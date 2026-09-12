@@ -1826,6 +1826,8 @@ impl<'a> App<'a> {
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
+            schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
+            active_session: self.workspace.active_project().map_or(0, |project| project.runtime_id),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
         view

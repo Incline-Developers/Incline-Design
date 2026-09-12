@@ -21,6 +21,7 @@ pub(crate) mod point_cloud;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+pub(crate) mod schedule;
 pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
 pub(crate) mod triangulation;
@@ -970,6 +971,11 @@ pub(crate) struct Document {
     solids: Vec<Solid>,
     #[serde(default)]
     next_solid_id: u64,
+    /// The Schedule workspace's loader fleet; see [`schedule::SchedulePlan`].
+    /// Default-empty, so a project saved before scheduling existed opens with
+    /// an empty schedule rather than failing to load.
+    #[serde(default)]
+    schedule: schedule::SchedulePlan,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -1465,6 +1471,44 @@ impl Document {
         &self.solids
     }
 
+    pub(crate) fn schedule(&self) -> &schedule::SchedulePlan {
+        &self.schedule
+    }
+
+    /// Swap in a whole schedule plan, as one undoable edit.
+    ///
+    /// The plan is small and edited a cell at a time, so a snapshot either
+    /// side is both the simplest correct undo and the cheapest one to reason
+    /// about: ids, order and assignments all come back exactly as they were.
+    /// Installing a plan - including reverting to one an undo restored -
+    /// never lowers the id allocator, so an id retired on one history branch
+    /// is not reissued on another.
+    pub(crate) fn set_schedule(&mut self, mut schedule: schedule::SchedulePlan) {
+        schedule.raise_allocator_to(&self.schedule);
+        if self.schedule == schedule {
+            return;
+        }
+        self.schedule = schedule;
+        self.touch();
+    }
+
+    /// Install a schedule read back from a save file. Not marked dirty, on
+    /// the same rule as [`Document::restore_solids`] beside it.
+    pub(crate) fn restore_schedule(&mut self, mut schedule: schedule::SchedulePlan) {
+        schedule.raise_allocator_to(&self.schedule);
+        self.schedule = schedule;
+    }
+
+    /// Take `source`'s schedule if this document has none. Used when opening
+    /// an OMF, whose designs elements are merged into a fresh document one at
+    /// a time - see [`Document::merge_solids_from`]. Only one element can
+    /// carry a schedule, so there is nothing to reconcile between them.
+    pub(crate) fn merge_schedule_from(&mut self, source: &Document) {
+        if self.schedule.is_pristine() && !source.schedule.is_pristine() {
+            self.schedule = source.schedule.clone();
+        }
+    }
+
     pub(crate) fn solid(&self, id: SolidId) -> Option<&Solid> {
         self.solids.iter().find(|solid| solid.id == id)
     }
@@ -1778,6 +1822,10 @@ impl Document {
             id.hash(&mut hasher);
             hashes.get(&id).hash(&mut hasher);
         }
+        // The schedule is document content that serializes, so it belongs in
+        // the fingerprint that decides whether the project is dirty - and,
+        // because an undo puts the whole plan back, it un-dirties by itself.
+        self.schedule.hash_content(&mut hasher);
         hasher.finish()
     }
 
@@ -2481,6 +2529,17 @@ pub(crate) enum Command {
         index: usize,
         added: Option<OpenItem>,
     },
+    /// Replace the whole Schedule loader fleet. One committed cell edit,
+    /// addition or deletion is one of these, so it is also one Ctrl-Z.
+    ///
+    /// A snapshot either side rather than a per-field edit: the plan is a
+    /// handful of names and rates, and swapping it whole is what guarantees
+    /// undo restores the same ids - which every Gantt row and, later, every
+    /// block assignment is keyed by.
+    SetSchedulePlan {
+        before: Box<schedule::SchedulePlan>,
+        after: Box<schedule::SchedulePlan>,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -2524,6 +2583,7 @@ impl Command {
                 }
                 Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } => 0,
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
                     .iter()
@@ -2648,7 +2708,8 @@ impl Command {
             | Command::AddLayerSnapshot { .. }
             | Command::DeleteLayerSnapshot { .. }
             | Command::SetLayerLoaded { .. }
-            | Command::SetObjectHidden { .. } => {}
+            | Command::SetObjectHidden { .. }
+            | Command::SetSchedulePlan { .. } => {}
         }
     }
 
@@ -2714,6 +2775,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, after, .. } => {
                 target.document.set_object_hidden(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::SetSchedulePlan { after, .. } => {
+                target.document.set_schedule((**after).clone());
                 target.effects.document_changed = true;
             }
             Command::SetItemStyle { item, after, .. } => target.set_item_style(*item, after),
@@ -2794,6 +2859,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, before, .. } => {
                 target.document.set_object_hidden(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetSchedulePlan { before, .. } => {
+                target.document.set_schedule((**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetItemStyle { item, before, .. } => target.set_item_style(*item, before),

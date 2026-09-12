@@ -175,14 +175,22 @@ impl EditorState {
     }
 
     pub(crate) fn is_planning_viewport(&self) -> bool {
-        self.active_workspace == Workspace::Planning && (!matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View) || self.is_planning_cut_step())
+        self.active_workspace == Workspace::Planning
+            && (!matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Gantt) || self.is_planning_cut_step())
     }
 
     /// Whether a Planning page that owns the whole window - rather than
     /// framing the 3D viewport - is on screen. Both the Solids setup and the
     /// view of what it produced are laid out that way.
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning && matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View) && !self.is_planning_cut_step()
+        self.active_workspace == Workspace::Planning
+            && matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Gantt)
+            && !self.is_planning_cut_step()
+    }
+
+    /// Whether the Schedule page is showing its Gantt subpage.
+    pub(crate) fn is_schedule_gantt(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
     }
 
     /// Whether the Solids page is showing its View subpage.
@@ -2068,6 +2076,28 @@ pub(crate) struct EditorState {
     pub(crate) new_solid_surface: Option<TriangulationId>,
     pub(crate) new_solid_topography: Option<TriangulationId>,
     pub(crate) new_solid_block_model: Option<BlockModelId>,
+    /// Which entry of the Schedule Setup tree is selected.
+    pub(crate) schedule_section: ScheduleSection,
+    /// Selected rows in the two loader editors, and the drafts of the cells
+    /// being typed into. Drafts are held rather than rebuilt each frame so an
+    /// invalid entry stays on screen with its error instead of snapping back
+    /// to the last committed value.
+    pub(crate) schedule_selected_class: Option<crate::model::schedule::LoaderClassId>,
+    pub(crate) schedule_selected_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
+    pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
+    pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
+    /// Whether the New Loader Class / New Loader Agent dialogs are open, and
+    /// their draft contents. A draft is not in the project until it is valid
+    /// and committed, so cancelling one leaves nothing behind.
+    pub(crate) new_loader_class_open: bool,
+    pub(crate) new_loader_class_name: String,
+    pub(crate) new_loader_class_rate: String,
+    pub(crate) new_loader_agent_open: bool,
+    pub(crate) new_loader_agent_name: String,
+    pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
+    /// Where the Gantt is looking: see [`GanttView`].
+    pub(crate) gantt: GanttView,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2339,6 +2369,21 @@ impl EditorState {
         self.text_edit_created = false;
         self.slice_pending_start = None;
         self.slice_preview_navigation.reset();
+
+        // Schedule setup selections and drafts name ids of the project that
+        // is going away, and the Gantt is looking at its timeline.
+        self.schedule_selected_class = None;
+        self.schedule_selected_agent = None;
+        self.schedule_class_draft = None;
+        self.schedule_agent_draft = None;
+        self.schedule_name_draft = None;
+        self.new_loader_class_open = false;
+        self.new_loader_class_name.clear();
+        self.new_loader_class_rate.clear();
+        self.new_loader_agent_open = false;
+        self.new_loader_agent_class = None;
+        self.new_loader_agent_name.clear();
+        self.gantt = GanttView::default();
 
         self.offset_dialog_open = false;
         self.offset_target_id = None;
@@ -2882,6 +2927,19 @@ impl EditorState {
             new_solid_surface: None,
             new_solid_topography: None,
             new_solid_block_model: None,
+            schedule_section: ScheduleSection::Configuration,
+            schedule_selected_class: None,
+            schedule_selected_agent: None,
+            schedule_class_draft: None,
+            schedule_agent_draft: None,
+            schedule_name_draft: None,
+            new_loader_class_open: false,
+            new_loader_class_name: String::new(),
+            new_loader_class_rate: String::new(),
+            new_loader_agent_open: false,
+            new_loader_agent_name: String::new(),
+            new_loader_agent_class: None,
+            gantt: GanttView::default(),
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -3355,6 +3413,17 @@ pub(crate) enum UiCommand {
     RunAllPlanningStages,
     /// Stop a run in flight, leaving completed stages alone.
     CancelPlanningRun,
+    /// One edit to a project's loader fleet.
+    ///
+    /// Addressed rather than implicit: `project` is the runtime id of the
+    /// project whose fleet the UI drew this from, and the handler refuses it
+    /// if that is no longer the project being edited. Ids alone could not
+    /// tell the two apart - a fresh project numbers its first class `0` as
+    /// well.
+    Schedule {
+        project: u32,
+        edit: ScheduleEdit,
+    },
     /// Change one field of a solid from its property table.
     UpdateSolid {
         solid: crate::model::SolidId,
@@ -3684,6 +3753,11 @@ pub(crate) enum UiCommand {
 }
 
 impl UiCommand {
+    /// One fleet edit, addressed to the project session it was drawn from.
+    pub(crate) fn schedule(project: u32, edit: ScheduleEdit) -> Self {
+        Self::Schedule { project, edit }
+    }
+
     /// Friendly activity-console metadata for meaningful user actions.
     ///
     /// This match is deliberately exhaustive: adding a command requires an
@@ -3817,6 +3891,20 @@ impl UiCommand {
             Self::AddReserveField { name, .. } => report(tr!(literal = "Add Field"), name.clone()),
             Self::DeleteReserveField(id) => report(tr!(literal = "Delete Field"), format!("{id:?}")),
             Self::AddSolid { name, .. } => report(tr!(literal = "Add Solid"), name.clone()),
+            // The fleet editors report additions and deletions, which are
+            // structural, but not renames or rate edits: those are cell edits
+            // and a console line per keystroke-commit would bury the log.
+            Self::Schedule { edit, .. } => match edit {
+                ScheduleEdit::AddClass { name, rate_tph } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} tph")),
+                ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
+                ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
+                ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
+                ScheduleEdit::SetName(_)
+                | ScheduleEdit::RenameClass { .. }
+                | ScheduleEdit::SetClassRate { .. }
+                | ScheduleEdit::RenameAgent { .. }
+                | ScheduleEdit::SetAgentClass { .. } => None,
+            },
             Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
             Self::ResetBlastName(blast) => report(tr!(literal = "Reset Blast Name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
@@ -4170,6 +4258,16 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
+    /// The *active* project's schedule. Read from the active project rather
+    /// than the render-scene composite, which copies planning data from every
+    /// open project in turn and so holds whichever was copied last: opening a
+    /// second project must not change or show the first one's fleet.
+    pub(crate) schedule: crate::model::schedule::SchedulePlan,
+    /// Runtime id of the active project, the session token fleet edits are
+    /// addressed to. Zero when no project is open - never a live id, so a
+    /// command that somehow escaped an empty workspace is refused rather than
+    /// applied to whatever opens next.
+    pub(crate) active_session: u32,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
@@ -4256,7 +4354,7 @@ impl PlanningPage {
         match self {
             Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
             Self::Haulage => &[PlanningSubpage::Layout],
-            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Animate],
+            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Gantt, PlanningSubpage::Animate],
         }
     }
 }
@@ -4269,6 +4367,9 @@ pub(crate) enum PlanningSubpage {
     /// to configure.
     View,
     Layout,
+    /// Schedule: one timeline row per loader agent, along elapsed project
+    /// time. Stage 1 draws the rows and the ruler; the bars follow.
+    Gantt,
     Animate,
 }
 
@@ -4278,8 +4379,234 @@ impl PlanningSubpage {
             Self::Setup => tr!("planning-page-setup"),
             Self::View => tr!("planning-subpage-view"),
             Self::Layout => tr!("planning-subpage-layout"),
+            Self::Gantt => tr!("planning-subpage-gantt"),
             Self::Animate => tr!("planning-subpage-animate"),
         }
+    }
+}
+
+/// Which entry of the Schedule Setup tree is showing.
+///
+/// Configuration is the schedule's own name; the other two are the fleet the
+/// Gantt draws its rows from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ScheduleSection {
+    Configuration,
+    LoaderClasses,
+    LoaderAgents,
+}
+
+/// The cells of one loader class as they are being typed.
+///
+/// The rate is kept as text, not a number: "3000." and "" are states a user
+/// passes through, and snapping them to a number every frame would make the
+/// field impossible to edit. It becomes a rate only when the edit is
+/// committed, and a rate that will not parse is reported in place.
+///
+/// `source` is what the plan held when the draft was built. While the plan
+/// still holds that, the typed text stands - which is what leaves an invalid
+/// entry on screen with its error instead of snapping back. The moment the
+/// plan moves on its own, through an undo, a redo or the edit landing, the
+/// draft is rebuilt from it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleClassDraft {
+    pub(crate) id: crate::model::schedule::LoaderClassId,
+    pub(crate) source: (String, f64),
+    pub(crate) name: String,
+    pub(crate) rate: String,
+}
+
+/// The editable cell of one loader agent, on the same rule as
+/// [`ScheduleClassDraft`]. Its class is a combo, committed the moment it is
+/// picked, so only the name needs a draft.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleAgentDraft {
+    pub(crate) id: crate::model::schedule::LoaderAgentId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// What one [`UiCommand::Schedule`] does to the fleet.
+///
+/// Split out from the command so every fleet edit carries the project it was
+/// drawn from in one place, and so adding an edit cannot quietly skip that.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ScheduleEdit {
+    /// Rename the project's schedule.
+    SetName(String),
+    /// Add a loader class - a machine type and the rate it digs at.
+    AddClass {
+        name: String,
+        rate_tph: f64,
+    },
+    RenameClass {
+        class: crate::model::schedule::LoaderClassId,
+        name: String,
+    },
+    SetClassRate {
+        class: crate::model::schedule::LoaderClassId,
+        rate_tph: f64,
+    },
+    /// Delete a loader class. Refused, with the machines named, while any
+    /// agent is still of that class.
+    DeleteClass(crate::model::schedule::LoaderClassId),
+    /// Add one machine of an existing class.
+    AddAgent {
+        name: String,
+        class: crate::model::schedule::LoaderClassId,
+    },
+    RenameAgent {
+        agent: crate::model::schedule::LoaderAgentId,
+        name: String,
+    },
+    /// Move one machine to a different class, and so to that class's rate.
+    SetAgentClass {
+        agent: crate::model::schedule::LoaderAgentId,
+        class: crate::model::schedule::LoaderClassId,
+    },
+    DeleteAgent(crate::model::schedule::LoaderAgentId),
+}
+
+/// The schedule's own name as it is being typed, and what the plan held when
+/// the typing started. See [`ScheduleClassDraft`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleNameDraft {
+    pub(crate) source: String,
+    pub(crate) text: String,
+}
+
+/// Where the Gantt is looking: the window of project time across its
+/// timeline, and how far its rows are scrolled.
+///
+/// Time here is *elapsed project time* in seconds - zero is `Day 1, 00:00`,
+/// not a calendar date and not the computer clock. Everything is kept in
+/// `f64` seconds; pixels are worked out per frame from the rect the timeline
+/// happens to get, so a resize or a DPI change cannot drift the two apart.
+///
+/// This is view state: it is not saved with the project, and it resets when
+/// the active project changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GanttView {
+    /// Elapsed seconds at the left edge of the timeline.
+    pub(crate) start_seconds: f64,
+    /// Elapsed seconds the timeline spans, left edge to right.
+    pub(crate) span_seconds: f64,
+    /// Downward row scroll, in points.
+    pub(crate) row_scroll: f32,
+}
+
+impl Default for GanttView {
+    fn default() -> Self {
+        Self {
+            start_seconds: 0.0,
+            span_seconds: Self::DEFAULT_SPAN_SECONDS,
+            row_scroll: 0.0,
+        }
+    }
+}
+
+impl GanttView {
+    pub(crate) const HOUR: f64 = 3600.0;
+    pub(crate) const DAY: f64 = 24.0 * Self::HOUR;
+    /// The span a Gantt opens at, and returns to on Reset View.
+    pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
+    /// Closest it zooms in, and furthest out. An hour is the finest window a
+    /// tonnes-per-hour schedule says anything useful over; a year is past the
+    /// point where a bar is a pixel.
+    pub(crate) const MIN_SPAN_SECONDS: f64 = Self::HOUR;
+    pub(crate) const MAX_SPAN_SECONDS: f64 = 365.0 * Self::DAY;
+
+    /// The minor tick intervals the ruler steps through as it is zoomed,
+    /// coarsest last. Hours, then days, then weeks - the scales a mine plan
+    /// is actually read at.
+    pub(crate) const TICK_LADDER: [f64; 8] = [
+        Self::HOUR,
+        3.0 * Self::HOUR,
+        6.0 * Self::HOUR,
+        12.0 * Self::HOUR,
+        Self::DAY,
+        2.0 * Self::DAY,
+        7.0 * Self::DAY,
+        14.0 * Self::DAY,
+    ];
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self {
+            row_scroll: self.row_scroll,
+            ..Self::default()
+        };
+    }
+
+    /// Hold the window inside its limits: a span between an hour and a year,
+    /// and a left edge no earlier than the start of the project.
+    fn clamp(&mut self) {
+        if !self.span_seconds.is_finite() || self.span_seconds <= 0.0 {
+            self.span_seconds = Self::DEFAULT_SPAN_SECONDS;
+        }
+        self.span_seconds = self.span_seconds.clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        if !self.start_seconds.is_finite() {
+            self.start_seconds = 0.0;
+        }
+        self.start_seconds = self.start_seconds.max(0.0);
+    }
+
+    pub(crate) fn end_seconds(&self) -> f64 {
+        self.start_seconds + self.span_seconds
+    }
+
+    /// Where `seconds` falls across a timeline `width` points wide starting at
+    /// `left`. Presentation only: nothing is stored in pixels.
+    pub(crate) fn x_of(&self, seconds: f64, left: f32, width: f32) -> f32 {
+        left + (((seconds - self.start_seconds) / self.span_seconds) * f64::from(width)) as f32
+    }
+
+    /// Zoom by `factor` (above one zooms in), holding the time under
+    /// `anchor` - a fraction across the timeline - in place.
+    ///
+    /// The anchor is only held where the limits allow it: at the left end the
+    /// window stops at zero rather than panning into negative time, so a zoom
+    /// out near the origin widens to the right instead.
+    pub(crate) fn zoom_at(&mut self, factor: f64, anchor: f64) {
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let anchor = anchor.clamp(0.0, 1.0);
+        let pinned = self.start_seconds + anchor * self.span_seconds;
+        let span = (self.span_seconds / factor).clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        self.span_seconds = span;
+        self.start_seconds = pinned - anchor * span;
+        self.clamp();
+    }
+
+    /// Slide the window along time by `delta` seconds.
+    pub(crate) fn pan(&mut self, delta: f64) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.start_seconds += delta;
+        self.clamp();
+    }
+
+    /// The finest interval from [`Self::TICK_LADDER`] whose ticks are at least
+    /// `min_spacing` points apart on a timeline `width` points wide.
+    ///
+    /// Choosing the interval from the spacing - rather than from the span - is
+    /// what keeps labels from overlapping at any width or DPI: a narrow pane
+    /// simply steps up to a coarser interval.
+    pub(crate) fn minor_interval(&self, width: f32, min_spacing: f32) -> f64 {
+        let points_per_second = f64::from(width.max(1.0)) / self.span_seconds;
+        let needed = f64::from(min_spacing.max(1.0)) / points_per_second;
+        Self::TICK_LADDER.into_iter().find(|interval| *interval >= needed).unwrap_or(Self::MAX_SPAN_SECONDS)
+    }
+
+    /// Every tick of `interval` inside the visible window, as elapsed seconds.
+    ///
+    /// Starts from the first tick at or after the left edge rather than from
+    /// zero, so scrolling to day 300 costs the same as scrolling to day 1.
+    pub(crate) fn visible_ticks(&self, interval: f64) -> impl Iterator<Item = f64> {
+        let first = (self.start_seconds / interval).ceil();
+        let end = self.end_seconds();
+        (0..).map(move |step| (first + f64::from(step)) * interval).take_while(move |tick| *tick <= end)
     }
 }
 

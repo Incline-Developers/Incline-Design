@@ -97,6 +97,7 @@ impl<'a> App<'a> {
         for imported in &designs {
             design.document.merge_reserve_fields_from(&imported.document);
             design.document.merge_solids_from(&imported.document);
+            design.document.merge_schedule_from(&imported.document);
         }
         for imported in designs {
             project::merge_document_preserve_ids(&mut design.document, &imported.document);

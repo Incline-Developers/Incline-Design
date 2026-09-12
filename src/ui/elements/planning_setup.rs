@@ -1,14 +1,17 @@
-//! Shared layout for the Solids and Schedule Setup subpages.
+//! Shared layout for the planning Setup subpages.
 //!
 //! Solids' Setup is the Reserves setup: a project-wide Field List (summed,
 //! weighted-average, or category columns, e.g. Tonnes, Fe, and Rock Type)
 //! and, per block model opted in via its own checkbox, a mapping of that
 //! model's own columns or constants onto the list, with the resulting
-//! totals. Schedule's Setup is still scaffold - its step tree and
-//! content category list are wired up, but item rows and property fields
-//! render their empty grids and fill in with the feature. The grids
-//! themselves are the reusable [`data_grid`](crate::ui::widgets::data_grid)
-//! widgets.
+//! totals.
+//!
+//! Schedule's Setup is the loader fleet, which lives in
+//! [`super::schedule_setup`]; this module supplies the panes it is arranged
+//! in. Haulage's Setup is still scaffold - its content category list is
+//! wired up, but item rows and property fields render their empty grids and
+//! fill in with the feature. The grids themselves are the reusable
+//! [`data_grid`](crate::ui::widgets::data_grid) widgets.
 use crate::{
     i18n::{tr, tr_format},
     model::{
@@ -44,9 +47,10 @@ fn striped_list(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 }
 
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: PlanningPage, commands: &mut Vec<UiCommand>) {
-    if page == PlanningPage::Solids {
-        draw_solids_steps(ui, editor, commands);
-        return;
+    match page {
+        PlanningPage::Solids => return draw_solids_steps(ui, editor, commands),
+        PlanningPage::Schedule => return striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor)),
+        PlanningPage::Haulage => {}
     }
     let selection_id = egui::Id::new(("planning_configuration_selected", page));
     let mut configuration = ui.data(|data| data.get_temp::<bool>(selection_id)).unwrap_or(false);
@@ -1328,6 +1332,44 @@ fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) {
     ui.data_mut(|data| data.insert_temp(name_id, schedule_name));
 }
 
+/// The Schedule Setup subpage's panes: a list beside the properties of the
+/// row selected in it, the same shape the Solids steps use.
+fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    use crate::ui::state::ScheduleSection;
+
+    // Cloned rather than borrowed: the panes below take `editor` mutably to
+    // hold their drafts and selection, and the plan they read is the active
+    // project's own rather than the render-scene composite's.
+    let plan = project.schedule.clone();
+    // Every edit below is addressed to the project this plan was read from,
+    // so one queued against a project that is closed before the frame's
+    // commands are handled is refused rather than applied to its successor.
+    let session = project.active_session;
+    match editor.schedule_section {
+        ScheduleSection::Configuration => {
+            central_island(ui, layout, |ui, rect| super::schedule_setup::draw_configuration(ui, rect, editor, &plan, session, commands));
+        }
+        ScheduleSection::LoaderClasses => {
+            island(ui, layout, "schedule_class_list_island", 320.0, |ui, rect| {
+                super::schedule_setup::draw_class_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_setup::draw_class_properties(ui, rect, editor, &plan, session, commands)
+            });
+        }
+        ScheduleSection::LoaderAgents => {
+            island(ui, layout, "schedule_agent_list_island", 320.0, |ui, rect| {
+                super::schedule_setup::draw_agent_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_setup::draw_agent_properties(ui, rect, editor, &plan, session, commands)
+            });
+        }
+    }
+    crate::ui::dialogs::schedule::draw_new_loader_class_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_new_loader_agent_dialog(ui, editor, &plan, session, commands);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_details(
     ui: &mut egui::Ui,
@@ -1342,6 +1384,10 @@ pub(crate) fn draw_details(
     let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         if page == PlanningPage::Solids {
             draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands);
+            return;
+        }
+        if page == PlanningPage::Schedule {
+            draw_schedule_details(ui, &mut layout, editor, project, commands);
             return;
         }
         let configuration = ui

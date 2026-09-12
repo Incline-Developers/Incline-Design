@@ -1595,8 +1595,9 @@ asset-unloading = Unloading asset data
 asset-load-failed = Could not load asset data
 asset-unload-failed = Could not unload asset data
 
-# Planning → Set Up. Step tree and content categories are wired up; item
-# rows and property fields are scaffold that fills in with the feature.
+# Planning → Set Up. Shared labels, plus Haulage's scaffold: its content
+# category list is wired up; item rows and property fields fill in with the
+# feature. Schedule's own labels are under "Schedule setup" below.
 planning-configuration = Configuration
 planning-site-data = Site Data
 planning-content = Content
@@ -1672,6 +1673,55 @@ planning-reserve-scope = Method
 planning-reserve-categories = { $count } categories
 planning-reserve-unavailable = Block model data is unavailable; reload the model to compute reserves
 planning-volume-unavailable = Preview available · volume requires closed meshes
+
+## Schedule setup: the loader fleet, and the Gantt it draws rows for
+
+schedule-loader-classes = Loader Classes
+schedule-loader-agents = Loader Agents
+schedule-class = Class
+schedule-dig-rate = Default dig rate
+schedule-effective-rate = Effective dig rate
+schedule-tph = tph
+schedule-new-class = New Loader Class
+schedule-new-agent = New Loader Agent
+schedule-rename-class = Rename Class
+schedule-delete-class = Delete Class
+schedule-rename-agent = Rename Agent
+schedule-delete-agent = Delete Agent
+schedule-add-class = Add Class
+schedule-add-agent = Add Agent
+schedule-no-classes = Add a loader class before adding machines to the fleet
+schedule-no-agents = No loader agents yet
+schedule-select-class = Select a loader class from the list
+schedule-select-agent = Select a loader agent from the list
+schedule-rate-not-a-number = Enter a dig rate in tonnes per hour
+schedule-loader-class-default = Loader Class
+schedule-loader-agent-default = Loader
+
+schedule-error-empty-name = Enter a name
+schedule-error-duplicate-name = ⁨{ $name }⁩ is already in use
+schedule-error-invalid-rate = The dig rate must be a number greater than zero
+schedule-error-unknown-class = That loader class is no longer in this project
+schedule-error-unknown-agent = That loader agent is no longer in this project
+schedule-error-class-in-use = Still assigned to ⁨{ $agents }⁩. Reassign or delete those agents first
+schedule-error-ids-exhausted = This project cannot hold any more loader classes or agents
+schedule-error-duplicate-id = Two entries share one identity
+schedule-stale-edit = That schedule edit was discarded: it was made in a project that is no longer open
+
+schedule-load-failed = The schedule in ⁨{ $project }⁩ could not be read and was left out: ⁨{ $reason }⁩
+
+## Schedule → Gantt
+
+planning-subpage-gantt = Gantt
+gantt-empty-fleet = No agent rows yet. Add loader classes and loader agents in Setup → Site Data
+gantt-no-sequences = Dig sequences will be added in the next stage
+gantt-reset-view = Reset View
+gantt-zoom-in = Zoom in
+gantt-zoom-out = Zoom out
+gantt-agent = Agent
+gantt-day = Day { $day }
+gantt-day-time = Day { $day }, { $time }
+gantt-range = { $from } → { $to }
 
 planning-stat-sum = Sum
 planning-stat-avg = Avg

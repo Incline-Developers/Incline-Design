@@ -51,6 +51,14 @@ const META_ID: &str = "incline:id";
 const META_DRILL_HOLE: &str = "incline:drill_hole";
 const META_RESERVE_FIELDS: &str = "incline:reserve_fields";
 const META_SOLIDS: &str = "incline:solids";
+/// The Schedule workspace's loader fleet, versioned independently of the
+/// planning metadata beside it so a future shape change can be read back
+/// deliberately rather than guessed at.
+const META_SCHEDULE: &str = "incline:schedule";
+/// Payload version written into [`META_SCHEDULE`]. Bumped when the stored
+/// shape changes; a file naming a version this build does not know is
+/// reported and left out rather than half-read.
+const SCHEDULE_METADATA_VERSION: u64 = 1;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -435,7 +443,45 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             .collect();
     }
     put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
+    let schedule = document.schedule();
+    if !schedule.is_pristine() {
+        put(
+            &mut element,
+            META_SCHEDULE,
+            serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
+        );
+    }
     Ok(element)
+}
+
+/// Decode one [`META_SCHEDULE`] payload, or say why it could not be.
+///
+/// Every failure here is reported to the caller: the version, the shape and
+/// the plan's own invariants (unique ids, unique names, positive rates,
+/// resolvable class references) are all things a silent default would turn
+/// into wrong numbers further down the schedule.
+fn read_schedule(value: serde_json::Value) -> std::result::Result<crate::model::schedule::SchedulePlan, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        version: u64,
+        plan: crate::model::schedule::SchedulePlan,
+    }
+
+    let version = value.get("version").and_then(serde_json::Value::as_u64);
+    if version.is_some_and(|version| version > SCHEDULE_METADATA_VERSION) {
+        return Err(format!(
+            "it was written by a newer version of Incline Design (schedule format {}, this build reads {SCHEDULE_METADATA_VERSION})",
+            version.unwrap_or_default()
+        ));
+    }
+    let payload: Payload = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    if payload.version != SCHEDULE_METADATA_VERSION {
+        return Err(format!("schedule format {} is not supported by this build", payload.version));
+    }
+    let mut plan = payload.plan;
+    plan.validate_loaded().map_err(|error| error.message())?;
+    Ok(plan)
 }
 
 fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, object: &Object) -> Result<omf_crate::Element> {
@@ -1377,6 +1423,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_TIE_INS,
             META_RESERVE_FIELDS,
             META_SOLIDS,
+            META_SCHEDULE,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -1512,6 +1559,19 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|value| serde_json::from_value::<Vec<Solid>>(value).ok())
         {
             document.restore_solids(solids);
+        }
+        if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {
+            // Unlike the two lists above, a malformed schedule is reported
+            // rather than dropped: a dig rate that failed to parse must not
+            // come back as a plausible-looking default, and a class an agent
+            // can no longer reach is a reconciliation the user has to see.
+            match read_schedule(value) {
+                Ok(schedule) => document.restore_schedule(schedule),
+                Err(reason) => self
+                    .bundle
+                    .warnings
+                    .push(format!("Element '{}' has a schedule that could not be read and was left out: {reason}", element.name)),
+            }
         }
         document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
         let unloaded: Vec<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();

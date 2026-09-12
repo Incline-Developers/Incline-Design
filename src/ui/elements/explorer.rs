@@ -134,7 +134,9 @@ pub(crate) fn draw_explorer(
                         super::solids_view::draw_tree(ui, editor, document);
                         return;
                     }
-                    if editor.is_planning_setup() {
+                    // The Gantt is not a setup step, so the column stays the
+                    // project tree there: its own rows already name the fleet.
+                    if editor.is_planning_setup() && !editor.is_schedule_gantt() {
                         let page = editor.planning_page;
                         super::planning_setup::draw_steps(ui, editor, page, commands);
                         return;
