@@ -1611,8 +1611,9 @@ fn build_solid_partition(
             .map(|blast| blast.shape_ref(solid.id))
     };
 
-    // With neither strips nor blast boundaries, the flitch is one dig block -
-    // the plan's terminal output for an uncut blast.
+    // Even without cut lines, disconnected ground has separate blast parents.
+    // Partition the footprint first; only a single connected face can reuse
+    // the entire flitch mesh without clipping.
     let mut parts = Vec::new();
     for (index, flitch) in body.flitch_parts.iter().enumerate() {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
@@ -1622,20 +1623,12 @@ fn build_solid_partition(
         let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
         let bench_cuts = solid.blasting.bench(bench.base).map_or(&[][..], |entry| &entry.cuts);
         let footprint = body.flitch_footprints.get(&band.selection.base.to_bits());
-        let faces = match footprint {
-            Some(footprint) if !strips.is_empty() || !bench_cuts.is_empty() => super::dig_strips::dig_block_faces(footprint, strips, bench_cuts),
-            // Nothing cuts this flitch, so it is one block and needs no clip.
-            _ => Vec::new(),
-        };
-        if faces.len() < 2 {
-            let (anchor, plan) = match faces.into_iter().next() {
-                Some((face, anchor)) => (anchor, face),
-                None => {
-                    let rings = footprint.cloned().unwrap_or_default();
-                    let anchor = arrangement::representative_point(&rings).unwrap_or_default();
-                    (anchor, rings)
-                }
-            };
+        let faces = footprint
+            .map(|footprint| super::dig_strips::dig_block_faces(footprint, strips, bench_cuts))
+            .unwrap_or_default();
+        anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
+        if faces.len() == 1 {
+            let (plan, anchor) = faces.into_iter().next().expect("one face");
             let mut mesh = flitch.mesh.clone();
             mesh.id = next_view_id();
             mesh.cull_back_faces = true;
@@ -1901,25 +1894,15 @@ impl ReserveScope {
 
 impl crate::app::App<'_> {
     /// One authoritative version of everything a reserve scan reads from a
-    /// block model.
+    /// block model: the grid it measures over, the columns it can read, and
+    /// the mapping that says which of them to read.
     ///
-    /// Built on the item's own content epoch, which advances when the content
-    /// is edited and is deliberately preserved across eviction and
-    /// restoration (see `replace_residency`). Allocation identity is not a
-    /// content version: restoring identical bytes into fresh `Arc`s changes
-    /// every pointer without changing a single value, and a fingerprint built
-    /// on pointers reads that as an edit - invalidating, and cancelling, the
-    /// very run that asked for the restore.
-    ///
-    /// The transform and the mapping are folded in as well. Both survive
-    /// eviction, and both change what a scan measures.
+    /// A source identity survives both eviction and first materialization of
+    /// deferred OMF metadata. Item epochs also include automatic colour-ramp
+    /// updates, which are not changes to reserve inputs.
     pub(crate) fn model_content_version(&self, model: &crate::model::block_model::OpenBlockModel) -> u64 {
         let mut version = DefaultHasher::new();
-        model.state.epoch().hash(&mut version);
-        model.model.metadata.n_blocks.hash(&mut version);
-        for value in model.model.origin().to_array().into_iter().chain(model.model.rotation().to_cols_array()) {
-            value.to_bits().hash(&mut version);
-        }
+        model.model.content_version().hash(&mut version);
         serde_json::to_vec(&model.reserve_mapping).unwrap_or_default().hash(&mut version);
         version.finish()
     }

@@ -1718,6 +1718,7 @@ stage-state-complete = Complete
 stage-state-failed = Failed
 stage-state-cancelled = Cancelled
 stage-blocked-by = Run { $stage } first
+stage-run-stopped-by-edit = Run stopped: the { $stage } step's inputs changed while it was running
 stage-failed-count = { $count } problems to resolve
 stage-duplicate-field = Two fields share this name
 stage-model-data-gaps = { $missing } blocks missing a value · { $weights } with no usable weight

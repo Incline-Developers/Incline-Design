@@ -120,7 +120,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
-    if editor.is_planning_cut_step() {
+    // Dig blocks belong to the step that draws them; the Blasting step before
+    // it shows its benches undivided.
+    if editor.is_dig_strips_step() {
         for outline in &editor.dig_outlines {
             let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
             for ring in &outline.rings {

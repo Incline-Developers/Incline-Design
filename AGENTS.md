@@ -22,6 +22,9 @@ Paths below are relative to `src/`:
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry/cache), `rendering/shaders/` (WGSL). |
 | Add background work | Reuse `app/jobs.rs`: compute on workers, apply on the UI thread; preserve `JobKey` dependencies and poll cancellation in long loops. |
 | Change asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, and `history_storage.rs` move payloads to temporary backing in `asset_storage.rs`. |
+| Planning solids | `app/commands/solids.rs` (Setup/shared slabs), `app/commands/solids_view.rs` (View cache/jobs), `model/solid_reserves.rs` (volume-prorated totals). |
+| Planning blast cuts | `app/commands/blasting.rs`, `model/arrangement.rs`, `BenchBlasts` in `model/mod.rs`; cut geometry stays in bench-owned planning storage. |
+| Planning dig strips | `app/commands/dig_strips.rs`, `ui/elements/dig_strips.rs`; strips live in `BlastingPlan::dig_strips` keyed by flitch, and dig blocks are derived from strip plus blast cuts. |
 | Change persistence | `model/formats/`, `model/atomic_file.rs` (native writes), `app/web_storage.rs` (browser storage). |
 
 Search the relevant subtree first, e.g. `rg -n 'draw_screen_cross' src/rendering`. Read matching functions and nearby callers before whole files. Exclude generated `target/` and `dist/` from code searches. Run checks appropriate to the change; repeat only after edits or unresolved failures. Keep these pointers current when moving code.

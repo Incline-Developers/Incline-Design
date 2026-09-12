@@ -74,9 +74,11 @@ impl crate::app::App<'_> {
     }
 
     pub(crate) fn sync_dig_blocks(&mut self) {
-        // View shows the blocks as cut-apart geometry, so the derived outlines
-        // are only needed by the steps that draw and list them.
-        if !self.editor.is_planning_cut_step() {
+        // Only the Dig Strips step draws and lists these. View shows the blocks
+        // as cut-apart geometry instead, and Blasting comes before the strips
+        // exist at all - a later step's subdivision must not appear over an
+        // earlier step's benches.
+        if !self.editor.is_dig_strips_step() {
             if !self.editor.dig_outlines.is_empty() {
                 self.editor.dig_outlines.clear();
                 self.editor.dig_outlines_key = None;
@@ -88,7 +90,6 @@ impl crate::app::App<'_> {
         let mut hash = DefaultHasher::new();
         self.workspace.active_project().map(|project| project.runtime_id).hash(&mut hash);
         document.revision().hash(&mut hash);
-        self.editor.is_dig_strips_step().hash(&mut hash);
         self.editor.selected_blast.hash(&mut hash);
         // Blast boundaries cut the strips, so a derivation that ran before the
         // blast outlines settled has to be redone once they change.
@@ -111,12 +112,6 @@ impl crate::app::App<'_> {
                 continue;
             };
             for bench in solid.benching.benches() {
-                let blasts: Vec<_> = self
-                    .editor
-                    .blasting_outlines
-                    .iter()
-                    .filter(|blast| blast.solid == solid.id && (blast.bench_base - bench.base).abs() < 1e-6)
-                    .collect();
                 for flitch in &bench.flitches {
                     let band = BenchSelection {
                         base: flitch.base,
@@ -127,29 +122,12 @@ impl crate::app::App<'_> {
                         continue;
                     }
                     let drawing = solid.blasting.drawing(flitch.base, true);
-                    if !self.editor.is_dig_strips_step() && drawing.is_none_or(|drawing| drawing.cuts.is_empty()) {
-                        continue;
-                    }
                     let Some(footprint) = geometry.flitch_footprints().get(&flitch.base.to_bits()) else {
                         continue;
                     };
                     let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
                     let faces = dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), bench_cuts);
                     for (index, (face, anchor)) in faces.into_iter().enumerate() {
-                        if self.editor.is_solids_view()
-                            && let Some(selected) = self.editor.selected_blast
-                        {
-                            let Some(blast) = blasts
-                                .iter()
-                                .find(|blast| crate::ui::state::BlastShapeRef::new(blast.solid, blast.bench_base, blast.anchor) == selected)
-                            else {
-                                continue;
-                            };
-                            let blast_face: Vec<Vec<DVec2>> = blast.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
-                            if !arrangement::point_in_face(&blast_face, anchor) {
-                                continue;
-                            }
-                        }
                         let area = face
                             .iter()
                             .enumerate()

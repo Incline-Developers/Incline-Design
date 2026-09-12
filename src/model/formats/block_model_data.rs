@@ -1,4 +1,13 @@
-use std::{collections::BTreeMap, error::Error, fmt, mem::size_of, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    mem::size_of,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use glam::{DMat3, DVec3};
 
@@ -9,8 +18,11 @@ const MAX_ALLOCATION_BYTES: usize = 8 * 1024 * 1024 * 1024;
 #[cfg(any(target_arch = "wasm32", target_pointer_width = "32"))]
 const MAX_ALLOCATION_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
+static NEXT_CONTENT_VERSION: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Debug)]
 pub(crate) struct BlockModelData {
+    content_version: u64,
     pub(crate) metadata: BlockModelMetadata,
     rotation: DMat3,
     numeric_values: BTreeMap<String, Arc<Vec<f64>>>,
@@ -85,11 +97,25 @@ fn validate_allocation<T>(len: usize, description: &str) -> Result<(), BlockMode
 impl BlockModelData {
     pub(crate) fn unloaded(metadata: BlockModelMetadata) -> Self {
         Self {
+            content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
             metadata,
             rotation: DMat3::IDENTITY,
             numeric_values: BTreeMap::new(),
             _reservation: crate::app::memory::MemoryReservation::untracked(),
         }
+    }
+
+    /// Session-local identity of the source data, independent of residency and styling.
+    pub(crate) fn content_version(&self) -> u64 {
+        self.content_version
+    }
+
+    /// Materialization discovers metadata and values for the existing source;
+    /// it does not create new planning inputs. Ordinary replacement retains the
+    /// freshly constructed data's version instead.
+    pub(crate) fn restore_payload(&mut self, mut restored: Self) {
+        restored.content_version = self.content_version;
+        *self = restored;
     }
 
     pub(crate) fn release_values(&mut self) {
@@ -193,6 +219,7 @@ impl BlockModelData {
         };
         let reservation = crate::app::memory::reserve(retained_bytes, "in-memory block model").map_err(invalid)?;
         Ok(Self {
+            content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
             metadata,
             rotation: DMat3::IDENTITY,
             numeric_values,
@@ -299,6 +326,9 @@ impl BlockModelData {
     pub(crate) fn with_transform(mut self, origin: DVec3, rotation: DMat3) -> Result<Self, BlockModelDataError> {
         if !origin.is_finite() || !rotation.is_finite() {
             return Err(invalid("block-model transform contains non-finite values"));
+        }
+        if self.metadata.origin != origin || self.rotation != rotation {
+            self.content_version = NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed);
         }
         self.metadata.origin = origin;
         self.rotation = rotation;

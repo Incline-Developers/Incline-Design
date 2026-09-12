@@ -316,20 +316,28 @@ impl PlanningPipeline {
     /// a metadata edit the user can see has to mark its stage stale too, or
     /// the markers stop meaning anything. Reusing an unchanged artifact during
     /// a run is an internal matter for the fingerprints.
+    ///
+    /// Returns whether this stopped a run that was in flight.
     fn invalidate_from(&mut self, stage: SolidsStep) -> bool {
+        // A queued stage has not read anything yet: it will see these inputs
+        // when its turn comes, so a change that reaches no further back than
+        // the queue leaves the run alone. Only a result already published, or
+        // one being computed right now, can end up describing inputs it never
+        // saw - and a run that gets that far has to stop rather than publish a
+        // mixed generation. Stages run in order, so everything already
+        // complete sits before whatever is running: one comparison settles it.
+        let stopped = self.running.is_some_and(|running| running.index() >= stage.index());
         for later in SolidsStep::ALL.into_iter().skip(stage.index()) {
             let status = self.status_mut(later);
             match status.state {
                 StageState::Complete => status.state = StageState::Stale,
-                // A run in flight over inputs that just changed is stopped
-                // rather than allowed to publish a mixed generation.
-                StageState::Running | StageState::Queued => status.state = StageState::Cancelled,
+                StageState::Running => status.state = StageState::Cancelled,
+                StageState::Queued if stopped => status.state = StageState::Cancelled,
                 _ => {}
             }
         }
-        self.queue.retain(|queued| queued.index() < stage.index());
-        let stopped = self.running.is_some_and(|running| running.index() >= stage.index());
         if stopped {
+            self.queue.clear();
             self.running = None;
             self.demand = None;
         }
@@ -385,6 +393,10 @@ impl crate::app::App<'_> {
                 // request that will never land.
                 self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { .. }));
                 self.discard_incomplete_solid_requests();
+                // Said out loud, and naming the stage whose inputs moved: a run
+                // that ends by itself part way through otherwise looks like a
+                // button that only does one step.
+                crate::userspace_warn!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
             }
         }
         // A stage whose recorded inputs no longer match is stale even if no

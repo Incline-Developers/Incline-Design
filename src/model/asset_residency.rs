@@ -127,7 +127,7 @@ impl OpenItem {
             Self::BlockModel(item) => {
                 let imported = bundle.block_models.pop().context("backing contains no block model")?;
                 let data = imported.loaded;
-                item.model = data.model;
+                item.model.restore_payload(data.model);
                 item.blocks = data.blocks;
                 item.renderable_block_indices = data.renderable_block_indices;
                 item.uniform_grid = data.uniform_grid;
