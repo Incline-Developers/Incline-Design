@@ -171,6 +171,7 @@ impl<'a> App<'a> {
                     .with_loaded(imported.is_loaded)
                     .with_deferred(imported.deferred),
                 name,
+                geometry: imported.geometry,
                 mesh,
                 spatial,
                 edges,
@@ -436,6 +437,7 @@ impl<'a> App<'a> {
                         .with_loaded(imported.is_loaded)
                         .with_deferred(imported.deferred),
                     name,
+                    geometry: imported.geometry,
                     mesh,
                     spatial,
                     edges,

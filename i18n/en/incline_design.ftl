@@ -1710,6 +1710,64 @@ schedule-stale-edit = That schedule edit was discarded: it was made in a project
 
 schedule-load-failed = The schedule in ⁨{ $project }⁩ could not be read and was left out: ⁨{ $reason }⁩
 
+## Schedule → Sequences
+
+schedule-sequences = Dig Sequences
+schedule-new-sequence = New Sequence
+schedule-add-sequence = Add Sequence
+schedule-delete-sequence = Delete Sequence
+schedule-select-sequence = Select a sequence to see its dig order
+schedule-no-sequences = No dig sequences yet
+schedule-sequence-default-name = Sequence
+schedule-sequence-blocks = Dig blocks
+schedule-sequence-tonnes = Tonnes
+schedule-sequence-order = Dig order
+schedule-sequence-position = ⁨{ $position }⁩. ⁨{ $block }⁩
+schedule-sequence-unresolved-row = ⁨{ $position }⁩. Unresolved dig block
+
+schedule-tonnage-field = Tonnage field
+schedule-tonnage-field-none = Not chosen
+schedule-tonnage-field-no-fields = This project has no reserve fields yet. Add them in Solids → Setup → Field List
+schedule-tonnage-field-note = The chosen field's summed value is read as tonnes. Incline Design does not convert units: the field must already be in tonnes.
+
+schedule-sequence-move-up = Move Up
+schedule-sequence-move-down = Move Down
+schedule-sequence-pick-coming = Dig blocks are picked in a 3D editor, which arrives in the next stage
+
+schedule-error-unknown-sequence = That dig sequence is no longer in this project
+schedule-error-unknown-member = That position is no longer in this dig sequence
+schedule-error-duplicate-member = That dig block is already in this sequence
+schedule-error-malformed-reference = That dig block reference could not be read
+
+sequence-unresolved-solid = Its solid is no longer in this project
+sequence-unresolved-flitch = No flitch sits at that level any more
+sequence-unresolved-flitch-top = The flitch at that level now runs to ⁨{$now}⁩ m: the ground was re-flitched, and this is not the band it was planned against
+sequence-unresolved-ground = No dig block covers that ground any more
+sequence-unresolved-volume = That ground has kept its outline but its volume changed: it was { $was } m³ and is now { $now } m³. Reselect the block to plan against what is there now
+sequence-unresolved-source = The surface this ground was cut from has changed since it was picked. Reselect or reconfirm the block to plan against what is there now
+sequence-unresolved-unverified = This dig block was picked before references carried their provenance, so it cannot be checked against the current ground. Reselect it to plan against what is there now
+sequence-unresolved-ambiguous = ⁨{ $count }⁩ dig blocks cover that ground, so which one was meant cannot be decided
+sequence-unresolved-changed = That ground has changed: it covered ⁨{ $was }⁩ m² and now covers ⁨{ $now }⁩ m². Reselect the block to plan against what is there now
+
+sequence-ready = Ready
+sequence-empty = Add dig blocks to this sequence
+sequence-not-ready = The dig blocks have not been calculated: ⁨{ $reason }⁩
+sequence-no-tonnage-field = Choose the reserve field that holds tonnes, in Configuration
+sequence-tonnage-field-missing = The chosen tonnage field is no longer in this project's Field List
+sequence-tonnage-field-not-sum = ⁨{ $field }⁩ is not a summed field, so it cannot be read as tonnes
+sequence-unresolved-count = ⁨{ $count }⁩ of its dig blocks could not be found in the current run
+sequence-block-unmeasured = ⁨{ $block }⁩ has no measured tonnage: ⁨{ $reason }⁩
+sequence-block-partial = ⁨{ $block }⁩ was only partly measured, so its tonnage is incomplete
+sequence-duplicate-ground = Positions ⁨{$first}⁩ and ⁨{$second}⁩ are the same dig block (⁨{$block}⁩), so it would be dug twice. Remove one of them
+sequence-invalid-tonnes = ⁨{$block}⁩ measures ⁨{$value}⁩ on the tonnage field, which cannot be tonnes. Check the field mapping or the block model
+sequence-total-not-finite = The sequence's total tonnage is not a finite number, so it cannot be executed
+sequence-pick-stale = That pick was made against an older Solids run (generation ⁨{$was}⁩; the current run is ⁨{$now}⁩), so it was discarded. Pick the block again
+sequence-pick-unknown-block = That dig block is not in the current Solids run, so the pick was discarded. Pick the block again
+sequence-material-capacity-only = it has no block model, so only its capacity is known
+sequence-material-no-schema = this project defines no reserve fields
+sequence-material-unavailable = its reserves have not been measured
+sequence-material-unmapped = no block model maps a value onto the chosen field
+
 ## Schedule → Gantt
 
 planning-subpage-gantt = Gantt

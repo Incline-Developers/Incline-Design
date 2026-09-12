@@ -24,7 +24,7 @@ use crate::{
         arrangement::{self, Face},
         formats::mesh_data::Triangulation,
         solid_reserves::{ReserveBand, ReserveOutcome, ReservePartition, ReservePiece},
-        triangulation::{OpenTriangulation, TriangulationId},
+        triangulation::{GroundSourceStamp, OpenTriangulation, TriangulationId},
     },
     ui::state::{BenchSelection, BlastShapeRef, SolidPreviewSummary, SolidsViewRow},
 };
@@ -302,6 +302,11 @@ pub(crate) struct ViewSolid {
     pub(super) runtime: u32,
     solid: Solid,
     sources: [Option<Arc<Triangulation>>; 2],
+    /// Which source geometry every artifact in this entry was built from.
+    /// Settled with the envelope - captured when its job started, from the
+    /// inputs that job read - and read by the dig-block records, so a block
+    /// can say which ground produced it. See [`GroundSourceStamp`].
+    stamp: GroundSourceStamp,
     envelope: Stage<Arc<OpenTriangulation>>,
     /// The Benching stage: the envelope plus the plan that divides it.
     body: Stage<Arc<SolidBody>>,
@@ -427,6 +432,7 @@ impl ViewSolid {
         Self {
             key: 7,
             runtime: 1,
+            stamp: Default::default(),
             solid: Solid {
                 id,
                 name: format!("Solid {}", id.0),
@@ -628,8 +634,11 @@ pub(crate) struct DigPiece {
     pub(crate) key: BlastShapeRef,
     pub(crate) name: String,
     pub(crate) area: f64,
-    /// The ground it covers, kept so the next run can recognise it.
-    pub(crate) face: Face,
+    /// The ground it covers, kept so the next run can recognise it - and so a
+    /// persisted schedule reference can be matched against it. Shared rather
+    /// than owned: the snapshot that carries it to a scheduler is rebuilt
+    /// every frame, and a footprint is not worth copying that often.
+    pub(crate) face: Arc<Face>,
     /// Identities this block's ground used to be held under, where a split or
     /// a merge changed it. Recorded rather than left implicit so a scheduler
     /// can trace where material went instead of seeing a deletion and an
@@ -649,7 +658,7 @@ pub(crate) struct DigBlockIdentity {
     pub(crate) band: f64,
     pub(crate) anchor: [f64; 2],
     /// The ground it covered, so a split can be told from a merge.
-    pub(crate) face: Face,
+    pub(crate) face: Arc<Face>,
 }
 
 /// `amount` of the way from `color` towards `towards`, alpha untouched.
@@ -829,6 +838,12 @@ impl crate::app::App<'_> {
         self.rebuild_solid_view_body(&solids);
     }
 
+    /// The stamp entry for one named source surface, as this job's inputs
+    /// stand right now.
+    fn source_stamp(&self, id: Option<TriangulationId>) -> Option<(TriangulationId, crate::model::triangulation::GeometryVersion)> {
+        id.and_then(|id| self.triangulations.iter().find(|item| item.id == id).map(|item| (item.id, item.geometry)))
+    }
+
     /// Solids: build the closed body between the solid's two surfaces.
     ///
     /// The single most expensive thing in the pipeline, and the one keyed
@@ -876,6 +891,7 @@ impl crate::app::App<'_> {
                     runtime,
                     solid: solid.clone(),
                     sources: sources.clone(),
+                    stamp: GroundSourceStamp::default(),
                     envelope: Stage::default(),
                     body: Stage::default(),
                     blasting: Stage::default(),
@@ -909,6 +925,14 @@ impl crate::app::App<'_> {
             return;
         };
         let id = solid.id;
+        // Captured here, from the inputs this job is about to read - never
+        // re-derived at land time from whatever the document then holds. The
+        // stamp settles only with a result the cache accepted, so an obsolete
+        // job can never stamp another run's geometry.
+        let stamp = GroundSourceStamp {
+            surface: self.source_stamp(solid.surface),
+            topography: self.source_stamp(solid.topography),
+        };
         let token = self.solid_view_cache.get_mut(&id).expect("just inserted").envelope.begin(key);
         let snapshot = solid.clone();
         self.spawn_job_reporting_progress(
@@ -919,6 +943,7 @@ impl crate::app::App<'_> {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Envelope, token) else {
                     return;
                 };
+                cache.stamp = stamp;
                 match result {
                     Ok(envelope) => cache.envelope.settle(Arc::new(envelope)),
                     Err(error) => cache.envelope.fail(format!("{error:#}")),
@@ -1450,7 +1475,7 @@ fn adopt_dig_block_ids(partition: &mut SolidPartition, previous: &[DigBlockIdent
 ///
 /// Split out from the walk above so the rule can be exercised on plain data:
 /// the meshes around it are expensive to build and say nothing about it.
-fn match_identity(band: f64, face: &Face, anchor: DVec2, previous: &[DigBlockIdentity], taken: &[DigBlockId]) -> (Option<DigBlockId>, Vec<DigBlockId>) {
+fn match_identity(band: f64, face: &[Vec<DVec2>], anchor: DVec2, previous: &[DigBlockIdentity], taken: &[DigBlockId]) -> (Option<DigBlockId>, Vec<DigBlockId>) {
     let mut candidates: Vec<DigBlockId> = previous
         .iter()
         .filter(|entry| (entry.band - band).abs() < 1e-6)
@@ -1640,7 +1665,7 @@ fn build_solid_partition(
                     key: BlastShapeRef::new(solid.id, band.selection.base, anchor.to_array()),
                     name: "1".to_owned(),
                     area: face_plan_area(&plan),
-                    face: plan,
+                    face: Arc::new(plan),
                     replaces: Vec::new(),
                 }),
                 band,
@@ -1682,7 +1707,7 @@ fn build_solid_partition(
                     key: BlastShapeRef::new(solid.id, band.selection.base, anchor.to_array()),
                     name: (number + 1).to_string(),
                     area: face_plan_area(&face),
-                    face,
+                    face: Arc::new(face),
                     replaces: Vec::new(),
                 }),
                 band,
@@ -1988,6 +2013,17 @@ pub(crate) struct DigBlockRecord {
     /// The block's number within its flitch, as the panels show it.
     pub(crate) name: String,
     pub(crate) plan_area: f64,
+    /// Which source geometry this block was cut from, captured when the
+    /// Solids artifact job started. This - not the id above, which is
+    /// allocated per session - is what a persisted schedule reference
+    /// resolves against; see [`crate::model::schedule::DigBlockRef`].
+    pub(crate) source: GroundSourceStamp,
+    /// The block's footprint in plan, and a point inside it. Together with
+    /// the solid and the flitch these narrow a reference down to one block;
+    /// see [`crate::model::schedule::DigBlockRef`].
+    pub(crate) ground: Arc<Face>,
+    #[allow(dead_code, reason = "stored by the stage 2B 3D picker through App::dig_block_reference, the field's only reader")]
+    pub(crate) anchor: [f64; 2],
     /// `None` when the block did not come out closed, so it has no volume
     /// rather than a volume of zero.
     pub(crate) volume: Option<f64>,
@@ -2077,11 +2113,14 @@ impl crate::app::App<'_> {
                     id: block.id,
                     solid: solid.id,
                     solid_name: solid.name.clone(),
+                    source: cache.stamp,
                     bench: part.bench,
                     flitch: part.band.selection,
                     blast: part.blast,
                     name: block.name.clone(),
                     plan_area: block.area,
+                    ground: block.face.clone(),
+                    anchor: block.key.anchor(),
                     volume: part.volume,
                     replaces: block.replaces.clone(),
                     material: match cache.reserves.product().map(|product| product.availability) {

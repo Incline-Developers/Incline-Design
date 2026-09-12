@@ -14,7 +14,8 @@ pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
 pub(crate) mod residency;
-pub(crate) mod schedule; // Handles the Schedule workspace's loader classes and agents.
+pub(crate) mod schedule;
+pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).

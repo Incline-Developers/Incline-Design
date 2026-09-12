@@ -1,8 +1,9 @@
-//! The Schedule Setup subpage's New Loader Class and New Loader Agent dialogs.
+//! The Schedule Setup subpage's New Loader Class, New Loader Agent and New
+//! Sequence dialogs.
 //!
-//! Both are drafts: nothing reaches the project until the entry is valid and
-//! the user confirms it, so a cancelled dialog leaves the schedule - and the
-//! project's dirty marker - exactly as it found them.
+//! All of them are drafts: nothing reaches the project until the entry is
+//! valid and the user confirms it, so a cancelled dialog leaves the schedule -
+//! and the project's dirty marker - exactly as it found them.
 
 use crate::{
     i18n::tr,
@@ -122,5 +123,43 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
     if close || !open {
         editor.new_loader_agent_open = false;
         editor.new_loader_agent_name.clear();
+    }
+}
+
+/// Add one dig sequence. It starts empty: its ground is chosen afterwards,
+/// once the 3D block editor exists to pick it from.
+pub(crate) fn draw_new_sequence_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    if !editor.new_sequence_open {
+        return;
+    }
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("new_sequence_dialog", tr!("schedule-new-sequence"))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldText::new(tr!("planning-name"), &mut editor.new_sequence_name)
+                .hint_text(tr!(literal = "Required"))
+                .show(ui);
+            let name = editor.new_sequence_name.trim().to_owned();
+            let taken = plan.sequences().iter().any(|sequence| sequence.name.trim().eq_ignore_ascii_case(&name));
+            let can_add = !name.is_empty() && !taken;
+            if taken {
+                ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
+            }
+            menu::menu_actions(ui, |ui| {
+                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!("schedule-add-sequence")).primary().enabled(can_add)).clicked()) && can_add {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::AddSequence { name }));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.new_sequence_open = false;
+        editor.new_sequence_name.clear();
     }
 }

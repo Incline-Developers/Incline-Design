@@ -12,9 +12,25 @@
 //! rather than in the UI, so a command that arrives from anywhere - a dialog,
 //! a replayed undo, a future script - is checked the same way.
 
+pub(crate) mod sequence;
+
+pub(crate) use sequence::{DigBlockRef, Footprint, Sequence, SequenceId};
+
+/// A pick of one dig block, as the 3D editor submits it: a block of *this*
+/// run. The command boundary checks both halves against the current snapshot
+/// and constructs the persistent reference there - the UI never builds a
+/// reference or its provenance itself.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DigBlockPick {
+    pub(crate) block: crate::model::DigBlockId,
+    pub(crate) generation: u64,
+}
 use serde::{Deserialize, Serialize};
 
-use crate::i18n::{tr, tr_format};
+use crate::{
+    i18n::{tr, tr_format},
+    model::ReserveFieldId,
+};
 
 /// Identity of one loader class within its project.
 ///
@@ -74,6 +90,15 @@ pub(crate) enum ScheduleError {
     IdsExhausted,
     /// Two entries share one id. Only reachable from a file.
     DuplicateId,
+    /// An id that names no sequence in this plan.
+    UnknownSequence,
+    /// A position that is past the end of a sequence's membership.
+    UnknownMember,
+    /// Ground already in this sequence. The order is what the sequence *is*,
+    /// so the same block cannot hold two places in it.
+    DuplicateMember,
+    /// A stored reference whose numbers could not describe any ground.
+    MalformedReference,
 }
 
 impl ScheduleError {
@@ -87,6 +112,10 @@ impl ScheduleError {
             Self::ClassInUse(agents) => tr!("schedule-error-class-in-use", agents = agents.join(", ")),
             Self::IdsExhausted => tr!("schedule-error-ids-exhausted"),
             Self::DuplicateId => tr!("schedule-error-duplicate-id"),
+            Self::UnknownSequence => tr!("schedule-error-unknown-sequence"),
+            Self::UnknownMember => tr!("schedule-error-unknown-member"),
+            Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
+            Self::MalformedReference => tr!("schedule-error-malformed-reference"),
         }
     }
 }
@@ -111,6 +140,22 @@ pub(crate) struct SchedulePlan {
     next_class_id: u64,
     #[serde(default)]
     next_agent_id: u64,
+    /// The dig sequences this project has authored, in the order they were
+    /// created. Ordering here carries no priority: a sequence becomes work
+    /// only once it is assigned to an agent.
+    #[serde(default)]
+    sequences: Vec<Sequence>,
+    #[serde(default)]
+    next_sequence_id: u64,
+    /// Which reserve field this schedule reads as tonnes.
+    ///
+    /// Chosen explicitly and never inferred from a field's name: "Tonnes",
+    /// "tonnage" and "TONNES_WET" are all plausible names for fields that
+    /// mean different things, and a schedule that guessed would produce
+    /// durations that look right and are not. `None` until the user picks
+    /// one, which is a readiness problem rather than a reason to assume.
+    #[serde(default)]
+    tonnage_field: Option<ReserveFieldId>,
 }
 
 /// Whether two names are the same name, for the uniqueness rules. Trimmed and
@@ -142,12 +187,12 @@ fn checked_rate(rate: f64) -> ScheduleResult<f64> {
 
 impl SchedulePlan {
     pub(crate) fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty()
+        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.sequences.is_empty() && self.tonnage_field.is_none()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
     pub(crate) fn is_pristine(&self) -> bool {
-        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0
+        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_sequence_id == 0
     }
 
     /// Never hand out an id `other` has already issued.
@@ -164,6 +209,7 @@ impl SchedulePlan {
     pub(crate) fn raise_allocator_to(&mut self, other: &Self) {
         self.next_class_id = self.next_class_id.max(other.next_class_id);
         self.next_agent_id = self.next_agent_id.max(other.next_agent_id);
+        self.next_sequence_id = self.next_sequence_id.max(other.next_sequence_id);
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -302,6 +348,129 @@ impl SchedulePlan {
         Ok(())
     }
 
+    pub(crate) fn sequences(&self) -> &[Sequence] {
+        &self.sequences
+    }
+
+    pub(crate) fn sequence(&self, id: SequenceId) -> Option<&Sequence> {
+        self.sequences.iter().find(|sequence| sequence.id == id)
+    }
+
+    /// Whether anything in this plan post-dates the first schedule format:
+    /// sequences, a tonnage field, or a sequence id that has been retired.
+    ///
+    /// A save writes the oldest format that can describe what it holds, so a
+    /// project that only ever configured a fleet still opens in a build from
+    /// before sequences existed.
+    pub(crate) fn uses_sequences(&self) -> bool {
+        !self.sequences.is_empty() || self.tonnage_field.is_some() || self.next_sequence_id != 0
+    }
+
+    /// Which reserve field this schedule reads as tonnes, if one was chosen.
+    pub(crate) fn tonnage_field(&self) -> Option<ReserveFieldId> {
+        self.tonnage_field
+    }
+
+    /// Choose the field whose summed value is read as tonnes, or clear it.
+    ///
+    /// The plan cannot check the field exists or sums - it has no document -
+    /// so that is a readiness question, answered against the project every
+    /// time a sequence is measured rather than once when it is picked.
+    pub(crate) fn set_tonnage_field(&mut self, field: Option<ReserveFieldId>) {
+        self.tonnage_field = field;
+    }
+
+    /// Every sequence holding this ground, for a report that must say where a
+    /// block is already committed.
+    #[allow(dead_code, reason = "read by the stage 2B assignment rules, which reject committing the same ground twice")]
+    pub(crate) fn sequences_holding(&self, block: &DigBlockRef) -> impl Iterator<Item = &Sequence> {
+        self.sequences.iter().filter(move |sequence| sequence.contains(block))
+    }
+
+    fn sequence_name_taken(&self, name: &str, except: Option<SequenceId>) -> bool {
+        self.sequences.iter().any(|sequence| Some(sequence.id) != except && same_name(&sequence.name, name))
+    }
+
+    pub(crate) fn add_sequence(&mut self, name: &str) -> ScheduleResult<SequenceId> {
+        let name = checked_name(name)?;
+        if self.sequence_name_taken(&name, None) {
+            return Err(ScheduleError::DuplicateName(name));
+        }
+        let id = SequenceId(self.next_sequence_id);
+        self.next_sequence_id = self.next_sequence_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
+        self.sequences.push(Sequence { id, name, members: Vec::new() });
+        Ok(id)
+    }
+
+    pub(crate) fn rename_sequence(&mut self, id: SequenceId, name: &str) -> ScheduleResult {
+        let name = checked_name(name)?;
+        if !self.sequences.iter().any(|sequence| sequence.id == id) {
+            return Err(ScheduleError::UnknownSequence);
+        }
+        if self.sequence_name_taken(&name, Some(id)) {
+            return Err(ScheduleError::DuplicateName(name));
+        }
+        self.sequences.iter_mut().find(|sequence| sequence.id == id).expect("checked above").name = name;
+        Ok(())
+    }
+
+    /// Delete a sequence and the membership it held.
+    ///
+    /// Unlike a loader class, a sequence owns its members rather than being
+    /// referred to by them, so nothing is orphaned. Stage 2B's assignments
+    /// will refer to sequences, and this is where that refusal will go.
+    pub(crate) fn remove_sequence(&mut self, id: SequenceId) -> ScheduleResult {
+        if !self.sequences.iter().any(|sequence| sequence.id == id) {
+            return Err(ScheduleError::UnknownSequence);
+        }
+        self.sequences.retain(|sequence| sequence.id != id);
+        Ok(())
+    }
+
+    fn sequence_mut(&mut self, id: SequenceId) -> ScheduleResult<&mut Sequence> {
+        self.sequences.iter_mut().find(|sequence| sequence.id == id).ok_or(ScheduleError::UnknownSequence)
+    }
+
+    /// Append ground to the end of a sequence's dig order.
+    #[allow(dead_code, reason = "insert_member covers it today; the tail-append reads better where the stage 2B picker adds blocks")]
+    pub(crate) fn add_member(&mut self, id: SequenceId, block: DigBlockRef) -> ScheduleResult {
+        self.insert_member(id, usize::MAX, block)
+    }
+
+    /// Put ground at `position` in the dig order, clamped to the end.
+    pub(crate) fn insert_member(&mut self, id: SequenceId, position: usize, block: DigBlockRef) -> ScheduleResult {
+        if !block.is_well_formed() {
+            return Err(ScheduleError::MalformedReference);
+        }
+        let sequence = self.sequence_mut(id)?;
+        if sequence.contains(&block) {
+            return Err(ScheduleError::DuplicateMember);
+        }
+        let position = position.min(sequence.members.len());
+        sequence.members.insert(position, block);
+        Ok(())
+    }
+
+    pub(crate) fn remove_member(&mut self, id: SequenceId, position: usize) -> ScheduleResult {
+        let sequence = self.sequence_mut(id)?;
+        if position >= sequence.members.len() {
+            return Err(ScheduleError::UnknownMember);
+        }
+        sequence.members.remove(position);
+        Ok(())
+    }
+
+    /// Move one block to a different place in the dig order.
+    pub(crate) fn move_member(&mut self, id: SequenceId, from: usize, to: usize) -> ScheduleResult {
+        let sequence = self.sequence_mut(id)?;
+        if from >= sequence.members.len() || to >= sequence.members.len() {
+            return Err(ScheduleError::UnknownMember);
+        }
+        let block = sequence.members.remove(from);
+        sequence.members.insert(to, block);
+        Ok(())
+    }
+
     /// Check a plan read back from a file, and bring its id counters up to
     /// what it actually contains.
     ///
@@ -333,9 +502,40 @@ impl SchedulePlan {
                 return Err(ScheduleError::UnknownClass);
             }
         }
+        for (index, sequence) in self.sequences.iter().enumerate() {
+            if self.sequences[..index].iter().any(|earlier| earlier.id == sequence.id) {
+                return Err(ScheduleError::DuplicateId);
+            }
+            checked_name(&sequence.name)?;
+            if self.sequences[..index].iter().any(|earlier| same_name(&earlier.name, &sequence.name)) {
+                return Err(ScheduleError::DuplicateName(sequence.name.clone()));
+            }
+            // Membership is checked for shape only. Whether the ground is
+            // still there is a question for the current run, asked every time
+            // a sequence is measured - a file that opens on a project whose
+            // Solids have not been rerun is not a broken file.
+            //
+            // Duplicates are judged on exact stored equality, which is file
+            // corruption; the same *ground* held under two anchors is not a
+            // broken file - capture refuses it, but a saved plan can carry
+            // it - so it passes here and the readiness report names it.
+            for (position, member) in sequence.members.iter().enumerate() {
+                if !member.is_well_formed() {
+                    return Err(ScheduleError::MalformedReference);
+                }
+                if sequence.members[..position].contains(member) {
+                    return Err(ScheduleError::DuplicateMember);
+                }
+            }
+        }
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
-        for (counter, highest) in [(&mut self.next_class_id, highest_class), (&mut self.next_agent_id, highest_agent)] {
+        let highest_sequence = self.sequences.iter().map(|sequence| sequence.id.0).max();
+        for (counter, highest) in [
+            (&mut self.next_class_id, highest_class),
+            (&mut self.next_agent_id, highest_agent),
+            (&mut self.next_sequence_id, highest_sequence),
+        ] {
             if let Some(highest) = highest {
                 *counter = (*counter).max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
             }
@@ -363,6 +563,28 @@ impl SchedulePlan {
             agent.name.hash(hasher);
             agent.class_id.hash(hasher);
         }
+        self.tonnage_field.hash(hasher);
+        for sequence in &self.sequences {
+            sequence.id.hash(hasher);
+            sequence.name.hash(hasher);
+            for member in sequence.members() {
+                member.solid.hash(hasher);
+                member.flitch_base.to_bits().hash(hasher);
+                member.anchor[0].to_bits().hash(hasher);
+                member.anchor[1].to_bits().hash(hasher);
+                member.plan_area.to_bits().hash(hasher);
+            }
+        }
+    }
+
+    /// Test-only: pretend the id allocators were never advanced, so plan
+    /// snapshots taken across an undo (which never rewinds them) compare on
+    /// content alone.
+    #[cfg(test)]
+    pub(crate) fn rewind_allocators_for_test(&mut self) {
+        self.next_class_id = 0;
+        self.next_agent_id = 0;
+        self.next_sequence_id = 0;
     }
 
     /// An estimate of what one snapshot of this plan costs the undo history.
@@ -371,6 +593,11 @@ impl SchedulePlan {
             + self.name.len()
             + self.classes.iter().map(|class| size_of::<LoaderClass>() + class.name.len()).sum::<usize>()
             + self.agents.iter().map(|agent| size_of::<LoaderAgent>() + agent.name.len()).sum::<usize>()
+            + self
+                .sequences
+                .iter()
+                .map(|sequence| size_of::<Sequence>() + sequence.name.len() + size_of_val(sequence.members()))
+                .sum::<usize>()
     }
 }
 

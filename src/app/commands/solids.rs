@@ -254,6 +254,9 @@ pub(super) fn preview_triangulation(
     OpenTriangulation {
         id: SOLID_PREVIEW_ID,
         state: crate::model::project::ProjectItemState::dirty(None).with_loaded(true),
+        // A preview is generated geometry, never a source surface; its token
+        // only has to exist.
+        geometry: crate::model::triangulation::GeometryVersion::mint(),
         name,
         mesh,
         spatial,

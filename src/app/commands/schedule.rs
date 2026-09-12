@@ -14,8 +14,8 @@
 use crate::{
     i18n::tr,
     model::{
-        Command,
-        schedule::{LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult},
+        Command, ReserveFieldId,
+        schedule::{LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult, SequenceId},
     },
     ui::state::ScheduleEdit,
     userspace_warn,
@@ -49,6 +49,13 @@ impl crate::app::App<'_> {
             ScheduleEdit::RenameAgent { agent, name } => self.rename_loader_agent(agent, name),
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
+            ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
+            ScheduleEdit::AddSequence { name } => self.add_sequence(name),
+            ScheduleEdit::RenameSequence { sequence, name } => self.rename_sequence(sequence, name),
+            ScheduleEdit::DeleteSequence(sequence) => self.delete_sequence(sequence),
+            ScheduleEdit::AddMember { sequence, position, pick } => self.add_sequence_member(sequence, position, pick),
+            ScheduleEdit::RemoveMember { sequence, position } => self.remove_sequence_member(sequence, position),
+            ScheduleEdit::MoveMember { sequence, from, to } => self.move_sequence_member(sequence, from, to),
         }
     }
 
@@ -137,6 +144,80 @@ impl crate::app::App<'_> {
         if self.workspace.active_document().is_none_or(|document| document.schedule().agent(id).is_none()) {
             self.editor.schedule_selected_agent = None;
             self.editor.schedule_agent_draft = None;
+        }
+    }
+
+    /// Nominate the field read as tonnes.
+    ///
+    /// Deliberately not validated here against the project's Field List: a
+    /// field can be deleted afterwards, so the choice has to be checked every
+    /// time it is read anyway. Checking it in one place - the readiness
+    /// report - is what keeps a stale choice explained rather than silently
+    /// dropped. See [`crate::app::commands::schedule_readiness`].
+    fn set_tonnage_field(&mut self, field: Option<ReserveFieldId>) {
+        self.edit_schedule(|plan| {
+            plan.set_tonnage_field(field);
+            Ok(())
+        });
+    }
+
+    fn add_sequence(&mut self, name: String) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            added = Some(plan.add_sequence(&name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_sequence = Some(id);
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    fn rename_sequence(&mut self, id: SequenceId, name: String) {
+        self.edit_schedule(|plan| plan.rename_sequence(id, &name));
+    }
+
+    fn delete_sequence(&mut self, id: SequenceId) {
+        self.edit_schedule(|plan| plan.remove_sequence(id));
+        if self.workspace.active_document().is_none_or(|document| document.schedule().sequence(id).is_none()) {
+            self.editor.schedule_selected_sequence = None;
+            self.editor.schedule_selected_member = None;
+            self.editor.schedule_sequence_draft = None;
+        }
+    }
+
+    fn add_sequence_member(&mut self, id: SequenceId, position: usize, pick: crate::model::schedule::DigBlockPick) {
+        // The pick boundary: a reference exists only through a block of the
+        // current run, checked here, so nothing downstream ever has to trust
+        // a hand-built reference or refresh provenance itself.
+        let block = match self.add_dig_block(&pick) {
+            Ok(block) => block,
+            Err(reason) => {
+                userspace_warn!("{}", reason);
+                return;
+            }
+        };
+        self.edit_schedule(|plan| plan.insert_member(id, position, block));
+    }
+
+    fn remove_sequence_member(&mut self, id: SequenceId, position: usize) {
+        self.edit_schedule(|plan| plan.remove_member(id, position));
+        // The row under the one that went is the one now at this position;
+        // past the end, nothing is selected rather than the wrong thing.
+        let length = self
+            .workspace
+            .active_document()
+            .and_then(|document| document.schedule().sequence(id))
+            .map_or(0, |sequence| sequence.members().len());
+        if self.editor.schedule_selected_member.is_some_and(|selected| selected >= length) {
+            self.editor.schedule_selected_member = length.checked_sub(1);
+        }
+    }
+
+    fn move_sequence_member(&mut self, id: SequenceId, from: usize, to: usize) {
+        self.edit_schedule(|plan| plan.move_member(id, from, to));
+        if self.editor.schedule_selected_member == Some(from) {
+            self.editor.schedule_selected_member = Some(to);
         }
     }
 }

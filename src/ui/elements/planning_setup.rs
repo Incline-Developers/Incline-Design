@@ -288,8 +288,9 @@ fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, running: bool, 
     });
 }
 
-/// One-line summary of how a field aggregates, for the Field List grid.
-fn aggregation_summary(document: &Document, aggregation: &ReserveAggregation) -> String {
+/// One-line summary of how a field aggregates, for the Field List grid and
+/// the tonnage-field combo.
+pub(crate) fn aggregation_summary(document: &Document, aggregation: &ReserveAggregation) -> String {
     match aggregation {
         ReserveAggregation::Sum => tr!(literal = "Sum"),
         ReserveAggregation::WeightedAverage { weight_field } => {
@@ -1334,7 +1335,7 @@ fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) {
 
 /// The Schedule Setup subpage's panes: a list beside the properties of the
 /// row selected in it, the same shape the Solids steps use.
-fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     use crate::ui::state::ScheduleSection;
 
     // Cloned rather than borrowed: the panes below take `editor` mutably to
@@ -1347,7 +1348,9 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
     let session = project.active_session;
     match editor.schedule_section {
         ScheduleSection::Configuration => {
-            central_island(ui, layout, |ui, rect| super::schedule_setup::draw_configuration(ui, rect, editor, &plan, session, commands));
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_setup::draw_configuration(ui, rect, editor, &plan, document, session, commands)
+            });
         }
         ScheduleSection::LoaderClasses => {
             island(ui, layout, "schedule_class_list_island", 320.0, |ui, rect| {
@@ -1365,9 +1368,18 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_setup::draw_agent_properties(ui, rect, editor, &plan, session, commands)
             });
         }
+        ScheduleSection::Sequences => {
+            island(ui, layout, "schedule_sequence_list_island", 320.0, |ui, rect| {
+                super::schedule_setup::draw_sequence_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_setup::draw_sequence_details(ui, rect, editor, &plan, session, commands)
+            });
+        }
     }
     crate::ui::dialogs::schedule::draw_new_loader_class_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_new_loader_agent_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_new_sequence_dialog(ui, editor, &plan, session, commands);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1387,7 +1399,7 @@ pub(crate) fn draw_details(
             return;
         }
         if page == PlanningPage::Schedule {
-            draw_schedule_details(ui, &mut layout, editor, project, commands);
+            draw_schedule_details(ui, &mut layout, editor, project, document, commands);
             return;
         }
         let configuration = ui

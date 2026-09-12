@@ -36,11 +36,12 @@ use crate::{
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{LoadedTriangulation, OpenTriangulation, morton_surface_face_order, unique_edges},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, morton_surface_face_order, unique_edges},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
 
+const META_GEOMETRY: &str = "incline:geometry";
 const META_KIND: &str = "incline:kind";
 const META_NAME: &str = "incline:name";
 const META_OBJECT: &str = "incline:object";
@@ -58,7 +59,21 @@ const META_SCHEDULE: &str = "incline:schedule";
 /// Payload version written into [`META_SCHEDULE`]. Bumped when the stored
 /// shape changes; a file naming a version this build does not know is
 /// reported and left out rather than half-read.
-const SCHEDULE_METADATA_VERSION: u64 = 1;
+///
+/// 3 - dig-block references carry their ground's geometry: the flitch's top
+/// RL, a canonical footprint digest and the block's volume.
+/// 4 - references also carry the ground's provenance: the source surfaces and
+/// their geometry versions the block was cut from. Version 3 references are
+/// read but cannot prove which sources produced them, so they resolve as
+/// unverified and stay in their sequences until the blocks are reselected,
+/// rather than being silently rebound to whatever now covers their anchors.
+/// Version 2 references (a point, an area, a base RL) are weaker still, and
+/// are treated the same way.
+const SCHEDULE_METADATA_VERSION: u64 = 4;
+/// The format before dig sequences and the tonnage field existed. Still
+/// written for a plan that holds only a fleet, so such a project keeps
+/// opening in builds that predate them.
+const SCHEDULE_FLEET_ONLY_VERSION: u64 = 1;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -111,6 +126,9 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) preferred_id: Option<u64>,
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
+    /// Which geometry version this surface's mesh is, read from the file or
+    /// minted at load for an older file that never recorded one.
+    pub(crate) geometry: GeometryVersion,
     pub(crate) loaded: LoadedTriangulation,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
@@ -333,6 +351,28 @@ fn element_id(element: &omf_crate::Element) -> Option<u64> {
         .and_then(|value| value.as_str().and_then(|value| value.parse().ok()).or_else(|| value.as_u64()))
 }
 
+/// The geometry version a surface element carries, as a UUID string. An
+/// element written before versions existed has none, so it is minted one at
+/// load: the mesh it holds is the first version this project has ever seen
+/// of it. That mint cannot retroactively verify anything - sequence
+/// references from those files carry no version to compare against, and stay
+/// unverified - it only gives the item a baseline that future edits can be
+/// measured from.
+///
+/// A value that is present but unparseable is treated the same way: the
+/// safest thing a file can be told about its own token is that this build
+/// cannot read it, and a fresh one cannot lie about the old geometry.
+fn element_geometry(element: &omf_crate::Element) -> GeometryVersion {
+    element
+        .metadata
+        .get(META_GEOMETRY)
+        .and_then(|value| value.get("version"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .map(GeometryVersion)
+        .unwrap_or_else(GeometryVersion::mint)
+}
+
 fn element_source_name(element: &omf_crate::Element) -> Option<String> {
     element
         .metadata
@@ -445,10 +485,15 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
     let schedule = document.schedule();
     if !schedule.is_pristine() {
+        let version = if schedule.uses_sequences() {
+            SCHEDULE_METADATA_VERSION
+        } else {
+            SCHEDULE_FLEET_ONLY_VERSION
+        };
         put(
             &mut element,
             META_SCHEDULE,
-            serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
+            serde_json::json!({ "version": version, "plan": serde_json::to_value(schedule)? }),
         );
     }
     Ok(element)
@@ -476,7 +521,9 @@ fn read_schedule(value: serde_json::Value) -> std::result::Result<crate::model::
         ));
     }
     let payload: Payload = serde_json::from_value(value).map_err(|error| error.to_string())?;
-    if payload.version != SCHEDULE_METADATA_VERSION {
+    // Older formats are read, not rejected: every version so far is a subset
+    // of this one, and the fields it does not carry default to empty.
+    if payload.version < SCHEDULE_FLEET_ONLY_VERSION {
         return Err(format!("schedule format {} is not supported by this build", payload.version));
     }
     let mut plan = payload.plan;
@@ -539,6 +586,10 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         triangulation.state.source_format.as_deref(),
         "surface",
     );
+    // The geometry version travels with the element as a UUID string, so a
+    // reopen - and an eviction, whose backing is these same bytes - hands
+    // back the version that left.
+    put(&mut element, META_GEOMETRY, json!({ "version": triangulation.geometry.0.to_string() }));
     put(
         &mut element,
         META_STYLE,
@@ -1295,6 +1346,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     preferred_id,
                     source_name,
                     source_format,
+                    geometry: element_geometry(element),
                     is_loaded: false,
                     deferred: Some((
                         locator,
@@ -1710,6 +1762,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn push_triangulation(&mut self, element: &omf_crate::Element, vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<()> {
+        let geometry = element_geometry(element);
         let mesh = Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?;
         let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
         let edges = unique_edges(&mesh);
@@ -1720,6 +1773,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
             source_format: element_source_format(element),
+            geometry,
             loaded: LoadedTriangulation {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "obj"),

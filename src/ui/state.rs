@@ -193,6 +193,15 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
     }
 
+    /// Whether the Schedule Setup subpage is on its Dig Sequences step, whose
+    /// panels read the mirrored readiness reports.
+    pub(crate) fn is_schedule_sequences_step(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Schedule
+            && self.schedule_subpage == PlanningSubpage::Setup
+            && self.schedule_section == ScheduleSection::Sequences
+    }
+
     /// Whether the Solids page is showing its View subpage.
     pub(crate) fn is_solids_view(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Solids && self.solids_subpage == PlanningSubpage::View
@@ -2087,6 +2096,21 @@ pub(crate) struct EditorState {
     pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
     pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
     pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
+    /// The selected dig sequence, the selected place in its dig order, and
+    /// the name being typed into it. The selected member is a position rather
+    /// than a block reference: the order is what is being edited, and two
+    /// positions can hold ground that resolves to nothing at all.
+    pub(crate) schedule_selected_sequence: Option<crate::model::schedule::SequenceId>,
+    pub(crate) schedule_selected_member: Option<usize>,
+    pub(crate) schedule_sequence_draft: Option<ScheduleSequenceDraft>,
+    pub(crate) new_sequence_open: bool,
+    pub(crate) new_sequence_name: String,
+    /// Every sequence's readiness against the current run, mirrored from
+    /// [`crate::app::commands::schedule_readiness`] while the Sequences step is
+    /// on screen and empty otherwise. Read where the dig order and its
+    /// diagnostics are drawn, so the panel never holds a report that outlived
+    /// the run it was measured against.
+    pub(crate) schedule_sequence_reports: Vec<ScheduleSequenceView>,
     /// Whether the New Loader Class / New Loader Agent dialogs are open, and
     /// their draft contents. A draft is not in the project until it is valid
     /// and committed, so cancelling one leaves nothing behind.
@@ -2377,6 +2401,12 @@ impl EditorState {
         self.schedule_class_draft = None;
         self.schedule_agent_draft = None;
         self.schedule_name_draft = None;
+        self.schedule_selected_sequence = None;
+        self.schedule_selected_member = None;
+        self.schedule_sequence_draft = None;
+        self.new_sequence_open = false;
+        self.new_sequence_name.clear();
+        self.schedule_sequence_reports.clear();
         self.new_loader_class_open = false;
         self.new_loader_class_name.clear();
         self.new_loader_class_rate.clear();
@@ -2933,6 +2963,12 @@ impl EditorState {
             schedule_class_draft: None,
             schedule_agent_draft: None,
             schedule_name_draft: None,
+            schedule_selected_sequence: None,
+            schedule_selected_member: None,
+            schedule_sequence_draft: None,
+            new_sequence_open: false,
+            new_sequence_name: String::new(),
+            schedule_sequence_reports: Vec::new(),
             new_loader_class_open: false,
             new_loader_class_name: String::new(),
             new_loader_class_rate: String::new(),
@@ -3899,11 +3935,22 @@ impl UiCommand {
                 ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
+                ScheduleEdit::AddSequence { name } => report(tr!("schedule-new-sequence"), name.clone()),
+                ScheduleEdit::DeleteSequence(id) => report(tr!("schedule-delete-sequence"), format!("{id:?}")),
                 ScheduleEdit::SetName(_)
                 | ScheduleEdit::RenameClass { .. }
                 | ScheduleEdit::SetClassRate { .. }
                 | ScheduleEdit::RenameAgent { .. }
-                | ScheduleEdit::SetAgentClass { .. } => None,
+                | ScheduleEdit::SetAgentClass { .. }
+                | ScheduleEdit::RenameSequence { .. }
+                | ScheduleEdit::SetTonnageField(_)
+                // Membership edits are cell edits of the dig order: the
+                // sequence's own panel shows the result, and a console line
+                // per block would bury the log once a sequence is picked out
+                // of a viewport.
+                | ScheduleEdit::AddMember { .. }
+                | ScheduleEdit::RemoveMember { .. }
+                | ScheduleEdit::MoveMember { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
@@ -4394,6 +4441,7 @@ pub(crate) enum ScheduleSection {
     Configuration,
     LoaderClasses,
     LoaderAgents,
+    Sequences,
 }
 
 /// The cells of one loader class as they are being typed.
@@ -4465,6 +4513,79 @@ pub(crate) enum ScheduleEdit {
         class: crate::model::schedule::LoaderClassId,
     },
     DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Nominate the reserve field whose summed value is read as tonnes, or
+    /// clear the choice. Never inferred from a field's name.
+    SetTonnageField(Option<crate::model::ReserveFieldId>),
+    /// Add an empty dig sequence. Its ground is chosen afterwards.
+    AddSequence {
+        name: String,
+    },
+    RenameSequence {
+        sequence: crate::model::schedule::SequenceId,
+        name: String,
+    },
+    DeleteSequence(crate::model::schedule::SequenceId),
+    /// Put one dug block into a sequence's dig order, at `position` or - when
+    /// that is past the end - after everything already in it. The pick names
+    /// a block of the run the picker saw; the handler validates it against
+    /// the current snapshot and constructs the stored reference itself, so a
+    /// late pick cannot masquerade as current ground.
+    #[allow(dead_code, reason = "constructed by the stage 2B 3D block picker; the dig-order panel edits what is already in the order")]
+    AddMember {
+        sequence: crate::model::schedule::SequenceId,
+        position: usize,
+        pick: crate::model::schedule::DigBlockPick,
+    },
+    /// Take one block out of the dig order. The block itself is untouched;
+    /// only this sequence's claim on it goes.
+    RemoveMember {
+        sequence: crate::model::schedule::SequenceId,
+        position: usize,
+    },
+    /// Move one block to a different place in the dig order.
+    MoveMember {
+        sequence: crate::model::schedule::SequenceId,
+        from: usize,
+        to: usize,
+    },
+}
+
+/// One dig sequence's name as it is being typed. See [`ScheduleClassDraft`]
+/// for why the source snapshot is here.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleSequenceDraft {
+    pub(crate) id: crate::model::schedule::SequenceId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// One member of a sequence as the panels show it: what the current run says
+/// about the ground at that place in the dig order. The dig order itself is
+/// persistent plan data; only the answers here are per-run.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleMemberView {
+    /// Its place in the dig order, from 1.
+    pub(crate) position: usize,
+    /// The block's name and solid in the Solids panels, when the reference
+    /// resolved.
+    pub(crate) name: Option<String>,
+    pub(crate) solid_name: Option<String>,
+    /// Why the reference did not resolve, when it did not.
+    pub(crate) unresolved: Option<String>,
+    /// Its complete measured tonnage, when everything needed to state one was
+    /// there. Never a quiet zero.
+    pub(crate) tonnes: Option<f64>,
+}
+
+/// One sequence's readiness as the Sequences step draws it, mirrored from the
+/// readiness report every frame that step is on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleSequenceView {
+    pub(crate) sequence: crate::model::schedule::SequenceId,
+    pub(crate) ready: bool,
+    pub(crate) tonnes: Option<f64>,
+    pub(crate) members: Vec<ScheduleMemberView>,
+    pub(crate) problems: Vec<String>,
 }
 
 /// The schedule's own name as it is being typed, and what the plan held when

@@ -366,6 +366,7 @@ impl crate::app::App<'_> {
             // Closing the project clears the markers too; a stage status left
             // over from the last one would describe geometry that is gone.
             self.mirror_planning_stages();
+            self.mirror_schedule_reports();
             return;
         };
         if self.planning_pipeline.as_ref().is_none_or(|pipeline| pipeline.runtime != runtime) {
@@ -416,6 +417,7 @@ impl crate::app::App<'_> {
         }
         self.advance_planning_run();
         self.mirror_planning_stages();
+        self.mirror_schedule_reports();
     }
 
     /// Copy the pipeline's status into the editor state the panels read.
