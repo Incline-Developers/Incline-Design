@@ -65,6 +65,11 @@ pub(crate) fn draw_sequence_editor(ui: &mut egui::Ui, editor: &mut EditorState, 
     // an older version of the same order, and writing it back would revert a
     // newer edit; Apply refuses it, and so does this.
     let target_changed = bar.is_some_and(|bar| bar.members() != draft.opened_from);
+    // While the discard question is on screen it owns the window behind it:
+    // the editor is inert - no keys, no list edits, no camera, no picks - and
+    // the question is the only thing that can be answered. Enter and Escape
+    // belong to it, so nothing here may consume them first.
+    let confirming = draft.confirming_close;
 
     let mut open = true;
     let mut close = false;
@@ -72,48 +77,55 @@ pub(crate) fn draw_sequence_editor(ui: &mut egui::Ui, editor: &mut EditorState, 
     let mut reload = false;
     let mut changed = false;
 
-    DragableMenu::new("sequence_editor", title)
-        .open(&mut open)
-        .min_width(MIN_SIZE.x)
-        .fixed_size(MIN_SIZE)
-        .show(ui.ctx(), |ui| {
-            let Some(bar) = bar else {
-                // Deleted, or undone, while the window was open. Nothing was
-                // applied, and there is nothing left to apply it to.
-                ui.label(egui::RichText::new(tr!("sequence-editor-bar-gone")).color(ui.visuals().error_fg_color));
-                menu::menu_actions(ui, |ui| {
-                    if ui.add(MenuButton::new(tr!(literal = "Close"))).clicked() {
-                        close = true;
-                    }
-                });
-                return;
-            };
-            if target_changed {
-                ui.label(egui::RichText::new(tr!("sequence-editor-target-changed")).color(ui.visuals().error_fg_color));
-            }
-            let available = ui.available_rect_before_wrap();
-            let body_height = (available.height() - ui.spacing().interact_size.y * 3.0).max(160.0);
-            ui.horizontal_top(|ui| {
-                let view_width = (available.width() - LIST_WIDTH - ui.spacing().item_spacing.x).max(200.0);
-                ui.allocate_ui(egui::vec2(view_width, body_height), |ui| {
-                    changed |= draw_view(ui, editor, &mut draft);
-                });
-                ui.allocate_ui(egui::vec2(LIST_WIDTH, body_height), |ui| {
-                    let (list_edit, selection) = draw_order_list(ui, editor, &draft);
-                    edit = list_edit;
-                    if selection != draft.selected {
-                        draft.selected = selection;
-                        changed = true;
-                    }
-                });
-            });
-            changed |= draw_preview_slider(ui, editor, &mut draft);
+    let menu = DragableMenu::new("sequence_editor", title).min_width(MIN_SIZE.x).fixed_size(MIN_SIZE);
+    // No close button of its own while the question stands: the question is
+    // the only way out of the window, and a second close behind it would be a
+    // second answer to the same question.
+    let menu = if confirming { menu } else { menu.open(&mut open) };
+    menu.show(ui.ctx(), |ui| {
+        let Some(bar) = bar else {
+            // Deleted, or undone, while the window was open. Nothing was
+            // applied, and there is nothing left to apply it to.
+            ui.label(egui::RichText::new(tr!("sequence-editor-bar-gone")).color(ui.visuals().error_fg_color));
             menu::menu_actions(ui, |ui| {
-                let can_apply = !target_changed;
-                // Enter applies and Escape cancels, as every other dialog in
-                // the app does. The keys are consumed either way, so Escape
-                // closing this window does not also reach past it.
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                if ui.add(MenuButton::new(tr!(literal = "Close"))).clicked() {
+                    close = true;
+                }
+            });
+            return;
+        };
+        if target_changed {
+            ui.label(egui::RichText::new(tr!("sequence-editor-target-changed")).color(ui.visuals().error_fg_color));
+        }
+        let available = ui.available_rect_before_wrap();
+        let body_height = (available.height() - ui.spacing().interact_size.y * 3.0).max(160.0);
+        ui.horizontal_top(|ui| {
+            let view_width = (available.width() - LIST_WIDTH - ui.spacing().item_spacing.x).max(200.0);
+            ui.allocate_ui(egui::vec2(view_width, body_height), |ui| {
+                changed |= draw_view(ui, editor, &mut draft, session, confirming);
+            });
+            ui.allocate_ui(egui::vec2(LIST_WIDTH, body_height), |ui| {
+                let (list_edit, selection) = draw_order_list(ui, editor, &draft, confirming);
+                edit = list_edit;
+                if selection != draft.selected {
+                    draft.selected = selection;
+                    changed = true;
+                }
+            });
+        });
+        changed |= draw_preview_slider(ui, editor, &mut draft, confirming);
+        menu::menu_actions(ui, |ui| {
+            let can_apply = !target_changed;
+            // Enter applies and Escape cancels, as every other dialog in
+            // the app does. The keys are consumed either way, so Escape
+            // closing this window does not also reach past it - except
+            // while the discard question is up, when neither is asked for
+            // here at all: the question owns both keys, and the draft
+            // under it must not be applied by a keypress meant to answer
+            // a question about throwing it away.
+            let submitted = !confirming && menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = !confirming && menu::dialog_cancel_pressed(ui.ctx());
+            ui.add_enabled_ui(!confirming, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("sequence-editor-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     commands.push(UiCommand::schedule(
                         session,
@@ -130,11 +142,12 @@ pub(crate) fn draw_sequence_editor(ui: &mut egui::Ui, editor: &mut EditorState, 
                 if target_changed && ui.add(MenuButton::new(tr!("sequence-editor-reload"))).clicked() {
                     reload = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
                     close = true;
                 }
             });
         });
+    });
 
     if let Some(edit) = edit {
         apply_list_edit(editor, &mut draft, edit);
@@ -163,6 +176,14 @@ pub(crate) fn draw_sequence_editor(ui: &mut egui::Ui, editor: &mut EditorState, 
 }
 
 /// Ask before throwing an editing session away.
+///
+/// While it is up, this question is the only interactive thing in the window:
+/// the editor behind it draws but does not act - no Apply on Enter, no Cancel
+/// on Escape, no list edits, no camera, no picks. Both keys are consumed here
+/// instead, and both answer *Keep Editing*: Enter confirms the question's
+/// primary action, Escape dismisses the question, and neither is a way to
+/// apply or discard the draft underneath. Discarding is the explicit danger
+/// button and nothing else.
 fn draw_discard_confirmation(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan) {
     let Some((bar, confirming)) = editor.sequence_editor.as_ref().map(|draft| (draft.bar, draft.confirming_close)) else {
         return;
@@ -183,7 +204,10 @@ fn draw_discard_confirmation(ui: &mut egui::Ui, editor: &mut EditorState, plan: 
                 if ui.add(MenuButton::new(tr!("sequence-editor-discard")).danger()).clicked() {
                     discard = true;
                 }
-                if ui.add(MenuButton::new(tr!("sequence-editor-keep-editing")).primary()).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("sequence-editor-keep-editing")).primary()).clicked()
+                    || menu::dialog_confirm_pressed(ui.ctx())
+                    || menu::dialog_cancel_pressed(ui.ctx())
+                {
                     keep = true;
                 }
             });
@@ -203,7 +227,7 @@ fn draw_discard_confirmation(ui: &mut egui::Ui, editor: &mut EditorState, plan: 
 /// The image is the same offscreen preview the Solids pages use, drawn by the
 /// same renderer through this editor's own camera - one renderer, not two, and
 /// nothing in the main viewport or on the Solids pages moves while it is open.
-fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDraft) -> bool {
+fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDraft, session: u32, confirming: bool) -> bool {
     let mut changed = false;
     let rect = ui.available_rect_before_wrap();
     let caption_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
@@ -222,8 +246,11 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
         }
     }
     // Painted first, interacted with second, so this stays the topmost
-    // interactive widget over the pane whichever branch painted it.
-    let response = ui.interact(image_rect, ui.id().with("sequence_editor_view"), egui::Sense::click_and_drag());
+    // interactive widget over the pane whichever branch painted it. While the
+    // discard question is up the pane is display only: no orbit, no zoom, and
+    // above all no pick, because a pick edits the draft being asked about.
+    let sense = if confirming { egui::Sense::hover() } else { egui::Sense::click_and_drag() };
+    let response = ui.interact(image_rect, ui.id().with("sequence_editor_view"), sense);
     let pixels_per_point = ui.ctx().pixels_per_point();
     let size_px = [
         (image_rect.width() * pixels_per_point).round().max(1.0) as u32,
@@ -253,7 +280,10 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
             egui::CursorIcon::PointingHand
         });
     }
-    if response.hovered() {
+    // Hovering survives the inert sense above, so the wheel is gated here:
+    // a scroll behind the discard question must not move the camera of a
+    // draft the user is being asked whether to keep.
+    if response.hovered() && !confirming {
         let scroll = ui.input(|input| {
             input
                 .events
@@ -273,16 +303,28 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
             changed = true;
         }
     }
-    // A click that did not drag picks the block under it. Recorded as a
-    // fraction of the image, not as pane pixels: the renderer sizes its target
-    // within limits of its own, so a pane outside them is drawn at one size and
-    // would otherwise be picked against another.
+    // A click that did not drag picks the block under it. The click is
+    // addressed the moment it is made - this draft instance, this run, this
+    // image - because it is resolved frames later, and an unaddressed click
+    // would be answered as whatever the renderer is looking at by then. The UV
+    // is a fraction of the image, not pane pixels: the renderer sizes its
+    // target within limits of its own, so a pane outside them is drawn at one
+    // size and would otherwise be picked against another.
     if response.clicked()
         && has_run
         && let Some(pointer) = response.interact_pointer_pos()
     {
         let local = pointer - image_rect.min;
-        editor.solid_preview_pick_uv = Some([local.x / image_rect.width().max(1.0), local.y / image_rect.height().max(1.0)]);
+        editor.solid_preview_pick = Some(crate::ui::state::SolidPreviewPickRequest {
+            session,
+            owner: crate::ui::state::SolidPreviewPickOwner::SequenceEditor {
+                bar: draft.bar,
+                edition: draft.edition,
+            },
+            generation: editor.sequence_generation,
+            image: editor.solid_preview_image_revision,
+            uv: [local.x / image_rect.width().max(1.0), local.y / image_rect.height().max(1.0)],
+        });
         ui.ctx().request_repaint();
     }
 
@@ -340,7 +382,7 @@ fn draw_order_numbers(ui: &egui::Ui, editor: &EditorState, image_rect: egui::Rec
 /// Hiding it is the one thing the identity layer exists to prevent: the
 /// reference is the user's own work, and only they can decide what it should
 /// become.
-fn draw_order_list(ui: &mut egui::Ui, editor: &EditorState, draft: &SequenceDraft) -> (Option<ListEdit>, Option<usize>) {
+fn draw_order_list(ui: &mut egui::Ui, editor: &EditorState, draft: &SequenceDraft, confirming: bool) -> (Option<ListEdit>, Option<usize>) {
     let mut edit = None;
     let mut selected = draft.selected;
     ui.vertical(|ui| {
@@ -365,48 +407,53 @@ fn draw_order_list(ui: &mut egui::Ui, editor: &EditorState, draft: &SequenceDraf
             ui.label(egui::RichText::new(tr!("sequence-editor-empty-order")).weak());
             return;
         }
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for index in 0..draft.members.len() {
-                let view = editor.sequence_members.get(index);
-                let label = view.and_then(|view| view.name.clone()).unwrap_or_else(|| tr!("sequence-editor-unknown-block"));
-                let is_selected = selected == Some(index);
-                let row = ui.selectable_label(is_selected, format!("{}. {label}", index + 1));
-                if row.clicked() {
-                    selected = Some(index);
+        // Rows and their buttons are one interaction surface, disabled whole
+        // while the discard question is up: neither a selection nor a remove
+        // or reorder may reach a draft the user is being asked whether to keep.
+        ui.add_enabled_ui(!confirming, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                for index in 0..draft.members.len() {
+                    let view = editor.sequence_members.get(index);
+                    let label = view.and_then(|view| view.name.clone()).unwrap_or_else(|| tr!("sequence-editor-unknown-block"));
+                    let is_selected = selected == Some(index);
+                    let row = ui.selectable_label(is_selected, format!("{}. {label}", index + 1));
+                    if row.clicked() {
+                        selected = Some(index);
+                    }
+                    if let Some(view) = view {
+                        ui.indent(("sequence_member", index), |ui| {
+                            if let Some(solid) = &view.solid_name {
+                                ui.label(egui::RichText::new(solid.clone()).weak().small());
+                            }
+                            if let Some(reason) = &view.unresolved {
+                                let color = if view.stale_pick { ui.visuals().error_fg_color } else { ui.visuals().warn_fg_color };
+                                ui.label(egui::RichText::new(reason.clone()).small().color(color));
+                            }
+                            // A tonnage that is not there is not zero: a member
+                            // with no figure says nothing rather than saying "0 t".
+                            if let Some(tonnes) = view.tonnes {
+                                ui.label(egui::RichText::new(tr_format!(literal = "%tonnes% t", tonnes = format!("{tonnes:.0}"))).weak().small());
+                            }
+                            if view.is_new {
+                                ui.label(egui::RichText::new(tr!("sequence-editor-new-block")).small());
+                            }
+                        });
+                    }
+                    if is_selected {
+                        ui.horizontal(|ui| {
+                            if ui.add(MenuButton::new(tr!("sequence-editor-move-up")).enabled(index > 0)).clicked() {
+                                edit = Some(ListEdit::Move { from: index, to: index - 1 });
+                            }
+                            if ui.add(MenuButton::new(tr!("sequence-editor-move-down")).enabled(index + 1 < draft.members.len())).clicked() {
+                                edit = Some(ListEdit::Move { from: index, to: index + 1 });
+                            }
+                            if ui.add(MenuButton::new(tr!("sequence-editor-remove")).danger()).clicked() {
+                                edit = Some(ListEdit::Remove(index));
+                            }
+                        });
+                    }
                 }
-                if let Some(view) = view {
-                    ui.indent(("sequence_member", index), |ui| {
-                        if let Some(solid) = &view.solid_name {
-                            ui.label(egui::RichText::new(solid.clone()).weak().small());
-                        }
-                        if let Some(reason) = &view.unresolved {
-                            let color = if view.stale_pick { ui.visuals().error_fg_color } else { ui.visuals().warn_fg_color };
-                            ui.label(egui::RichText::new(reason.clone()).small().color(color));
-                        }
-                        // A tonnage that is not there is not zero: a member
-                        // with no figure says nothing rather than saying "0 t".
-                        if let Some(tonnes) = view.tonnes {
-                            ui.label(egui::RichText::new(tr_format!(literal = "%tonnes% t", tonnes = format!("{tonnes:.0}"))).weak().small());
-                        }
-                        if view.is_new {
-                            ui.label(egui::RichText::new(tr!("sequence-editor-new-block")).small());
-                        }
-                    });
-                }
-                if is_selected {
-                    ui.horizontal(|ui| {
-                        if ui.add(MenuButton::new(tr!("sequence-editor-move-up")).enabled(index > 0)).clicked() {
-                            edit = Some(ListEdit::Move { from: index, to: index - 1 });
-                        }
-                        if ui.add(MenuButton::new(tr!("sequence-editor-move-down")).enabled(index + 1 < draft.members.len())).clicked() {
-                            edit = Some(ListEdit::Move { from: index, to: index + 1 });
-                        }
-                        if ui.add(MenuButton::new(tr!("sequence-editor-remove")).danger()).clicked() {
-                            edit = Some(ListEdit::Remove(index));
-                        }
-                    });
-                }
-            }
+            });
         });
     });
     (edit, selected)
@@ -419,7 +466,7 @@ fn draw_order_list(ui: &mut egui::Ui, editor: &EditorState, draft: &SequenceDraf
 /// and no other bar; the whole-schedule playback that does all three consumes
 /// calculated execution segments and belongs to the dispatch stage. Saying so
 /// under the slider is what keeps the two from being read as one control.
-fn draw_preview_slider(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDraft) -> bool {
+fn draw_preview_slider(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDraft, confirming: bool) -> bool {
     let total = draft.members.len();
     draft.preview = draft.preview.min(total);
     let before = draft.preview;
@@ -428,7 +475,10 @@ fn draw_preview_slider(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut 
         ui.label(egui::RichText::new(tr!("sequence-editor-preview")).strong());
         let mut position = draft.preview;
         let width = (ui.available_width() - 220.0).max(120.0);
-        ui.add_enabled_ui(total > 0, |ui| {
+        // Previewing is not an edit of the order, but it is still an
+        // interaction with a draft the discard question stands over, and the
+        // question is the only interaction until it is answered.
+        ui.add_enabled_ui(total > 0 && !confirming, |ui| {
             ui.spacing_mut().slider_width = width;
             ui.add(egui::Slider::new(&mut position, 0..=total).show_value(false));
         });

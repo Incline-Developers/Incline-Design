@@ -175,6 +175,26 @@ pub(super) fn mesh_framing(meshes: &[OpenTriangulation]) -> (glam::DVec3, f64) {
     (center, radius)
 }
 
+/// Advance the preview's content revision over a redraw that changes what is
+/// on screen.
+///
+/// The revision numbers each distinct image the renderer has drawn, so a
+/// click can name the image it was made on. Anything the render key covers -
+/// geometry, surrounding scene, camera, size - is a content change.
+pub(crate) fn advance_image_revision(image_revision: u64, content_changed: bool) -> u64 {
+    if content_changed { image_revision.wrapping_add(1) } else { image_revision }
+}
+
+/// Whether a click made on `request_image` may still be resolved against the
+/// image being drawn now.
+///
+/// The image-identity half of the pick gate: a click on any earlier image -
+/// the camera has moved, the meshes were replaced - is rejected rather than
+/// reinterpreted against the new one.
+pub(crate) fn click_names_current_image(request_image: u64, image_revision: u64) -> bool {
+    request_image == image_revision
+}
+
 impl Graphics<'_> {
     /// Draw the solid being inspected into its own texture, and hand egui the
     /// id to paint it with. Does nothing - and releases the previous id - when
@@ -251,9 +271,18 @@ impl Graphics<'_> {
         // its own - and the pick is resolved against the camera this sets up.
         // Left to the key alone, a picked block stayed unhighlighted until some
         // unrelated change happened to redraw the preview.
-        let pick_pending = editor.solid_preview_pick_uv.is_some();
-        if resized || pick_pending || self.solid_preview_key != Some(key) {
+        let pick_pending = editor.solid_preview_pick.is_some();
+        let content_changed = resized || self.solid_preview_key != Some(key);
+        if content_changed {
             self.solid_preview_key = Some(key);
+            // The image on screen is about to be replaced by a different one -
+            // new geometry, a new surrounding scene or a new camera. Numbering
+            // it here is what lets a pending click say which image it was made
+            // on: one made on the outgoing image is dropped inside this render
+            // rather than answered against the incoming one.
+            editor.solid_preview_image_revision = advance_image_revision(editor.solid_preview_image_revision, true);
+        }
+        if content_changed || pick_pending {
             self.render_solid_preview_inner(&mut target, preview, &scene, center, radius, view, editor);
         }
         self.solid_preview = Some(target);
@@ -369,11 +398,22 @@ impl Graphics<'_> {
         self.camera_uniform.set_interaction_quality(1.0, 1.0);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
 
-        if let Some(uv) = editor.solid_preview_pick_uv.take() {
+        if let Some(request) = editor.solid_preview_pick.take() {
             // Resolved against the target actually drawn to, which the clamp
             // above may have sized differently from the pane the click landed
             // in. UVs survive that; pane pixels did not.
-            editor.solid_preview_picked = Some(self.pick_preview_solid(preview, uv));
+            //
+            // Only a click made on *this* image is resolved at all: the camera
+            // and the meshes below are the ones the image on screen was drawn
+            // with, and answering a click that named an earlier image against
+            // them would reinterpret it. A superseded click is dropped here,
+            // still carrying the request that named it.
+            if click_names_current_image(request.image, editor.solid_preview_image_revision) {
+                editor.solid_preview_pick_result = Some(crate::ui::state::SolidPreviewPickResult {
+                    request,
+                    outcome: self.pick_preview_solid(preview, request.uv),
+                });
+            }
         }
         // Where each of the sequence editor's members sits in this image, for
         // its order number to be drawn at. Projected here, through the camera

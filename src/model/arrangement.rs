@@ -26,7 +26,7 @@ use crate::model::kernel::{SegSeg, XY_TOL, segment_segment};
 /// outer ring wound counter-clockwise and the holes clockwise.
 pub(crate) type Face = Vec<Vec<DVec2>>;
 
-/// Cut `outline` into the faces `cuts` leaves it in.
+/// Cut `outline` into the faces `cuts` leave it in.
 ///
 /// `outline` is one solid's plan rings in any order and any winding: what is
 /// inside it is decided by the even-odd rule, so an outer ring, a hole in it
@@ -40,14 +40,29 @@ pub(crate) type Face = Vec<Vec<DVec2>>;
 /// trace, which cannot produce a crossing - so only pairs involving a cut are
 /// tested, which is what keeps this affordable on an outline of some thousands
 /// of points.
+///
+/// The same ground and the same cuts must give the same faces every time they
+/// are subdivided, whatever order the rings happen to arrive in: a ring's
+/// starting point is not data - a mesh boundary trace can begin anywhere along
+/// it - but the graph this builds welds near-coincident points in segment
+/// order, so a rotated ring can weld differently and occasionally lose a cut
+/// outright. Every ring is therefore rotated to start at its own lowest point
+/// before anything is built, which makes the whole construction a function of
+/// the rings' points rather than of their order of arrival.
 pub(crate) fn subdivide(outline: &[Vec<DVec2>], cuts: &[Vec<DVec2>]) -> Vec<Face> {
     // Work near the origin. Mine coordinates leave an absolute tolerance of a
     // tenth of a millimetre only a few decimal digits of headroom, and the
-    // angular sort that walks the faces is the last place to spend them.
-    let Some(origin) = outline.iter().flatten().next().copied() else {
+    // angular sort that walks the faces is the last place to spend them. The
+    // origin is the lowest corner of the whole outline rather than its first
+    // point, so it is a property of the ground rather than of the order the
+    // rings arrived in.
+    let Some(origin) = outline.iter().flatten().copied().reduce(DVec2::min).filter(|origin| origin.x.is_finite()) else {
         return Vec::new();
     };
-    let outline: Vec<Vec<DVec2>> = outline.iter().map(|ring| ring.iter().map(|point| *point - origin).collect()).collect();
+    let outline: Vec<Vec<DVec2>> = outline
+        .iter()
+        .map(|ring| canonical_rotation(ring, true).iter().map(|point| *point - origin).collect())
+        .collect();
 
     let mut segments: Vec<[DVec2; 2]> = Vec::new();
     for ring in &outline {
@@ -55,7 +70,7 @@ pub(crate) fn subdivide(outline: &[Vec<DVec2>], cuts: &[Vec<DVec2>]) -> Vec<Face
     }
     let cut_start = segments.len();
     for cut in cuts {
-        let cut: Vec<DVec2> = cut.iter().map(|point| *point - origin).collect();
+        let cut: Vec<DVec2> = canonical_rotation(cut, false).iter().map(|point| *point - origin).collect();
         push_ring(&mut segments, &cut, false);
     }
 
@@ -198,6 +213,50 @@ fn point_in_ring(ring: &[DVec2], point: DVec2) -> bool {
         }
     }
     inside
+}
+
+/// The same points, started from a canonical place: a closed ring from its
+/// lowest vertex, an open line from its lower end.
+///
+/// Where a ring starts is not data - a mesh boundary trace can begin anywhere
+/// along it - but the arrangement's weld takes points in segment order, so two
+/// rotations of one ring can weld near-coincident points differently and even
+/// lose a cut outright. Canonicalising the start makes the subdivision a
+/// function of the rings' points alone. `closed` says the points are a cycle
+/// whether or not the caller repeated the first point at the end.
+fn canonical_rotation(points: &[DVec2], closed: bool) -> Vec<DVec2> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let lowest = |index: usize| (points[index].x, points[index].y);
+    let repeats = points[0].distance_squared(points[points.len() - 1]) <= XY_TOL * XY_TOL;
+    if (closed || repeats) && points.len() > 2 {
+        // The repeated end point, where the caller drew one, is not part of
+        // the cycle; rotate the cycle and append it back.
+        let cycle = if repeats { &points[..points.len() - 1] } else { points };
+        let start = (0..cycle.len())
+            .min_by(|a, b| lowest(*a).0.total_cmp(&lowest(*b).0).then_with(|| lowest(*a).1.total_cmp(&lowest(*b).1)))
+            .unwrap_or(0);
+        let mut rotated: Vec<DVec2> = cycle.iter().cycle().skip(start).take(cycle.len()).copied().collect();
+        // Direction is not data either - a boundary trace can walk either way
+        // round - and the even-odd rule this module answers to does not read
+        // it. Canonicalising it as well makes a ring and its reverse the same
+        // input, which is what "the same ground" has to mean here.
+        if signed_area(&rotated) < 0.0 {
+            rotated.reverse();
+        }
+        if repeats {
+            rotated.push(rotated[0]);
+        }
+        rotated
+    } else if lowest(points.len() - 1) < lowest(0) {
+        // An open line's two ends are interchangeable to the arrangement.
+        let mut reversed = points.to_vec();
+        reversed.reverse();
+        reversed
+    } else {
+        points.to_vec()
+    }
 }
 
 /// Append a polyline's edges, closing it when it is a ring.

@@ -857,6 +857,77 @@ fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::plannin
     }
 }
 
+/// What the frame should do with one completed pick result.
+///
+/// Every outcome but the last two is a refusal, and the refusals are the
+/// point: a click is resolved frames after it is made, against caches and a
+/// camera the user has never seen, so the only click that may act is one
+/// whose request still names the project, pane, editor instance and run it
+/// was made against. Anything else is dropped, never reinterpreted against
+/// whatever is current now.
+#[derive(Debug)]
+pub(crate) enum PickRouting {
+    /// Nobody's any more: the click outlived its context.
+    Drop,
+    /// The editor it was made in is still open, but the run it was picked
+    /// against has been replaced. Still dropped - but worth saying out loud,
+    /// because the click looked perfectly good on screen.
+    Superseded,
+    /// A Solids View click, free to move that page's own selection. `hit` is
+    /// the block the ray reached; a miss clears the selection.
+    SelectSolidsView,
+    /// A sequence-editor click that passed every gate. `generation` is the
+    /// run the *click* was made against - confirmed still current, and
+    /// carried through rather than re-read, so the pick is answered as the
+    /// click it was.
+    SequenceEditor { block: Option<crate::model::DigBlockId>, generation: u64 },
+}
+
+/// Decide one completed pick result against the state it must still match.
+///
+/// The whole of the pick's consumption boundary as one decision, kept pure so
+/// every refusal can be checked without a running application. `session` is
+/// the project open now; `generation_now` is the run the project holds now
+/// (`None` when there is no finished run), fetched only for a sequence-editor
+/// click; `hit` is the block the click's ray reached, if any.
+pub(crate) fn route_pick_result(
+    editor: &crate::ui::state::EditorState,
+    session: u32,
+    generation_now: Option<u64>,
+    result: &crate::ui::state::SolidPreviewPickResult,
+    hit: Option<crate::model::DigBlockId>,
+) -> PickRouting {
+    use crate::ui::state::SolidPreviewPickOwner;
+    match result.request.owner {
+        SolidPreviewPickOwner::SolidsView => {
+            // A sequence editor open behind the Gantt cannot receive a View
+            // click, exactly as a View page cannot edit a draft.
+            if editor.solids_view_pick_target(session, &result.request) {
+                PickRouting::SelectSolidsView
+            } else {
+                PickRouting::Drop
+            }
+        }
+        SolidPreviewPickOwner::SequenceEditor { .. } => {
+            // The draft instance the click belongs to, or nothing: not the bar
+            // alone (a closed and reopened editor is a different session), and
+            // not while a discard question stands over the draft.
+            if editor.sequence_pick_target(session, &result.request).is_none() {
+                return PickRouting::Drop;
+            }
+            // The run the clicked image depicted must still be the run the
+            // project holds: a rerun between the click and here puts different
+            // ground under the same id, and the pick is refused rather than
+            // stamped with the new run's generation.
+            match (result.request.generation, generation_now) {
+                (Some(generation), Some(now)) if generation == now => PickRouting::SequenceEditor { block: hit, generation },
+                (Some(_), _) => PickRouting::Superseded,
+                (None, _) => PickRouting::Drop,
+            }
+        }
+    }
+}
+
 impl crate::app::App<'_> {
     /// `displaying` says whether a page that shows these artifacts is open.
     /// When it is not, the artifacts are still built and measured - only the
@@ -1273,38 +1344,61 @@ impl crate::app::App<'_> {
     /// A completed miss is as meaningful as a hit: it clears the selection,
     /// the way clicking empty space in the main viewport does. Nothing is
     /// rebuilt either way - the pick only changes what is highlighted.
+    ///
+    /// The decision itself is [`route_pick_result`]: the result's request
+    /// must still name the project, pane, editor instance and run it was made
+    /// against, and this shell only supplies those answers from live state
+    /// (which mesh the ray reached, which run the project holds now) and
+    /// carries out what it decides.
     fn resolve_solid_preview_pick(&mut self) {
-        let Some(picked) = self.editor.solid_preview_picked.take() else {
+        let Some(result) = self.editor.solid_preview_pick_result.take() else {
             return;
         };
         self.redraw_requested = true;
         self.solid_view_body_key = None;
-        let hit = match picked {
-            crate::ui::state::SolidPick::Miss => None,
-            crate::ui::state::SolidPick::Hit(id) => self
-                .solid_view_cache
-                .values()
-                .filter_map(|cache| {
-                    let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
-                    let benches = cache.body.product().map_or(&[][..], |body| body.bench_parts.as_slice());
-                    partition
-                        .iter()
-                        .chain(benches)
-                        .find(|part| part.mesh.id == id)
-                        .and_then(|part| part.block.as_ref())
-                        .map(|block| (block.id, block.key))
-                })
-                .next(),
-        };
-        // The sequence editor borrows this preview, so while it is open a
-        // click builds its dig order instead of moving the Solids pages'
-        // selection. Those pages are not on screen, and finding their
-        // selection somewhere else on returning to them would be a surprise.
-        if self.editor.sequence_editor_active() {
-            self.pick_into_sequence_draft(hit.map(|(id, _)| id));
+        let Some(session) = self.workspace.active_project().map(|project| project.runtime_id) else {
             return;
+        };
+        let hit = match result.outcome {
+            crate::ui::state::SolidPick::Miss => None,
+            crate::ui::state::SolidPick::Hit(id) => self.dig_block_key_of(id),
+        };
+        let block = hit.map(|(id, _)| id);
+        // Only a sequence-editor click is answered against a run: the Solids
+        // View page picks displayed geometry and has no scheduling gate.
+        let generation_now = matches!(result.request.owner, crate::ui::state::SolidPreviewPickOwner::SequenceEditor { .. })
+            .then(|| self.planning_snapshot().ok().map(|snapshot| snapshot.generation))
+            .flatten();
+        match route_pick_result(&self.editor, session, generation_now, &result, block) {
+            PickRouting::Drop => {}
+            PickRouting::Superseded => {
+                crate::userspace_warn!("{}", crate::i18n::tr!("sequence-pick-superseded"));
+            }
+            PickRouting::SelectSolidsView => {
+                self.editor.selected_dig_block = hit.map(|(_, key)| key);
+            }
+            PickRouting::SequenceEditor { block, generation } => {
+                self.pick_into_sequence_draft(block, generation);
+            }
         }
-        self.editor.selected_dig_block = hit.map(|(_, key)| key);
+    }
+
+    /// The dig block a preview mesh belongs to, as `(id, key)` - or `None` for
+    /// a mesh that is not a block at all.
+    fn dig_block_key_of(&self, id: crate::model::triangulation::TriangulationId) -> Option<(crate::model::DigBlockId, BlastShapeRef)> {
+        self.solid_view_cache
+            .values()
+            .filter_map(|cache| {
+                let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
+                let benches = cache.body.product().map_or(&[][..], |body| body.bench_parts.as_slice());
+                partition
+                    .iter()
+                    .chain(benches)
+                    .find(|part| part.mesh.id == id)
+                    .and_then(|part| part.block.as_ref())
+                    .map(|block| (block.id, block.key))
+            })
+            .next()
     }
 
     /// Rebuild the display list from the artifacts. Pure presentation: which

@@ -346,13 +346,13 @@ impl crate::app::App<'_> {
     /// as a dead block. A miss clears the list selection, the way clicking
     /// empty space in the viewport clears a selection there.
     ///
-    /// A pick records the block *and* the generation of the run it came from.
-    /// It is deliberately not turned into a stored reference here: that
-    /// happens once, at the command boundary, against whatever snapshot is
-    /// current when Apply is pressed - which may be a later run than this.
-    pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>) {
-        use crate::ui::state::DraftMember;
-
+    /// `generation` is the run the *click* was made against, carried from the
+    /// pick request - never re-read here. The two are equal by the time this
+    /// is reached (the consumption gate checked), but the pick records what it
+    /// was picked from, and a pick found to name a different run is refused
+    /// rather than relabelled: refreshing provenance to fit is exactly the
+    /// silent repair the identity layer exists to prevent.
+    pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>, generation: u64) {
         let Some(block) = block else {
             if let Some(draft) = self.editor.sequence_editor.as_mut() {
                 draft.selected = None;
@@ -369,27 +369,17 @@ impl crate::app::App<'_> {
                 return;
             }
         };
+        if generation != snapshot.generation {
+            crate::userspace_warn!("{}", tr!("sequence-pick-superseded"));
+            return;
+        }
         let Some(index) = snapshot.blocks.iter().position(|candidate| candidate.id == block) else {
             crate::userspace_warn!("{}", tr!("sequence-pick-unknown-block"));
             return;
         };
         let ground = ground_of(&snapshot);
-        let Some(draft) = self.editor.sequence_editor.as_mut() else {
-            return;
-        };
-        let existing = draft.members.iter().position(|member| match member {
-            DraftMember::Held(reference) => reference.resolve(&ground).resolved() == Some(index),
-            DraftMember::Picked(pick) => pick.block == block && pick.generation == snapshot.generation,
-        });
-        match existing {
-            Some(position) => draft.selected = Some(position),
-            None => {
-                draft.members.push(DraftMember::Picked(DigBlockPick {
-                    block,
-                    generation: snapshot.generation,
-                }));
-                draft.selected = Some(draft.members.len() - 1);
-            }
+        if let Some(draft) = self.editor.sequence_editor.as_mut() {
+            append_or_select(draft, block, index, generation, &ground);
         }
         self.redraw_requested = true;
     }
@@ -581,6 +571,29 @@ fn ground_of(snapshot: &PlanningSnapshot) -> Vec<BlockGround> {
             plan_area: block.plan_area,
         })
         .collect()
+}
+
+/// Take one gated pick into the draft: append it, or select the member that
+/// already holds this ground.
+///
+/// Kept pure so the pick's own rules can be checked without a running
+/// application: a completed pick appends exactly one member, carrying the run
+/// it was made against, and selects - never duplicates - ground the draft
+/// already holds, whatever anchor that ground was captured with.
+pub(crate) fn append_or_select(draft: &mut crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) {
+    use crate::ui::state::DraftMember;
+
+    let existing = draft.members.iter().position(|member| match member {
+        DraftMember::Held(reference) => reference.resolve(ground).resolved() == Some(index),
+        DraftMember::Picked(pick) => pick.block == block && pick.generation == generation,
+    });
+    match existing {
+        Some(position) => draft.selected = Some(position),
+        None => {
+            draft.members.push(DraftMember::Picked(DigBlockPick { block, generation }));
+            draft.selected = Some(draft.members.len() - 1);
+        }
+    }
 }
 
 /// One resolved block's complete measured tonnage, or why there is not one.

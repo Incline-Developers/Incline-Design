@@ -223,6 +223,44 @@ impl EditorState {
         self.sequence_generation = None;
         self.sequence_unavailable = None;
         self.sequence_label_uv.clear();
+        // A click made in the session being closed is nobody's: left pending,
+        // it could only be answered into whatever is drawn over the Gantt next.
+        if matches!(self.solid_preview_pick.map(|pick| pick.owner), Some(SolidPreviewPickOwner::SequenceEditor { .. })) {
+            self.solid_preview_pick = None;
+        }
+        if matches!(
+            self.solid_preview_pick_result.map(|result| result.request.owner),
+            Some(SolidPreviewPickOwner::SequenceEditor { .. })
+        ) {
+            self.solid_preview_pick_result = None;
+        }
+    }
+
+    /// The draft a completed sequence-editor pick still belongs to, if any.
+    ///
+    /// Every refusal here is a click that outlived its context: the project it
+    /// was made in, the Gantt it was made on, the draft instance it was made
+    /// in, or a discard question now standing between the user and the draft.
+    /// Such a pick is dropped - never reinterpreted against the editor that
+    /// happens to be open now, and never allowed to edit a draft the user is
+    /// being asked whether to keep.
+    pub(crate) fn sequence_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> Option<&SequenceDraft> {
+        let draft = self.sequence_editor.as_ref()?;
+        if !self.is_schedule_gantt() || draft.session != session || request.session != session {
+            return None;
+        }
+        match request.owner {
+            SolidPreviewPickOwner::SequenceEditor { bar, edition } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
+            SolidPreviewPickOwner::SolidsView => None,
+        }
+    }
+
+    /// Whether a completed Solids View pick may still move that page's
+    /// selection. The same refusal as [`Self::sequence_pick_target`], for the
+    /// pane that selects rather than edits: the pick belongs to the View page,
+    /// and only while it is the page on screen.
+    pub(crate) fn solids_view_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> bool {
+        request.owner == SolidPreviewPickOwner::SolidsView && request.session == session && self.is_solids_view()
     }
 
     /// Whether the Solids page is showing its View subpage.
@@ -436,6 +474,65 @@ pub(crate) enum SolidPick {
     Hit(crate::model::triangulation::TriangulationId),
     /// The ray reached nothing. Distinct from "no pick has been resolved yet".
     Miss,
+}
+
+/// Which pane a click on the shared solid preview belongs to.
+///
+/// The Solids View page and the sequence editor draw through the same offscreen
+/// image, so the click alone cannot say who made it - and a click one pane
+/// made must never be answered into the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidPreviewPickOwner {
+    /// The Solids View page's inspector pane, selecting a dig block.
+    SolidsView,
+    /// The floating sequence editor, building one bar's dig order.
+    SequenceEditor {
+        bar: crate::model::schedule::BarId,
+        /// The draft instance the click was made in. Each opened draft gets a
+        /// fresh one, so a click from a closed editor - or from the same bar
+        /// reopened, or a reloaded draft - cannot land in the one on screen now.
+        edition: u64,
+    },
+}
+
+/// A click on the solid preview, addressed from the moment it is made.
+///
+/// The click is resolved frames later, by the renderer, against the caches and
+/// camera of a frame the user has never seen. Carrying the click's own context
+/// with it - rather than reading whatever is current at each later stage - is
+/// what keeps an old click from being reinterpreted as a new one: every gate
+/// along the way compares against *these* values, and a mismatched result is
+/// dropped rather than relabelled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewPickRequest {
+    /// The project session the click happened in.
+    pub(crate) session: u32,
+    pub(crate) owner: SolidPreviewPickOwner,
+    /// The run generation the clicked image depicted. `None` where the pane
+    /// picks displayed geometry without a scheduling gate (the Solids View
+    /// page may pick out benches before any dig-block run exists).
+    pub(crate) generation: Option<u64>,
+    /// The revision of the displayed image the click was made on. The renderer
+    /// re-numbers the image whenever its content changes - geometry, scene or
+    /// camera - so a click naming an image that is no longer on screen is
+    /// rejected instead of resolved against the new one.
+    pub(crate) image: u64,
+    /// Where in the image the click landed, as a fraction of it. The renderer
+    /// sizes its target within limits of its own, so a fraction - not pane
+    /// pixels - is what survives between the two.
+    pub(crate) uv: [f32; 2],
+}
+
+/// A completed pick, still carrying the request that produced it.
+///
+/// The provenance travels with the outcome because the outcome alone cannot be
+/// checked afterwards: a block id that exists in the current run proves the
+/// block exists *now*, not that the click came from this run, this project or
+/// this editor instance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewPickResult {
+    pub(crate) request: SolidPreviewPickRequest,
+    pub(crate) outcome: SolidPick,
 }
 
 /// A row of the Solids View tree: a solid, one of its benches, or one flitch
@@ -1616,18 +1713,21 @@ pub(crate) struct EditorState {
     pub(crate) dig_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines_key: Option<u64>,
     pub(crate) selected_dig_block: Option<BlastShapeRef>,
-    /// A click on the solid preview, waiting for the renderer to say which
-    /// solid it landed on.
-    ///
-    /// Held as image UVs rather than pixels. The renderer clamps its target to
-    /// a size range of its own, so a pane outside that range draws at one size
-    /// and was being picked against another; a fraction of the image means the
-    /// same point whatever size it was actually drawn at.
-    pub(crate) solid_preview_pick_uv: Option<[f32; 2]>,
-    /// The completed result of that click. A miss is a result, not an absence:
-    /// it clears the selection the way clicking empty space in the viewport
-    /// does, which an `Option<TriangulationId>` could not express.
-    pub(crate) solid_preview_picked: Option<SolidPick>,
+    /// A click on the solid preview, waiting for the renderer to say what it
+    /// landed on - addressed, so it can only ever be answered as the click it
+    /// was (see [`SolidPreviewPickRequest`]).
+    pub(crate) solid_preview_pick: Option<SolidPreviewPickRequest>,
+    /// The completed result of that click, echoing its request's provenance.
+    /// A miss is a result, not an absence: it clears the selection the way
+    /// clicking empty space in the viewport does, which an
+    /// `Option<TriangulationId>` could not express.
+    pub(crate) solid_preview_pick_result: Option<SolidPreviewPickResult>,
+    /// The content revision of the image currently in the preview texture.
+    /// Incremented by the renderer whenever it actually redraws to new content
+    /// (geometry, surrounding scene or camera), so a click can name the exact
+    /// image it was made on, and a click on a superseded image can be told
+    /// apart from one on the image being drawn now.
+    pub(crate) solid_preview_image_revision: u64,
     /// The selected dig block as the figures panel reports it: identity,
     /// parents and what it is worth. Mirrored out of the committed artifacts.
     pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
@@ -2733,8 +2833,9 @@ impl EditorState {
             dig_outlines: Vec::new(),
             dig_outlines_key: None,
             selected_dig_block: None,
-            solid_preview_pick_uv: None,
-            solid_preview_picked: None,
+            solid_preview_pick: None,
+            solid_preview_pick_result: None,
+            solid_preview_image_revision: 0,
             selected_dig_block_info: None,
             dig_clipboard: Vec::new(),
             selected_blast: None,
@@ -4768,6 +4869,11 @@ pub(crate) struct SequenceDraft {
     /// work rather than failing to resolve.
     pub(crate) session: u32,
     pub(crate) bar: crate::model::schedule::BarId,
+    /// Which instance of this editor the draft is. Every opened draft - a
+    /// fresh open, a close and reopen of the *same* bar, a Reload - takes the
+    /// next number, so a click made in one editing session can never be
+    /// answered into another, however similar the two look.
+    pub(crate) edition: u64,
     /// The bar's dig order exactly as it stood when the editor opened. Apply
     /// refuses when the bar no longer holds this, rather than overwriting a
     /// newer edit with an older list.
@@ -4791,10 +4897,19 @@ pub(crate) struct SequenceDraft {
 }
 
 impl SequenceDraft {
+    /// Source of the instance numbers above. Global rather than per-editor
+    /// state so every construction site - including a Reload inside the window
+    /// - shares one sequence, with nothing to reset or keep in step.
+    fn next_edition() -> u64 {
+        static EDITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        EDITION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub(crate) fn open(session: u32, bar: crate::model::schedule::BarId, members: &[crate::model::schedule::DigBlockRef]) -> Self {
         Self {
             session,
             bar,
+            edition: Self::next_edition(),
             opened_from: members.to_vec(),
             members: members.iter().copied().map(DraftMember::Held).collect(),
             selected: None,

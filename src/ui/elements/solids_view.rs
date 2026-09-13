@@ -577,7 +577,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let properties = egui::Rect::from_min_size(area.min, egui::vec2((area.width() * 0.35).min(460.0), area.height()));
             draw_properties(ui, properties, editor, project, document);
             let inspector = egui::Rect::from_min_max(egui::pos2(properties.right() + 12.0, area.top()), area.max);
-            super::planning_setup::draw_solid_render(ui, inspector, editor, commands);
+            super::planning_setup::draw_solid_render(ui, inspector, editor, project.active_session, commands);
             ui.allocate_rect(area, egui::Sense::hover());
         })
         .response

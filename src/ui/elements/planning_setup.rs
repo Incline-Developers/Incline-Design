@@ -667,7 +667,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
 /// A solid with only a design surface shows that surface; one that also names
 /// a topography shows the closed volume between the two, with its enclosed
 /// volume captioned. Drag to orbit, scroll to zoom.
-pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) {
     let title = tr!(literal = "Preview");
     framed_render_pane(ui, rect, &title, |ui, body| {
         let caption_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
@@ -745,15 +745,23 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         }
         // A click that did not drag selects the solid under it. In View that is
         // how a dig block, which the tree does not list, is picked out for its
-        // own figures. Recorded as a fraction of the image: the renderer sizes
-        // its target within limits of its own, and a pane outside them is drawn
-        // at one size and would otherwise be picked against another.
+        // own figures. The click is addressed from the moment it is made - this
+        // page, this project, this image - because it is resolved frames later,
+        // and the UV is a fraction of the image: the renderer sizes its target
+        // within limits of its own, and a pane outside them is drawn at one
+        // size and would otherwise be picked against another.
         if response.clicked()
             && selects
             && let Some(pointer) = response.interact_pointer_pos()
         {
             let local = pointer - image_rect.min;
-            editor.solid_preview_pick_uv = Some([local.x / image_rect.width().max(1.0), local.y / image_rect.height().max(1.0)]);
+            editor.solid_preview_pick = Some(crate::ui::state::SolidPreviewPickRequest {
+                session,
+                owner: crate::ui::state::SolidPreviewPickOwner::SolidsView,
+                generation: None,
+                image: editor.solid_preview_image_revision,
+                uv: [local.x / image_rect.width().max(1.0), local.y / image_rect.height().max(1.0)],
+            });
             ui.ctx().request_repaint();
         }
         if response.hovered() {
@@ -923,6 +931,7 @@ fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut E
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    let session = project.active_session;
     objects_island(ui, layout, editor, project, commands);
     island(ui, layout, "planning_solids_list_island", 240.0, |ui, rect| {
         draw_solid_list(ui, rect, editor, document, commands)
@@ -935,7 +944,7 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
             }),
         }
     });
-    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
 
@@ -1221,7 +1230,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
             });
         }
     });
-    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, project.active_session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
         && changed
