@@ -1790,7 +1790,7 @@ impl<'a> Graphics<'a> {
         self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
     }
 
-    pub(crate) fn update(&mut self, dt: Duration, interaction_resolution_divisor: u32, rotation_centre: Option<DVec3>) {
+    pub(crate) fn update(&mut self, dt: Duration, rotation_centre: Option<DVec3>) {
         if self.slice_view.is_some() {
             self.update_slice_camera(dt, rotation_centre);
         } else if self.camera_controller.has_view_transition() {
@@ -1801,7 +1801,7 @@ impl<'a> Graphics<'a> {
             let screen_size = self.screen_size();
             self.camera_controller.update_camera(&mut self.camera, &mut self.projection, dt, screen_size);
         }
-        self.upload_camera_uniform(interaction_resolution_divisor, self.section_slab());
+        // The render path uploads uniforms after acquiring a surface texture.
     }
 
     pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {

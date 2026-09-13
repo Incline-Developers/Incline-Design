@@ -771,10 +771,9 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn reconfigure_slice_preview(&mut self) {
-        let Some(size) = self.slice_preview.as_ref().map(|preview| preview.size) else {
-            return;
-        };
-        self.resize_slice_preview(size);
+        if let Some(preview) = self.slice_preview.as_ref() {
+            preview.surface.configure(&self.device, &preview.config);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

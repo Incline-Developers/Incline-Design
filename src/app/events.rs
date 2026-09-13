@@ -234,7 +234,7 @@ impl<'a> App<'a> {
                         }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
-                        graphics.update(dt, self.editor.block_model_interaction_resolution_divisor, self.editor.rotation_centre);
+                        graphics.update(dt, self.editor.rotation_centre);
                     }
                     // cursor_world is otherwise only written from CursorMoved; re-project after a keyboard-driven move.
                     if slice_moving {
@@ -255,6 +255,10 @@ impl<'a> App<'a> {
                             project: &project,
                         }) {
                             Ok(ui_output) => {
+                                if self.surface_retry_pending {
+                                    log::info!("Main render surface recovered");
+                                }
+                                self.surface_retry_pending = false;
                                 self.render_validation_recovery_attempts = 0;
                                 self.next_ui_repaint_deadline = ui_output.repaint_after.and_then(|delay| Instant::now().checked_add(delay));
                                 if ui_output.repaint_after.is_some_and(|delay| delay.is_zero()) {
@@ -368,11 +372,19 @@ impl<'a> App<'a> {
                                     self.split_init_from_selection();
                                 }
                             }
-                            Err(RenderSurfaceError::Lost | RenderSurfaceError::Outdated) => {
+                            Err(error @ (RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
+                                if !self.surface_retry_pending {
+                                    log::warn!("Main render surface {error:?}; retrying at 250 ms intervals");
+                                }
+                                self.surface_retry_pending = true;
                                 graphics.reconfigure();
                                 self.redraw_requested = true;
                             }
-                            Err(RenderSurfaceError::Timeout | RenderSurfaceError::Occluded) => {
+                            Err(error @ (RenderSurfaceError::Timeout | RenderSurfaceError::Occluded)) => {
+                                if !self.surface_retry_pending {
+                                    log::info!("Main render surface {error:?}; retrying at 250 ms intervals");
+                                }
+                                self.surface_retry_pending = true;
                                 self.redraw_requested = true;
                             }
                             Err(RenderSurfaceError::Validation) => {
@@ -381,6 +393,7 @@ impl<'a> App<'a> {
                                 // between are treated as fatal.
                                 const MAX_VALIDATION_RECOVERY_ATTEMPTS: u32 = 3;
                                 if self.render_validation_recovery_attempts < MAX_VALIDATION_RECOVERY_ATTEMPTS {
+                                    self.surface_retry_pending = true;
                                     self.render_validation_recovery_attempts += 1;
                                     log::warn!(
                                         "Renderer validation error; attempting surface recovery ({}/{})",
@@ -774,6 +787,10 @@ impl<'a> App<'a> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if self.slice_surface_retry_deadline.is_some_and(|deadline| Instant::now() < deadline) {
+                    return;
+                }
+                self.slice_surface_retry_deadline = None;
                 let result = self.graphics.as_mut().map(|graphics| {
                     graphics.render_slice_preview(
                         &self.scene_document,
@@ -789,13 +806,11 @@ impl<'a> App<'a> {
                     Some(Err(RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
                         if let Some(graphics) = self.graphics.as_mut() {
                             graphics.reconfigure_slice_preview();
-                            graphics.request_slice_preview_redraw();
                         }
+                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
                     }
                     Some(Err(RenderSurfaceError::Timeout | RenderSurfaceError::Occluded)) => {
-                        if let Some(graphics) = self.graphics.as_ref() {
-                            graphics.request_slice_preview_redraw();
-                        }
+                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
                     }
                     Some(Err(RenderSurfaceError::Validation)) => {
                         if let Some(graphics) = self.graphics.as_mut() {
