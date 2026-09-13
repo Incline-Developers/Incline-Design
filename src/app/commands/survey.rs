@@ -169,6 +169,7 @@ impl App<'_> {
 
     pub(crate) fn transform_survey_selection(&mut self) -> Result<()> {
         let transform = self.editor.survey.selected_survey_transform()?;
+        let target_system = self.editor.survey.resolve(&self.editor.survey.target_system)?.to_stored();
         let project = self.workspace.active_project().ok_or_else(|| anyhow!("{}", tr!("survey-wrong-project")))?;
         let runtime_id = project.runtime_id;
         let mut keys = vec![JobKey::Project {
@@ -270,7 +271,7 @@ impl App<'_> {
                 }
                 for item in &mut items {
                     ensure!(!cancel.is_cancelled(), "Cancelled");
-                    transform_item(item, &transform, cancel)?;
+                    transform_item(item, &transform, &target_system, cancel)?;
                 }
                 Ok((objects, items))
             },
@@ -339,7 +340,7 @@ impl App<'_> {
     }
 }
 
-fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, cancel: &CancelFlag) -> Result<()> {
+fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_system: &str, cancel: &CancelFlag) -> Result<()> {
     match item {
         OpenItem::Triangulation(item) => {
             let vertices = item
@@ -491,6 +492,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, cancel: &Can
             // and would have to warp the pixels themselves.
             let grid = transform.grid().ok_or_else(|| anyhow!("{}", tr!("survey-needs-grid-raster")))?;
             item.world_to_uv = composed_world_to_uv(item.world_to_uv, grid)?;
+            item.projection = target_system.to_owned();
         }
     }
     ensure!(!cancel.is_cancelled(), "Cancelled");
