@@ -151,6 +151,8 @@ impl<'a> App<'a> {
             &preferences,
             self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
         ))?;
 
         self.editor.dark_mode = preferences.dark_mode;
@@ -296,10 +298,13 @@ impl<'a> App<'a> {
 /// draft because they are not a preference the settings tabs edit - the
 /// palette owns them. The workspace order is passed separately for the same
 /// reason, so saving preferences or products preserves the tab arrangement.
+/// Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 4],
+    workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
+    coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
+    mine_coordinate_system: Option<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -331,6 +336,8 @@ pub(crate) fn config_from(
         fly_near_clip_limit: preferences.fly_near_clip_limit,
         fly_max_clip_span: preferences.fly_max_clip_span,
         delay_products,
+        coordinate_systems,
+        mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
     }
 }

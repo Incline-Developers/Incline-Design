@@ -14,6 +14,7 @@ pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod residency;
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
@@ -98,7 +99,8 @@ impl<'a> App<'a> {
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
         let requires_project = matches!(
             &command,
-            UiCommand::ImportOmfPaths(_)
+            UiCommand::TransformSurveySelection
+                | UiCommand::ImportOmfPaths(_)
                 | UiCommand::ImportDxfPathsInto(_)
                 | UiCommand::ImportTriangulationPaths(_)
                 | UiCommand::ImportPointCloudPaths(_)
@@ -642,6 +644,54 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
+            UiCommand::OpenSurveyDefinitions => {
+                self.editor.survey.transform_open = false;
+                self.editor.survey.definitions_open = true;
+                let name = self.editor.survey.editing_name.clone();
+                self.editor.survey.edit_definition(name);
+                Ok(())
+            }
+            UiCommand::OpenSurveyTransform => {
+                self.editor.survey.open_transform();
+                Ok(())
+            }
+            UiCommand::SaveSurveyDefinition { target, definition } => {
+                let result = self.save_survey_definition(target, definition);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::DeleteSurveyDefinition(name) => {
+                let result = self.delete_survey_definition(&name);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::SelectRaster(id) => {
+                let handle = crate::model::SceneEntityId::Raster(id);
+                // Plain clicks replace the selection, as they do in the
+                // viewport; clicking the selected row again drops it.
+                if self.editor.selected_handles.contains(&handle) {
+                    self.editor.selected_handles.remove(&handle);
+                } else if self.modifiers.shift_key() || self.modifiers.control_key() {
+                    self.editor.selected_handles.insert(handle);
+                } else {
+                    self.editor.selected_handles.clear();
+                    self.editor.selected_handles.insert(handle);
+                }
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::SetSurveyLocalSystem(system) => {
+                let result = self.set_survey_local_system(system);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::TransformSurveySelection => self.transform_survey_selection(),
             UiCommand::ReorderWorkspace { workspace, before } => {
                 let mut order = self.editor.workspace_order.to_vec();
                 if before != Some(workspace) {
@@ -654,6 +704,8 @@ impl<'a> App<'a> {
                             &self.editor.current_preferences(),
                             order,
                             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                            self.editor.survey.definitions.clone(),
+                            self.editor.survey.local_system.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;

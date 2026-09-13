@@ -603,6 +603,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "crs-definitions"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d18c61d944a9f854f35279f9a5d75ab562fb076dab3f49e53d6f0edbff4f44ea"
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1631,6 +1637,7 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "cosmic-text",
+ "crs-definitions",
  "dirs",
  "dxf",
  "earcut",
@@ -1655,6 +1662,7 @@ dependencies = [
  "omf",
  "png 0.18.1",
  "pollster 1.0.1",
+ "proj4rs",
  "rayon",
  "rfd",
  "robust",
@@ -2904,6 +2912,20 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "proj4rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eac6b1fdc97b02fd39d051342c6372ab2729b4ced74456c9616f2e08c74e94f"
+dependencies = [
+ "console_log",
+ "crs-definitions",
+ "js-sys",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "web-sys",
+]
 
 [[package]]
 name = "pxfm"

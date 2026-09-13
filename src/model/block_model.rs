@@ -1420,3 +1420,50 @@ fn block_corners(block: BlockBounds) -> [DVec3; 8] {
         DVec3::new(lo.x, hi.y, hi.z),
     ]
 }
+
+impl BlockBoundsSource {
+    /// Scale local cell geometry while retaining implicit grids and file order.
+    pub(crate) fn scaled(&self, scale: f64, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Self> {
+        let out = match self {
+            Self::Regular(grid) => {
+                let mut grid = grid.clone();
+                grid.lower *= scale;
+                grid.cell *= scale;
+                anyhow::ensure!(
+                    grid.lower.is_finite() && grid.cell.is_finite() && grid.cell.min_element() > 0.0,
+                    "Invalid scaled block grid"
+                );
+                Self::Regular(grid)
+            }
+            Self::Explicit(blocks) => {
+                let mut out = Vec::with_capacity(blocks.len());
+                for (index, block) in blocks.iter().enumerate() {
+                    if index % 4096 == 0 {
+                        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                    }
+                    let block = BlockBounds {
+                        lower: block.lower * scale,
+                        upper: block.upper * scale,
+                    };
+                    anyhow::ensure!(
+                        block.lower.is_finite() && block.upper.is_finite() && block.upper.cmpgt(block.lower).all(),
+                        "Invalid scaled block bounds"
+                    );
+                    out.push(block);
+                }
+                Self::Explicit(out)
+            }
+        };
+        Ok(out)
+    }
+}
+
+impl UniformBlockGrid {
+    pub(crate) fn scaled(&self, scale: f64) -> Self {
+        Self {
+            origin: self.origin * scale,
+            inv_cell: self.inv_cell / scale,
+            dims: self.dims,
+        }
+    }
+}

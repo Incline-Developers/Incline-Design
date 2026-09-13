@@ -152,7 +152,7 @@ fn draw_separator(ui: &mut egui::Ui) {
 #[derive(Clone)]
 struct WorkspaceTabDrag {
     workspace: Workspace,
-    order: [Workspace; 4],
+    order: [Workspace; 5],
     grab_offset: f32,
 }
 
@@ -164,7 +164,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
     let width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
     let spacing = ui.spacing().item_spacing.x;
-    let total_width = widths.iter().sum::<f32>() + spacing * 3.0;
+    let total_width = widths.iter().sum::<f32>() + spacing * (Workspace::ALL.len() - 1) as f32;
     let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
     let pointer = ui.input(|input| input.pointer.interact_pos());
     let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -262,6 +262,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     if editor.active_workspace == workspace {
         return;
     }
+    let previous_workspace = editor.active_workspace;
     editor.active_workspace = workspace;
     if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
         editor.close_drill_pattern();
@@ -270,11 +271,13 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // of a trip through production.
     editor.end_tie_chain();
     editor.initiation_dialog = None;
-    // A selection is made in one discipline's terms - production selects a
-    // drill hole dataset whole where Drill & Blast selects one hole of it - so
-    // it is left behind with the workspace that made it rather than carried
-    // into the next one.
-    commands.push(UiCommand::ClearSelection);
+    // Survey consumes the same entity selection as the design workspaces.
+    // Keep it when entering/leaving Survey so users can select data first.
+    // Drill & Blast's individual-hole selection still has different semantics.
+    let survey_transition = workspace == Workspace::Survey || previous_workspace == Workspace::Survey;
+    if !survey_transition || workspace == Workspace::DrillAndBlast || previous_workspace == Workspace::DrillAndBlast {
+        commands.push(UiCommand::ClearSelection);
+    }
     // A tool belongs to the discipline whose cell arms it, both ways round:
     // Drill & Blast's Move Collar is put down on the way out just as the
     // drawing tools are on the way in.
@@ -527,6 +530,36 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             return;
         }
 
+        if editor.active_workspace == Workspace::Survey {
+            MenuBarMenu::new(&tr!("survey-coordinates-menu")).show(ui, |ui| {
+                if ContextMenuAction::new(tr!("survey-definitions-action")).show(ui).clicked() {
+                    commands.push(UiCommand::OpenSurveyDefinitions);
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("survey-transform-action"))
+                    .enabled(project.has_active_project)
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenSurveyTransform);
+                    ui.close();
+                }
+            });
+
+            MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
+                let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
+                if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
+                    .enabled(has_loaded_cloud)
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenPointCloudTin);
+                    ui.close();
+                }
+            });
+            return;
+        }
+
         if editor.active_workspace == Workspace::Geology {
             MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
                 if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
@@ -619,18 +652,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
             if ContextMenuAction::new(tr!(literal = "Undrape All")).enabled(any_draped).show(ui).clicked() {
                 commands.push(UiCommand::UndrapeAllRasters);
-                ui.close();
-            }
-        });
-
-        MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
-            let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
-            if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
-                .enabled(has_loaded_cloud)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenPointCloudTin);
                 ui.close();
             }
         });

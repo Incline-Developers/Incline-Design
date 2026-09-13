@@ -440,9 +440,10 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
         &[VertexColumn::X, VertexColumn::Y, VertexColumn::Z]
     };
     let headings: Vec<String> = if is_polyline {
-        vec![tr!(literal = "X"), tr!(literal = "Y"), tr!(literal = "Z"), tr!(literal = "Bulge")]
+        let [x, y, z] = crate::model::survey::axis_names();
+        vec![x, y, z, tr!(literal = "Bulge")]
     } else {
-        vec![tr!(literal = "X"), tr!(literal = "Y"), tr!(literal = "Z")]
+        crate::model::survey::axis_names().to_vec()
     };
     draw_sheet_header(ui, &headings);
 

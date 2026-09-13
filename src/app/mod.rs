@@ -544,6 +544,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
+            MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
+            MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
@@ -597,6 +599,19 @@ impl<'a> App<'a> {
         }
         self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
         self.editor.active_workspace = self.editor.workspace_order[0];
+        // A definition naming a parent that is not in the list, or itself,
+        // cannot be resolved and would fail on every use; it is dropped on the
+        // way in so the rest of the list still works.
+        let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
+        self.editor.survey.definitions = definitions
+            .iter()
+            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .cloned()
+            .collect();
+        self.editor.survey.local_system = config
+            .mine_coordinate_system
+            .filter(|name| self.editor.survey.definitions.iter().any(|definition| &definition.name == name));
+        self.refresh_axis_names();
         // The status bar's picker switches this live afterwards; here it just
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
@@ -945,6 +960,7 @@ impl<'a> App<'a> {
             SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id),
             SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
             SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id),
+            SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id),
         };
         let missing: Vec<SceneEntityId> = self
             .editor

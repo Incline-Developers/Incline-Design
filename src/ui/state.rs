@@ -1677,7 +1677,8 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
-    pub(crate) workspace_order: [Workspace; 4],
+    pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
+    pub(crate) workspace_order: [Workspace; 5],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -1815,6 +1816,8 @@ impl EditorState {
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
+            || self.survey.definitions_open
+            || self.survey.transform_open
             || self.new_delay_product_open
             || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
@@ -2458,6 +2461,7 @@ impl EditorState {
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
+            survey: Default::default(),
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
             active_delay_product: builtin_delay_products().first().map(|product| product.id),
@@ -2935,6 +2939,23 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
+    OpenSurveyDefinitions,
+    OpenSurveyTransform,
+    TransformSurveySelection,
+    /// Write one coordinate system to the config, replacing `target` if it
+    /// names an existing system and adding one otherwise. The edit travels
+    /// with the command so switching rows mid-edit cannot drop it.
+    SaveSurveyDefinition {
+        target: Option<String>,
+        definition: crate::model::survey::SystemDefinition,
+    },
+    DeleteSurveyDefinition(String),
+    /// Mark one saved system as the site's mine coordinate system, or the
+    /// reference frame with `None`.
+    SetSurveyLocalSystem(Option<String>),
+    /// Select or deselect one raster from its explorer row - the only place a
+    /// raster can be picked on its own, since it has no geometry in the scene.
+    SelectRaster(crate::model::raster::RasterTextureId),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3267,6 +3288,13 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
+            | Self::OpenSurveyDefinitions
+            | Self::OpenSurveyTransform
+            | Self::SaveSurveyDefinition { .. }
+            | Self::DeleteSurveyDefinition(_)
+            | Self::SetSurveyLocalSystem(_)
+            | Self::SelectRaster(_)
+            | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
@@ -3734,19 +3762,20 @@ impl UiProjectView {
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
 /// tabs decide what its editors show. Production, Drill & Blast and Geology are
-/// built out; Planning carries what every workspace does and is where the
-/// scheduling tools will go.
+/// built out; Survey transforms project data into local mine grids. Planning
+/// carries the shared controls and is where scheduling tools will go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
     Planning,
+    Survey,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 4] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -3754,12 +3783,13 @@ impl Workspace {
             Self::DrillAndBlast => tr!("ws-drill-and-blast"),
             Self::Geology => tr!("ws-geology"),
             Self::Planning => tr!("ws-planning"),
+            Self::Survey => tr!("ws-survey"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning)
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey)
     }
 
     /// Whether this workspace carries the mine production tools.

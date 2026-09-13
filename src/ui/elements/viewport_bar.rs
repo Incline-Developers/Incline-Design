@@ -238,7 +238,7 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
             centre_part(ui);
             draw_z_setting(ui, editor);
         }
-        Workspace::Geology | Workspace::Planning => {
+        Workspace::Geology | Workspace::Planning | Workspace::Survey => {
             ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
             draw_z_setting(ui, editor);
         }
@@ -250,7 +250,7 @@ fn centre_part(ui: &mut egui::Ui) {
 }
 
 fn draw_z_setting(ui: &mut egui::Ui, editor: &mut EditorState) {
-    let response = MenuFieldF64::new(tr!(literal = "Z:"), &mut editor.z_input, f64::MIN..=f64::MAX)
+    let response = MenuFieldF64::new(format!("{}:", crate::model::survey::axis_abbreviation(2)), &mut editor.z_input, f64::MIN..=f64::MAX)
         .width(80.0)
         .suffix(tr!(literal = "m"))
         .show_inline(ui);

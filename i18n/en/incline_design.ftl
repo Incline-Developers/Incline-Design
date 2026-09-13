@@ -1672,3 +1672,113 @@ literal-hide-xy-grid-85952898e2cff804 = Hide XY Grid
 literal-show-xy-grid-d22a739bae102bb1 = Show XY Grid
 literal-set-grid-63bc48801d739665 = Set Grid
 literal-xy-grid-options-04861f560f92a08c = XY Grid Options
+
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Reset the section view (fit to extents)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Set XY grid = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Counter-clockwise pattern rotation from the global %axis% axis.
+literal-axis-offset-d064a568a65d9a1f = %axis% offset
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Translation distance along the world %axis% axis.
+literal-axis-scale-ratio-851b3aab8b582f09 = %axis% scale ratio
+literal-axis-range-5455776ed8bd0a89 = %axis% range
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Draped over a surface
+
+# Coordinate systems
+crs-unknown-ellipsoid = Unrecognised earth model "{ $name }" in this coordinate system definition.
+crs-no-ellipsoid = This coordinate system definition does not say what earth model it uses.
+crs-unknown-code = EPSG:{ $code } is not in the coordinate system registry.
+crs-transform-failed = A coordinate could not be converted; the result was not a finite position.
+crs-no-datum-path = No published transformation is available between the reference frames of { $from } and { $to } (EPSG datums { $source } and { $target }). Converting anyway would be wrong by an unknown amount, so nothing was changed.
+crs-unknown-datum = The reference frame of { $from } or { $to } cannot be identified, and the two use different earth models. Converting between them would be wrong by an unknown amount.
+
+# Survey workspace
+ws-survey = Survey
+survey-count-designs = { $count } { $count ->
+    [one] design
+   *[other] designs
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] triangulation
+   *[other] triangulations
+  }
+survey-count-models = { $count } { $count ->
+    [one] block model
+   *[other] block models
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] point cloud
+   *[other] point clouds
+  }
+survey-count-holes = { $count } { $count ->
+    [one] drillhole dataset
+   *[other] drillhole datasets
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] raster
+   *[other] rasters
+  }
+survey-unsupported = Rasters cannot be converted by this transform. They are not selectable in the viewport, so nothing in a selection reaches this.
+survey-angle = Rotation about Z (counterclockwise)
+survey-scale = Uniform XYZ scale factor
+survey-invalid-transform = Origins, angle and resulting coordinates must be finite.
+survey-invalid-scale = Scale must be a finite positive number with a finite reciprocal.
+survey-empty-selection = Select at least one supported item to transform.
+survey-unavailable = A selected item is missing or unloaded. Load it before transforming.
+survey-wrong-project = Select designs from the active project only.
+survey-name-required = Enter a coordinate system name.
+survey-working = Transforming selected data…
+survey-completed = Converted { $items } in place. Undo restores them.
+survey-failed = Transformation failed: { $error }
+survey-stale = Transformation discarded because the active project or source data changed. Select the source data and try again.
+survey-coordinates-menu = Coordinates
+survey-definitions-action = Definitions…
+survey-transform-action = Transform…
+survey-definitions-title = Coordinate Definitions
+survey-transform-title = Transform Coordinates
+survey-new-system = New Coordinate System
+survey-new-system-name = Coordinate system
+survey-set-local = Set as Mine Coordinate System
+survey-delete-system = Delete Coordinate System
+survey-systems-empty = No coordinate systems
+survey-system-section = Mine grid definition
+survey-reference-note = The frame every definition is written against: the coordinates your data already carries when it is imported. It has no parameters of its own. Right-click a system to make it the mine coordinate system, or the empty space below to define one.
+survey-system-name = Name
+survey-reference-system = Reference system
+survey-reference-origin = Known point — reference coordinates
+survey-system-origin = Same point — system coordinates
+survey-angle-help = Counterclockwise from reference X toward reference Y, viewed from above.
+survey-scale-help = Uniform XYZ scale from the reference frame to this system. Use 1 to preserve dimensions.
+survey-close = Close
+survey-from = From
+survey-to = To
+survey-transform-button = Transform
+survey-swap = Swap
+survey-drape-note = Draped imagery is dropped from converted surfaces and must be re-draped.
+survey-needs-grid-block-model = A block model is a regular grid of cells, and a change of projection or reference frame does not keep it regular. Converting it would mean resampling every cell into a new grid and losing the values it carries, so it was left alone.
+survey-needs-grid-raster = A raster is placed by an affine map onto the world, which a change of projection or reference frame cannot preserve. Converting it would mean resampling the image, so it was left alone.
+survey-conversion-exact = Exact: grid change only, no reprojection.
+survey-conversion-accuracy = Stated accuracy { $accuracy } m.
+survey-kind = Kind
+survey-axis-names = Axis names
+survey-axis-help = What this system calls its axes, if not X, Y and Z — "E", "N", "RL" for a mine grid. Used everywhere coordinates are shown, but only while this is the mine coordinate system. Name all three or none.
+survey-kind-registry-short = Registry system
+survey-kind-grid-short = Grid over another system
+survey-registry-search = Search
+survey-registry-hint = Name or EPSG code, e.g. "mga zone 56"
+survey-registry-none = Nothing in the registry matches every word.
+survey-parent = Defined against
+survey-parent-origin = Known point — parent coordinates
+survey-pick-registry = Search for the system and choose it from the results.
+survey-pick-parent = Choose the system this grid is defined against.
+survey-pick-system = Choose a system
+survey-pick-systems = Choose the system to convert from and the one to convert to.
+survey-no-selection = Choose a coordinate system on the left, or right-click to add one.
+survey-kind-grid = Grid over { $parent }
+survey-system-in-use = "{ $name }" cannot be deleted: { $dependants } { $dependants ->
+    [one] is
+   *[other] are
+  } defined against it. Point them elsewhere first.
+survey-system-cycle = "{ $name }" is defined against itself, directly or through its parents.
+survey-system-missing = That coordinate system no longer exists. Select another definition.
+survey-same-system = Choose different source and destination systems.
+survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
