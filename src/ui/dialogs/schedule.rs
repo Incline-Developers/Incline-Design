@@ -1,5 +1,5 @@
-//! The Schedule Setup subpage's New Loader Class, New Loader Agent and New
-//! Sequence dialogs.
+//! The Schedule workspace's New Loader Class and New Loader Agent dialogs,
+//! and the Gantt's New Bar / Rename Bar dialog.
 //!
 //! All of them are drafts: nothing reaches the project until the entry is
 //! valid and the user confirms it, so a cancelled dialog leaves the schedule -
@@ -10,7 +10,7 @@ use crate::{
     model::schedule::SchedulePlan,
     ui::{
         EditorState,
-        state::{ScheduleEdit, UiCommand},
+        state::{BarNameDialog, ScheduleEdit, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
     },
 };
@@ -128,38 +128,77 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
 
 /// Add one dig sequence. It starts empty: its ground is chosen afterwards,
 /// once the 3D block editor exists to pick it from.
-pub(crate) fn draw_new_sequence_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    if !editor.new_sequence_open {
+/// Name a new Gantt bar, or rename one.
+///
+/// One dialog for both, because they ask the same question and are subject to
+/// the same rule: a bar's name must be its own. Which one it is doing is the
+/// dialog's `target` - `None` adds, `Some` renames - and the confirm button
+/// says so.
+pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some((target, agent, priority, earliest_start_h)) = editor
+        .bar_name_dialog
+        .as_ref()
+        .map(|dialog: &BarNameDialog| (dialog.target, dialog.agent, dialog.priority, dialog.earliest_start_h))
+    else {
+        return;
+    };
+    // A rename whose bar went away while the dialog was open has nothing left
+    // to rename; it closes rather than committing against a missing id.
+    if target.is_some_and(|id| plan.bar(id).is_none()) {
+        editor.bar_name_dialog = None;
         return;
     }
+    let title = if target.is_some() { tr!("schedule-rename-bar") } else { tr!("schedule-new-bar") };
+    let confirm = if target.is_some() { tr!("schedule-rename-bar") } else { tr!("schedule-add-bar") };
     let mut open = true;
     let mut close = false;
-    DragableMenu::new("new_sequence_dialog", tr!("schedule-new-sequence"))
-        .open(&mut open)
-        .min_width(320.0)
-        .show(ui.ctx(), |ui| {
-            MenuFieldText::new(tr!("planning-name"), &mut editor.new_sequence_name)
-                .hint_text(tr!(literal = "Required"))
-                .show(ui);
-            let name = editor.new_sequence_name.trim().to_owned();
-            let taken = plan.sequences().iter().any(|sequence| sequence.name.trim().eq_ignore_ascii_case(&name));
-            let can_add = !name.is_empty() && !taken;
-            if taken {
-                ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
+    let draft = editor.bar_name_dialog.as_mut().expect("checked above");
+    DragableMenu::new("bar_name_dialog", title).open(&mut open).min_width(320.0).show(ui.ctx(), |ui| {
+        MenuFieldText::new(tr!("planning-name"), &mut draft.name).hint_text(tr!(literal = "Required")).show(ui);
+        // Where the new bar will land, stated rather than assumed: it is
+        // created at the instant the lane was right-clicked, which is not
+        // necessarily the start of the schedule.
+        if target.is_none() {
+            ui.label(
+                egui::RichText::new(tr!(
+                    "schedule-bar-earliest-start",
+                    instant = crate::ui::elements::schedule_gantt::instant_label(earliest_start_h * crate::ui::state::GanttView::HOUR)
+                ))
+                .weak(),
+            );
+        }
+        let name = draft.name.trim().to_owned();
+        // Rejected before it is offered rather than after it is pressed: the
+        // same rules the domain enforces, applied to the draft. A bar keeping
+        // its own name is not a duplicate of itself.
+        let taken = plan.bars().iter().any(|bar| Some(bar.id) != target && bar.name().trim().eq_ignore_ascii_case(&name));
+        let can_commit = !name.is_empty() && !taken;
+        if taken {
+            ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
+        }
+        menu::menu_actions(ui, |ui| {
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            if (submitted || ui.add(MenuButton::new(confirm).primary().enabled(can_commit)).clicked()) && can_commit {
+                commands.push(UiCommand::schedule(
+                    session,
+                    match target {
+                        Some(bar) => ScheduleEdit::RenameBar { bar, name },
+                        None => ScheduleEdit::AddBar {
+                            name,
+                            agent,
+                            priority,
+                            earliest_start_h,
+                        },
+                    },
+                ));
+                close = true;
             }
-            menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
-                if (submitted || ui.add(MenuButton::new(tr!("schedule-add-sequence")).primary().enabled(can_add)).clicked()) && can_add {
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::AddSequence { name }));
-                    close = true;
-                }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                    close = true;
-                }
-            });
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                close = true;
+            }
         });
+    });
     if close || !open {
-        editor.new_sequence_open = false;
-        editor.new_sequence_name.clear();
+        editor.bar_name_dialog = None;
     }
 }

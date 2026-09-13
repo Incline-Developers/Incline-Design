@@ -1368,18 +1368,9 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_setup::draw_agent_properties(ui, rect, editor, &plan, session, commands)
             });
         }
-        ScheduleSection::Sequences => {
-            island(ui, layout, "schedule_sequence_list_island", 320.0, |ui, rect| {
-                super::schedule_setup::draw_sequence_list(ui, rect, editor, &plan, session, commands)
-            });
-            central_island(ui, layout, |ui, rect| {
-                super::schedule_setup::draw_sequence_details(ui, rect, editor, &plan, session, commands)
-            });
-        }
     }
     crate::ui::dialogs::schedule::draw_new_loader_class_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_new_loader_agent_dialog(ui, editor, &plan, session, commands);
-    crate::ui::dialogs::schedule::draw_new_sequence_dialog(ui, editor, &plan, session, commands);
 }
 
 #[allow(clippy::too_many_arguments)]

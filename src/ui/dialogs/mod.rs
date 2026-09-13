@@ -16,6 +16,7 @@ pub(crate) mod plot;
 pub(crate) mod products;
 pub(crate) mod reserve_fields;
 pub(crate) mod schedule;
+pub(crate) mod sequence_editor;
 pub(crate) mod solids;
 pub(crate) mod triangulation;
 

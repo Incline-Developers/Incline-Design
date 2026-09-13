@@ -143,7 +143,7 @@ pub(crate) struct PlanningPipeline {
 /// Solids and Benching own the body; Blasting and Dig Strips own the
 /// partition cut out of it. A stage never asks for work belonging to a stage
 /// after it, which is what stops Run Solids waiting on a bad cut line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum GeometryDemand {
     Envelope,
     Body,
@@ -1145,12 +1145,12 @@ impl PlanningInputs<'_> {
                 }
                 continue;
             }
-            let Some(geometry) = cache.geometry() else {
+            let Some(blocks) = cache.finished_partition() else {
                 waiting += 1;
                 continue;
             };
-            entities += geometry.parts().len();
-            if geometry.parts().iter().any(|part| part.volume.is_none()) {
+            entities += blocks.len();
+            if blocks.iter().any(|part| part.volume.is_none()) {
                 diagnostics.push(StageDiagnostic {
                     entity: Some(solid.name.clone()),
                     message: tr!("planning-reserve-open-solid"),

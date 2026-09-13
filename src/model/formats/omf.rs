@@ -56,24 +56,15 @@ const META_SOLIDS: &str = "incline:solids";
 /// planning metadata beside it so a future shape change can be read back
 /// deliberately rather than guessed at.
 const META_SCHEDULE: &str = "incline:schedule";
-/// Payload version written into [`META_SCHEDULE`]. Bumped when the stored
-/// shape changes; a file naming a version this build does not know is
-/// reported and left out rather than half-read.
+/// Payload version written into [`META_SCHEDULE`], and the only one this
+/// build reads.
 ///
-/// 3 - dig-block references carry their ground's geometry: the flitch's top
-/// RL, a canonical footprint digest and the block's volume.
-/// 4 - references also carry the ground's provenance: the source surfaces and
-/// their geometry versions the block was cut from. Version 3 references are
-/// read but cannot prove which sources produced them, so they resolve as
-/// unverified and stay in their sequences until the blocks are reselected,
-/// rather than being silently rebound to whatever now covers their anchors.
-/// Version 2 references (a point, an area, a base RL) are weaker still, and
-/// are treated the same way.
-const SCHEDULE_METADATA_VERSION: u64 = 4;
-/// The format before dig sequences and the tonnage field existed. Still
-/// written for a plan that holds only a fleet, so such a project keeps
-/// opening in builds that predate them.
-const SCHEDULE_FLEET_ONLY_VERSION: u64 = 1;
+/// Scheduling is in development and keeps **no** backwards compatibility: a
+/// payload naming any other version is reported and left out rather than
+/// half-read or migrated. Bumping this retires every file written before it,
+/// deliberately, so that nothing in the app has to carry a shape it no longer
+/// has. That ends when scheduling ships.
+const SCHEDULE_METADATA_VERSION: u64 = 5;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -485,15 +476,10 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
     let schedule = document.schedule();
     if !schedule.is_pristine() {
-        let version = if schedule.uses_sequences() {
-            SCHEDULE_METADATA_VERSION
-        } else {
-            SCHEDULE_FLEET_ONLY_VERSION
-        };
         put(
             &mut element,
             META_SCHEDULE,
-            serde_json::json!({ "version": version, "plan": serde_json::to_value(schedule)? }),
+            serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
         );
     }
     Ok(element)
@@ -503,29 +489,32 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
 ///
 /// Every failure here is reported to the caller: the version, the shape and
 /// the plan's own invariants (unique ids, unique names, positive rates,
-/// resolvable class references) are all things a silent default would turn
-/// into wrong numbers further down the schedule.
+/// resolvable class and agent references) are all things a silent default
+/// would turn into wrong numbers further down the schedule.
 fn read_schedule(value: serde_json::Value) -> std::result::Result<crate::model::schedule::SchedulePlan, String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Payload {
+        /// Read above, before the plan, so that a payload of another shape is
+        /// refused with the version as the reason. Declared here only because
+        /// `deny_unknown_fields` would otherwise reject the key it was read
+        /// from.
+        #[allow(dead_code, reason = "checked before deserializing; the field exists so deny_unknown_fields accepts the key")]
         version: u64,
         plan: crate::model::schedule::SchedulePlan,
     }
 
+    // The version is read before the plan: another version is another shape,
+    // and `deny_unknown_fields` would refuse it with a serde complaint about
+    // some field rather than with the reason.
     let version = value.get("version").and_then(serde_json::Value::as_u64);
-    if version.is_some_and(|version| version > SCHEDULE_METADATA_VERSION) {
+    if version != Some(SCHEDULE_METADATA_VERSION) {
         return Err(format!(
-            "it was written by a newer version of Incline Design (schedule format {}, this build reads {SCHEDULE_METADATA_VERSION})",
-            version.unwrap_or_default()
+            "schedule format {} is not read by this build, which reads {SCHEDULE_METADATA_VERSION}: scheduling is in development and keeps no backwards compatibility",
+            version.map_or_else(|| "(unstated)".to_owned(), |version| version.to_string())
         ));
     }
     let payload: Payload = serde_json::from_value(value).map_err(|error| error.to_string())?;
-    // Older formats are read, not rejected: every version so far is a subset
-    // of this one, and the fields it does not carry default to empty.
-    if payload.version < SCHEDULE_FLEET_ONLY_VERSION {
-        return Err(format!("schedule format {} is not supported by this build", payload.version));
-    }
     let mut plan = payload.plan;
     plan.validate_loaded().map_err(|error| error.message())?;
     Ok(plan)

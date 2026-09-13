@@ -37,14 +37,18 @@
 //!   *same* sources into different ground.
 //!
 //! Resolving, in order: is the solid still there; are the sources still the
-//! sources (stamp comparison); is the stored provenance trustworthy at all;
-//! and then does exactly one block of this solid, in this band, cover the
-//! stored point with this footprint and this volume? Only an unqualified yes
-//! resolves. Every other answer - including "cannot be established", which
-//! is what a reference from before this contract existed must answer - keeps
-//! the member in place and unresolved, with the most specific true reason.
-//! Nothing is ever dropped, renamed, matched by display name, or rebound
-//! through a `replaces` lineage.
+//! sources (stamp comparison); and then does exactly one block of this solid,
+//! in this band, cover the stored point with this footprint and this volume?
+//! Only an unqualified yes resolves. Every other answer keeps the member in
+//! place and unresolved, with the most specific true reason. Nothing is ever
+//! dropped, renamed, matched by display name, or rebound through a `replaces`
+//! lineage.
+//!
+//! Every field of a reference is required. Scheduling is in development and
+//! carries no backwards compatibility: a reference is captured whole by
+//! [`App::dig_block_reference`](crate::app::App::dig_block_reference) or it
+//! does not exist, so there is no weaker kind to resolve, and no branch that
+//! has to decide how much of a reference it can trust.
 //!
 //! Measured grades and tonnages are deliberately *not* part of identity: a
 //! block whose model was re-measured is the same ground with new figures,
@@ -62,11 +66,6 @@ use crate::{
         triangulation::GroundSourceStamp,
     },
 };
-
-/// Identity of one dig sequence within its project. Allocated like the fleet
-/// ids beside it: never reused, and not rewound by an undo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct SequenceId(pub(crate) u64);
 
 /// How far a flitch's base or top RL may move and still be the same band.
 ///
@@ -255,11 +254,9 @@ pub(crate) struct BlockGround {
 /// A stored reference to one dig block's ground.
 ///
 /// Every field is durable project data or plain geometry - nothing here is
-/// allocated at runtime, so nothing here can alias a later session's block.
-/// The `source`, `flitch_top` and `footprint` fields are [`None`] only in a
-/// reference written before this contract existed: such a reference can name
-/// where its ground used to sit, but cannot prove it is the same ground, and
-/// so never resolves. See [`RefStatus::Unverified`].
+/// allocated at runtime, so nothing here can alias a later session's block -
+/// and every field is required. A reference either names its ground
+/// completely or is not a reference.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DigBlockRef {
@@ -269,13 +266,11 @@ pub(crate) struct DigBlockRef {
     /// it stood when the reference was captured. Never refreshed: it records
     /// the provenance of the ground the user selected, and a later source
     /// edit is exactly what it exists to catch.
-    #[serde(default)]
-    pub(crate) source: Option<GroundSourceStamp>,
+    pub(crate) source: GroundSourceStamp,
     /// Base RL of its flitch.
     pub(crate) flitch_base: f64,
-    /// Top RL of its flitch. `None` in a legacy reference.
-    #[serde(default)]
-    pub(crate) flitch_top: Option<f64>,
+    /// Top RL of its flitch.
+    pub(crate) flitch_top: f64,
     /// A point inside the block's footprint, in plan. Taken from the
     /// partition's own anchor for the block, and used only as a probe: the
     /// current block's anchor may sit elsewhere, so long as this point is
@@ -284,12 +279,15 @@ pub(crate) struct DigBlockRef {
     /// The plan area the reference was captured against. Diagnostic only -
     /// identity is decided by the footprint digest, not the area.
     pub(crate) plan_area: f64,
-    /// The canonical digest of the footprint. `None` in a legacy reference.
-    #[serde(default)]
-    pub(crate) footprint: Option<Footprint>,
-    /// The clipped volume the reference was captured against, `None` when
-    /// the block did not close.
-    #[serde(default)]
+    /// The canonical digest of the footprint.
+    pub(crate) footprint: Footprint,
+    /// The clipped volume the reference was captured against, `null` when the
+    /// block did not close - the one field that may legitimately be empty,
+    /// because an unclosed piece has no volume. Still *required* on the wire:
+    /// serde would otherwise read a reference with no `volume` key at all as
+    /// one that did not close, which is a statement about the ground and not
+    /// something a missing key is entitled to make.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) volume: Option<f64>,
 }
 
@@ -298,8 +296,7 @@ impl DigBlockRef {
     ///
     /// Two references to one block differ in their anchor (and nothing
     /// else), so membership checks compare this rather than the whole
-    /// reference; a legacy reference - which cannot name its ground this
-    /// precisely - falls back to its exact stored fields.
+    /// reference.
     pub(crate) fn ground_identity(&self) -> GroundIdentity {
         GroundIdentity {
             solid: self.solid,
@@ -307,7 +304,6 @@ impl DigBlockRef {
             flitch_base: self.flitch_base,
             flitch_top: self.flitch_top,
             footprint: self.footprint,
-            anchor: self.footprint.is_none().then_some(self.anchor),
         }
     }
 }
@@ -317,12 +313,10 @@ impl DigBlockRef {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct GroundIdentity {
     solid: SolidId,
-    source: Option<GroundSourceStamp>,
+    source: GroundSourceStamp,
     flitch_base: f64,
-    flitch_top: Option<f64>,
-    footprint: Option<Footprint>,
-    /// Compared only for unprovenanced references, which have no digest.
-    anchor: Option<[f64; 2]>,
+    flitch_top: f64,
+    footprint: Footprint,
 }
 
 /// What a current run says about one stored reference.
@@ -362,10 +356,6 @@ pub(crate) enum RefStatus {
     /// a slope and its mirror share every number but the material's - so the
     /// reference stands down until it is reselected or reconfirmed.
     SourceChanged,
-    /// Written before references carried their provenance, so equivalence
-    /// cannot be established for it at all. It stays in its sequence until
-    /// the block is explicitly reselected.
-    Unverified,
 }
 
 impl RefStatus {
@@ -392,7 +382,6 @@ impl RefStatus {
                 now = now.map_or_else(|| tr!(literal = "—").to_owned(), |value| format!("{value:.1}"))
             ),
             Self::SourceChanged => tr!("sequence-unresolved-source"),
-            Self::Unverified => tr!("sequence-unresolved-unverified"),
         })
     }
 }
@@ -423,12 +412,9 @@ impl DigBlockRef {
         if !seen_solid {
             return RefStatus::SolidMissing;
         }
-        if let (Some(stored), Some(current)) = (self.source, current_source)
-            && stored != current
-        {
+        if current_source.is_some_and(|current| current != self.source) {
             return RefStatus::SourceChanged;
         }
-        let strong = self.flitch_top.is_some_and(|_| self.footprint.is_some()) && self.source.is_some();
         let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
         let mut seen_base = false;
         let mut band_top = None;
@@ -442,7 +428,7 @@ impl DigBlockRef {
             }
             seen_base = true;
             band_top.get_or_insert(block.flitch_top);
-            let band = self.flitch_top.is_none_or(|top| (block.flitch_top - top).abs() <= FLITCH_TOLERANCE);
+            let band = (block.flitch_top - self.flitch_top).abs() <= FLITCH_TOLERANCE;
             if band && point_in_face(&block.outline, anchor) {
                 covering.push(index);
             }
@@ -454,19 +440,16 @@ impl DigBlockRef {
         // the way this reference was captured against. `seen_band` false
         // means every flitch at this base runs to some other top, so this is
         // a re-flitch rather than missing ground.
-        if strong && self.flitch_top.is_some_and(|top| band_top.is_some_and(|now| (now - top).abs() > FLITCH_TOLERANCE)) && covering.is_empty() {
-            return RefStatus::FlitchTopChanged {
-                now: band_top.unwrap_or(f64::NAN),
-            };
+        if covering.is_empty()
+            && let Some(now) = band_top.filter(|now| (now - self.flitch_top).abs() > FLITCH_TOLERANCE)
+        {
+            return RefStatus::FlitchTopChanged { now };
         }
         match covering.as_slice() {
             [] => RefStatus::GroundMissing,
             [index] => {
-                if !strong {
-                    return RefStatus::Unverified;
-                }
                 let block = &ground[*index];
-                if block.footprint != self.footprint.expect("strong references carry a digest") {
+                if block.footprint != self.footprint {
                     return RefStatus::GroundChanged {
                         was: self.plan_area,
                         now: block.plan_area,
@@ -489,7 +472,7 @@ impl DigBlockRef {
     /// nothing for reasons no diagnostic could explain.
     pub(crate) fn is_well_formed(&self) -> bool {
         self.flitch_base.is_finite()
-            && self.flitch_top.is_none_or(f64::is_finite)
+            && self.flitch_top.is_finite()
             && self.anchor.iter().all(|value| value.is_finite())
             && self.plan_area.is_finite()
             && self.plan_area > 0.0
@@ -511,32 +494,94 @@ fn same_volume(was: Option<f64>, now: Option<f64>) -> bool {
     }
 }
 
-/// An ordered run of ground, named by the user.
+/// An ordered run of ground, named by the user: the dig order one Gantt bar
+/// works through.
 ///
 /// Order is the whole point: it is the order the blocks are dug in, so
 /// membership is a `Vec` rather than a set, and the same ground cannot appear
 /// in it twice.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// Exactly one thing owns one of these: a [`ScheduleBar`](super::ScheduleBar),
+/// and nothing else. The stage 2A standalone sequence is gone and its
+/// membership moved here unchanged, so the project holds one notion of "an
+/// ordered run of ground" rather than two that could drift apart.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Sequence {
-    pub(crate) id: SequenceId,
+pub(crate) struct DigOrder {
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) members: Vec<DigBlockRef>,
 }
 
-impl Sequence {
+impl DigOrder {
+    pub(crate) fn new(name: String) -> Self {
+        Self { name, members: Vec::new() }
+    }
+
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         &self.members
     }
 
-    /// Whether this sequence already holds the ground `block` names.
+    /// Whether this order already holds the ground `block` names.
     ///
     /// By ground identity - where in the ground the pick sat is not part of
-    /// what a sequence claims - so picking the same block twice through
+    /// what an order claims - so picking the same block twice through
     /// different anchors is still a duplicate. A file's duplicate ground is
     /// caught the same way by the load check.
     pub(crate) fn contains(&self, block: &DigBlockRef) -> bool {
         self.members.iter().any(|member| member.ground_identity() == block.ground_identity())
+    }
+
+    /// Put ground at `position`, clamped to the end.
+    pub(crate) fn insert(&mut self, position: usize, block: DigBlockRef) -> super::ScheduleResult {
+        if !block.is_well_formed() {
+            return Err(super::ScheduleError::MalformedReference);
+        }
+        if self.contains(&block) {
+            return Err(super::ScheduleError::DuplicateMember);
+        }
+        let position = position.min(self.members.len());
+        self.members.insert(position, block);
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, position: usize) -> super::ScheduleResult {
+        if position >= self.members.len() {
+            return Err(super::ScheduleError::UnknownMember);
+        }
+        self.members.remove(position);
+        Ok(())
+    }
+
+    /// Move one block to a different place in the dig order.
+    pub(crate) fn move_member(&mut self, from: usize, to: usize) -> super::ScheduleResult {
+        if from >= self.members.len() || to >= self.members.len() {
+            return Err(super::ScheduleError::UnknownMember);
+        }
+        let block = self.members.remove(from);
+        self.members.insert(to, block);
+        Ok(())
+    }
+
+    /// Check membership read back from a file.
+    ///
+    /// Shape only. Whether the ground is still there is a question for the
+    /// current run, asked every time an order is measured - a file that opens
+    /// on a project whose Solids have not been rerun is not a broken file.
+    ///
+    /// Duplicates are judged on exact stored equality, which is file
+    /// corruption; the same *ground* held under two anchors is not a broken
+    /// file - capture refuses it, but a saved plan can carry it - so it
+    /// passes here and the readiness report names it.
+    pub(crate) fn check_loaded(&self) -> super::ScheduleResult {
+        for (position, member) in self.members.iter().enumerate() {
+            if !member.is_well_formed() {
+                return Err(super::ScheduleError::MalformedReference);
+            }
+            if self.members[..position].contains(member) {
+                return Err(super::ScheduleError::DuplicateMember);
+            }
+        }
+        Ok(())
     }
 }

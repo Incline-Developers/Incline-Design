@@ -1,8 +1,8 @@
-//! What a dig sequence would actually execute, measured against the run the
+//! What one Gantt bar would actually execute, measured against the run the
 //! project currently holds.
 //!
 //! This is the join between three things that are deliberately kept apart:
-//! the authored sequence (persistent, in [`crate::model::schedule`]), the
+//! the authored bar (persistent, in [`crate::model::schedule`]), the
 //! finished Solids run (session state, reached through
 //! [`crate::app::commands::solids_view::PlanningSnapshot`]) and the project's
 //! reserve schema. Nothing here computes geometry, starts a job or edits the
@@ -17,29 +17,31 @@
 //!   that ground" is not "this ground is that ground", and the tonnes differ.
 //! - **A tonnage that is not there is not zero.** Capacity-only material,
 //!   an unmeasured block, a field nothing maps onto and a partial total each
-//!   produce a stated problem, so a sequence can be short of an answer but
+//!   produce a stated problem, so a bar can be short of an answer but
 //!   never quietly short of tonnes.
 //! - **Ground is counted once.** Two members that resolve to the same block
 //!   are one block dug twice, whatever anchors they were captured with;
 //!   captures refuse it, and this gate refuses what a saved file or a changed
-//!   run still produces.
+//!   run still produces. Ground shared between two *different* bars - which
+//!   copying one produces on purpose - is the dispatch evaluator's to refuse,
+//!   because only it knows which bars are executable.
 //! - **A figure that cannot be tonnes is refused, not rounded into one.** A
 //!   negative or overflowed sum on the nominated tonne field, and a total
-//!   that is not finite, each stop the sequence with a named problem. A
-//!   measured zero is an answer and passes.
+//!   that is not finite, each stop the bar with a named problem. A measured
+//!   zero is an answer and passes.
 
 use super::solids_view::{DigBlockRecord, MaterialState, PlanningSnapshot};
 use crate::{
     i18n::tr,
     model::{
         Document, ReserveAggregation, ReserveFieldId,
-        schedule::{DigBlockPick, SequenceId, sequence::BlockGround},
+        schedule::{BarId, DigBlockPick, sequence::BlockGround},
         solid_reserves::ReserveTotals,
     },
-    ui::state::{ScheduleMemberView, ScheduleSequenceView},
+    ui::state::{ScheduleBarView, ScheduleMemberView, SequenceMemberView},
 };
 
-/// Why a sequence cannot be turned into work yet.
+/// Why a bar cannot be turned into work yet.
 ///
 /// A report can carry several: a project can be missing its tonnage field
 /// *and* holding references the last run could not place, and fixing one
@@ -48,7 +50,7 @@ pub(crate) enum ReadinessProblem {
     /// The Solids run these blocks come from is not finished, is stale, or
     /// never happened. Carries the pipeline's own explanation.
     NoRun(String),
-    /// The sequence has no dig blocks in it.
+    /// The bar has no dig blocks in it.
     Empty,
     /// No reserve field has been nominated as tonnes.
     NoTonnageField,
@@ -57,14 +59,14 @@ pub(crate) enum ReadinessProblem {
     /// The nominated field is averaged or categorical, so summing it would
     /// not produce a tonnage.
     TonnageFieldNotSum(String),
-    /// References the current run could not place, kept in the sequence.
+    /// References the current run could not place, kept in the bar.
     Unresolved(usize),
     /// A block that resolved but has no complete measured tonnage.
     Unmeasured { block: String, reason: String },
     /// A block whose total is measured but incomplete.
     Partial { block: String },
-    /// Two dig-order positions resolved to the same block, so the sequence
-    /// would dig it twice. `first`/`second` are positions from 1.
+    /// Two dig-order positions resolved to the same block, so the bar would
+    /// dig it twice. `first`/`second` are positions from 1.
     DuplicateGround { first: usize, second: usize, block: String },
     /// A block whose nominated tonne field holds a figure that cannot be
     /// tonnes: negative, or overflowed to a non-finite sum.
@@ -94,7 +96,7 @@ impl ReadinessProblem {
     }
 }
 
-/// One member of a sequence, as the current run sees it.
+/// One member of a bar's dig order, as the current run sees it.
 pub(crate) struct MemberReport {
     /// Its place in the dig order, from 1.
     pub(crate) position: usize,
@@ -102,19 +104,19 @@ pub(crate) struct MemberReport {
     pub(crate) name: Option<String>,
     pub(crate) solid_name: Option<String>,
     /// Why it was not found, when it was not. The member is still in the
-    /// sequence either way.
+    /// dig order either way.
     pub(crate) unresolved: Option<String>,
     /// Its complete measured tonnage. `None` whenever that figure is not
     /// available *for any reason* - which is never the same as zero.
     pub(crate) tonnes: Option<f64>,
 }
 
-/// What one sequence would execute.
-pub(crate) struct SequenceReport {
-    pub(crate) sequence: SequenceId,
+/// What one bar would execute.
+pub(crate) struct BarReport {
+    pub(crate) bar: BarId,
     pub(crate) members: Vec<MemberReport>,
-    /// The sequence's total tonnes, present only when every member resolved
-    /// and every one of them carries a complete measured figure.
+    /// The bar's total tonnes, present only when every member resolved and
+    /// every one of them carries a complete measured figure.
     pub(crate) tonnes: Option<f64>,
     pub(crate) problems: Vec<ReadinessProblem>,
     /// The run this was measured against, so a caller can tell that a report
@@ -122,7 +124,7 @@ pub(crate) struct SequenceReport {
     pub(crate) generation: Option<u64>,
 }
 
-impl SequenceReport {
+impl BarReport {
     pub(crate) fn is_ready(&self) -> bool {
         self.problems.is_empty() && self.tonnes.is_some()
     }
@@ -141,37 +143,37 @@ enum TonnageField {
 }
 
 impl crate::app::App<'_> {
-    /// Measure one sequence against the current run.
+    /// Measure one bar against the current run.
     ///
     /// Returns a report in every case, including when there is no run at all:
     /// the dig order is the user's own work and stays legible whether or not
     /// Solids can currently say anything about it.
     #[allow(
         dead_code,
-        reason = "the panels read the mirrored reports; this single-sequence entry is the dispatch evaluator's stage 2B gate"
+        reason = "the Gantt reads the mirrored reports; this single-bar entry is the checkpoint 4 dispatch evaluator's gate"
     )]
-    pub(crate) fn sequence_report(&self, id: SequenceId) -> Option<SequenceReport> {
+    pub(crate) fn bar_report(&self, id: BarId) -> Option<BarReport> {
         let document = self.workspace.active_document()?;
-        let sequence = document.schedule().sequence(id)?;
+        let bar = document.schedule().bar(id)?;
         let snapshot = self.planning_snapshot();
         let run = snapshot.as_ref().map(|snapshot| CurrentRun {
             snapshot,
             ground: ground_of(snapshot),
         });
-        Some(report_against(document, sequence, run.as_ref().map_err(|reason| *reason)))
+        Some(report_against(document, bar, run.as_ref().map_err(|reason| *reason)))
     }
 
-    /// Every sequence, measured. Used by the panels and, in stage 2B, by the
+    /// Every bar, measured. Used by the Gantt and, in checkpoint 4, by the
     /// dispatch evaluator's own gate.
     ///
     /// One snapshot serves them all: every report then describes the same
-    /// generation, and the run is collected once however many sequences the
+    /// generation, and the run is collected once however many bars the
     /// project holds.
-    pub(crate) fn schedule_reports(&self) -> Vec<SequenceReport> {
+    pub(crate) fn schedule_reports(&self) -> Vec<BarReport> {
         let Some(document) = self.workspace.active_document() else {
             return Vec::new();
         };
-        if document.schedule().sequences().is_empty() {
+        if document.schedule().bars().is_empty() {
             return Vec::new();
         }
         let snapshot = self.planning_snapshot();
@@ -181,32 +183,42 @@ impl crate::app::App<'_> {
         });
         document
             .schedule()
-            .sequences()
+            .bars()
             .iter()
-            .map(|sequence| report_against(document, sequence, run.as_ref().map_err(|reason| *reason)))
+            .map(|bar| report_against(document, bar, run.as_ref().map_err(|reason| *reason)))
             .collect()
     }
 
-    /// Mirror the sequence readiness reports into the editor state the
-    /// Sequences step reads.
+    /// Mirror the bar readiness reports into the editor state the Gantt reads.
     ///
-    /// Computed only while that step is on screen, and cleared when it leaves
-    /// it, so a report can never be read against a run it was not measured
-    /// from. The dig order itself is not mirrored: it is persistent plan data,
+    /// Computed only while the Gantt is on screen, and cleared when it leaves,
+    /// so a report can never be read against a run it was not measured from.
+    /// The dig order itself is not mirrored: it is persistent plan data,
     /// already in the project view.
     pub(crate) fn mirror_schedule_reports(&mut self) {
-        if !self.editor.is_schedule_sequences_step() {
-            if !self.editor.schedule_sequence_reports.is_empty() {
-                self.editor.schedule_sequence_reports.clear();
+        if !self.editor.is_schedule_gantt() {
+            if !self.editor.schedule_bar_reports.is_empty() {
+                self.editor.schedule_bar_reports.clear();
+                self.redraw_requested = true;
+            }
+            // The draft itself is kept: leaving the page puts the Solids
+            // preview back the way it was, and coming back shows the same
+            // editing session. Only the per-run answers go, because they
+            // would otherwise outlive the run they were measured against.
+            if !self.editor.sequence_members.is_empty() || self.editor.sequence_generation.is_some() || self.editor.sequence_unavailable.is_some() {
+                self.editor.sequence_members.clear();
+                self.editor.sequence_generation = None;
+                self.editor.sequence_unavailable = None;
                 self.redraw_requested = true;
             }
             return;
         }
+        self.mirror_sequence_editor();
         let views = self
             .schedule_reports()
             .into_iter()
-            .map(|report| ScheduleSequenceView {
-                sequence: report.sequence,
+            .map(|report| ScheduleBarView {
+                bar: report.bar,
                 ready: report.is_ready(),
                 tonnes: report.tonnes,
                 members: report
@@ -223,41 +235,194 @@ impl crate::app::App<'_> {
                 problems: report.problems.iter().map(|problem| problem.message()).collect(),
             })
             .collect::<Vec<_>>();
-        if self.editor.schedule_sequence_reports != views {
-            self.editor.schedule_sequence_reports = views;
+        if self.editor.schedule_bar_reports != views {
+            self.editor.schedule_bar_reports = views;
             self.redraw_requested = true;
         }
+    }
+
+    /// Mirror what the current run says about each member of the open
+    /// sequence editor's draft.
+    ///
+    /// Kept apart from the bar reports above because the two describe
+    /// different lists: a bar report describes the order the *project* holds,
+    /// and this describes the order the user is drafting - which is exactly
+    /// the list that has not been applied yet. Both are reads; neither starts
+    /// work, and neither edits the draft.
+    fn mirror_sequence_editor(&mut self) {
+        use crate::ui::state::DraftMember;
+
+        let Some(draft) = self.editor.sequence_editor.clone() else {
+            if !self.editor.sequence_members.is_empty() {
+                self.editor.sequence_members.clear();
+                self.redraw_requested = true;
+            }
+            return;
+        };
+        let snapshot = self.planning_snapshot();
+        let (generation, unavailable) = match &snapshot {
+            Ok(snapshot) => (Some(snapshot.generation), None),
+            Err(reason) => (None, Some(reason.describe())),
+        };
+        let members = match &snapshot {
+            // No finished run: every member keeps its place and its number,
+            // and none of them is described. An absent run is stated once, by
+            // the window, rather than as a fault of every block in the list.
+            Err(_) => draft
+                .members
+                .iter()
+                .map(|member| SequenceMemberView {
+                    name: None,
+                    solid_name: None,
+                    unresolved: None,
+                    tonnes: None,
+                    is_new: matches!(member, DraftMember::Picked(_)),
+                    stale_pick: false,
+                    anchor: None,
+                    block: None,
+                })
+                .collect(),
+            Ok(snapshot) => {
+                let ground = ground_of(snapshot);
+                // The same rule the readiness report applies: a field that
+                // is gone, or no longer summed, produces no figure rather
+                // than a wrong one.
+                let field = self.workspace.active_document().and_then(|document| {
+                    let id = document.schedule().tonnage_field()?;
+                    document
+                        .reserve_fields()
+                        .iter()
+                        .find(|field| field.id == id && field.aggregation == ReserveAggregation::Sum)
+                        .map(|field| field.id)
+                });
+                draft
+                    .members
+                    .iter()
+                    .map(|member| {
+                        // A held reference is resolved exactly as a bar's own
+                        // member is; a pick names a block of a run directly,
+                        // and is stale when that run is no longer this one.
+                        let (found, unresolved, stale_pick) = match member {
+                            DraftMember::Held(reference) => {
+                                let status = reference.resolve(&ground);
+                                (status.resolved(), status.message(), false)
+                            }
+                            DraftMember::Picked(pick) => {
+                                let stale = pick.generation != snapshot.generation;
+                                let found = snapshot.blocks.iter().position(|block| block.id == pick.block).filter(|_| !stale);
+                                (found, stale.then(|| tr!("sequence-pick-superseded")), stale)
+                            }
+                        };
+                        let block = found.and_then(|index| snapshot.blocks.get(index));
+                        SequenceMemberView {
+                            name: block.map(|block| block.name.clone()),
+                            solid_name: block.map(|block| block.solid_name.clone()),
+                            unresolved,
+                            tonnes: block.zip(field).and_then(|(block, field)| block_tonnes(block, field).ok()),
+                            is_new: matches!(member, DraftMember::Picked(_)),
+                            stale_pick,
+                            // The flitch top, so the number floats on the
+                            // block's own upper surface rather than inside it.
+                            anchor: block.map(|block| [block.anchor[0], block.anchor[1], block.flitch.top]),
+                            block: block.map(|block| block.id),
+                        }
+                    })
+                    .collect()
+            }
+        };
+        if self.editor.sequence_members != members || self.editor.sequence_generation != generation || self.editor.sequence_unavailable != unavailable {
+            self.editor.sequence_members = members;
+            self.editor.sequence_generation = generation;
+            self.editor.sequence_unavailable = unavailable;
+            self.redraw_requested = true;
+        }
+    }
+
+    /// Take one click in the sequence editor's 3D view into the draft.
+    ///
+    /// Clicking a block the draft already holds selects it in the ordered
+    /// list rather than adding it a second time: a dig order refuses
+    /// duplicate ground, and a click that appeared to do nothing would read
+    /// as a dead block. A miss clears the list selection, the way clicking
+    /// empty space in the viewport clears a selection there.
+    ///
+    /// A pick records the block *and* the generation of the run it came from.
+    /// It is deliberately not turned into a stored reference here: that
+    /// happens once, at the command boundary, against whatever snapshot is
+    /// current when Apply is pressed - which may be a later run than this.
+    pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>) {
+        use crate::ui::state::DraftMember;
+
+        let Some(block) = block else {
+            if let Some(draft) = self.editor.sequence_editor.as_mut() {
+                draft.selected = None;
+            }
+            return;
+        };
+        // Picking needs a finished run to name; without one there is no
+        // generation to record, and a pick with no generation is exactly what
+        // the identity layer exists to refuse.
+        let snapshot = match self.planning_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                crate::userspace_warn!("{}", reason.describe());
+                return;
+            }
+        };
+        let Some(index) = snapshot.blocks.iter().position(|candidate| candidate.id == block) else {
+            crate::userspace_warn!("{}", tr!("sequence-pick-unknown-block"));
+            return;
+        };
+        let ground = ground_of(&snapshot);
+        let Some(draft) = self.editor.sequence_editor.as_mut() else {
+            return;
+        };
+        let existing = draft.members.iter().position(|member| match member {
+            DraftMember::Held(reference) => reference.resolve(&ground).resolved() == Some(index),
+            DraftMember::Picked(pick) => pick.block == block && pick.generation == snapshot.generation,
+        });
+        match existing {
+            Some(position) => draft.selected = Some(position),
+            None => {
+                draft.members.push(DraftMember::Picked(DigBlockPick {
+                    block,
+                    generation: snapshot.generation,
+                }));
+                draft.selected = Some(draft.members.len() - 1);
+            }
+        }
+        self.redraw_requested = true;
     }
 
     /// The ground a pick would store, for a block of the current run.
     ///
     /// The one place a [`crate::model::schedule::DigBlockRef`] is made, so
-    /// what is captured and what is matched cannot drift apart. Captures are
-    /// always complete - the source stamp, the band's top, the footprint
-    /// digest and the volume are taken together - so nothing captured by this
-    /// build can be an unverified reference. See [`Self::add_dig_block`] for
-    /// the command boundary a pick has to pass through to get here.
+    /// what is captured and what is matched cannot drift apart. A capture is
+    /// whole by construction - the source stamp, the band's top, the footprint
+    /// digest and the volume are taken together, and the reference has no
+    /// optional half to leave out. See [`Self::add_dig_block`] for the command
+    /// boundary a pick has to pass through to get here.
     #[allow(dead_code, reason = "reached only through add_dig_block, the generation-checked pick boundary")]
     pub(crate) fn dig_block_reference(&self, block: &DigBlockRecord) -> crate::model::schedule::DigBlockRef {
         crate::model::schedule::DigBlockRef {
             solid: block.solid,
-            source: Some(block.source),
+            source: block.source,
             flitch_base: block.flitch.base,
-            flitch_top: Some(block.flitch.top),
+            flitch_top: block.flitch.top,
             anchor: block.anchor,
             plan_area: block.plan_area,
-            footprint: Some(crate::model::schedule::Footprint::of(&block.ground)),
+            footprint: crate::model::schedule::Footprint::of(&block.ground),
             volume: block.volume,
         }
     }
 
-    /// Turn a pick - a block of *this* run - into the reference a sequence
-    /// stores, or refuse it.
+    /// Turn a pick - a block of *this* run - into the reference a bar's dig
+    /// order stores, or refuse it.
     ///
     /// The pick names the run it saw; a pick landing after a rerun (or from a
     /// project that is no longer open) describes a block this run never
     /// produced, so it is refused rather than matched by id. This is the only
-    /// door through which a reference enters a sequence, so the UI never
+    /// door through which a reference enters a dig order, so the UI never
     /// constructs or refreshes provenance itself.
     pub(crate) fn add_dig_block(&self, pick: &DigBlockPick) -> std::result::Result<crate::model::schedule::DigBlockRef, String> {
         let snapshot = self.planning_snapshot().map_err(|reason| reason.describe())?;
@@ -272,25 +437,25 @@ impl crate::app::App<'_> {
 }
 
 /// One finished run, held in the shape resolving asks of it. Borrowed from the
-/// snapshot that produced it, so measuring many sequences walks one collection
-/// of the run rather than one each.
+/// snapshot that produced it, so measuring many bars walks one collection of
+/// the run rather than one each.
 struct CurrentRun<'a> {
     snapshot: &'a PlanningSnapshot,
     ground: Vec<BlockGround>,
 }
 
-/// Measure one sequence against the run the project currently holds, or
-/// against nothing - in which case the pipeline's own explanation of why is
-/// carried as the report's first problem.
-fn report_against(document: &Document, sequence: &crate::model::schedule::Sequence, run: Result<&CurrentRun<'_>, &super::solids_view::PlanningNotReady>) -> SequenceReport {
-    let mut report = SequenceReport {
-        sequence: sequence.id,
-        members: Vec::with_capacity(sequence.members().len()),
+/// Measure one bar against the run the project currently holds, or against
+/// nothing - in which case the pipeline's own explanation of why is carried as
+/// the report's first problem.
+fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar, run: Result<&CurrentRun<'_>, &super::solids_view::PlanningNotReady>) -> BarReport {
+    let mut report = BarReport {
+        bar: bar.id,
+        members: Vec::with_capacity(bar.members().len()),
         tonnes: None,
         problems: Vec::new(),
         generation: None,
     };
-    if sequence.members().is_empty() {
+    if bar.members().is_empty() {
         report.problems.push(ReadinessProblem::Empty);
     }
 
@@ -313,7 +478,7 @@ fn report_against(document: &Document, sequence: &crate::model::schedule::Sequen
         Ok(run) => run,
         Err(reason) => {
             report.problems.push(ReadinessProblem::NoRun(reason.describe()));
-            report.members = sequence
+            report.members = bar
                 .members()
                 .iter()
                 .enumerate()
@@ -334,10 +499,10 @@ fn report_against(document: &Document, sequence: &crate::model::schedule::Sequen
     // Which block each resolved member landed on, by dig-order position: two
     // members that resolve to one block are one block dug twice, whatever
     // anchors they were captured with. Captures normalize this away, but a
-    // saved sequence or a changed run can still produce it, and the report is
+    // saved dig order or a changed run can still produce it, and the report is
     // the last gate before a total becomes work.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
-    for (index, member) in sequence.members().iter().enumerate() {
+    for (index, member) in bar.members().iter().enumerate() {
         let status = member.resolve(&run.ground);
         let Some(found) = status.resolved() else {
             report.members.push(MemberReport {
@@ -394,7 +559,7 @@ fn report_against(document: &Document, sequence: &crate::model::schedule::Sequen
         report.problems.push(ReadinessProblem::TotalNotFinite);
         total = None;
     }
-    report.tonnes = total.filter(|_| !sequence.members().is_empty());
+    report.tonnes = total.filter(|_| !bar.members().is_empty());
     report
 }
 

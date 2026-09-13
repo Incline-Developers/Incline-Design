@@ -227,7 +227,10 @@ impl crate::app::App<'_> {
         }
         for solid in &solids {
             solid.id.hash(&mut hasher);
-            self.solid_view_cache.get(&solid.id).map(|cache| (cache.key, cache.is_built())).hash(&mut hasher);
+            self.solid_view_cache
+                .get(&solid.id)
+                .map(|cache| (cache.key, cache.built_through(crate::app::planning_pipeline::GeometryDemand::Blasting)))
+                .hash(&mut hasher);
         }
         let key = hasher.finish();
         if self.editor.blasting_outlines_key == Some(key) {
@@ -239,10 +242,12 @@ impl crate::app::App<'_> {
         let mut next_selection = None;
         let mut outlines = Vec::new();
         for solid in &solids {
-            let Some(geometry) = self.solid_view_cache.get(&solid.id).and_then(|cache| cache.geometry()) else {
+            // The blast faces alone: this derivation is the Blasting stage's
+            // own, and must not wait on the dig blocks cut out of them.
+            let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(|cache| cache.blast_faces()) else {
                 continue;
             };
-            for (bench_base, faces) in group_faces_by_bench(geometry.blast_faces()) {
+            for (bench_base, faces) in group_faces_by_bench(faces) {
                 let band = BenchSelection {
                     base: bench_base,
                     top: faces[0].bench.top,
@@ -299,8 +304,13 @@ impl crate::app::App<'_> {
                 .then_with(|| number(&a.name).cmp(&number(&b.name)))
                 .then_with(|| a.name.cmp(&b.name))
         });
-        self.editor.selected_blast =
-            next_selection.or_else(|| previous_selection.filter(|selected| self.solid_view_cache.get(&selected.solid).is_some_and(|cache| !cache.is_built())));
+        self.editor.selected_blast = next_selection.or_else(|| {
+            previous_selection.filter(|selected| {
+                self.solid_view_cache
+                    .get(&selected.solid)
+                    .is_some_and(|cache| !cache.built_through(crate::app::planning_pipeline::GeometryDemand::Blasting))
+            })
+        });
         if self.editor.blasting_outlines != outlines {
             self.editor.blasting_outlines = outlines;
             self.invalidate_overlay();
@@ -320,12 +330,16 @@ impl crate::app::App<'_> {
         let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
         let mut named = Vec::new();
         for solid in &solids {
-            let Some(geometry) = self.solid_view_cache.get(&solid.id).and_then(|cache| cache.geometry()) else {
+            // Committing names is the Blasting stage's own work, so it reads
+            // the blast faces it just built. Asking for a finished partition
+            // here left the commit silently doing nothing whenever the strips
+            // below it had been retired - which is every run of this step.
+            let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(|cache| cache.blast_faces()) else {
                 continue;
             };
             let mut plan = solid.blasting.clone();
             let mut plan_changed = false;
-            for (bench_base, faces) in group_faces_by_bench(geometry.blast_faces()) {
+            for (bench_base, faces) in group_faces_by_bench(faces) {
                 let entry = plan.bench_mut(bench_base);
                 let before = entry.blasts.len();
                 entry

@@ -562,7 +562,7 @@ fn draw_ui(
             // The Gantt owns the whole pane rather than arranging islands in
             // it, so - like the Solids View - it hands its own rect back to be
             // rounded off as one region.
-            elements::schedule_gantt::draw_details(root_ui, editor, project)
+            elements::schedule_gantt::draw_details(root_ui, editor, project, commands)
         } else {
             planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
             planning_layout.rect

@@ -1712,16 +1712,29 @@ schedule-load-failed = The schedule in ⁨{ $project }⁩ could not be read and 
 
 ## Schedule → Sequences
 
-schedule-sequences = Dig Sequences
-schedule-new-sequence = New Sequence
-schedule-add-sequence = Add Sequence
-schedule-delete-sequence = Delete Sequence
-schedule-select-sequence = Select a sequence to see its dig order
-schedule-no-sequences = No dig sequences yet
-schedule-sequence-default-name = Sequence
-schedule-sequence-blocks = Dig blocks
-schedule-sequence-tonnes = Tonnes
-schedule-sequence-order = Dig order
+schedule-bar-default-name = Bar
+schedule-new-bar = New Bar
+schedule-add-bar = Add Bar
+schedule-rename-bar = Rename Bar
+schedule-rename-bar-action = Rename…
+schedule-copy-bar = Copy Bar
+schedule-delete-bar = Delete Bar
+# Used to name a copied bar, so it becomes project data: no bidi isolation
+# marks here, which would be stored in the name itself.
+schedule-bar-copy-name = { $name } copy
+schedule-bar-edit-sequence = Edit Sequence…
+schedule-bar-edit-sequence-coming = Dig blocks are picked in a floating 3D editor, which arrives in the next stage
+schedule-bar-raise-priority = Raise Priority
+schedule-bar-lower-priority = Lower Priority
+schedule-bar-assign = Assign To
+schedule-bar-unassign = Unassign
+schedule-bar-unassigned = Unassigned
+schedule-bar-unassigned-note = Bars with no machine. Drag one onto a loader row, or use its Assign To menu
+schedule-bar-lane = Lane ⁨{ $lane }⁩
+schedule-bar-blocks = ⁨{ $count }⁩ dig blocks
+schedule-bar-empty = No dig blocks yet
+schedule-bar-earliest-start = Earliest start ⁨{ $instant }⁩
+schedule-bar-length-note = Length is calculated by the dispatch stage, which arrives later; this marker shows only where the bar may start.
 schedule-sequence-position = ⁨{ $position }⁩. ⁨{ $block }⁩
 schedule-sequence-unresolved-row = ⁨{ $position }⁩. Unresolved dig block
 
@@ -1732,11 +1745,11 @@ schedule-tonnage-field-note = The chosen field's summed value is read as tonnes.
 
 schedule-sequence-move-up = Move Up
 schedule-sequence-move-down = Move Down
-schedule-sequence-pick-coming = Dig blocks are picked in a 3D editor, which arrives in the next stage
 
-schedule-error-unknown-sequence = That dig sequence is no longer in this project
-schedule-error-unknown-member = That position is no longer in this dig sequence
-schedule-error-duplicate-member = That dig block is already in this sequence
+schedule-error-unknown-bar = That bar is no longer in this project
+schedule-error-unknown-member = That position is no longer in this bar's dig order
+schedule-error-duplicate-member = That dig block is already in this bar's dig order
+schedule-error-invalid-earliest-start = A bar cannot start before the schedule origin
 schedule-error-malformed-reference = That dig block reference could not be read
 
 sequence-unresolved-solid = Its solid is no longer in this project
@@ -1745,12 +1758,11 @@ sequence-unresolved-flitch-top = The flitch at that level now runs to ⁨{$now}�
 sequence-unresolved-ground = No dig block covers that ground any more
 sequence-unresolved-volume = That ground has kept its outline but its volume changed: it was { $was } m³ and is now { $now } m³. Reselect the block to plan against what is there now
 sequence-unresolved-source = The surface this ground was cut from has changed since it was picked. Reselect or reconfirm the block to plan against what is there now
-sequence-unresolved-unverified = This dig block was picked before references carried their provenance, so it cannot be checked against the current ground. Reselect it to plan against what is there now
 sequence-unresolved-ambiguous = ⁨{ $count }⁩ dig blocks cover that ground, so which one was meant cannot be decided
 sequence-unresolved-changed = That ground has changed: it covered ⁨{ $was }⁩ m² and now covers ⁨{ $now }⁩ m². Reselect the block to plan against what is there now
 
 sequence-ready = Ready
-sequence-empty = Add dig blocks to this sequence
+sequence-empty = Add dig blocks to this bar
 sequence-not-ready = The dig blocks have not been calculated: ⁨{ $reason }⁩
 sequence-no-tonnage-field = Choose the reserve field that holds tonnes, in Configuration
 sequence-tonnage-field-missing = The chosen tonnage field is no longer in this project's Field List
@@ -1760,7 +1772,7 @@ sequence-block-unmeasured = ⁨{ $block }⁩ has no measured tonnage: ⁨{ $reas
 sequence-block-partial = ⁨{ $block }⁩ was only partly measured, so its tonnage is incomplete
 sequence-duplicate-ground = Positions ⁨{$first}⁩ and ⁨{$second}⁩ are the same dig block (⁨{$block}⁩), so it would be dug twice. Remove one of them
 sequence-invalid-tonnes = ⁨{$block}⁩ measures ⁨{$value}⁩ on the tonnage field, which cannot be tonnes. Check the field mapping or the block model
-sequence-total-not-finite = The sequence's total tonnage is not a finite number, so it cannot be executed
+sequence-total-not-finite = This bar's total tonnage is not a finite number, so it cannot be executed
 sequence-pick-stale = That pick was made against an older Solids run (generation ⁨{$was}⁩; the current run is ⁨{$now}⁩), so it was discarded. Pick the block again
 sequence-pick-unknown-block = That dig block is not in the current Solids run, so the pick was discarded. Pick the block again
 sequence-material-capacity-only = it has no block model, so only its capacity is known
@@ -1768,11 +1780,42 @@ sequence-material-no-schema = this project defines no reserve fields
 sequence-material-unavailable = its reserves have not been measured
 sequence-material-unmapped = no block model maps a value onto the chosen field
 
+## Schedule → the floating sequence editor
+
+sequence-editor-title = Edit Sequence — ⁨{ $bar }⁩
+sequence-editor-hint = Click a dig block to add it to the end of the order. Click one already in the order to pick it out below.
+sequence-editor-no-run = ⁨{ $reason }⁩ Run Solids → Dig Strips to pick dig blocks for this bar.
+sequence-editor-generation = Solids run ⁨{ $generation }⁩
+sequence-editor-order = Dig order
+sequence-editor-empty-order = No dig blocks yet
+sequence-editor-unresolved-kept = ⁨{ $count }⁩ of these references could not be found in the current run. They stay in the order, and stay removable, until you decide what to do with them.
+sequence-editor-stale-picks = ⁨{ $count }⁩ of these blocks were picked against an earlier Solids run. Remove and re-pick them; Apply will refuse them as they stand.
+sequence-editor-bar-gone = This bar is no longer in the schedule. Nothing was applied.
+sequence-editor-target-changed = This bar's dig order has changed since the editor was opened. Applying would overwrite that newer order with this older one, so it is refused. Reload to start again from what the bar holds now.
+sequence-editor-reload = Reload
+sequence-editor-preview = Order preview
+sequence-editor-preview-at = ⁨{ $dug }⁩ of ⁨{ $total }⁩ dug
+sequence-editor-preview-note = Authored order only — not a time axis, and no loader rate is consulted. Timed playback arrives with dispatch.
+sequence-editor-apply = Apply
+sequence-editor-remove = Remove
+sequence-editor-move-up = Move up
+sequence-editor-move-down = Move down
+sequence-editor-new-block = New
+sequence-editor-discard-title = Discard these changes?
+sequence-editor-discard-body = This editing session has changes that have not been applied to ⁨{ $bar }⁩.
+sequence-editor-discard = Discard
+sequence-editor-keep-editing = Keep Editing
+sequence-editor-unknown-block = Unidentified ground
+sequence-applied-blocks = ⁨{ $count }⁩ dig blocks
+sequence-pick-superseded = Picked against an earlier Solids run
+sequence-target-changed = This bar's dig order changed while the sequence editor was open, so the older draft was refused rather than written over it
+
 ## Schedule → Gantt
 
 planning-subpage-gantt = Gantt
 gantt-empty-fleet = No agent rows yet. Add loader classes and loader agents in Setup → Site Data
-gantt-no-sequences = Dig sequences will be added in the next stage
+gantt-no-bars = No bars yet. Right-click a loader row to add one
+gantt-bar-unassigned-row = Unassigned
 gantt-reset-view = Reset View
 gantt-zoom-in = Zoom in
 gantt-zoom-out = Zoom out

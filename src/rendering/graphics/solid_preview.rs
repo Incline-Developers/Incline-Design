@@ -194,7 +194,10 @@ impl Graphics<'_> {
         editor.solid_preview_texture = Some(target.texture_id);
 
         let (center, radius) = mesh_framing(preview);
-        let view = editor.solid_preview_view;
+        // Whichever pane is showing this image owns the orbit. The sequence
+        // editor keeps its own, so opening it moves nothing on the Solids
+        // pages and closing it puts the user back where they left off.
+        let view = editor.preview_camera();
         // Re-render only when something the image depends on changed: the
         // mesh, the orbit, or the frame size. Everything else on this page is
         // egui, which composites over an unchanged texture for free.
@@ -235,6 +238,13 @@ impl Graphics<'_> {
             (requested.width, requested.height).hash(&mut hasher);
             view.hash_into(&mut hasher);
             editor.dig_outlines_key.hash(&mut hasher);
+            // The order numbers are projected during the render, so the draft
+            // they belong to is part of what the image depends on. Without
+            // this a reorder - which changes no block's colour - would leave
+            // last render's positions numbered in the new order.
+            for member in &editor.sequence_members {
+                member.anchor.map(|anchor| anchor.map(f64::to_bits)).hash(&mut hasher);
+            }
             hasher.finish()
         };
         // A click changes nothing about the image, so it would not re-render on
@@ -247,6 +257,30 @@ impl Graphics<'_> {
             self.render_solid_preview_inner(&mut target, preview, &scene, center, radius, view, editor);
         }
         self.solid_preview = Some(target);
+    }
+
+    /// Project each open sequence draft member's anchor into image UVs.
+    ///
+    /// An unresolved member has no anchor and so gets no number in the image:
+    /// it keeps its place and its number in the ordered list beside it, which
+    /// is where a reference nothing can be found for belongs.
+    fn project_sequence_labels(&self, editor: &mut EditorState) {
+        if editor.sequence_members.is_empty() {
+            editor.sequence_label_uv.clear();
+            return;
+        }
+        let matrix = crate::rendering::camera::scene_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
+        let size = (self.size.width as f32, self.size.height as f32);
+        editor.sequence_label_uv = editor
+            .sequence_members
+            .iter()
+            .map(|member| {
+                let anchor = member.anchor?;
+                let world = glam::DVec3::new(anchor[0], anchor[1], anchor[2]) - self.scene_origin;
+                let point = crate::rendering::pick::world_to_screen(&matrix, world, size)?;
+                Some([(point.x / f64::from(size.0.max(1.0))) as f32, (point.y / f64::from(size.1.max(1.0))) as f32])
+            })
+            .collect();
     }
 
     /// Resolve a click on the preview image to the solid it landed on.
@@ -341,6 +375,11 @@ impl Graphics<'_> {
             // in. UVs survive that; pane pixels did not.
             editor.solid_preview_picked = Some(self.pick_preview_solid(preview, uv));
         }
+        // Where each of the sequence editor's members sits in this image, for
+        // its order number to be drawn at. Projected here, through the camera
+        // the image is actually being drawn with and rebased the same way the
+        // pick above is, so a number cannot drift from the block it names.
+        self.project_sequence_labels(editor);
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Solid preview encoder"),

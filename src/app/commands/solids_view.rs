@@ -63,16 +63,6 @@ impl BlastFace {
     }
 }
 
-/// One flitch as it comes out of the Benching stage, before any cut divides
-/// it. The mesh is shared, so the Dig Strips stage clips from it without
-/// rebuilding the body it came out of.
-pub(crate) struct FlitchPart {
-    pub(crate) mesh: OpenTriangulation,
-    pub(crate) band: CutBand,
-    pub(crate) bench: BenchSelection,
-    pub(crate) volume: Option<f64>,
-}
-
 /// What the Solids and Benching stages commit: the closed body, cut into
 /// benches and flitches, with the ground each covers.
 ///
@@ -82,7 +72,10 @@ pub(crate) struct FlitchPart {
 pub(crate) struct SolidBody {
     /// Whole-bench parts, never cut laterally. What Blasting draws on.
     pub(crate) bench_parts: Vec<SolidPart>,
-    pub(crate) flitch_parts: Vec<FlitchPart>,
+    /// One part per flitch as Benching leaves it, before any cut divides it,
+    /// so it carries no blast and no block. The mesh is shared, so the Dig
+    /// Strips stage clips from it without rebuilding the body it came out of.
+    pub(crate) flitch_parts: Vec<SolidPart>,
     /// Bench ground, by the bit pattern of the bench base RL.
     pub(crate) bench_footprints: HashMap<u64, Vec<Vec<DVec2>>>,
     /// Flitch ground, by the bit pattern of the flitch base RL.
@@ -100,37 +93,6 @@ pub(crate) struct SolidBlasting {
 pub(crate) struct SolidPartition {
     /// Flitch-level parts, cut into dig blocks. What View draws.
     pub(crate) parts: Vec<SolidPart>,
-}
-
-/// Every committed half of one solid's geometry, for consumers that need more
-/// than one of them together.
-#[derive(Clone, Copy)]
-pub(crate) struct SolidGeometry<'artifact> {
-    pub(crate) body: &'artifact SolidBody,
-    pub(crate) blasting: &'artifact SolidBlasting,
-    pub(crate) partition: &'artifact SolidPartition,
-}
-
-impl SolidGeometry<'_> {
-    pub(crate) fn bench_parts(&self) -> &[SolidPart] {
-        &self.body.bench_parts
-    }
-
-    pub(crate) fn parts(&self) -> &[SolidPart] {
-        &self.partition.parts
-    }
-
-    pub(crate) fn blast_faces(&self) -> &[BlastFace] {
-        &self.blasting.blast_faces
-    }
-
-    pub(crate) fn occupied_bands(&self) -> &[CutBand] {
-        &self.body.occupied_bands
-    }
-
-    pub(crate) fn flitch_footprints(&self) -> &HashMap<u64, Vec<Vec<DVec2>>> {
-        &self.body.flitch_footprints
-    }
 }
 
 /// One solid's artifacts, one per stage that owns one.
@@ -255,6 +217,11 @@ impl<T> Stage<T> {
     fn is_awaiting_inputs(&self) -> bool {
         self.awaiting_inputs
     }
+
+    /// Whether an attempt has been made and has yet to produce anything.
+    fn is_working(&self) -> bool {
+        self.request.is_some() && self.product.is_none() && self.error.is_none()
+    }
 }
 
 /// What to do about a request whose inputs are not resident.
@@ -332,17 +299,73 @@ impl ViewSolid {
         (self.key == key).then(|| self.sources[index].clone()).flatten()
     }
 
-    pub(crate) fn is_built(&self) -> bool {
-        self.geometry().is_some()
+    /// Whether every artifact up to and including `demand`'s own is committed.
+    ///
+    /// Per stage, because the artifacts after one are cleared the moment it
+    /// rebuilds: asking for all four is how a page that only needs the benches
+    /// came to go blank until Dig Strips had run as well.
+    pub(crate) fn built_through(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> bool {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.product().is_some()),
+            (GeometryDemand::Body, self.body.product().is_some()),
+            (GeometryDemand::Blasting, self.blasting.product().is_some()),
+            (GeometryDemand::Partition, self.partition.product().is_some()),
+        ]
+        .into_iter()
+        .take_while(|(stage, _)| *stage <= demand)
+        .all(|(_, built)| built)
     }
 
-    /// Every committed half, once they are all there.
-    pub(crate) fn geometry(&self) -> Option<SolidGeometry<'_>> {
-        Some(SolidGeometry {
-            body: self.body.product()?,
-            blasting: self.blasting.product()?,
-            partition: self.partition.product()?,
-        })
+    /// Whether an attempt at any artifact up to `demand`'s own is in flight.
+    pub(crate) fn working_through(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> bool {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.is_working()),
+            (GeometryDemand::Body, self.body.is_working()),
+            (GeometryDemand::Blasting, self.blasting.is_working()),
+            (GeometryDemand::Partition, self.partition.is_working()),
+        ]
+        .into_iter()
+        .take_while(|(stage, _)| *stage <= demand)
+        .any(|(_, working)| working)
+    }
+
+    /// The parts one stage draws out of the artifact it owns.
+    ///
+    /// Benching draws its flitches, Blasting the whole benches it divides, and
+    /// Dig Strips the blocks it cuts. A stage never reaches forward for a
+    /// later stage's subdivision - which is also why it does not go blank when
+    /// that subdivision is retired.
+    pub(crate) fn display_parts(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> Option<&[SolidPart]> {
+        use crate::app::planning_pipeline::GeometryDemand;
+        match demand {
+            GeometryDemand::Envelope | GeometryDemand::Body => self.body.product().map(|body| body.flitch_parts.as_slice()),
+            GeometryDemand::Blasting => self.body.product().map(|body| body.bench_parts.as_slice()),
+            GeometryDemand::Partition => self.partition.product().map(|partition| partition.parts.as_slice()),
+        }
+    }
+
+    /// The flitch bands that hold material - a Benching product, readable
+    /// without any of the cutting stages having run.
+    pub(crate) fn occupied_bands(&self) -> Option<&[CutBand]> {
+        self.body.product().map(|body| body.occupied_bands.as_slice())
+    }
+
+    /// Each flitch's ground in plan, likewise a Benching product.
+    pub(crate) fn flitch_footprints(&self) -> Option<&HashMap<u64, Vec<Vec<DVec2>>>> {
+        self.body.product().map(|body| &body.flitch_footprints)
+    }
+
+    /// The dig blocks, once every artifact behind them is committed too.
+    ///
+    /// The terminal product, and the one thing that does need all four: a
+    /// block is only a finished block if the body and the blast partition it
+    /// was cut out of are the ones still in hand.
+    pub(crate) fn finished_partition(&self) -> Option<&[SolidPart]> {
+        self.body.product()?;
+        self.blasting.product()?;
+        self.partition.product().map(|partition| partition.parts.as_slice())
     }
 
     /// The committed body, whatever the stages after it are doing.
@@ -662,6 +685,12 @@ pub(crate) struct DigBlockIdentity {
 }
 
 /// `amount` of the way from `color` towards `towards`, alpha untouched.
+/// What a block already dug at the order preview's position is tinted
+/// towards. Deliberately not transparency: a dug block is still there to be
+/// clicked, and still occludes the ones behind it, which is what makes the
+/// preview read as a pit being taken apart rather than as blocks vanishing.
+const DUG_BLOCK_COLOR: [f32; 4] = [0.32, 0.34, 0.38, 1.0];
+
 fn blended(color: [f32; 4], towards: [f32; 4], amount: f32) -> [f32; 4] {
     let mut blend = color;
     for (channel, target) in blend.iter_mut().zip(towards).take(3) {
@@ -787,6 +816,47 @@ fn next_view_id() -> TriangulationId {
     TriangulationId(NEXT_VIEW_ID.fetch_sub(1, Ordering::Relaxed))
 }
 
+/// How far down the geometry the open page draws.
+///
+/// The rule the whole pipeline rests on, applied to display as well as to
+/// running: a step shows the artifact it owns and never one from a stage after
+/// it. Blasting draws whole benches, Dig Strips and View the finished blocks,
+/// and everything before them the flitches Benching committed.
+///
+/// The sequence editor is not one of the Solids Setup steps, so it falls to
+/// the finished partition - the dig blocks a completed run committed, which
+/// are exactly what a dig order is made of. It asks for no more than that:
+/// this chooses which artifact to *display*, never which to build.
+/// Which pages are showing the artifacts a completed run committed.
+///
+/// Display only, and the distinction the whole pipeline rests on: a page in
+/// this list *reads* what a run left behind and asks the pipeline for
+/// nothing. Opening one is not a calculation. That is what lets the sequence
+/// editor open onto a finished run, or onto a stated reason there is not one,
+/// without starting any geometry work. It is also why adding a page here
+/// cannot cause a job: the build gate in
+/// [`crate::app::App::sync_solids_view`] is the pipeline's own demand, and
+/// only a running stage sets that.
+pub(crate) fn displaying_solid_artifacts(editor: &crate::ui::state::EditorState) -> bool {
+    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active()
+}
+
+fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::planning_pipeline::GeometryDemand {
+    use crate::{
+        app::planning_pipeline::GeometryDemand,
+        ui::state::{PlanningPage, PlanningSubpage, SolidsStep, Workspace},
+    };
+    let setup = editor.active_workspace == Workspace::Planning && editor.planning_page == PlanningPage::Solids && editor.solids_subpage == PlanningSubpage::Setup;
+    if !setup {
+        return GeometryDemand::Partition;
+    }
+    match editor.planning_solids_step {
+        SolidsStep::Blasting => GeometryDemand::Blasting,
+        SolidsStep::DigStrips => GeometryDemand::Partition,
+        SolidsStep::FieldList | SolidsStep::BlockModels | SolidsStep::Solids | SolidsStep::Benching => GeometryDemand::Body,
+    }
+}
+
 impl crate::app::App<'_> {
     /// `displaying` says whether a page that shows these artifacts is open.
     /// When it is not, the artifacts are still built and measured - only the
@@ -835,7 +905,7 @@ impl crate::app::App<'_> {
         }
         self.prune_solids_view_selection(&solids);
         self.resolve_solid_preview_pick();
-        self.rebuild_solid_view_body(&solids);
+        self.rebuild_solid_view_body(&solids, display_demand(&self.editor));
     }
 
     /// The stamp entry for one named source surface, as this job's inputs
@@ -1187,14 +1257,13 @@ impl crate::app::App<'_> {
             let Some(band) = row.band else {
                 return true;
             };
-            let Some(geometry) = self.solid_view_cache.get(&row.solid).and_then(ViewSolid::geometry) else {
+            let Some(body) = self.solid_view_cache.get(&row.solid).and_then(ViewSolid::body) else {
                 return true;
             };
             if band.is_flitch {
-                geometry.occupied_bands().iter().any(|part| part.selection == band)
+                body.occupied_bands.iter().any(|part| part.selection == band)
             } else {
-                solid.benching.benches().iter().any(|bench| bench.base == band.base && bench.top() == band.top)
-                    && geometry.bench_parts().iter().any(|part| part.band.selection == band)
+                solid.benching.benches().iter().any(|bench| bench.base == band.base && bench.top() == band.top) && body.bench_parts.iter().any(|part| part.band.selection == band)
             }
         });
     }
@@ -1216,27 +1285,54 @@ impl crate::app::App<'_> {
                 .solid_view_cache
                 .values()
                 .filter_map(|cache| {
-                    let geometry = cache.geometry()?;
-                    geometry
-                        .parts()
+                    let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
+                    let benches = cache.body.product().map_or(&[][..], |body| body.bench_parts.as_slice());
+                    partition
                         .iter()
-                        .chain(geometry.bench_parts())
+                        .chain(benches)
                         .find(|part| part.mesh.id == id)
                         .and_then(|part| part.block.as_ref())
-                        .map(|block| block.key)
+                        .map(|block| (block.id, block.key))
                 })
                 .next(),
         };
-        self.editor.selected_dig_block = hit;
+        // The sequence editor borrows this preview, so while it is open a
+        // click builds its dig order instead of moving the Solids pages'
+        // selection. Those pages are not on screen, and finding their
+        // selection somewhere else on returning to them would be a surprise.
+        if self.editor.sequence_editor_active() {
+            self.pick_into_sequence_draft(hit.map(|(id, _)| id));
+            return;
+        }
+        self.editor.selected_dig_block = hit.map(|(_, key)| key);
     }
 
     /// Rebuild the display list from the artifacts. Pure presentation: which
     /// step is open, what is selected and how things are coloured all live
     /// here, and none of them reach the geometry.
-    fn rebuild_solid_view_body(&mut self, solids: &[Solid]) {
-        let selected_block = self.editor.selected_dig_block;
-        let selected_blast = self.editor.selected_blast;
-        let benches_only = self.editor.is_blasting_step();
+    fn rebuild_solid_view_body(&mut self, solids: &[Solid], demand: crate::app::planning_pipeline::GeometryDemand) {
+        use crate::app::planning_pipeline::GeometryDemand;
+        // While the sequence editor owns the preview it shows the whole run:
+        // narrowing the image to the Solids View page's tree selection would
+        // hide ground a dig order is entitled to be built from, and that
+        // selection is not even on screen to be seen or changed.
+        let sequencing = self.editor.sequence_editor_active();
+        let selected_block = (!sequencing).then_some(self.editor.selected_dig_block).flatten();
+        let selected_blast = (!sequencing).then_some(self.editor.selected_blast).flatten();
+        let view_selection: Vec<SolidsViewRow> = if sequencing { Vec::new() } else { self.editor.solids_view_selection.clone() };
+        // Which draft position each block sits at, and how far the order
+        // preview has been walked. Taken from the mirror rather than resolved
+        // again here: the mirror is this frame's, and resolving one reference
+        // in two places is how two answers to one question start to differ.
+        let order: HashMap<DigBlockId, usize> = self
+            .editor
+            .sequence_members
+            .iter()
+            .enumerate()
+            .filter_map(|(position, member)| member.block.filter(|_| sequencing).map(|block| (block, position)))
+            .collect();
+        let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
+        let benches_only = demand == GeometryDemand::Blasting;
         let blasting = self.editor.is_planning_cut_step();
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
 
@@ -1246,15 +1342,23 @@ impl crate::app::App<'_> {
         selected_blast.hash(&mut hasher);
         benches_only.hash(&mut hasher);
         blasting.hash(&mut hasher);
+        demand.hash(&mut hasher);
+        sequencing.hash(&mut hasher);
+        dug_through.hash(&mut hasher);
+        // Sorted before hashing: a hash map's iteration order is not stable,
+        // and an unstable key would rebuild the display list every frame.
+        let mut order_key: Vec<(DigBlockId, usize)> = order.iter().map(|(block, position)| (*block, *position)).collect();
+        order_key.sort_unstable();
+        order_key.hash(&mut hasher);
         serde_json::to_vec(&solids).unwrap_or_default().hash(&mut hasher);
-        for row in &self.editor.solids_view_selection {
+        for row in &view_selection {
             row.solid.hash(&mut hasher);
             row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
         }
         for solid in solids {
             if let Some(cache) = self.solid_view_cache.get(&solid.id) {
                 cache.key.hash(&mut hasher);
-                cache.is_built().hash(&mut hasher);
+                cache.built_through(demand).hash(&mut hasher);
                 cache.fingerprint().hash(&mut hasher);
             }
         }
@@ -1277,16 +1381,16 @@ impl crate::app::App<'_> {
             .then(|| {
                 let mut range: Option<[f64; 2]> = None;
                 for solid in solids {
-                    let Some(geometry) = self
+                    let Some(parts) = self
                         .solid_view_cache
                         .get(&solid.id)
-                        .filter(|_| selected_solid(&self.editor.solids_view_selection, solid.id))
-                        .and_then(ViewSolid::geometry)
+                        .filter(|_| selected_solid(&view_selection, solid.id))
+                        .and_then(|cache| cache.display_parts(demand))
                     else {
                         continue;
                     };
-                    for part in displayed_parts(geometry, benches_only) {
-                        if !selected(&self.editor.solids_view_selection, solid.id, Some(part.band.selection)) {
+                    for part in parts {
+                        if !selected(&view_selection, solid.id, Some(part.band.selection)) {
                             continue;
                         }
                         let bounds = part.mesh.mesh.bounds();
@@ -1305,32 +1409,44 @@ impl crate::app::App<'_> {
         let mut errors = Vec::new();
         let has_fields = self.workspace.active_document().is_some_and(|doc| !doc.reserve_fields().is_empty());
         for solid in solids {
-            let wanted = selected_solid(&self.editor.solids_view_selection, solid.id);
+            let wanted = selected_solid(&view_selection, solid.id);
             let Some(cache) = self.solid_view_cache.get(&solid.id) else {
                 // Nothing has been built for this solid. Opening a page is not
                 // a calculation, so this says so rather than starting one.
                 not_run |= wanted;
                 continue;
             };
-            let Some(geometry) = cache.geometry() else {
-                if cache.error().is_some() {
+            // The occupied bands are a Benching product, and the trees that
+            // list them belong to the steps after it. Reading them from the
+            // body rather than from a finished partition is what lets Blasting
+            // open on the benches its own prerequisite committed.
+            match cache.occupied_bands() {
+                Some(bands) => {
+                    self.editor.solid_view_bands.insert(solid.id, bands.iter().map(|band| band.selection).collect());
+                }
+                None if cache.error_through(GeometryDemand::Body).is_some() => {
                     self.editor.solid_view_bands.insert(solid.id, Vec::new());
                 }
+                None => {}
+            }
+            let Some(parts) = cache.display_parts(demand) else {
                 if wanted {
-                    match cache.error() {
+                    match cache.error_through(demand) {
                         Some(error) => errors.push(error.to_owned()),
-                        None => pending = true,
+                        // No artifact and no fault: either the work is in
+                        // flight, or this step has not been run for these
+                        // inputs. Missing geometry must not read as a valid
+                        // empty result either way.
+                        None if cache.working_through(demand) => pending = true,
+                        None => not_run = true,
                     }
                 }
                 continue;
             };
-            self.editor
-                .solid_view_bands
-                .insert(solid.id, geometry.occupied_bands().iter().map(|band| band.selection).collect());
             if !wanted {
                 continue;
             }
-            if has_fields {
+            if has_fields && demand == GeometryDemand::Partition {
                 let settled = cache.reserves.product().is_some();
                 if !settled {
                     reserve_complete = false;
@@ -1346,9 +1462,11 @@ impl crate::app::App<'_> {
                 }
             }
             self.editor.solid_preview_sources.extend([solid.surface, solid.topography].into_iter().flatten());
-            let reserves = cache.reserves.product().map(|product| &product.totals);
-            for (index, part) in displayed_parts(geometry, benches_only).enumerate() {
-                if !selected(&self.editor.solids_view_selection, solid.id, Some(part.band.selection)) {
+            let reserves = (demand == GeometryDemand::Partition)
+                .then(|| cache.reserves.product().map(|product| &product.totals))
+                .flatten();
+            for (index, part) in parts.iter().enumerate() {
+                if !selected(&view_selection, solid.id, Some(part.band.selection)) {
                     continue;
                 }
                 // Selecting a blast narrows what is shown, not what is built.
@@ -1396,11 +1514,27 @@ impl crate::app::App<'_> {
                     mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
                     mesh.flitch_style = None;
                 }
+                // The sequence editor's own three states, which stand in for
+                // the single selected block above while it owns the preview:
+                // in this bar's order and already dug at the slider's
+                // position, in the order and still to come, or not in this
+                // bar at all. All three stay drawn and stay pickable - a
+                // dimmed block is ground that can still be added.
+                if let Some(position) = part.block.as_ref().and_then(|piece| order.get(&piece.id).copied()) {
+                    mesh.flitch_style = None;
+                    if position < dug_through {
+                        mesh.color = blended(mesh.color, DUG_BLOCK_COLOR, 0.75);
+                        mesh.line_color = blended(mesh.line_color, DUG_BLOCK_COLOR, 0.6);
+                    } else {
+                        mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                        mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                    }
+                }
                 if counted {
                     // Reserves are measured over the flitch-level partition,
                     // so a bench figure is its own parts added back up rather
                     // than a second measurement of the same ground.
-                    if !benches_only && let Some(values) = reserves.and_then(|values| values.get(index)) {
+                    if let Some(values) = reserves.and_then(|values| values.get(index)) {
                         covered += values.all.covered_volume;
                         match self.editor.solid_view_reserves.as_mut() {
                             Some(total) => total.merge(values),
@@ -1435,15 +1569,6 @@ impl crate::app::App<'_> {
                 waiting_on_unloaded: false,
             }
         };
-    }
-}
-
-/// The parts one step draws: whole benches for Blasting, dig blocks elsewhere.
-fn displayed_parts<'artifact>(geometry: SolidGeometry<'artifact>, benches_only: bool) -> impl Iterator<Item = &'artifact SolidPart> {
-    if benches_only {
-        geometry.body.bench_parts.iter()
-    } else {
-        geometry.partition.parts.iter()
     }
 }
 
@@ -1569,9 +1694,11 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
     let mut flitch_parts = Vec::with_capacity(flitch_body.len());
     for (mesh, band) in flitch_body.into_iter().zip(flitch_bands) {
         let volume = closed_volume(&mesh);
-        flitch_parts.push(FlitchPart {
+        flitch_parts.push(SolidPart {
             bench: bench_of(band.selection),
             band,
+            blast: None,
+            block: None,
             volume,
             mesh,
         });
@@ -2103,11 +2230,11 @@ impl crate::app::App<'_> {
                     message: error.to_owned(),
                 });
             }
-            let Some(geometry) = cache.geometry() else {
+            let Some(blocks) = cache.finished_partition() else {
                 return Err(PlanningNotReady::Incomplete { solid: solid.name.clone() });
             };
             let totals = cache.reserves.product().map(|product| &product.totals);
-            for (slot, part) in geometry.partition.parts.iter().enumerate() {
+            for (slot, part) in blocks.iter().enumerate() {
                 let Some(block) = &part.block else { continue };
                 records.push(DigBlockRecord {
                     id: block.id,

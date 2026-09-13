@@ -14,7 +14,7 @@
 
 pub(crate) mod sequence;
 
-pub(crate) use sequence::{DigBlockRef, Footprint, Sequence, SequenceId};
+pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*
 /// run. The command boundary checks both halves against the current snapshot
@@ -42,6 +42,51 @@ pub(crate) struct LoaderClassId(pub(crate) u64);
 /// Identity of one loader agent within its project. See [`LoaderClassId`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LoaderAgentId(pub(crate) u64);
+
+/// Identity of one Gantt bar within its project. Allocated like the fleet ids
+/// beside it: never reused, and not rewound by an undo - which is what lets a
+/// copy be told from its original across one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct BarId(pub(crate) u64);
+
+/// One authored bar on the Gantt: a named dig order, the machine asked to
+/// work it, the lane it competes in, and the soonest it may begin.
+///
+/// A bar carries no duration. Its drawn length is the execution the dispatch
+/// evaluator calculates from this bar's tonnes and its loader's rate, so
+/// dragging or resizing one cannot change what it holds - the position *is*
+/// the earliest start and nothing else.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScheduleBar {
+    pub(crate) id: BarId,
+    /// What this bar is called and the ground it works, in order. Owned
+    /// outright: a copy holds its own, so editing one never reaches another.
+    pub(crate) order: DigOrder,
+    /// The loader this bar is assigned to, or `None` while it is being built,
+    /// and after the machine it named was deleted: deleting a machine
+    /// unassigns its bars rather than taking their work out of the project.
+    #[serde(default)]
+    pub(crate) agent: Option<LoaderAgentId>,
+    /// Lane within that loader. Lower is higher priority; ties break on
+    /// `earliest_start_h` and then `id`, so the order is never arbitrary.
+    #[serde(default)]
+    pub(crate) priority: u32,
+    /// Earliest start, in hours from the schedule origin. This *is* the bar's
+    /// position on the Gantt: dragging it is how the user sets it.
+    #[serde(default)]
+    pub(crate) earliest_start_h: f64,
+}
+
+impl ScheduleBar {
+    pub(crate) fn name(&self) -> &str {
+        &self.order.name
+    }
+
+    pub(crate) fn members(&self) -> &[DigBlockRef] {
+        self.order.members()
+    }
+}
 
 /// A machine type: what it is called, and how fast it digs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,13 +135,17 @@ pub(crate) enum ScheduleError {
     IdsExhausted,
     /// Two entries share one id. Only reachable from a file.
     DuplicateId,
-    /// An id that names no sequence in this plan.
-    UnknownSequence,
-    /// A position that is past the end of a sequence's membership.
+    /// An id that names no bar in this plan.
+    UnknownBar,
+    /// A position that is past the end of a bar's dig order.
     UnknownMember,
-    /// Ground already in this sequence. The order is what the sequence *is*,
-    /// so the same block cannot hold two places in it.
+    /// Ground already in this dig order. The order is what the bar *is*, so
+    /// the same block cannot hold two places in it.
     DuplicateMember,
+    /// An earliest start that is not a finite number of hours at or after the
+    /// schedule origin. Refused rather than clamped: a bar that silently
+    /// moved to hour zero would be scheduled against a time nobody chose.
+    InvalidEarliestStart,
     /// A stored reference whose numbers could not describe any ground.
     MalformedReference,
 }
@@ -112,10 +161,11 @@ impl ScheduleError {
             Self::ClassInUse(agents) => tr!("schedule-error-class-in-use", agents = agents.join(", ")),
             Self::IdsExhausted => tr!("schedule-error-ids-exhausted"),
             Self::DuplicateId => tr!("schedule-error-duplicate-id"),
-            Self::UnknownSequence => tr!("schedule-error-unknown-sequence"),
+            Self::UnknownBar => tr!("schedule-error-unknown-bar"),
             Self::UnknownMember => tr!("schedule-error-unknown-member"),
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
+            Self::InvalidEarliestStart => tr!("schedule-error-invalid-earliest-start"),
         }
     }
 }
@@ -140,13 +190,14 @@ pub(crate) struct SchedulePlan {
     next_class_id: u64,
     #[serde(default)]
     next_agent_id: u64,
-    /// The dig sequences this project has authored, in the order they were
-    /// created. Ordering here carries no priority: a sequence becomes work
-    /// only once it is assigned to an agent.
+    /// The Gantt bars this project has authored, in the order they were
+    /// created. Ordering here carries no priority - each bar names its own -
+    /// but it is the order the Gantt lists them in, and a file that
+    /// round-trips brings the same order back.
     #[serde(default)]
-    sequences: Vec<Sequence>,
+    bars: Vec<ScheduleBar>,
     #[serde(default)]
-    next_sequence_id: u64,
+    next_bar_id: u64,
     /// Which reserve field this schedule reads as tonnes.
     ///
     /// Chosen explicitly and never inferred from a field's name: "Tonnes",
@@ -187,12 +238,12 @@ fn checked_rate(rate: f64) -> ScheduleResult<f64> {
 
 impl SchedulePlan {
     pub(crate) fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.sequences.is_empty() && self.tonnage_field.is_none()
+        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.bars.is_empty() && self.tonnage_field.is_none()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
     pub(crate) fn is_pristine(&self) -> bool {
-        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_sequence_id == 0
+        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_bar_id == 0
     }
 
     /// Never hand out an id `other` has already issued.
@@ -209,7 +260,7 @@ impl SchedulePlan {
     pub(crate) fn raise_allocator_to(&mut self, other: &Self) {
         self.next_class_id = self.next_class_id.max(other.next_class_id);
         self.next_agent_id = self.next_agent_id.max(other.next_agent_id);
-        self.next_sequence_id = self.next_sequence_id.max(other.next_sequence_id);
+        self.next_bar_id = self.next_bar_id.max(other.next_bar_id);
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -340,30 +391,32 @@ impl SchedulePlan {
         Ok(())
     }
 
+    /// Remove one machine, and unassign every bar that named it.
+    ///
+    /// The bars survive: a bar is the user's own authored work, and deleting
+    /// a machine is a statement about the fleet, not about the ground. They
+    /// come back as unassigned - which the Gantt shows in its own lane and
+    /// the readiness report states - rather than being deleted or left
+    /// pointing at equipment that is gone.
     pub(crate) fn remove_agent(&mut self, id: LoaderAgentId) -> ScheduleResult {
         if !self.agents.iter().any(|agent| agent.id == id) {
             return Err(ScheduleError::UnknownAgent);
         }
         self.agents.retain(|agent| agent.id != id);
+        for bar in &mut self.bars {
+            if bar.agent == Some(id) {
+                bar.agent = None;
+            }
+        }
         Ok(())
     }
 
-    pub(crate) fn sequences(&self) -> &[Sequence] {
-        &self.sequences
+    pub(crate) fn bars(&self) -> &[ScheduleBar] {
+        &self.bars
     }
 
-    pub(crate) fn sequence(&self, id: SequenceId) -> Option<&Sequence> {
-        self.sequences.iter().find(|sequence| sequence.id == id)
-    }
-
-    /// Whether anything in this plan post-dates the first schedule format:
-    /// sequences, a tonnage field, or a sequence id that has been retired.
-    ///
-    /// A save writes the oldest format that can describe what it holds, so a
-    /// project that only ever configured a fleet still opens in a build from
-    /// before sequences existed.
-    pub(crate) fn uses_sequences(&self) -> bool {
-        !self.sequences.is_empty() || self.tonnage_field.is_some() || self.next_sequence_id != 0
+    pub(crate) fn bar(&self, id: BarId) -> Option<&ScheduleBar> {
+        self.bars.iter().find(|bar| bar.id == id)
     }
 
     /// Which reserve field this schedule reads as tonnes, if one was chosen.
@@ -375,99 +428,175 @@ impl SchedulePlan {
     ///
     /// The plan cannot check the field exists or sums - it has no document -
     /// so that is a readiness question, answered against the project every
-    /// time a sequence is measured rather than once when it is picked.
+    /// time a bar is measured rather than once when it is picked.
     pub(crate) fn set_tonnage_field(&mut self, field: Option<ReserveFieldId>) {
         self.tonnage_field = field;
     }
 
-    /// Every sequence holding this ground, for a report that must say where a
-    /// block is already committed.
-    #[allow(dead_code, reason = "read by the stage 2B assignment rules, which reject committing the same ground twice")]
-    pub(crate) fn sequences_holding(&self, block: &DigBlockRef) -> impl Iterator<Item = &Sequence> {
-        self.sequences.iter().filter(move |sequence| sequence.contains(block))
+    /// Every bar holding this ground, for a report that must say where a
+    /// block is already committed - including when the duplication arrived by
+    /// copying a bar.
+    #[allow(dead_code, reason = "read by the checkpoint 4 dispatch rules, which refuse the same ground to two executable assignments")]
+    pub(crate) fn bars_holding(&self, block: &DigBlockRef) -> impl Iterator<Item = &ScheduleBar> {
+        self.bars.iter().filter(move |bar| bar.order.contains(block))
     }
 
-    fn sequence_name_taken(&self, name: &str, except: Option<SequenceId>) -> bool {
-        self.sequences.iter().any(|sequence| Some(sequence.id) != except && same_name(&sequence.name, name))
+    fn bar_name_taken(&self, name: &str, except: Option<BarId>) -> bool {
+        self.bars.iter().any(|bar| Some(bar.id) != except && same_name(bar.name(), name))
     }
 
-    pub(crate) fn add_sequence(&mut self, name: &str) -> ScheduleResult<SequenceId> {
-        let name = checked_name(name)?;
-        if self.sequence_name_taken(&name, None) {
-            return Err(ScheduleError::DuplicateName(name));
-        }
-        let id = SequenceId(self.next_sequence_id);
-        self.next_sequence_id = self.next_sequence_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
-        self.sequences.push(Sequence { id, name, members: Vec::new() });
+    fn allocate_bar_id(&mut self) -> ScheduleResult<BarId> {
+        let id = BarId(self.next_bar_id);
+        self.next_bar_id = self.next_bar_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
         Ok(id)
     }
 
-    pub(crate) fn rename_sequence(&mut self, id: SequenceId, name: &str) -> ScheduleResult {
+    /// Add an empty bar to one machine's lane, at the instant it was asked
+    /// for. Its ground is chosen afterwards.
+    ///
+    /// The earliest start is a parameter rather than always zero because a bar
+    /// is created by right-clicking a place on the timeline: adding it at the
+    /// origin instead would put new work somewhere the user is not looking,
+    /// and moving it back would be a second undo step.
+    pub(crate) fn add_bar(&mut self, name: &str, agent: Option<LoaderAgentId>, priority: u32, earliest_start_h: f64) -> ScheduleResult<BarId> {
         let name = checked_name(name)?;
-        if !self.sequences.iter().any(|sequence| sequence.id == id) {
-            return Err(ScheduleError::UnknownSequence);
-        }
-        if self.sequence_name_taken(&name, Some(id)) {
+        if self.bar_name_taken(&name, None) {
             return Err(ScheduleError::DuplicateName(name));
         }
-        self.sequences.iter_mut().find(|sequence| sequence.id == id).expect("checked above").name = name;
+        if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+            return Err(ScheduleError::UnknownAgent);
+        }
+        if !earliest_start_h.is_finite() || earliest_start_h < 0.0 {
+            return Err(ScheduleError::InvalidEarliestStart);
+        }
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            order: DigOrder::new(name),
+            agent,
+            priority,
+            earliest_start_h,
+        });
+        Ok(id)
+    }
+
+    pub(crate) fn rename_bar(&mut self, id: BarId, name: &str) -> ScheduleResult {
+        let name = checked_name(name)?;
+        if !self.bars.iter().any(|bar| bar.id == id) {
+            return Err(ScheduleError::UnknownBar);
+        }
+        if self.bar_name_taken(&name, Some(id)) {
+            return Err(ScheduleError::DuplicateName(name));
+        }
+        self.bars.iter_mut().find(|bar| bar.id == id).expect("checked above").order.name = name;
         Ok(())
     }
 
-    /// Delete a sequence and the membership it held.
+    /// Delete a bar and the dig order it held.
     ///
-    /// Unlike a loader class, a sequence owns its members rather than being
-    /// referred to by them, so nothing is orphaned. Stage 2B's assignments
-    /// will refer to sequences, and this is where that refusal will go.
-    pub(crate) fn remove_sequence(&mut self, id: SequenceId) -> ScheduleResult {
-        if !self.sequences.iter().any(|sequence| sequence.id == id) {
-            return Err(ScheduleError::UnknownSequence);
+    /// Unlike a loader class, a bar owns its members rather than being
+    /// referred to by them, so nothing is orphaned. The ground itself is
+    /// untouched - only this bar's claim on it goes.
+    pub(crate) fn remove_bar(&mut self, id: BarId) -> ScheduleResult {
+        if !self.bars.iter().any(|bar| bar.id == id) {
+            return Err(ScheduleError::UnknownBar);
         }
-        self.sequences.retain(|sequence| sequence.id != id);
+        self.bars.retain(|bar| bar.id != id);
         Ok(())
     }
 
-    fn sequence_mut(&mut self, id: SequenceId) -> ScheduleResult<&mut Sequence> {
-        self.sequences.iter_mut().find(|sequence| sequence.id == id).ok_or(ScheduleError::UnknownSequence)
+    /// Copy a bar into an independent one, placed directly after it.
+    ///
+    /// Independent from the moment it exists: a fresh id and a cloned
+    /// membership list, so editing either one never reaches the other. The
+    /// copy keeps its original's machine, lane and earliest start - the point
+    /// of copying is to start from the same work - and the two then hold the
+    /// same ground, which the readiness report names as a conflict rather
+    /// than resolving on the user's behalf.
+    pub(crate) fn copy_bar(&mut self, id: BarId, name: &str) -> ScheduleResult<BarId> {
+        let name = checked_name(name)?;
+        if self.bar_name_taken(&name, None) {
+            return Err(ScheduleError::DuplicateName(name));
+        }
+        let Some(index) = self.bars.iter().position(|bar| bar.id == id) else {
+            return Err(ScheduleError::UnknownBar);
+        };
+        let new_id = self.allocate_bar_id()?;
+        let mut copy = self.bars[index].clone();
+        copy.id = new_id;
+        copy.order.name = name;
+        self.bars.insert(index + 1, copy);
+        Ok(new_id)
     }
 
-    /// Append ground to the end of a sequence's dig order.
-    #[allow(dead_code, reason = "insert_member covers it today; the tail-append reads better where the stage 2B picker adds blocks")]
-    pub(crate) fn add_member(&mut self, id: SequenceId, block: DigBlockRef) -> ScheduleResult {
-        self.insert_member(id, usize::MAX, block)
-    }
-
-    /// Put ground at `position` in the dig order, clamped to the end.
-    pub(crate) fn insert_member(&mut self, id: SequenceId, position: usize, block: DigBlockRef) -> ScheduleResult {
-        if !block.is_well_formed() {
-            return Err(ScheduleError::MalformedReference);
+    /// Assign a bar to a machine, or take it off the fleet entirely.
+    pub(crate) fn set_bar_agent(&mut self, id: BarId, agent: Option<LoaderAgentId>) -> ScheduleResult {
+        if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+            return Err(ScheduleError::UnknownAgent);
         }
-        let sequence = self.sequence_mut(id)?;
-        if sequence.contains(&block) {
-            return Err(ScheduleError::DuplicateMember);
-        }
-        let position = position.min(sequence.members.len());
-        sequence.members.insert(position, block);
+        let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
+        bar.agent = agent;
         Ok(())
     }
 
-    pub(crate) fn remove_member(&mut self, id: SequenceId, position: usize) -> ScheduleResult {
-        let sequence = self.sequence_mut(id)?;
-        if position >= sequence.members.len() {
-            return Err(ScheduleError::UnknownMember);
-        }
-        sequence.members.remove(position);
+    /// Put a bar in a priority lane. Lower is higher priority.
+    pub(crate) fn set_bar_priority(&mut self, id: BarId, priority: u32) -> ScheduleResult {
+        let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
+        bar.priority = priority;
         Ok(())
     }
 
-    /// Move one block to a different place in the dig order.
-    pub(crate) fn move_member(&mut self, id: SequenceId, from: usize, to: usize) -> ScheduleResult {
-        let sequence = self.sequence_mut(id)?;
-        if from >= sequence.members.len() || to >= sequence.members.len() {
-            return Err(ScheduleError::UnknownMember);
+    /// Set the soonest a bar may begin, in hours from the schedule origin.
+    pub(crate) fn set_bar_earliest_start(&mut self, id: BarId, hours: f64) -> ScheduleResult {
+        if !hours.is_finite() || hours < 0.0 {
+            return Err(ScheduleError::InvalidEarliestStart);
         }
-        let block = sequence.members.remove(from);
-        sequence.members.insert(to, block);
+        let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
+        bar.earliest_start_h = hours;
+        Ok(())
+    }
+
+    fn bar_mut(&mut self, id: BarId) -> ScheduleResult<&mut ScheduleBar> {
+        self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)
+    }
+
+    /// Append ground to the end of a bar's dig order.
+    #[allow(
+        dead_code,
+        reason = "insert_bar_member covers it today; the tail-append reads better where the checkpoint 3 picker adds blocks"
+    )]
+    pub(crate) fn add_bar_member(&mut self, id: BarId, block: DigBlockRef) -> ScheduleResult {
+        self.insert_bar_member(id, usize::MAX, block)
+    }
+
+    /// Put ground at `position` in a bar's dig order, clamped to the end.
+    pub(crate) fn insert_bar_member(&mut self, id: BarId, position: usize, block: DigBlockRef) -> ScheduleResult {
+        self.bar_mut(id)?.order.insert(position, block)
+    }
+
+    pub(crate) fn remove_bar_member(&mut self, id: BarId, position: usize) -> ScheduleResult {
+        self.bar_mut(id)?.order.remove(position)
+    }
+
+    /// Move one block to a different place in a bar's dig order.
+    pub(crate) fn move_bar_member(&mut self, id: BarId, from: usize, to: usize) -> ScheduleResult {
+        self.bar_mut(id)?.order.move_member(from, to)
+    }
+
+    /// Replace a bar's whole dig order in one edit.
+    ///
+    /// What the floating sequence editor applies: an editing session is one
+    /// command and therefore one undo step, rather than one per pick. The
+    /// list is checked the way the incremental edits are - well-formed
+    /// references, no ground twice - so a draft cannot enter the project
+    /// through a door the other edits are guarded on.
+    #[allow(dead_code, reason = "the checkpoint 3 sequence editor's Apply; the Gantt edits membership one block at a time")]
+    pub(crate) fn set_bar_members(&mut self, id: BarId, members: Vec<DigBlockRef>) -> ScheduleResult {
+        let mut order = DigOrder::new(String::new());
+        for block in members {
+            order.insert(usize::MAX, block)?;
+        }
+        self.bar_mut(id)?.order.members = order.members;
         Ok(())
     }
 
@@ -502,39 +631,29 @@ impl SchedulePlan {
                 return Err(ScheduleError::UnknownClass);
             }
         }
-        for (index, sequence) in self.sequences.iter().enumerate() {
-            if self.sequences[..index].iter().any(|earlier| earlier.id == sequence.id) {
+        for (index, bar) in self.bars.iter().enumerate() {
+            if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
                 return Err(ScheduleError::DuplicateId);
             }
-            checked_name(&sequence.name)?;
-            if self.sequences[..index].iter().any(|earlier| same_name(&earlier.name, &sequence.name)) {
-                return Err(ScheduleError::DuplicateName(sequence.name.clone()));
+            checked_name(bar.name())?;
+            if self.bars[..index].iter().any(|earlier| same_name(earlier.name(), bar.name())) {
+                return Err(ScheduleError::DuplicateName(bar.name().to_owned()));
             }
-            // Membership is checked for shape only. Whether the ground is
-            // still there is a question for the current run, asked every time
-            // a sequence is measured - a file that opens on a project whose
-            // Solids have not been rerun is not a broken file.
-            //
-            // Duplicates are judged on exact stored equality, which is file
-            // corruption; the same *ground* held under two anchors is not a
-            // broken file - capture refuses it, but a saved plan can carry
-            // it - so it passes here and the readiness report names it.
-            for (position, member) in sequence.members.iter().enumerate() {
-                if !member.is_well_formed() {
-                    return Err(ScheduleError::MalformedReference);
-                }
-                if sequence.members[..position].contains(member) {
-                    return Err(ScheduleError::DuplicateMember);
-                }
+            if bar.agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+                return Err(ScheduleError::UnknownAgent);
             }
+            if !bar.earliest_start_h.is_finite() || bar.earliest_start_h < 0.0 {
+                return Err(ScheduleError::InvalidEarliestStart);
+            }
+            bar.order.check_loaded()?;
         }
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
-        let highest_sequence = self.sequences.iter().map(|sequence| sequence.id.0).max();
+        let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
         for (counter, highest) in [
             (&mut self.next_class_id, highest_class),
             (&mut self.next_agent_id, highest_agent),
-            (&mut self.next_sequence_id, highest_sequence),
+            (&mut self.next_bar_id, highest_bar),
         ] {
             if let Some(highest) = highest {
                 *counter = (*counter).max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
@@ -564,10 +683,13 @@ impl SchedulePlan {
             agent.class_id.hash(hasher);
         }
         self.tonnage_field.hash(hasher);
-        for sequence in &self.sequences {
-            sequence.id.hash(hasher);
-            sequence.name.hash(hasher);
-            for member in sequence.members() {
+        for bar in &self.bars {
+            bar.id.hash(hasher);
+            bar.order.name.hash(hasher);
+            bar.agent.hash(hasher);
+            bar.priority.hash(hasher);
+            bar.earliest_start_h.to_bits().hash(hasher);
+            for member in bar.members() {
                 member.solid.hash(hasher);
                 member.flitch_base.to_bits().hash(hasher);
                 member.anchor[0].to_bits().hash(hasher);
@@ -584,7 +706,7 @@ impl SchedulePlan {
     pub(crate) fn rewind_allocators_for_test(&mut self) {
         self.next_class_id = 0;
         self.next_agent_id = 0;
-        self.next_sequence_id = 0;
+        self.next_bar_id = 0;
     }
 
     /// An estimate of what one snapshot of this plan costs the undo history.
@@ -594,9 +716,9 @@ impl SchedulePlan {
             + self.classes.iter().map(|class| size_of::<LoaderClass>() + class.name.len()).sum::<usize>()
             + self.agents.iter().map(|agent| size_of::<LoaderAgent>() + agent.name.len()).sum::<usize>()
             + self
-                .sequences
+                .bars
                 .iter()
-                .map(|sequence| size_of::<Sequence>() + sequence.name.len() + size_of_val(sequence.members()))
+                .map(|bar| size_of::<ScheduleBar>() + bar.name().len() + size_of_val(bar.members()))
                 .sum::<usize>()
     }
 }

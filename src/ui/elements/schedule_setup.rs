@@ -15,7 +15,7 @@ use crate::{
     ui::{
         EditorState,
         fonts::bold,
-        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleSection, ScheduleSequenceDraft, UiCommand},
+        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleSection, UiCommand},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -62,8 +62,12 @@ fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<Strin
         .then(|| crate::model::schedule::ScheduleError::DuplicateName(trimmed.to_owned()).message())
 }
 
-/// The Schedule Setup step tree: the schedule's own settings, the two fleet
-/// lists under Site Data, then the dig sequences those machines will work.
+/// The Schedule Setup step tree: the schedule's own settings and the two
+/// fleet lists under Site Data.
+///
+/// Dig sequences are deliberately absent. An ordered run of ground belongs to
+/// the Gantt bar that works it, and is authored there; a second list of them
+/// here would be a second place the same thing could be edited.
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
     let mut section = editor.schedule_section;
     let mut entry = |ui: &mut egui::Ui, id: &'static str, label: String, value: ScheduleSection| {
@@ -88,7 +92,6 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
             entry(ui, "schedule_loader_classes", tr!("schedule-loader-classes"), ScheduleSection::LoaderClasses);
             entry(ui, "schedule_loader_agents", tr!("schedule-loader-agents"), ScheduleSection::LoaderAgents);
         });
-    entry(ui, "schedule_sequences", tr!("schedule-sequences"), ScheduleSection::Sequences);
     editor.schedule_section = section;
 }
 
@@ -394,225 +397,7 @@ pub(crate) fn suggested_agent_name(plan: &SchedulePlan) -> String {
     crate::model::schedule::suggested_name(&tr!("schedule-loader-agent-default"), plan.agents().iter().map(|agent| agent.name.clone()))
 }
 
-pub(crate) fn suggested_sequence_name(plan: &SchedulePlan) -> String {
-    crate::model::schedule::suggested_name(&tr!("schedule-sequence-default-name"), plan.sequences().iter().map(|sequence| sequence.name.clone()))
-}
-
-/// The Dig Sequences list. A row shows the sequence's name and, once measured,
-/// its total tonnes; what stands between it and that figure is the selected
-/// row's own panel beside this list.
-pub(crate) fn draw_sequence_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    let mut selected = editor.schedule_selected_sequence;
-    let mut open_dialog = false;
-    DataGrid::new("schedule_sequence_list", rect, &tr!("schedule-sequences"))
-        .column_header(&tr!("planning-name"))
-        .show(ui, |ui| {
-            if plan.sequences().is_empty() {
-                explorer_note(ui, tr!("schedule-no-sequences"));
-            }
-            for sequence in plan.sequences() {
-                let report = editor.schedule_sequence_reports.iter().find(|report| report.sequence == sequence.id);
-                let label = match report.and_then(|report| report.tonnes) {
-                    Some(tonnes) => tr_format!(
-                        literal = "%name% · %tonnes% %unit%",
-                        name = sequence.name.clone(),
-                        tonnes = tonnes.to_string(),
-                        unit = tr!(literal = "t")
-                    ),
-                    None => sequence.name.clone(),
-                };
-                let hover = match report {
-                    Some(report) if report.problems.is_empty() && report.tonnes.is_some() => tr!("sequence-ready"),
-                    Some(report) if !report.problems.is_empty() => report.problems.join("\n"),
-                    _ => sequence.name.clone(),
-                };
-                let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(sequence.id))).on_hover_text(&hover);
-                if response.clicked() {
-                    selected = Some(sequence.id);
-                }
-                context_menu_popup(&response, &sequence.name, |ui| {
-                    if ContextMenuAction::new(tr!("schedule-delete-sequence")).show(ui).clicked() {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteSequence(sequence.id)));
-                        ui.close();
-                    }
-                });
-            }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_sequence_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("schedule-sequences"), |ui| {
-                    if ContextMenuAction::new(tr!("schedule-new-sequence")).show(ui).clicked() {
-                        open_dialog = true;
-                        ui.close();
-                    }
-                });
-            }
-        });
-    if editor.schedule_selected_sequence != selected {
-        // A different sequence is being edited; the member place selected in
-        // the old one belongs to nothing in the new one.
-        editor.schedule_sequence_draft = None;
-        editor.schedule_selected_member = None;
-    }
-    editor.schedule_selected_sequence = selected;
-    if open_dialog && !editor.new_sequence_open {
-        editor.new_sequence_name = suggested_sequence_name(plan);
-        editor.new_sequence_open = true;
-    }
-}
-
-/// The selected sequence's own column: its cells above, every stated problem
-/// under them, and the dig order itself below that.
-///
-/// The dig order is persistent plan data; the names, tonnes and problems
-/// beside it are what the current run says about that order, mirrored from
-/// the readiness report. A member the run cannot place keeps its place and
-/// its red badge - nothing here removes it, renames it, or reads it as zero.
-pub(crate) fn draw_sequence_details(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    let Some(sequence) = editor.schedule_selected_sequence.and_then(|id| plan.sequence(id)) else {
-        PropertyTable::new("schedule_sequence_properties", rect, &tr!("schedule-sequences")).show(ui, |rows| {
-            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            rows.readonly(&tr!("planning-name"), &tr!("schedule-select-sequence"), None, None);
-        });
-        return;
-    };
-    let report = editor.schedule_sequence_reports.iter().find(|report| report.sequence == sequence.id).cloned();
-    if editor
-        .schedule_sequence_draft
-        .as_ref()
-        .is_none_or(|draft| draft.id != sequence.id || draft.source != sequence.name)
-    {
-        editor.schedule_sequence_draft = Some(ScheduleSequenceDraft {
-            id: sequence.id,
-            source: sequence.name.clone(),
-            name: sequence.name.clone(),
-        });
-    }
-    let draft = editor.schedule_sequence_draft.as_mut().expect("just ensured");
-    let name_error = name_problem(&draft.name, plan.sequences().iter().filter(|other| other.id != sequence.id).map(|other| other.name.clone()));
-    let mut edits = Vec::new();
-    let properties_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 3).min(rect.height())));
-    PropertyTable::new("schedule_sequence_properties", properties_rect, &sequence.name).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        let name = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
-        if name.lost_focus()
-            && name_problem(&draft.name, plan.sequences().iter().filter(|other| other.id != sequence.id).map(|other| other.name.clone())).is_none()
-            && draft.name.trim() != sequence.name
-        {
-            edits.push(UiCommand::schedule(
-                session,
-                ScheduleEdit::RenameSequence {
-                    sequence: sequence.id,
-                    name: draft.name.trim().to_owned(),
-                },
-            ));
-        }
-        let tonnes = report
-            .as_ref()
-            .and_then(|report| report.tonnes)
-            .map(|tonnes| tonnes.to_string())
-            .unwrap_or_else(|| tr!(literal = "—"));
-        rows.readonly(
-            &tr!("schedule-sequence-tonnes"),
-            &tonnes,
-            Some(&tr!(literal = "t")),
-            report.as_ref().and_then(|report| report.problems.first()).map(String::as_str),
-        );
-    });
-
-    // Every problem stated in full, not as a hover: these are the reasons a
-    // schedule cannot be calculated, and a truncated badge cannot carry them.
-    let problems = report.as_ref().map_or(&[][..], |report| report.problems.as_slice());
-    let mut order_top = properties_rect.bottom() + 6.0;
-    if !problems.is_empty() {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let color = ui.visuals().error_fg_color;
-        let width = rect.width() - 16.0;
-        let galleys: Vec<_> = problems.iter().map(|problem| ui.painter().layout(problem.clone(), font.clone(), color, width)).collect();
-        let height = galleys.iter().map(|galley| galley.size().y + 4.0).sum::<f32>() + 4.0;
-        let problems_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0, order_top), egui::vec2(rect.width(), height));
-        let mut cursor = problems_rect.min;
-        for galley in &galleys {
-            ui.painter().galley(cursor, galley.clone(), color);
-            cursor.y += galley.size().y + 4.0;
-        }
-        order_top = problems_rect.bottom() + 6.0;
-    }
-
-    let order_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), order_top), rect.max);
-    if !order_rect.is_positive() {
-        commands.extend(edits);
-        return;
-    }
-    let mut selected_member = editor.schedule_selected_member;
-    DataGrid::new("schedule_sequence_order", order_rect, &tr!("schedule-sequence-order"))
-        .column_header(&tr!("schedule-sequence-blocks"))
-        .show(ui, |ui| {
-            if sequence.members().is_empty() {
-                explorer_note(ui, tr!("schedule-sequence-pick-coming"));
-            }
-            for (index, _member) in sequence.members().iter().enumerate() {
-                let view = report.as_ref().and_then(|report| report.members.get(index));
-                let mut label = match view.and_then(|view| view.name.as_deref()) {
-                    Some(name) => tr!("schedule-sequence-position", position = (index + 1).to_string(), block = name.to_owned()),
-                    None => tr!("schedule-sequence-unresolved-row", position = (index + 1).to_string()),
-                };
-                if let Some(solid) = view.and_then(|view| view.solid_name.as_deref()) {
-                    label = tr_format!(literal = "%label% · %solid%", label = label, solid = solid.to_owned());
-                }
-                if let Some(tonnes) = view.and_then(|view| view.tonnes) {
-                    label = tr_format!(literal = "%label% · %tonnes% %unit%", label = label, tonnes = tonnes.to_string(), unit = tr!(literal = "t"));
-                }
-                let response = grid_row(
-                    ui,
-                    GridRow::new(&label)
-                        .selected(selected_member == Some(index))
-                        .error(view.and_then(|view| view.unresolved.as_deref())),
-                )
-                .on_hover_text(&label);
-                if response.clicked() {
-                    selected_member = Some(index);
-                }
-                context_menu_popup(&response, &label, |ui| {
-                    if ContextMenuAction::new(tr!("schedule-sequence-move-up")).enabled(index > 0).show(ui).clicked() {
-                        edits.push(UiCommand::schedule(
-                            session,
-                            ScheduleEdit::MoveMember {
-                                sequence: sequence.id,
-                                from: index,
-                                to: index - 1,
-                            },
-                        ));
-                        ui.close();
-                    }
-                    if ContextMenuAction::new(tr!("schedule-sequence-move-down"))
-                        .enabled(index + 1 < sequence.members().len())
-                        .show(ui)
-                        .clicked()
-                    {
-                        edits.push(UiCommand::schedule(
-                            session,
-                            ScheduleEdit::MoveMember {
-                                sequence: sequence.id,
-                                from: index,
-                                to: index + 1,
-                            },
-                        ));
-                        ui.close();
-                    }
-                    if ContextMenuAction::new(tr!(literal = "Remove")).show(ui).clicked() {
-                        edits.push(UiCommand::schedule(
-                            session,
-                            ScheduleEdit::RemoveMember {
-                                sequence: sequence.id,
-                                position: index,
-                            },
-                        ));
-                        ui.close();
-                    }
-                });
-            }
-        });
-    editor.schedule_selected_member = selected_member;
-    commands.extend(edits);
+/// A name for a new bar that no bar in this plan already has.
+pub(crate) fn suggested_bar_name(plan: &SchedulePlan) -> String {
+    crate::model::schedule::suggested_name(&tr!("schedule-bar-default-name"), plan.bars().iter().map(|bar| bar.name().to_owned()))
 }

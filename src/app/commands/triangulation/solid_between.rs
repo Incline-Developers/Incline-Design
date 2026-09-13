@@ -542,24 +542,6 @@ fn boundary_rings(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -
     rings
 }
 
-/// Six times the signed volume a triangle soup encloses, positive when its
-/// faces wind outwards. Rebased, so mine coordinates keep their precision.
-fn signed_volume(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> f64 {
-    let Some(origin) = vertices.first() else {
-        return 0.0;
-    };
-    faces
-        .iter()
-        .map(|face| {
-            let [a, b, c] = face.map(|index| {
-                let vertex = vertices[index as usize];
-                glam::DVec3::new(vertex.x - origin.x, vertex.y - origin.y, vertex.z - origin.z)
-            });
-            a.dot(b.cross(c))
-        })
-        .sum()
-}
-
 /// Trace the rings bounding a planar rim, getting past nodes where more than
 /// two rim edges meet.
 ///
@@ -1079,13 +1061,21 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         if slab.1.is_empty() {
             continue;
         }
-        // Each cell's own volume, summed here rather than measured off the
-        // merged soup afterwards. Cells are not individually edge-manifold -
-        // clipping leaves T-junctions - so a divergence sum taken over the
-        // merge, from one shared origin, does not recover the total. Taken per
-        // cell against the cell's own origin it is exact.
-        let signed = signed_volume(&slab.0, &slab.1);
-        volume += signed.abs() / 6.0;
+        // Each cell's own volume, as the integral between its floor and its
+        // roof over the ground it covers.
+        //
+        // Deliberately not a divergence sum over the cell's surface. That is
+        // only exact on a closed cell, and a cell is not reliably closed: the
+        // clip leaves T-junctions, and the walls it caps can come out
+        // incomplete where the body thins to nothing at a cell corner. A
+        // divergence sum over such a cell reads near zero, which is how a
+        // bench's dig blocks came to total less than the bench itself by an
+        // amount that moved with the decomposition the clip happened to
+        // choose. The cut walls are vertical, so they project to no ground
+        // and contribute nothing here; only floor and roof do, and those
+        // cover the cell exactly whatever the walls did.
+        let signed = prism_volume(&slab.0, &slab.1);
+        volume += signed.abs();
         // Volume is taken per cell as a magnitude, but the block-model overlap
         // integrates signed prisms over floor and roof from one shared origin,
         // so it needs every cell wound the same way. No cell in the test fixture
@@ -1107,6 +1097,35 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         volume,
         boundary_wall,
     })
+}
+
+/// The volume between a vertically-closed body's floor and its roof.
+///
+/// Every face contributes its projected ground times its mean height, signed
+/// by which way it faces, which telescopes to the height between the roof and
+/// the floor over every point of the footprint. Vertical faces project to
+/// nothing and drop out - which is the point: it holds whether or not the
+/// walls are closed, and cannot be changed by re-triangulating them.
+fn prism_volume(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> f64 {
+    // Rebased, and on the height above all: a mine RL is three digits of
+    // elevation over a metre of slab, and the floor's contribution cancels
+    // the roof's almost exactly. Measured from the lowest vertex, the terms
+    // are the height of the material rather than the height of the datum.
+    let Some(origin) = vertices.first().copied() else {
+        return 0.0;
+    };
+    let floor = vertices.iter().map(|vertex| vertex.z).fold(f64::INFINITY, f64::min);
+    faces
+        .iter()
+        .map(|face| {
+            let [a, b, c] = face.map(|index| {
+                let vertex = vertices[index as usize];
+                [vertex.x - origin.x, vertex.y - origin.y, vertex.z - floor]
+            });
+            let projected = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            projected / 2.0 * (a[2] + b[2] + c[2]) / 3.0
+        })
+        .sum()
 }
 
 /// Whether the segment `a`-`b` runs along one of `rings` rather than cutting

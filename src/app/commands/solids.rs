@@ -455,7 +455,7 @@ impl crate::app::App<'_> {
         // styles and frames it differently. Neither *starts* anything: the
         // artifacts are built when a stage is run, and these pages show what
         // that run committed. Opening a page is not a calculation.
-        let displaying = self.editor.is_solids_view() || self.editor.is_planning_cut_step();
+        let displaying = super::solids_view::displaying_solid_artifacts(&self.editor);
         let running = self.planning_pipeline.as_ref().and_then(crate::app::planning_pipeline::PlanningPipeline::demand).is_some();
         if displaying || running {
             self.sync_solids_view(displaying);

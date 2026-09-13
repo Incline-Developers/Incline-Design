@@ -193,13 +193,36 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
     }
 
-    /// Whether the Schedule Setup subpage is on its Dig Sequences step, whose
-    /// panels read the mirrored readiness reports.
-    pub(crate) fn is_schedule_sequences_step(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Schedule
-            && self.schedule_subpage == PlanningSubpage::Setup
-            && self.schedule_section == ScheduleSection::Sequences
+    /// Whether the floating sequence editor is on screen.
+    ///
+    /// It is the Gantt's own editor, so it is shown - and owns the shared
+    /// preview camera, the pick and the display list - only while the Gantt
+    /// is the page being drawn. Navigating away leaves the draft alone and
+    /// hands the Solids pages their preview back untouched; coming back shows
+    /// the same draft again.
+    pub(crate) fn sequence_editor_active(&self) -> bool {
+        self.sequence_editor.is_some() && self.is_schedule_gantt()
+    }
+
+    /// The orbit the offscreen preview is drawn with.
+    ///
+    /// One image, and whichever pane is showing it owns the camera. The
+    /// sequence editor keeps its own, so opening it moves nothing on the
+    /// Solids pages and closing it hands them back exactly the view they had.
+    pub(crate) fn preview_camera(&self) -> SolidPreviewView {
+        match self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()) {
+            Some(draft) => draft.view,
+            None => self.solid_preview_view,
+        }
+    }
+
+    /// Discard the draft and everything mirrored for it.
+    pub(crate) fn close_sequence_editor(&mut self) {
+        self.sequence_editor = None;
+        self.sequence_members.clear();
+        self.sequence_generation = None;
+        self.sequence_unavailable = None;
+        self.sequence_label_uv.clear();
     }
 
     /// Whether the Solids page is showing its View subpage.
@@ -2096,21 +2119,44 @@ pub(crate) struct EditorState {
     pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
     pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
     pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
-    /// The selected dig sequence, the selected place in its dig order, and
-    /// the name being typed into it. The selected member is a position rather
+    /// The selected Gantt bar, the selected place in its dig order, and the
+    /// name being typed into it. The selected member is a position rather
     /// than a block reference: the order is what is being edited, and two
     /// positions can hold ground that resolves to nothing at all.
-    pub(crate) schedule_selected_sequence: Option<crate::model::schedule::SequenceId>,
+    pub(crate) schedule_selected_bar: Option<crate::model::schedule::BarId>,
     pub(crate) schedule_selected_member: Option<usize>,
-    pub(crate) schedule_sequence_draft: Option<ScheduleSequenceDraft>,
-    pub(crate) new_sequence_open: bool,
-    pub(crate) new_sequence_name: String,
-    /// Every sequence's readiness against the current run, mirrored from
-    /// [`crate::app::commands::schedule_readiness`] while the Sequences step is
-    /// on screen and empty otherwise. Read where the dig order and its
-    /// diagnostics are drawn, so the panel never holds a report that outlived
-    /// the run it was measured against.
-    pub(crate) schedule_sequence_reports: Vec<ScheduleSequenceView>,
+    /// The New Bar / Rename Bar dialog, while one is open. One dialog serves
+    /// both: they ask the same question, and the target is what says which.
+    pub(crate) bar_name_dialog: Option<BarNameDialog>,
+    /// The bar being dragged along the Gantt, and where its earliest start
+    /// stood when the drag began. Held so a drag reads as one continuous
+    /// movement from a fixed origin rather than accumulating rounding at every
+    /// frame, and so releasing outside the canvas leaves the bar where the
+    /// last committed edit put it.
+    pub(crate) gantt_drag: Option<GanttDrag>,
+    /// Every bar's readiness against the current run, mirrored from
+    /// [`crate::app::commands::schedule_readiness`] while the Gantt is on
+    /// screen and empty otherwise. Read where the bars and their diagnostics
+    /// are drawn, so the Gantt never holds a report that outlived the run it
+    /// was measured against.
+    pub(crate) schedule_bar_reports: Vec<ScheduleBarView>,
+    /// The floating 3D sequence editor's draft, while one is open.
+    pub(crate) sequence_editor: Option<SequenceDraft>,
+    /// What the current run says about each draft member, in draft order.
+    /// Mirrored while the editor is open and empty otherwise.
+    pub(crate) sequence_members: Vec<SequenceMemberView>,
+    /// The run generation the mirror above was measured against, and why
+    /// there is not one. The editor states this rather than picking against a
+    /// run it cannot name.
+    pub(crate) sequence_generation: Option<u64>,
+    pub(crate) sequence_unavailable: Option<String>,
+    /// Where each member's order number goes over the preview image, in image
+    /// UVs, projected by the renderer through the camera the image was
+    /// actually drawn with. Indexed alongside `sequence_members`; a length
+    /// that does not match means the draft moved since the last render, and
+    /// the numbers are left off for that frame rather than drawn in the wrong
+    /// places.
+    pub(crate) sequence_label_uv: Vec<Option<[f32; 2]>>,
     /// Whether the New Loader Class / New Loader Agent dialogs are open, and
     /// their draft contents. A draft is not in the project until it is valid
     /// and committed, so cancelling one leaves nothing behind.
@@ -2401,12 +2447,12 @@ impl EditorState {
         self.schedule_class_draft = None;
         self.schedule_agent_draft = None;
         self.schedule_name_draft = None;
-        self.schedule_selected_sequence = None;
+        self.schedule_selected_bar = None;
         self.schedule_selected_member = None;
-        self.schedule_sequence_draft = None;
-        self.new_sequence_open = false;
-        self.new_sequence_name.clear();
-        self.schedule_sequence_reports.clear();
+        self.bar_name_dialog = None;
+        self.gantt_drag = None;
+        self.schedule_bar_reports.clear();
+        self.close_sequence_editor();
         self.new_loader_class_open = false;
         self.new_loader_class_name.clear();
         self.new_loader_class_rate.clear();
@@ -2963,12 +3009,16 @@ impl EditorState {
             schedule_class_draft: None,
             schedule_agent_draft: None,
             schedule_name_draft: None,
-            schedule_selected_sequence: None,
+            schedule_selected_bar: None,
             schedule_selected_member: None,
-            schedule_sequence_draft: None,
-            new_sequence_open: false,
-            new_sequence_name: String::new(),
-            schedule_sequence_reports: Vec::new(),
+            bar_name_dialog: None,
+            gantt_drag: None,
+            schedule_bar_reports: Vec::new(),
+            sequence_editor: None,
+            sequence_members: Vec::new(),
+            sequence_generation: None,
+            sequence_unavailable: None,
+            sequence_label_uv: Vec::new(),
             new_loader_class_open: false,
             new_loader_class_name: String::new(),
             new_loader_class_rate: String::new(),
@@ -3935,19 +3985,29 @@ impl UiCommand {
                 ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
-                ScheduleEdit::AddSequence { name } => report(tr!("schedule-new-sequence"), name.clone()),
-                ScheduleEdit::DeleteSequence(id) => report(tr!("schedule-delete-sequence"), format!("{id:?}")),
+                ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
+                ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
+                ScheduleEdit::DeleteBar(id) => report(tr!("schedule-delete-bar"), format!("{id:?}")),
+                // Applying a sequence edit is a deliberate, single act on a
+                // whole dig order, unlike the per-block edits below it.
+                ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
                 ScheduleEdit::SetName(_)
                 | ScheduleEdit::RenameClass { .. }
                 | ScheduleEdit::SetClassRate { .. }
                 | ScheduleEdit::RenameAgent { .. }
                 | ScheduleEdit::SetAgentClass { .. }
-                | ScheduleEdit::RenameSequence { .. }
+                | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
-                // Membership edits are cell edits of the dig order: the
-                // sequence's own panel shows the result, and a console line
-                // per block would bury the log once a sequence is picked out
-                // of a viewport.
+                // Assignment, lane and earliest-start edits are cell edits of
+                // one bar, and dragging one produces a stream of them: the
+                // Gantt shows the result in place, and a console line per
+                // frame of a drag would bury the log.
+                | ScheduleEdit::SetBarAgent { .. }
+                | ScheduleEdit::SetBarPriority { .. }
+                | ScheduleEdit::SetBarEarliestStart { .. }
+                // Membership edits are cell edits of the dig order: the bar's
+                // own panel shows the result, and a console line per block
+                // would bury the log once a bar is picked out of a viewport.
                 | ScheduleEdit::AddMember { .. }
                 | ScheduleEdit::RemoveMember { .. }
                 | ScheduleEdit::MoveMember { .. } => None,
@@ -4441,7 +4501,6 @@ pub(crate) enum ScheduleSection {
     Configuration,
     LoaderClasses,
     LoaderAgents,
-    Sequences,
 }
 
 /// The cells of one loader class as they are being typed.
@@ -4516,47 +4575,135 @@ pub(crate) enum ScheduleEdit {
     /// Nominate the reserve field whose summed value is read as tonnes, or
     /// clear the choice. Never inferred from a field's name.
     SetTonnageField(Option<crate::model::ReserveFieldId>),
-    /// Add an empty dig sequence. Its ground is chosen afterwards.
-    AddSequence {
+    /// Add an empty Gantt bar to one machine's lane - the row it was asked
+    /// for - at the instant it was asked for. Its ground is chosen afterwards.
+    AddBar {
+        name: String,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        /// Where along the timeline the bar was created, in hours from the
+        /// schedule origin. A bar added while a later week is on screen
+        /// belongs where it was asked for, not back at hour zero where it
+        /// cannot be seen.
+        earliest_start_h: f64,
+    },
+    RenameBar {
+        bar: crate::model::schedule::BarId,
         name: String,
     },
-    RenameSequence {
-        sequence: crate::model::schedule::SequenceId,
-        name: String,
+    DeleteBar(crate::model::schedule::BarId),
+    /// Copy a bar into an independent one: a fresh identity and its own
+    /// membership list, so editing either never reaches the other.
+    CopyBar(crate::model::schedule::BarId),
+    /// Assign a bar to a machine, or take it off the fleet.
+    SetBarAgent {
+        bar: crate::model::schedule::BarId,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
     },
-    DeleteSequence(crate::model::schedule::SequenceId),
+    /// Put a bar in a priority lane. Lower is higher priority.
+    SetBarPriority {
+        bar: crate::model::schedule::BarId,
+        priority: u32,
+    },
+    /// Set the soonest a bar may begin, in hours from the schedule origin -
+    /// which is what dragging it along the Gantt does, and the only thing
+    /// dragging does. A bar's length is calculated, never dragged.
+    SetBarEarliestStart {
+        bar: crate::model::schedule::BarId,
+        hours: f64,
+    },
     /// Put one dug block into a sequence's dig order, at `position` or - when
     /// that is past the end - after everything already in it. The pick names
     /// a block of the run the picker saw; the handler validates it against
     /// the current snapshot and constructs the stored reference itself, so a
     /// late pick cannot masquerade as current ground.
-    #[allow(dead_code, reason = "constructed by the stage 2B 3D block picker; the dig-order panel edits what is already in the order")]
+    #[allow(dead_code, reason = "constructed by the checkpoint 3 floating 3D block picker; the Gantt edits what is already in the order")]
     AddMember {
-        sequence: crate::model::schedule::SequenceId,
+        bar: crate::model::schedule::BarId,
         position: usize,
         pick: crate::model::schedule::DigBlockPick,
     },
     /// Take one block out of the dig order. The block itself is untouched;
-    /// only this sequence's claim on it goes.
+    /// only this bar's claim on it goes.
+    #[allow(dead_code, reason = "emitted by the checkpoint 3 sequence editor's ordered list")]
     RemoveMember {
-        sequence: crate::model::schedule::SequenceId,
+        bar: crate::model::schedule::BarId,
         position: usize,
     },
     /// Move one block to a different place in the dig order.
+    #[allow(dead_code, reason = "emitted by the checkpoint 3 sequence editor's ordered list")]
     MoveMember {
-        sequence: crate::model::schedule::SequenceId,
+        bar: crate::model::schedule::BarId,
         from: usize,
         to: usize,
     },
+    /// Replace a bar's whole dig order with what the sequence editor drafted,
+    /// as one undo step.
+    ///
+    /// `expected` is the order the draft was opened from. The handler refuses
+    /// the edit when the bar no longer holds it - an undo, or an edit from
+    /// somewhere else, while the window was open - rather than overwriting a
+    /// newer order with an older list. Every member picked in the editing
+    /// session is revalidated against the current snapshot on the way
+    /// through, exactly as [`ScheduleEdit::AddMember`] does, so a pick that
+    /// outlived its run is refused rather than having its provenance quietly
+    /// refreshed to fit.
+    SetBarMembers {
+        bar: crate::model::schedule::BarId,
+        expected: Vec<crate::model::schedule::DigBlockRef>,
+        members: Vec<DraftMember>,
+    },
 }
 
-/// One dig sequence's name as it is being typed. See [`ScheduleClassDraft`]
-/// for why the source snapshot is here.
+/// The New Bar / Rename Bar dialog's draft.
+///
+/// Nothing reaches the project until the name is valid and the user confirms
+/// it, so cancelling leaves the schedule - and the project's dirty marker -
+/// exactly as it found them.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScheduleSequenceDraft {
-    pub(crate) id: crate::model::schedule::SequenceId,
-    pub(crate) source: String,
+pub(crate) struct BarNameDialog {
+    /// The bar being renamed, or `None` while a new one is being named.
+    pub(crate) target: Option<crate::model::schedule::BarId>,
+    /// For a new bar, the machine and lane of the row it was asked for, so it
+    /// appears where the user right-clicked rather than somewhere else. Ignored
+    /// for a rename, which changes the name and nothing else.
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    /// For a new bar, the instant the lane was right-clicked at, in hours from
+    /// the schedule origin. Ignored for a rename.
+    pub(crate) earliest_start_h: f64,
     pub(crate) name: String,
+}
+
+/// A bar being dragged along the Gantt.
+///
+/// A drag moves the bar's earliest start and nothing else. Not its tonnes,
+/// because a bar's length is calculated from the ground it holds and a drag
+/// that changed tonnes would be a drag that changed the plan; not its machine
+/// or its lane, because both are decisions, and reading one off a pointer
+/// position would make it an accident. Those are chosen from the bar's own
+/// menu, where what is being chosen is named.
+///
+/// The drag previews in this state and commits once, on release, so one drag
+/// is one undo step rather than one per frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GanttDrag {
+    /// The project the drag took hold in. A drag is pointer state, and the
+    /// pointer outlives a project switch; without this, a drag begun in one
+    /// project could release onto the same-numbered bar of its successor.
+    pub(crate) session: u32,
+    pub(crate) bar: crate::model::schedule::BarId,
+    /// The earliest start the bar held when the drag began, in seconds.
+    pub(crate) from_seconds: f64,
+    /// Where along the bar the pointer took hold, in seconds, so the bar does
+    /// not jump its own width on the first movement.
+    pub(crate) grab_offset_seconds: f64,
+    /// Where the drag has moved it to, in seconds. Drawn, not stored on the
+    /// project, until the drag is released.
+    pub(crate) preview_seconds: f64,
+    /// Whether the pointer has actually moved. A click that never moves is a
+    /// selection, and must not commit an edit or dirty the project.
+    pub(crate) moved: bool,
 }
 
 /// One member of a sequence as the panels show it: what the current run says
@@ -4577,15 +4724,130 @@ pub(crate) struct ScheduleMemberView {
     pub(crate) tonnes: Option<f64>,
 }
 
-/// One sequence's readiness as the Sequences step draws it, mirrored from the
-/// readiness report every frame that step is on screen.
+/// One bar's readiness as the Gantt draws it, mirrored from the readiness
+/// report every frame the Gantt is on screen.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScheduleSequenceView {
-    pub(crate) sequence: crate::model::schedule::SequenceId,
+pub(crate) struct ScheduleBarView {
+    pub(crate) bar: crate::model::schedule::BarId,
     pub(crate) ready: bool,
     pub(crate) tonnes: Option<f64>,
     pub(crate) members: Vec<ScheduleMemberView>,
     pub(crate) problems: Vec<String>,
+}
+
+/// One member of a sequence editor's draft.
+///
+/// Ground the bar already held is carried through exactly as it was stored:
+/// applying an edit must never refresh a provenance stamp that could not be
+/// re-derived, because that stamp is the whole point of the identity layer. A
+/// block picked in this editing session is carried as the *pick* it was,
+/// naming the run it was picked from, and becomes a stored reference only at
+/// the command boundary - where the generation is checked against whatever
+/// snapshot is current by then, which may be a later one than the pick saw.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DraftMember {
+    Held(crate::model::schedule::DigBlockRef),
+    Picked(crate::model::schedule::DigBlockPick),
+}
+
+/// The floating 3D sequence editor's draft.
+///
+/// A member list alone is not enough to apply safely, because the window
+/// stays open across frames in which anything can happen: the project can be
+/// closed, the bar deleted, the order undone, or Dig Strips rerun. So the
+/// draft carries what it needs to *refuse* rather than to guess - the session
+/// it was opened under, the bar it edits, the member list it was opened from,
+/// and, inside each new member, the run generation it was picked against.
+///
+/// Nothing here is durable. Cancelling discards it and touches no project
+/// state at all, and the draft is dropped outright when the project changes.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SequenceDraft {
+    /// The project session the editor was opened under. A fresh project
+    /// numbers its first bar `0` too, so an id alone could land on unrelated
+    /// work rather than failing to resolve.
+    pub(crate) session: u32,
+    pub(crate) bar: crate::model::schedule::BarId,
+    /// The bar's dig order exactly as it stood when the editor opened. Apply
+    /// refuses when the bar no longer holds this, rather than overwriting a
+    /// newer edit with an older list.
+    pub(crate) opened_from: Vec<crate::model::schedule::DigBlockRef>,
+    pub(crate) members: Vec<DraftMember>,
+    /// The selected row of the ordered list, as a position - the order is
+    /// what is being edited, and two positions can hold ground that resolves
+    /// to nothing at all.
+    pub(crate) selected: Option<usize>,
+    /// The order-preview slider, `0..=members.len()`: at *k* the first *k*
+    /// blocks draw as dug. This previews the authored order and nothing else.
+    /// It is not a time axis, consults no loader rate, and is not the
+    /// whole-schedule playback the dispatch stage will drive.
+    pub(crate) preview: usize,
+    /// This editor's own camera, so opening it moves nothing in the main
+    /// viewport or on the Solids pages.
+    pub(crate) view: SolidPreviewView,
+    /// Set once Cancel or the window's close button is pressed with unapplied
+    /// changes, so discarding them is asked about rather than done.
+    pub(crate) confirming_close: bool,
+}
+
+impl SequenceDraft {
+    pub(crate) fn open(session: u32, bar: crate::model::schedule::BarId, members: &[crate::model::schedule::DigBlockRef]) -> Self {
+        Self {
+            session,
+            bar,
+            opened_from: members.to_vec(),
+            members: members.iter().copied().map(DraftMember::Held).collect(),
+            selected: None,
+            // Nothing dug: the editor opens on the whole authored order, and
+            // the slider walks forward through it from there.
+            preview: 0,
+            view: SolidPreviewView::default(),
+            confirming_close: false,
+        }
+    }
+
+    /// Whether the draft holds anything the bar does not. A draft that only
+    /// ever looked at the order has nothing to discard, so closing it asks
+    /// nothing.
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.members.len() != self.opened_from.len()
+            || self
+                .members
+                .iter()
+                .zip(&self.opened_from)
+                .any(|(member, held)| !matches!(member, DraftMember::Held(reference) if reference == held))
+    }
+}
+
+/// One draft member as the sequence editor shows it, measured against the run
+/// the project currently holds. Mirrored out of
+/// [`crate::app::commands::schedule_readiness`] while the editor is open, and
+/// cleared when it is not, so the editor can never describe a member against
+/// a run it was not measured from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SequenceMemberView {
+    /// The block's name and solid in the Solids panels, when it resolved.
+    pub(crate) name: Option<String>,
+    pub(crate) solid_name: Option<String>,
+    /// Why it did not resolve, when it did not. An unresolved member stays in
+    /// the list, stays numbered and stays removable.
+    pub(crate) unresolved: Option<String>,
+    pub(crate) tonnes: Option<f64>,
+    /// True for a block picked in this editing session rather than one the
+    /// bar already held.
+    pub(crate) is_new: bool,
+    /// True when this member was picked against a run that has since been
+    /// replaced. Apply will refuse it; saying so here is what stops that
+    /// being a surprise.
+    pub(crate) stale_pick: bool,
+    /// A point inside the block, for the order number drawn over the 3D view.
+    /// `None` when the member did not resolve, which is also why an
+    /// unresolved member carries no number in the image.
+    pub(crate) anchor: Option<[f64; 3]>,
+    /// The block of the current run this member landed on, so the display
+    /// list can pick it out without resolving every reference a second time.
+    /// Session-scoped and display-only: nothing durable is ever keyed by it.
+    pub(crate) block: Option<crate::model::DigBlockId>,
 }
 
 /// The schedule's own name as it is being typed, and what the plan held when
@@ -4679,6 +4941,16 @@ impl GanttView {
     /// `left`. Presentation only: nothing is stored in pixels.
     pub(crate) fn x_of(&self, seconds: f64, left: f32, width: f32) -> f32 {
         left + (((seconds - self.start_seconds) / self.span_seconds) * f64::from(width)) as f32
+    }
+
+    /// What instant sits at `x`, the inverse of [`Self::x_of`]. Used where a
+    /// pointer position has to become a time - dragging a bar - so the two
+    /// conversions cannot drift apart.
+    pub(crate) fn seconds_at(&self, x: f32, left: f32, width: f32) -> f64 {
+        if width <= 0.0 {
+            return self.start_seconds;
+        }
+        self.start_seconds + f64::from(x - left) / f64::from(width) * self.span_seconds
     }
 
     /// Zoom by `factor` (above one zooms in), holding the time under

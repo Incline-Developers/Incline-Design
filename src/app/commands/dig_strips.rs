@@ -100,7 +100,7 @@ impl crate::app::App<'_> {
         }
         for cache in self.solid_view_cache.values() {
             cache.key.hash(&mut hash);
-            cache.is_built().hash(&mut hash);
+            cache.built_through(crate::app::planning_pipeline::GeometryDemand::Body).hash(&mut hash);
         }
         let key = hash.finish();
         if self.editor.dig_outlines_key == Some(key) {
@@ -108,7 +108,9 @@ impl crate::app::App<'_> {
         }
         let mut outlines = Vec::new();
         for solid in document.solids() {
-            let Some(geometry) = self.solid_view_cache.get(&solid.id).and_then(super::solids_view::ViewSolid::geometry) else {
+            // The flitch ground, which Benching committed: the strips drawn on
+            // it are this step's own input, not the blocks cut out of them.
+            let Some(footprints) = self.solid_view_cache.get(&solid.id).and_then(super::solids_view::ViewSolid::flitch_footprints) else {
                 continue;
             };
             for bench in solid.benching.benches() {
@@ -122,7 +124,7 @@ impl crate::app::App<'_> {
                         continue;
                     }
                     let drawing = solid.blasting.drawing(flitch.base, true);
-                    let Some(footprint) = geometry.flitch_footprints().get(&flitch.base.to_bits()) else {
+                    let Some(footprint) = footprints.get(&flitch.base.to_bits()) else {
                         continue;
                     };
                     let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
