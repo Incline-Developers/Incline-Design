@@ -138,7 +138,8 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     ui.separator();
                 }
                 let coord_width = coord_field_width(ui);
-                match editor.cursor_world {
+                let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();
+                match editor.cursor_world.filter(|_| cursor_in_viewport) {
                     Some(p) => {
                         for (axis, value) in crate::model::survey::axis_names().into_iter().zip([p.x, p.y, p.z]) {
                             coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
