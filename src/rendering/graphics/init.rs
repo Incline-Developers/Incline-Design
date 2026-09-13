@@ -1632,7 +1632,9 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn reconfigure(&mut self) {
-        self.resize(self.size);
+        // Surface recovery does not change attachment dimensions. Rebuilding
+        // full-resolution MSAA/depth targets on every failure wastes GPU memory.
+        self.surface.configure(&self.device, &self.config);
     }
 
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {

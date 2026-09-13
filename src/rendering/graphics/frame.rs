@@ -102,6 +102,16 @@ impl<'a> Graphics<'a> {
             rasters,
             project,
         } = input;
+        // Acquire before any queue writes: a hidden/unavailable surface can fail
+        // indefinitely, and write_buffer staging allocations live until submit.
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
+            wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
+            wgpu::CurrentSurfaceTexture::Outdated => return Err(RenderSurfaceError::Outdated),
+            wgpu::CurrentSurfaceTexture::Lost => return Err(RenderSurfaceError::Lost),
+            wgpu::CurrentSurfaceTexture::Validation => return Err(RenderSurfaceError::Validation),
+        };
         // Only scene content forces the cached scene to be re-rendered. The
         // editor overlay is drawn over the cache every frame by
         // `render_editor_overlay_pass`, so `overlay_dirty` deliberately does
@@ -173,14 +183,6 @@ impl<'a> Graphics<'a> {
             let _ = self.device.poll(wgpu::PollType::Poll);
             self.block_model_gpu.poll_volume_feedback();
         }
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
-            wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
-            wgpu::CurrentSurfaceTexture::Outdated => return Err(RenderSurfaceError::Outdated),
-            wgpu::CurrentSurfaceTexture::Lost => return Err(RenderSurfaceError::Lost),
-            wgpu::CurrentSurfaceTexture::Validation => return Err(RenderSurfaceError::Validation),
-        };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.add_srgb_suffix()),
             ..Default::default()

@@ -290,6 +290,8 @@ pub(crate) struct App<'a> {
     /// deliberately replaced instead of configuring a swapchain for each one.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
     last_render_time: Option<Instant>,
+    surface_retry_pending: bool,
+    slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
@@ -426,6 +428,8 @@ impl<'a> Default for App<'a> {
             tracked_project_paths: Vec::new(),
             pending_resize: None,
             last_render_time: None,
+            surface_retry_pending: false,
+            slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
@@ -1227,7 +1231,10 @@ impl<'a> App<'a> {
     /// miss its slot and wait for the next one (144 on a 165 Hz display
     /// presents 82.5 times a second, not 144).
     fn frame_interval(&self) -> Duration {
-        if self.pending_resize.is_some() {
+        if self.surface_retry_pending {
+            // Failed acquisition never reaches present, so vsync cannot pace it.
+            Duration::from_millis(250)
+        } else if self.pending_resize.is_some() {
             rate_interval(self.editor.resize_frame_rate_cap)
         } else if self.editor.vsync_enabled {
             Duration::ZERO
@@ -1439,6 +1446,8 @@ impl<'a> App<'a> {
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
+        self.surface_retry_pending = false;
+        self.slice_surface_retry_deadline = None;
         self.redraw_requested = false;
     }
 
@@ -1931,6 +1940,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.next_ui_repaint_deadline = None;
             self.redraw_requested = true;
         }
+        if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
+            self.slice_surface_retry_deadline = None;
+            if let Some(graphics) = self.graphics.as_ref() {
+                graphics.request_slice_preview_redraw();
+            }
+        }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
 
         if (self.redraw_requested || continuous_redraw)
@@ -1955,6 +1970,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
+        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
