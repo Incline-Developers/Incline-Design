@@ -10,7 +10,7 @@ use crate::{
     model::schedule::SchedulePlan,
     ui::{
         EditorState,
-        state::{BarNameDialog, ScheduleEdit, UiCommand},
+        state::{BarNameDialog, BarWindowDialog, ScheduleEdit, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
     },
 };
@@ -135,10 +135,10 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
 /// dialog's `target` - `None` adds, `Some` renames - and the confirm button
 /// says so.
 pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    let Some((target, agent, priority, earliest_start_h)) = editor
+    let Some((target, agent, priority, window)) = editor
         .bar_name_dialog
         .as_ref()
-        .map(|dialog: &BarNameDialog| (dialog.target, dialog.agent, dialog.priority, dialog.earliest_start_h))
+        .map(|dialog: &BarNameDialog| (dialog.target, dialog.agent, dialog.priority, dialog.window))
     else {
         return;
     };
@@ -162,7 +162,7 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
             ui.label(
                 egui::RichText::new(tr!(
                     "schedule-bar-earliest-start",
-                    instant = crate::ui::elements::schedule_gantt::instant_label(earliest_start_h * crate::ui::state::GanttView::HOUR)
+                    instant = crate::ui::elements::schedule_gantt::instant_label(window.start_h * crate::ui::state::GanttView::HOUR)
                 ))
                 .weak(),
             );
@@ -183,12 +183,7 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                     session,
                     match target {
                         Some(bar) => ScheduleEdit::RenameBar { bar, name },
-                        None => ScheduleEdit::AddBar {
-                            name,
-                            agent,
-                            priority,
-                            earliest_start_h,
-                        },
+                        None => ScheduleEdit::AddBar { name, agent, priority, window },
                     },
                 ));
                 close = true;
@@ -200,5 +195,54 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
     });
     if close || !open {
         editor.bar_name_dialog = None;
+    }
+}
+
+/// Type a bar's work window exactly.
+///
+/// The same edit dragging an edge produces, validated by the same rule, so
+/// neither route can put a window into the project that the other would
+/// refuse. An empty end is open-ended rather than zero - the two are different
+/// statements, and only one of them is a mistake.
+pub(crate) fn draw_bar_window_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(bar) = editor.bar_window_dialog.as_ref().map(|dialog: &BarWindowDialog| dialog.bar) else {
+        return;
+    };
+    // A bar that went away while the dialog was open has no window to set; it
+    // closes rather than committing against a missing id.
+    if plan.bar(bar).is_none() {
+        editor.bar_window_dialog = None;
+        return;
+    }
+    let mut open = true;
+    let mut close = false;
+    let draft = editor.bar_window_dialog.as_mut().expect("checked above");
+    DragableMenu::new("bar_window_dialog", tr!("schedule-window-dialog"))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldText::new(tr!("schedule-window-start"), &mut draft.start).show(ui);
+            MenuFieldText::new(tr!("schedule-window-end"), &mut draft.end)
+                .hint_text(tr!("schedule-window-end-hint"))
+                .show(ui);
+            let window = draft.window();
+            if window.is_none() {
+                ui.label(egui::RichText::new(tr!("schedule-window-invalid")).color(ui.visuals().error_fg_color));
+            }
+            menu::menu_actions(ui, |ui| {
+                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!("schedule-window-apply")).primary().enabled(window.is_some())).clicked())
+                    && let Some(window) = window
+                {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarWindow { bar, window }));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.bar_window_dialog = None;
     }
 }

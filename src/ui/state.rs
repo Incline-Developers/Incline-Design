@@ -2209,7 +2209,19 @@ pub(crate) struct EditorState {
     pub(crate) new_solid_topography: Option<TriangulationId>,
     pub(crate) new_solid_block_model: Option<BlockModelId>,
     /// Which entry of the Schedule Setup tree is selected.
-    pub(crate) schedule_section: ScheduleSection,
+    pub(crate) schedule_setup_step: ScheduleStep,
+    /// The Schedule Setup pipeline's status, mirrored out of `App` each frame
+    /// so the step tree can mark each step without reaching into the pipeline.
+    /// Indexed by [`ScheduleStep::index`].
+    pub(crate) schedule_stages: [ScheduleStageView; ScheduleStep::ALL.len()],
+    /// Whether a Schedule Setup run is queued or in flight, so the controls
+    /// can offer Cancel.
+    pub(crate) schedule_run_active: bool,
+    /// What the Gantt would be told if it asked to calculate right now: empty
+    /// while a current Schedule Setup run stands, and otherwise the one unmet
+    /// prerequisite, named. Inspection never consults it - only calculation is
+    /// gated.
+    pub(crate) schedule_calculation_status: String,
     /// Selected rows in the two loader editors, and the drafts of the cells
     /// being typed into. Drafts are held rather than rebuilt each frame so an
     /// invalid entry stays on screen with its error instead of snapping back
@@ -2228,6 +2240,9 @@ pub(crate) struct EditorState {
     /// The New Bar / Rename Bar dialog, while one is open. One dialog serves
     /// both: they ask the same question, and the target is what says which.
     pub(crate) bar_name_dialog: Option<BarNameDialog>,
+    /// The numeric work-window dialog, while one is open. Dragging an edge is
+    /// quick and imprecise; this is the same edit said exactly.
+    pub(crate) bar_window_dialog: Option<BarWindowDialog>,
     /// The bar being dragged along the Gantt, and where its earliest start
     /// stood when the drag began. Held so a drag reads as one continuous
     /// movement from a fixed origin rather than accumulating rounding at every
@@ -2240,6 +2255,19 @@ pub(crate) struct EditorState {
     /// are drawn, so the Gantt never holds a report that outlived the run it
     /// was measured against.
     pub(crate) schedule_bar_reports: Vec<ScheduleBarView>,
+    /// What the last Run Schedule calculated, mirrored only while it is still
+    /// current. Authored bars remain separate and editable; an edit to any of
+    /// them takes this off the page until the schedule is run again, and the
+    /// held result itself is kept and labelled rather than destroyed.
+    pub(crate) schedule_dispatch: Option<crate::model::schedule::DispatchSchedule>,
+    /// What the Gantt's own run controls say: which run is on screen, that it
+    /// is out of date, or why one cannot be started.
+    pub(crate) schedule_run_status: String,
+    /// Whether a held result exists but no longer describes the project. The
+    /// calculated bands are hidden while this is set.
+    pub(crate) schedule_run_stale: bool,
+    /// Whether a Run Schedule is in flight, so the controls can offer Cancel.
+    pub(crate) schedule_run_working: bool,
     /// The floating 3D sequence editor's draft, while one is open.
     pub(crate) sequence_editor: Option<SequenceDraft>,
     /// What the current run says about each draft member, in draft order.
@@ -2550,8 +2578,13 @@ impl EditorState {
         self.schedule_selected_bar = None;
         self.schedule_selected_member = None;
         self.bar_name_dialog = None;
+        self.bar_window_dialog = None;
         self.gantt_drag = None;
         self.schedule_bar_reports.clear();
+        self.schedule_dispatch = None;
+        self.schedule_run_status.clear();
+        self.schedule_run_stale = false;
+        self.schedule_run_working = false;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
         self.new_loader_class_name.clear();
@@ -3104,7 +3137,10 @@ impl EditorState {
             new_solid_surface: None,
             new_solid_topography: None,
             new_solid_block_model: None,
-            schedule_section: ScheduleSection::Configuration,
+            schedule_setup_step: ScheduleStep::Configuration,
+            schedule_stages: Default::default(),
+            schedule_run_active: false,
+            schedule_calculation_status: String::new(),
             schedule_selected_class: None,
             schedule_selected_agent: None,
             schedule_class_draft: None,
@@ -3113,8 +3149,13 @@ impl EditorState {
             schedule_selected_bar: None,
             schedule_selected_member: None,
             bar_name_dialog: None,
+            bar_window_dialog: None,
             gantt_drag: None,
             schedule_bar_reports: Vec::new(),
+            schedule_dispatch: None,
+            schedule_run_status: String::new(),
+            schedule_run_stale: false,
+            schedule_run_working: false,
             sequence_editor: None,
             sequence_members: Vec::new(),
             sequence_generation: None,
@@ -3600,6 +3641,20 @@ pub(crate) enum UiCommand {
     RunAllPlanningStages,
     /// Stop a run in flight, leaving completed stages alone.
     CancelPlanningRun,
+    /// Reset the Schedule Setup pipeline and rerun from its first step through
+    /// this one.
+    RunScheduleStage(ScheduleStep),
+    /// Calculate one more period of the schedule, from the origin.
+    RunSchedulePeriod,
+    /// Calculate the whole schedule, to completion.
+    RunWholeSchedule,
+    /// Stop a Run Schedule in flight. The held result is untouched.
+    CancelScheduleCalculation,
+    /// Reset the Schedule Setup pipeline and rerun every step.
+    RunAllScheduleStages,
+    /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
+    /// whatever result the last completed run left stands untouched.
+    CancelScheduleRun,
     /// One edit to a project's loader fleet.
     ///
     /// Addressed rather than implicit: `project` is the runtime id of the
@@ -4021,7 +4076,13 @@ impl UiCommand {
             | Self::RecomputeReserveStats(_)
             | Self::RunPlanningStage(_)
             | Self::RunAllPlanningStages
-            | Self::CancelPlanningRun => None,
+            | Self::CancelPlanningRun
+            | Self::RunScheduleStage(_)
+            | Self::RunAllScheduleStages
+            | Self::CancelScheduleRun
+            | Self::RunSchedulePeriod
+            | Self::RunWholeSchedule
+            | Self::CancelScheduleCalculation => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,
@@ -4105,7 +4166,7 @@ impl UiCommand {
                 // frame of a drag would bury the log.
                 | ScheduleEdit::SetBarAgent { .. }
                 | ScheduleEdit::SetBarPriority { .. }
-                | ScheduleEdit::SetBarEarliestStart { .. }
+                | ScheduleEdit::SetBarWindow { .. }
                 // Membership edits are cell edits of the dig order: the bar's
                 // own panel shows the result, and a console line per block
                 // would bury the log once a bar is picked out of a viewport.
@@ -4593,15 +4654,64 @@ impl PlanningSubpage {
     }
 }
 
-/// Which entry of the Schedule Setup tree is showing.
+/// The Schedule Setup subpage's steps, in the order the step tree lists them.
 ///
-/// Configuration is the schedule's own name; the other two are the fleet the
-/// Gantt draws its rows from.
+/// Configuration is the schedule's own name and the field read as tonnes; the
+/// two fleet steps are the machines the Gantt draws its rows from; Scheduling
+/// Readiness is the gate over everything before it, and over the Solids run
+/// this schedule would be calculated from.
+///
+/// The same enum indexes the pipeline in [`crate::app::schedule_pipeline`] and
+/// selects which panel the Setup page draws, so a step cannot be marked in the
+/// tree without having somewhere to say why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ScheduleSection {
+pub(crate) enum ScheduleStep {
     Configuration,
     LoaderClasses,
     LoaderAgents,
+    Readiness,
+}
+
+impl ScheduleStep {
+    /// Every step, in the order the step tree lists them.
+    pub(crate) const ALL: [Self; 4] = [Self::Configuration, Self::LoaderClasses, Self::LoaderAgents, Self::Readiness];
+
+    pub(crate) fn index(self) -> usize {
+        Self::ALL.iter().position(|step| *step == self).expect("every step is in ALL")
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Configuration => tr!("planning-configuration"),
+            Self::LoaderClasses => tr!("schedule-loader-classes"),
+            Self::LoaderAgents => tr!("schedule-loader-agents"),
+            Self::Readiness => tr!("schedule-readiness-step"),
+        }
+    }
+
+    pub(crate) fn tree_id(self) -> &'static str {
+        match self {
+            Self::Configuration => "schedule_configuration",
+            Self::LoaderClasses => "schedule_loader_classes",
+            Self::LoaderAgents => "schedule_loader_agents",
+            Self::Readiness => "schedule_readiness",
+        }
+    }
+}
+
+/// One Schedule Setup stage's status as the step tree reads it.
+///
+/// Separate from [`PlanningStageView`] because the step it can be blocked by
+/// is a Schedule step, not a Solids one - a stage view that could name either
+/// would let the two trees be crossed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScheduleStageView {
+    pub(crate) state: crate::app::planning_pipeline::StageState,
+    pub(crate) message: Option<String>,
+    pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
+    pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// The earlier step that has to run first, when this one cannot.
+    pub(crate) blocked_by: Option<ScheduleStep>,
 }
 
 /// The cells of one loader class as they are being typed.
@@ -4682,11 +4792,10 @@ pub(crate) enum ScheduleEdit {
         name: String,
         agent: Option<crate::model::schedule::LoaderAgentId>,
         priority: u32,
-        /// Where along the timeline the bar was created, in hours from the
-        /// schedule origin. A bar added while a later week is on screen
-        /// belongs where it was asked for, not back at hour zero where it
-        /// cannot be seen.
-        earliest_start_h: f64,
+        /// The period the bar was created over, in hours from the schedule
+        /// origin. A bar added while a later week is on screen belongs where
+        /// it was asked for, not back at hour zero where it cannot be seen.
+        window: crate::model::schedule::WorkWindow,
     },
     RenameBar {
         bar: crate::model::schedule::BarId,
@@ -4706,12 +4815,13 @@ pub(crate) enum ScheduleEdit {
         bar: crate::model::schedule::BarId,
         priority: u32,
     },
-    /// Set the soonest a bar may begin, in hours from the schedule origin -
-    /// which is what dragging it along the Gantt does, and the only thing
-    /// dragging does. A bar's length is calculated, never dragged.
-    SetBarEarliestStart {
+    /// Set the period a bar may be worked in - which is what dragging it
+    /// along the Gantt does, and what dragging either of its edges resizes.
+    /// The same edit carries a window typed into the numeric dialog, so both
+    /// routes are subject to exactly the same validation.
+    SetBarWindow {
         bar: crate::model::schedule::BarId,
-        hours: f64,
+        window: crate::model::schedule::WorkWindow,
     },
     /// Put one dug block into a sequence's dig order, at `position` or - when
     /// that is past the end - after everything already in it. The pick names
@@ -4770,20 +4880,29 @@ pub(crate) struct BarNameDialog {
     /// for a rename, which changes the name and nothing else.
     pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
     pub(crate) priority: u32,
-    /// For a new bar, the instant the lane was right-clicked at, in hours from
-    /// the schedule origin. Ignored for a rename.
-    pub(crate) earliest_start_h: f64,
+    /// For a new bar, the period it will be created over - the instant the
+    /// lane was right-clicked at, and one period of it. Ignored for a rename.
+    pub(crate) window: crate::model::schedule::WorkWindow,
     pub(crate) name: String,
 }
 
-/// A bar being dragged along the Gantt.
+/// What a drag on a bar is doing to its window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GanttDragMode {
+    /// The whole window, keeping its length.
+    Move,
+    ResizeStart,
+    ResizeEnd,
+}
+
+/// A bar being dragged or resized along the Gantt.
 ///
-/// A drag moves the bar's earliest start and nothing else. Not its tonnes,
-/// because a bar's length is calculated from the ground it holds and a drag
-/// that changed tonnes would be a drag that changed the plan; not its machine
-/// or its lane, because both are decisions, and reading one off a pointer
-/// position would make it an accident. Those are chosen from the bar's own
-/// menu, where what is being chosen is named.
+/// A drag moves or resizes the bar's work window and nothing else. Not its
+/// tonnes, because what a bar holds is its dig order and a drag that changed
+/// tonnes would be a drag that changed the plan; not its machine or its lane,
+/// because both are decisions, and reading one off a pointer position would
+/// make it an accident. Those are chosen from the bar's own menu, where what
+/// is being chosen is named.
 ///
 /// The drag previews in this state and commits once, on release, so one drag
 /// is one undo step rather than one per frame.
@@ -4794,17 +4913,66 @@ pub(crate) struct GanttDrag {
     /// project could release onto the same-numbered bar of its successor.
     pub(crate) session: u32,
     pub(crate) bar: crate::model::schedule::BarId,
-    /// The earliest start the bar held when the drag began, in seconds.
-    pub(crate) from_seconds: f64,
+    pub(crate) mode: GanttDragMode,
+    /// The window the bar held when the drag began, in seconds. What the
+    /// commit compares against, so a drag that ends where it started commits
+    /// nothing.
+    pub(crate) from_start_seconds: f64,
+    pub(crate) from_end_seconds: Option<f64>,
     /// Where along the bar the pointer took hold, in seconds, so the bar does
     /// not jump its own width on the first movement.
     pub(crate) grab_offset_seconds: f64,
-    /// Where the drag has moved it to, in seconds. Drawn, not stored on the
+    /// Where the drag has the window now, in seconds. Drawn, not stored on the
     /// project, until the drag is released.
-    pub(crate) preview_seconds: f64,
+    pub(crate) preview_start_seconds: f64,
+    pub(crate) preview_end_seconds: Option<f64>,
     /// Whether the pointer has actually moved. A click that never moves is a
     /// selection, and must not commit an edit or dirty the project.
     pub(crate) moved: bool,
+}
+
+impl GanttDrag {
+    pub(crate) fn preview_window(self) -> crate::model::schedule::WorkWindow {
+        crate::model::schedule::WorkWindow {
+            start_h: self.preview_start_seconds / GanttView::HOUR,
+            end_h: self.preview_end_seconds.map(|end| end / GanttView::HOUR),
+        }
+    }
+}
+
+/// The numeric work-window dialog's draft.
+///
+/// Kept as text rather than parsed numbers so a half-typed entry stays on
+/// screen with its error instead of snapping back to the last valid value,
+/// and so an empty end reads as open-ended rather than as zero.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BarWindowDialog {
+    pub(crate) bar: crate::model::schedule::BarId,
+    pub(crate) start: String,
+    pub(crate) end: String,
+}
+
+impl BarWindowDialog {
+    pub(crate) fn of(bar: crate::model::schedule::BarId, window: crate::model::schedule::WorkWindow) -> Self {
+        Self {
+            bar,
+            start: format!("{:.2}", window.start_h),
+            end: window.end_h.map(|end| format!("{end:.2}")).unwrap_or_default(),
+        }
+    }
+
+    /// The window this draft describes, or `None` while it does not describe
+    /// one. An empty end is open-ended and is not an error; anything else that
+    /// does not parse is.
+    pub(crate) fn window(&self) -> Option<crate::model::schedule::WorkWindow> {
+        let start_h = self.start.trim().parse::<f64>().ok()?;
+        let end_h = match self.end.trim() {
+            "" => None,
+            text => Some(text.parse::<f64>().ok()?),
+        };
+        let window = crate::model::schedule::WorkWindow { start_h, end_h };
+        window.is_valid().then_some(window)
+    }
 }
 
 /// One member of a sequence as the panels show it: what the current run says

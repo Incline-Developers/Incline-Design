@@ -366,6 +366,7 @@ impl crate::app::App<'_> {
             // Closing the project clears the markers too; a stage status left
             // over from the last one would describe geometry that is gone.
             self.mirror_planning_stages();
+            self.sync_schedule_pipeline();
             self.mirror_schedule_reports();
             return;
         };
@@ -417,6 +418,10 @@ impl crate::app::App<'_> {
         }
         self.advance_planning_run();
         self.mirror_planning_stages();
+        // After this pipeline, never beside it: the Schedule Setup readiness
+        // step's inputs include where this run stands, so refreshing the two
+        // in the other order would fingerprint it against last frame's state.
+        self.sync_schedule_pipeline();
         self.mirror_schedule_reports();
     }
 

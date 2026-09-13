@@ -50,18 +50,13 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
-            ScheduleEdit::AddBar {
-                name,
-                agent,
-                priority,
-                earliest_start_h,
-            } => self.add_bar(name, agent, priority, earliest_start_h),
+            ScheduleEdit::AddBar { name, agent, priority, window } => self.add_bar(name, agent, priority, window),
             ScheduleEdit::RenameBar { bar, name } => self.rename_bar(bar, name),
             ScheduleEdit::DeleteBar(bar) => self.delete_bar(bar),
             ScheduleEdit::CopyBar(bar) => self.copy_bar(bar),
             ScheduleEdit::SetBarAgent { bar, agent } => self.set_bar_agent(bar, agent),
             ScheduleEdit::SetBarPriority { bar, priority } => self.set_bar_priority(bar, priority),
-            ScheduleEdit::SetBarEarliestStart { bar, hours } => self.set_bar_earliest_start(bar, hours),
+            ScheduleEdit::SetBarWindow { bar, window } => self.set_bar_window(bar, window),
             ScheduleEdit::AddMember { bar, position, pick } => self.add_bar_member(bar, position, pick),
             ScheduleEdit::RemoveMember { bar, position } => self.remove_bar_member(bar, position),
             ScheduleEdit::MoveMember { bar, from, to } => self.move_bar_member(bar, from, to),
@@ -171,10 +166,10 @@ impl crate::app::App<'_> {
         });
     }
 
-    fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, earliest_start_h: f64) {
+    fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            added = Some(plan.add_bar(&name, agent, priority, earliest_start_h)?);
+            added = Some(plan.add_bar(&name, agent, priority, window)?);
             Ok(())
         });
         if let Some(id) = added {
@@ -233,8 +228,8 @@ impl crate::app::App<'_> {
         self.edit_schedule(|plan| plan.set_bar_priority(id, priority));
     }
 
-    fn set_bar_earliest_start(&mut self, id: BarId, hours: f64) {
-        self.edit_schedule(|plan| plan.set_bar_earliest_start(id, hours));
+    fn set_bar_window(&mut self, id: BarId, window: crate::model::schedule::WorkWindow) {
+        self.edit_schedule(|plan| plan.set_bar_window(id, window));
     }
 
     fn add_bar_member(&mut self, id: BarId, position: usize, pick: crate::model::schedule::DigBlockPick) {

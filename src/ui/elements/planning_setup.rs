@@ -27,7 +27,7 @@ use crate::{
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_number_row, grid_row, grid_style_row, property_table_height},
+            data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_choice_row, grid_color_row, grid_row, grid_separator_row, grid_value_row, property_table_height},
             explorer::{ExplorerEntry, ExplorerHeader, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
             menu::{MenuFieldCombo, MenuFieldF64},
@@ -49,7 +49,7 @@ fn striped_list(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: PlanningPage, commands: &mut Vec<UiCommand>) {
     match page {
         PlanningPage::Solids => return draw_solids_steps(ui, editor, commands),
-        PlanningPage::Schedule => return striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor)),
+        PlanningPage::Schedule => return striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor, commands)),
         PlanningPage::Haulage => {}
     }
     let selection_id = egui::Id::new(("planning_configuration_selected", page));
@@ -109,43 +109,50 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 draw_stage_menu(&response, entry, editor.planning_run_active, commands);
             });
         }
-        // Paint after all rows so their backgrounds cannot cover the links.
-        // Green reaches the first red or yellow badge. Red then reaches the
-        // first yellow badge, where the connecting line stops.
-        let mut failed = false;
-        for pair in markers.windows(2) {
-            use crate::app::planning_pipeline::StageState;
-            let (previous, state) = pair[0];
-            let (next, _) = pair[1];
-            failed |= matches!(state, StageState::Failed | StageState::Blocked);
-            if !matches!(state, StageState::Complete | StageState::Failed | StageState::Blocked) {
-                break;
-            }
-            let color = if failed {
-                egui::Color32::from_rgb(0xDC, 0x45, 0x45)
-            } else {
-                egui::Color32::from_rgb(0x2E, 0xAD, 0x62)
-            };
-            // The circular badges occupy 12.2 px inside their 16 px SVGs.
-            let start = previous.center() + egui::vec2(0.0, 6.1);
-            let end = next.center() - egui::vec2(0.0, 6.1);
-            if end.y > start.y {
-                ui.painter().line_segment([start, end], egui::Stroke::new(2.0, color));
-            }
-        }
+        paint_step_links(ui, &markers);
     });
     editor.planning_solids_step = step;
 }
 
+/// Join consecutive step badges with a line showing how far a run reached.
+///
+/// Painted after all the rows so their backgrounds cannot cover it. Green
+/// reaches the first red or yellow badge. Red then reaches the first yellow
+/// badge, where the connecting line stops.
+pub(crate) fn paint_step_links(ui: &egui::Ui, markers: &[(egui::Rect, crate::app::planning_pipeline::StageState)]) {
+    use crate::app::planning_pipeline::StageState;
+
+    let mut failed = false;
+    for pair in markers.windows(2) {
+        let (previous, state) = pair[0];
+        let (next, _) = pair[1];
+        failed |= matches!(state, StageState::Failed | StageState::Blocked);
+        if !matches!(state, StageState::Complete | StageState::Failed | StageState::Blocked) {
+            break;
+        }
+        let color = if failed {
+            egui::Color32::from_rgb(0xDC, 0x45, 0x45)
+        } else {
+            egui::Color32::from_rgb(0x2E, 0xAD, 0x62)
+        };
+        // The circular badges occupy 12.2 px inside their 16 px SVGs.
+        let start = previous.center() + egui::vec2(0.0, 6.1);
+        let end = next.center() - egui::vec2(0.0, 6.1);
+        if end.y > start.y {
+            ui.painter().line_segment([start, end], egui::Stroke::new(2.0, color));
+        }
+    }
+}
+
 /// Run Step and Run All: a light muted green, filled for the one and outlined
 /// for the other.
-const RUN_STEP_TINT: egui::Color32 = egui::Color32::from_rgb(0x76, 0xC3, 0x8D);
+pub(crate) const RUN_STEP_TINT: egui::Color32 = egui::Color32::from_rgb(0x76, 0xC3, 0x8D);
 /// Run All: the same green as Run - the pair is one control, told apart by
 /// the filled head against the outlined pair rather than by shade.
-const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
+pub(crate) const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
 /// Cancel: a soft red, muted well below the error red the failed stages carry
 /// so it is a button rather than an alarm.
-const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
+pub(crate) const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
 
 /// Contents of the separate run-control island at the top of the sidebar.
 pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
@@ -224,7 +231,97 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, 
     });
 }
 
-fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSource<'static> {
+/// The Schedule Setup page's run controls: the same three buttons and the same
+/// progress readout as the Solids page, over its own four-step pipeline.
+///
+/// Kept beside the Solids controls rather than merged with them: the two
+/// pipelines run different things, and one control that switched which
+/// pipeline it drove on a page change would be one Cancel that could stop the
+/// wrong run.
+pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::{
+        app::planning_pipeline::StageState,
+        ui::{state::ScheduleStep, widgets::toolbar::ToolbarButton},
+    };
+
+    let run_enabled = !editor.schedule_run_active;
+    let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
+    let side = ui.available_height();
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let step = editor.schedule_setup_step;
+        if ui
+            .add_enabled(
+                run_enabled,
+                ToolbarButton::new(
+                    egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, run_enabled)),
+                    tr!("stage-run-step"),
+                )
+                .button_side(side)
+                .id_salt("schedule_run_through"),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::RunScheduleStage(step));
+        }
+        if ui
+            .add_enabled(
+                run_enabled,
+                ToolbarButton::new(
+                    egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, run_enabled)),
+                    tr!("stage-run-all"),
+                )
+                .button_side(side)
+                .id_salt("schedule_run_all"),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::RunAllScheduleStages);
+        }
+        if ui
+            .add_enabled(
+                editor.schedule_run_active,
+                ToolbarButton::new(
+                    egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, editor.schedule_run_active)),
+                    tr!("stage-cancel"),
+                )
+                .button_side(side)
+                .id_salt("schedule_run_cancel"),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::CancelScheduleRun);
+        }
+        let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
+        let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
+        let reported = active.unwrap_or(step);
+        let status = &editor.schedule_stages[reported.index()];
+        let label = tr!("stage-progress", done = completed, total = ScheduleStep::ALL.len());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::ui::widgets::progress::draw_planning_progress(ui, &label, completed as f32 / ScheduleStep::ALL.len() as f32);
+        })
+        .response
+        .on_hover_ui(|ui| {
+            ui.label(reported.label());
+            stage_tooltip_parts(
+                ui,
+                status.state,
+                status.blocked_by.map(ScheduleStep::label),
+                status.message.as_deref(),
+                status.last_success.as_ref(),
+                &status.diagnostics,
+            );
+            // What the Gantt would be told if it asked to calculate now,
+            // where the buttons that change that answer are.
+            if !editor.schedule_calculation_status.is_empty() {
+                ui.separator();
+                ui.label(&editor.schedule_calculation_status);
+            }
+        });
+    });
+}
+
+pub(crate) fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSource<'static> {
     match state.icon() {
         "step_complete.svg" => unthemed_icon!("step_complete.svg"),
         "step_error.svg" => unthemed_icon!("step_error.svg"),
@@ -233,7 +330,7 @@ fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSou
 }
 
 /// Preserve the SVG colours for pending and completed badges.
-fn stage_tint(ui: &egui::Ui, state: crate::app::planning_pipeline::StageState) -> egui::Color32 {
+pub(crate) fn stage_tint(ui: &egui::Ui, state: crate::app::planning_pipeline::StageState) -> egui::Color32 {
     use crate::app::planning_pipeline::StageState;
     match state {
         StageState::Complete => egui::Color32::WHITE,
@@ -243,22 +340,45 @@ fn stage_tint(ui: &egui::Ui, state: crate::app::planning_pipeline::StageState) -
 }
 
 fn stage_tooltip(ui: &mut egui::Ui, status: &crate::ui::state::PlanningStageView) {
-    ui.label(bold(&status.state.label()));
-    if let Some(blocker) = status.blocked_by {
-        ui.label(tr!("stage-blocked-by", stage = blocker.label()));
+    stage_tooltip_parts(
+        ui,
+        status.state,
+        status.blocked_by.map(SolidsStep::label),
+        status.message.as_deref(),
+        status.last_success.as_ref(),
+        &status.diagnostics,
+    );
+}
+
+/// One step badge's hover: where it stands, what stopped it, what its last
+/// successful run covered, and everything that run had to say.
+///
+/// Takes the parts rather than a view, so the Solids and Schedule step trees
+/// say the same things in the same order about their own stages.
+pub(crate) fn stage_tooltip_parts(
+    ui: &mut egui::Ui,
+    state: crate::app::planning_pipeline::StageState,
+    blocked_by: Option<String>,
+    message: Option<&str>,
+    last_success: Option<&crate::app::planning_pipeline::StageSummary>,
+    diagnostics: &[crate::app::planning_pipeline::StageDiagnostic],
+) {
+    ui.label(bold(&state.label()));
+    if let Some(blocker) = blocked_by {
+        ui.label(tr!("stage-blocked-by", stage = blocker));
     }
-    if let Some(message) = &status.message {
+    if let Some(message) = message {
         ui.label(message);
     }
-    if let Some(summary) = &status.last_success {
+    if let Some(summary) = last_success {
         ui.label(tr!("stage-last-run", generation = summary.generation.to_string(), entities = summary.entities.to_string()));
     }
-    if status.diagnostics.is_empty() {
+    if diagnostics.is_empty() {
         return;
     }
     ui.separator();
     ui.label(bold(&tr!("stage-diagnostics")));
-    for entry in status.diagnostics.iter().take(12) {
+    for entry in diagnostics.iter().take(12) {
         let text = match &entry.entity {
             Some(entity) => format!("{entity}: {}", entry.message),
             None => entry.message.clone(),
@@ -266,8 +386,8 @@ fn stage_tooltip(ui: &mut egui::Ui, status: &crate::ui::state::PlanningStageView
         let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
         ui.label(egui::RichText::new(text).color(color));
     }
-    if status.diagnostics.len() > 12 {
-        ui.label(egui::RichText::new(format!("… {}", status.diagnostics.len() - 12)).color(ui.visuals().weak_text_color()));
+    if diagnostics.len() > 12 {
+        ui.label(egui::RichText::new(format!("… {}", diagnostics.len() - 12)).color(ui.visuals().weak_text_color()));
     }
 }
 
@@ -894,6 +1014,40 @@ fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, w
     response.inner
 }
 
+/// Least height a stacked pane may be dragged to before its neighbour stops
+/// giving way. Two rows and a title strip: below that a grid says nothing.
+const MIN_STACKED_PANE: f32 = 96.0;
+
+/// The lower half of a column of two stacked panes.
+///
+/// Vertical stacking is how a column carries two grids without the workspace
+/// paying for two columns of width, and the split between them is the user's:
+/// the seam takes a grip of its own, the same three dots every other seam
+/// here is marked with. The upper half is [`central_pane`], which takes
+/// whatever this leaves.
+fn stacked_lower<R>(ui: &mut egui::Ui, id: &'static str, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> (egui::Rect, chrome::Grip) {
+    // Bounded against the height actually on offer rather than a fixed pair of
+    // limits, so a short window narrows both panes instead of letting one of
+    // them push the other off the bottom.
+    let available = ui.available_height();
+    let max = (available - MIN_STACKED_PANE).max(MIN_STACKED_PANE);
+    let rect = egui::Panel::bottom(id)
+        .resizable(true)
+        .default_size(available * 0.5)
+        .min_size(MIN_STACKED_PANE.min(max))
+        .max_size(max)
+        .show_separator_line(chrome::show_separator_line(ui))
+        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| {
+            let rect = ui.available_rect_before_wrap();
+            ui.set_clip_rect(ui.clip_rect().intersect(rect));
+            content(ui, rect);
+        })
+        .response
+        .rect;
+    (rect, chrome::Grip::new(rect, chrome::Edge::Top, id))
+}
+
 /// Whatever is left once the islands have taken their columns, as one pane.
 /// Returns what it claimed, for a caller that registers it itself.
 fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
@@ -933,17 +1087,30 @@ fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut E
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     let session = project.active_session;
     objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_solids_list_island", 240.0, |ui, rect| {
-        draw_solid_list(ui, rect, editor, document, commands)
-    });
-    island(ui, layout, "planning_solids_properties_island", 320.0, |ui, rect| {
-        match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
-            Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
-            None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            }),
-        }
-    });
+    // The solid list and the properties of the one picked stack rather than
+    // taking a column each: they are read together, and two columns of chrome
+    // for them costs the preview beside them most of its width.
+    let column = Island::new("planning_solids_column", Side::Left)
+        .default_width(320.0)
+        .min_width(160.0)
+        .bare()
+        .show(ui, |ui, _| {
+            let (properties, seam) = stacked_lower(ui, "planning_solids_properties_island", |ui, rect| {
+                match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
+                    Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
+                    None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
+                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                    }),
+                }
+            });
+            let list = central_pane(ui, |ui, rect| {
+                draw_solid_list(ui, rect, editor, document, commands);
+            });
+            ([list, properties], seam)
+        });
+    layout.regions.extend(column.inner.0);
+    layout.grips.push(column.grip);
+    layout.grips.push(column.inner.1);
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
@@ -951,34 +1118,56 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
 /// The Benching step's first column: the RL the solid is benched down from,
 /// and the bench height for each range beneath it.
 ///
-/// The list reads top down, the way a pit is described: each row is an RL and
-/// the bench height that applies below it, and the last row is the RL the
-/// bottom range ends at. Inserting a row splits the range it sits in.
+/// The list reads top down, the way a pit is described: an RL, the bench
+/// height that applies below it indented under it, then the RL that range
+/// ends at - so adding a range adds one height row and one RL row. Every
+/// value carries its unit, because an elevation and a height are both bare
+/// numbers and telling them apart by position alone is a trap.
 fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, changed: &mut bool) {
     DataGrid::new("planning_bench_list", rect, &tr!("planning-benching"))
-        .column_header(&tr!(literal = "RL · Bench height"))
+        .column_header(&tr!(literal = "Elevation · Height"))
         .show(ui, |ui| {
-            *changed |= grid_number_row(ui, ("bench_top", 0usize), [GridNumber::Edit(&mut plan.top), GridNumber::Blank], None, false).1;
+            let count = plan.intervals.len();
+            *changed |= grid_value_row(
+                ui,
+                ("bench_top", 0usize),
+                &tr!(literal = "Top RL"),
+                GridNumber::Edit(&mut plan.top),
+                &tr!(literal = "RL"),
+                0,
+                None,
+            )
+            .1;
             let mut edit = None;
             for (index, interval) in plan.intervals.iter_mut().enumerate() {
-                let (response, edited) = grid_number_row(
+                let (height_row, edited) = grid_value_row(
                     ui,
-                    ("bench_interval", index),
-                    [GridNumber::Edit(&mut interval.base), GridNumber::Edit(&mut interval.bench)],
+                    ("bench_height", index),
+                    &tr!(literal = "Bench height"),
+                    GridNumber::Edit(&mut interval.bench),
+                    &tr!(literal = "m"),
+                    1,
                     None,
-                    false,
                 );
                 *changed |= edited;
-                context_menu_popup(&response, tr!(literal = "Range"), |ui| {
-                    if ContextMenuAction::new(tr!(literal = "Insert Range Below")).show(ui).clicked() {
-                        edit = Some((index, true));
-                        ui.close();
-                    }
-                    if ContextMenuAction::new(tr!(literal = "Delete Range")).show(ui).clicked() {
-                        edit = Some((index, false));
-                        ui.close();
-                    }
-                });
+                let label = if index + 1 == count { tr!(literal = "Bottom RL") } else { tr!(literal = "RL") };
+                let (base_row, edited) = grid_value_row(ui, ("bench_base", index), &label, GridNumber::Edit(&mut interval.base), &tr!(literal = "RL"), 0, None);
+                *changed |= edited;
+                // Both rows describe the same range, so both carry its menu:
+                // whichever one the user happens to be on is the one they
+                // right-click.
+                for row in [&height_row, &base_row] {
+                    context_menu_popup(row, tr!(literal = "Range"), |ui| {
+                        if ContextMenuAction::new(tr!(literal = "Insert Range Below")).show(ui).clicked() {
+                            edit = Some((index, true));
+                            ui.close();
+                        }
+                        if ContextMenuAction::new(tr!(literal = "Delete Range")).show(ui).clicked() {
+                            edit = Some((index, false));
+                            ui.close();
+                        }
+                    });
+                }
             }
             match edit {
                 // Splitting a range halves it: the new row takes the lower
@@ -1017,12 +1206,6 @@ fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
         });
 }
 
-/// The Benching step's second column: the flitch height for each of the same
-/// ranges.
-///
-/// The RLs are the benching list's and are shown greyed, because a flitch
-/// divides a bench and cannot start anywhere else. A height that is not a
-/// whole number of flitches to the bench is painted in the error colour.
 /// What one flitch position is called: the ends are named, the rest counted.
 fn flitch_position_label(position: usize, count: usize) -> String {
     if position == 0 {
@@ -1043,12 +1226,24 @@ fn pattern_label(pattern: crate::model::FillStyle) -> String {
     }
 }
 
+/// The Benching step's second column: the flitch height for each of the same
+/// ranges, and how each flitch position in them is drawn.
+///
+/// The RLs are the benching list's and are shown greyed, because a flitch
+/// divides a bench and cannot start anywhere else. A height that is not a
+/// whole number of flitches to the bench is painted in the error colour.
+///
+/// Styling is a list rather than a row: fill, pattern and pattern colour each
+/// get a line of their own under the flitch they belong to, beneath a rule
+/// that separates them from the heights above. Three controls crammed into one
+/// row fit no column width worth having.
 fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, solid_color: [f32; 4], changed: &mut bool) {
     DataGrid::new("planning_flitch_list", rect, &tr!(literal = "Flitching"))
-        .column_header(&tr!(literal = "RL · Flitch height"))
+        .column_header(&tr!(literal = "Elevation · Height"))
         .show(ui, |ui| {
             let top = plan.top;
-            grid_number_row(ui, ("flitch_top", 0usize), [GridNumber::Fixed(top), GridNumber::Blank], None, false);
+            let count = plan.intervals.len();
+            grid_value_row(ui, ("flitch_top", 0usize), &tr!(literal = "Top RL"), GridNumber::Fixed(top), &tr!(literal = "RL"), 0, None);
             for (index, interval) in plan.intervals.iter_mut().enumerate() {
                 let error = if interval.flitch > 0.0 && (interval.bench / interval.flitch).ceil() > 64.0 {
                     Some(tr!("planning-too-many-flitches"))
@@ -1061,46 +1256,64 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
                         )
                     })
                 };
-                let base = interval.base;
-                *changed |= grid_number_row(
+                *changed |= grid_value_row(
                     ui,
-                    ("flitch_interval", index),
-                    [GridNumber::Fixed(base), GridNumber::Edit(&mut interval.flitch)],
+                    ("flitch_height", index),
+                    &tr!(literal = "Flitch height"),
+                    GridNumber::Edit(&mut interval.flitch),
+                    &tr!(literal = "m"),
+                    1,
                     error.as_deref(),
-                    false,
                 )
                 .1;
 
-                // One row per flitch position in the range's bench, top down,
-                // carrying how that position is drawn wherever it recurs.
-                let count = interval.flitch_count();
-                if interval.styles.len() != count {
+                // One group per flitch position in the range's bench, top
+                // down, carrying how that position is drawn wherever it
+                // recurs.
+                let flitches = interval.flitch_count();
+                if interval.styles.len() != flitches {
                     // Changing a height changes how many flitches a bench has.
                     // Positions that survive keep what they were given; new
                     // ones take the default shade for where they now sit.
-                    interval.styles = (0..count)
+                    interval.styles = (0..flitches)
                         .map(|position| {
                             interval
                                 .styles
                                 .get(position)
                                 .copied()
-                                .unwrap_or_else(|| crate::model::FlitchStyle::default_for(solid_color, position, count))
+                                .unwrap_or_else(|| crate::model::FlitchStyle::default_for(solid_color, position, flitches))
                         })
                         .collect();
                     *changed = true;
                 }
-                for (position, style) in interval.styles.iter_mut().enumerate() {
-                    let label = flitch_position_label(position, count);
-                    *changed |= grid_style_row(
-                        ui,
-                        ("flitch_style", index, position),
-                        &label,
-                        &mut style.color,
-                        &mut style.pattern_color,
-                        &mut style.pattern,
-                        pattern_label,
-                    );
+                if flitches > 0 {
+                    grid_separator_row(ui, &tr!(literal = "Styling"), 1);
                 }
+                for (position, style) in interval.styles.iter_mut().enumerate() {
+                    grid_value_row(
+                        ui,
+                        ("flitch_name", index, position),
+                        &flitch_position_label(position, flitches),
+                        GridNumber::Blank,
+                        "",
+                        1,
+                        None,
+                    );
+                    *changed |= grid_color_row(ui, ("flitch_fill", index, position), &tr!(literal = "Fill colour"), &mut style.color, 2);
+                    *changed |= grid_choice_row(
+                        ui,
+                        ("flitch_pattern", index, position),
+                        &tr!(literal = "Pattern"),
+                        &mut style.pattern,
+                        crate::model::FillStyle::ALL,
+                        pattern_label,
+                        2,
+                    );
+                    *changed |= grid_color_row(ui, ("flitch_pattern_color", index, position), &tr!(literal = "Pattern colour"), &mut style.pattern_color, 2);
+                }
+
+                let label = if index + 1 == count { tr!(literal = "Bottom RL") } else { tr!(literal = "RL") };
+                grid_value_row(ui, ("flitch_base", index), &label, GridNumber::Fixed(interval.base), &tr!(literal = "RL"), 0, None);
             }
         });
 }
@@ -1189,23 +1402,15 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         .min_width(140.0)
         .bare()
         .show(ui, |ui, _| {
-            let flitching = egui::Panel::bottom("planning_flitching_island")
-                .resizable(false)
-                .exact_size(ui.available_height() * 0.5)
-                .show_separator_line(chrome::show_separator_line(ui))
-                .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-                .show(ui, |ui| {
-                    let rect = ui.available_rect_before_wrap();
-                    if solid_id.is_some() {
-                        draw_flitching_list(ui, rect, &mut plan, solid_color, &mut changed);
-                    } else {
-                        PropertyTable::new("planning_flitching_empty", rect, &tr!(literal = "Flitching")).show(ui, |rows| {
-                            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-                        });
-                    }
-                })
-                .response
-                .rect;
+            let (flitching, seam) = stacked_lower(ui, "planning_flitching_island", |ui, rect| {
+                if solid_id.is_some() {
+                    draw_flitching_list(ui, rect, &mut plan, solid_color, &mut changed);
+                } else {
+                    PropertyTable::new("planning_flitching_empty", rect, &tr!(literal = "Flitching")).show(ui, |rows| {
+                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                    });
+                }
+            });
             let benching = central_pane(ui, |ui, rect| {
                 if solid_id.is_some() {
                     draw_benching_list(ui, rect, &mut plan, &mut changed);
@@ -1216,11 +1421,13 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
                     });
                 }
             });
-            [flitching, benching]
+            ([flitching, benching], seam)
         });
-    // The column is not a region itself: the two panes inside it are.
-    layout.regions.extend(settings.inner);
+    // The column is not a region itself: the two panes inside it are, and the
+    // seam between them resizes the split the column's own seam cannot.
+    layout.regions.extend(settings.inner.0);
     layout.grips.push(settings.grip);
+    layout.grips.push(settings.inner.1);
     island(ui, layout, "planning_bench_results_island", 240.0, |ui, rect| {
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &plan, editor);
@@ -1345,7 +1552,7 @@ fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) {
 /// The Schedule Setup subpage's panes: a list beside the properties of the
 /// row selected in it, the same shape the Solids steps use.
 fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    use crate::ui::state::ScheduleSection;
+    use crate::ui::state::ScheduleStep;
 
     // Cloned rather than borrowed: the panes below take `editor` mutably to
     // hold their drafts and selection, and the plan they read is the active
@@ -1355,13 +1562,13 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
     // so one queued against a project that is closed before the frame's
     // commands are handled is refused rather than applied to its successor.
     let session = project.active_session;
-    match editor.schedule_section {
-        ScheduleSection::Configuration => {
+    match editor.schedule_setup_step {
+        ScheduleStep::Configuration => {
             central_island(ui, layout, |ui, rect| {
                 super::schedule_setup::draw_configuration(ui, rect, editor, &plan, document, session, commands)
             });
         }
-        ScheduleSection::LoaderClasses => {
+        ScheduleStep::LoaderClasses => {
             island(ui, layout, "schedule_class_list_island", 320.0, |ui, rect| {
                 super::schedule_setup::draw_class_list(ui, rect, editor, &plan, session, commands)
             });
@@ -1369,13 +1576,16 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_setup::draw_class_properties(ui, rect, editor, &plan, session, commands)
             });
         }
-        ScheduleSection::LoaderAgents => {
+        ScheduleStep::LoaderAgents => {
             island(ui, layout, "schedule_agent_list_island", 320.0, |ui, rect| {
                 super::schedule_setup::draw_agent_list(ui, rect, editor, &plan, session, commands)
             });
             central_island(ui, layout, |ui, rect| {
                 super::schedule_setup::draw_agent_properties(ui, rect, editor, &plan, session, commands)
             });
+        }
+        ScheduleStep::Readiness => {
+            central_island(ui, layout, |ui, rect| super::schedule_setup::draw_readiness(ui, rect, editor, &plan, document));
         }
     }
     crate::ui::dialogs::schedule::draw_new_loader_class_dialog(ui, editor, &plan, session, commands);

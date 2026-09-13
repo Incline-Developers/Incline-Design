@@ -130,6 +130,10 @@ impl<'a> App<'a> {
                 | UiCommand::RecomputeReserveStats(_)
                 | UiCommand::RunPlanningStage(_)
                 | UiCommand::RunAllPlanningStages
+                | UiCommand::RunScheduleStage(_)
+                | UiCommand::RunAllScheduleStages
+                | UiCommand::RunSchedulePeriod
+                | UiCommand::RunWholeSchedule
                 | UiCommand::Schedule { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -419,6 +423,30 @@ impl<'a> App<'a> {
             }
             UiCommand::CancelPlanningRun => {
                 self.cancel_planning_run();
+                Ok(())
+            }
+            UiCommand::RunScheduleStage(step) => {
+                self.run_schedule_step(step);
+                Ok(())
+            }
+            UiCommand::RunAllScheduleStages => {
+                self.run_all_schedule_steps();
+                Ok(())
+            }
+            UiCommand::RunSchedulePeriod => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Period);
+                Ok(())
+            }
+            UiCommand::RunWholeSchedule => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Whole);
+                Ok(())
+            }
+            UiCommand::CancelScheduleCalculation => {
+                self.cancel_schedule_run_calculation();
+                Ok(())
+            }
+            UiCommand::CancelScheduleRun => {
+                self.cancel_schedule_run();
                 Ok(())
             }
             UiCommand::UpdateSolid { solid, edit } => {

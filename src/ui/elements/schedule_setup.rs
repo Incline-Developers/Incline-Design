@@ -15,12 +15,11 @@ use crate::{
     ui::{
         EditorState,
         fonts::bold,
-        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleSection, UiCommand},
-        unthemed_icon,
+        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridRow, PropertyTable, grid_row, property_table_height},
-            explorer::{ExplorerEntry, ExplorerHeader, explorer_note},
+            explorer::{ExplorerEntry, explorer_note},
         },
     },
 };
@@ -62,37 +61,128 @@ fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<Strin
         .then(|| crate::model::schedule::ScheduleError::DuplicateName(trimmed.to_owned()).message())
 }
 
-/// The Schedule Setup step tree: the schedule's own settings and the two
-/// fleet lists under Site Data.
+/// The Schedule Setup step tree.
+///
+/// A flat list of four steps with the same badges, the same connecting line
+/// and the same context menu as the Solids page's, because it is the same kind
+/// of thing: an explicitly executed pipeline, not a category tree. The Site
+/// Data grouping the fleet lists used to sit under is gone with it - a step
+/// that can be marked Complete, Stale or Failed belongs in the chain that
+/// marks it.
 ///
 /// Dig sequences are deliberately absent. An ordered run of ground belongs to
 /// the Gantt bar that works it, and is authored there; a second list of them
 /// here would be a second place the same thing could be edited.
-pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
-    let mut section = editor.schedule_section;
-    let mut entry = |ui: &mut egui::Ui, id: &'static str, label: String, value: ScheduleSection| {
+pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let mut step = editor.schedule_setup_step;
+    let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
+    for entry in ScheduleStep::ALL {
+        let status = &editor.schedule_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            if ExplorerEntry::new(egui::Id::new(id), bold(&label))
-                .leading_icon(unthemed_icon!("step_pending.svg"), egui::Color32::WHITE)
+            let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
+                .leading_icon(super::planning_setup::step_icon(status.state), super::planning_setup::stage_tint(ui, status.state))
                 .header_aligned_icon()
-                .selected(section == value)
-                .show(ui)
-                .response
-                .clicked()
-            {
-                section = value;
+                .selected(step == entry)
+                .show(ui);
+            if let Some(rect) = entry_response.icon_rect {
+                markers.push((rect, status.state));
             }
+            let response = entry_response.response;
+            if response.clicked() {
+                step = entry;
+            }
+            draw_step_menu(&response, entry, editor.schedule_run_active, commands);
         });
+    }
+    super::planning_setup::paint_step_links(ui, &markers);
+    editor.schedule_setup_step = step;
+}
+
+fn draw_step_menu(response: &egui::Response, step: ScheduleStep, running: bool, commands: &mut Vec<UiCommand>) {
+    context_menu_popup(response, step.label(), |ui| {
+        if ContextMenuAction::new(tr!("stage-run-step")).enabled(!running).show(ui).clicked() {
+            commands.push(UiCommand::RunScheduleStage(step));
+            ui.close();
+        }
+        if ContextMenuAction::new(tr!("stage-run-all")).enabled(!running).show(ui).clicked() {
+            commands.push(UiCommand::RunAllScheduleStages);
+            ui.close();
+        }
+        if ContextMenuAction::new(tr!("stage-cancel")).enabled(running).show(ui).clicked() {
+            commands.push(UiCommand::CancelScheduleRun);
+            ui.close();
+        }
+    });
+}
+
+/// The Scheduling Readiness step: what the last completed run checked, and
+/// what the Gantt would be told if it asked to calculate right now.
+///
+/// Reports; it never runs anything. A held result stays on screen after an
+/// edit retires it, labelled as belonging to the run that produced it - a
+/// result that vanished on the first edit would leave the page with nothing to
+/// say about what was checked.
+pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, document: &Document) {
+    use crate::app::planning_pipeline::StageState;
+
+    let status = &editor.schedule_stages[ScheduleStep::Readiness.index()];
+    let summary = status.last_success.as_ref();
+    let field = plan
+        .tonnage_field()
+        .map(|id| {
+            document
+                .reserve_fields()
+                .iter()
+                .find(|field| field.id == id)
+                .map_or_else(|| tr!("sequence-tonnage-field-missing"), |field| field_option_label(document, field))
+        })
+        .unwrap_or_else(|| tr!("schedule-tonnage-field-none"));
+    let result = match summary {
+        None => tr!("schedule-readiness-never-run"),
+        Some(summary) if status.state == StageState::Complete => tr!("schedule-readiness-result-current", run = summary.generation.to_string()),
+        Some(summary) => tr!("schedule-readiness-result-stale", run = summary.generation.to_string()),
     };
-    entry(ui, "schedule_configuration", tr!("planning-configuration"), ScheduleSection::Configuration);
-    ExplorerHeader::new(egui::Id::new("schedule_site_data"), tr!("planning-site-data"))
-        .icon(unthemed_icon!("step_pending.svg"))
-        .show(ui, |ui| {
-            entry(ui, "schedule_loader_classes", tr!("schedule-loader-classes"), ScheduleSection::LoaderClasses);
-            entry(ui, "schedule_loader_agents", tr!("schedule-loader-agents"), ScheduleSection::LoaderAgents);
+    let blocks = summary.map_or_else(|| tr!(literal = "—"), |summary| summary.entities.to_string());
+
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 5).min(rect.height())));
+    PropertyTable::new("schedule_readiness", table_rect, &ScheduleStep::Readiness.label()).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        rows.readonly(&tr!("schedule-readiness-state"), &status.state.label(), None, None);
+        rows.readonly(&tr!("schedule-readiness-last-run"), &result, None, None);
+        rows.readonly(&tr!("schedule-readiness-tonnage-field"), &field, None, None);
+        rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
+    });
+
+    // Everything the step had to say, in full, and then the one sentence the
+    // Gantt would show. Both are statements about a completed run, so neither
+    // is offered as something to press.
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
+    if !body.is_positive() {
+        return;
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(body));
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            if let Some(message) = &status.message {
+                ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().error_fg_color)).wrap());
+            }
+            for entry in &status.diagnostics {
+                let text = match &entry.entity {
+                    Some(entity) => tr_format!(literal = "%entity%: %message%", entity = entity.clone(), message = entry.message.clone()),
+                    None => entry.message.clone(),
+                };
+                let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
+                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
+            }
+            if !editor.schedule_calculation_status.is_empty() {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(bold(&editor.schedule_calculation_status)).wrap());
+            }
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(egui::RichText::new(tr!("schedule-readiness-intro")).weak().small()).wrap());
         });
-    editor.schedule_section = section;
+    });
 }
 
 /// One field as the tonnage combo lists it: its name and how it aggregates,
@@ -133,7 +223,10 @@ pub(crate) fn draw_configuration(
     let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
-    let rows = 2 + usize::from(no_fields);
+    // Header + schedule name + scheduling quantity, plus the explanatory
+    // empty-field row when the project has no reserve schema. The header is a
+    // table row too; omitting it from this count clips the quantity combo.
+    let rows = 3 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
     PropertyTable::new("schedule_configuration", table_rect, &tr!("planning-configuration")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));

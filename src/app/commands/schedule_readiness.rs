@@ -35,7 +35,7 @@ use crate::{
     i18n::tr,
     model::{
         Document, ReserveAggregation, ReserveFieldId,
-        schedule::{BarId, DigBlockPick, sequence::BlockGround},
+        schedule::{BarId, DigBlockPick, DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, sequence::BlockGround},
         solid_reserves::ReserveTotals,
     },
     ui::state::{ScheduleBarView, ScheduleMemberView, SequenceMemberView},
@@ -109,6 +109,9 @@ pub(crate) struct MemberReport {
     /// Its complete measured tonnage. `None` whenever that figure is not
     /// available *for any reason* - which is never the same as zero.
     pub(crate) tonnes: Option<f64>,
+    /// Identity in the current run, used to detect two persistent references
+    /// that resolve to the same occupied ground across different bars.
+    pub(crate) resolved: Option<crate::model::DigBlockId>,
 }
 
 /// What one bar would execute.
@@ -134,12 +137,134 @@ impl BarReport {
     }
 }
 
+/// One reason a schedule could not be calculated, and which bars it is about.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleRunProblem {
+    pub(crate) bars: Vec<BarId>,
+    pub(crate) message: String,
+}
+
 /// The project's tonnage field, or what is wrong with the choice.
 enum TonnageField {
     Chosen(ReserveFieldId),
     None,
     Missing,
     NotSum(String),
+}
+
+/// Join persistent assignments to one set of readiness reports and hand back
+/// the entirely validated evaluator input, or every reason it cannot be built.
+///
+/// Nothing partial: a schedule assembled from the bars that happened to be
+/// ready would draw calculated spans beside silently omitted work, which reads
+/// as a complete answer and is not one.
+///
+/// `expected` is the Solids run the completed Schedule Setup run was validated
+/// against. Reports measured against any other run are refused rather than
+/// evaluated: the gate that let this be calculated named one run, and a
+/// schedule assembled from two of them would describe ground that was never
+/// all there at once.
+pub(crate) fn dispatch_input(
+    plan: &crate::model::schedule::SchedulePlan,
+    reports: &[BarReport],
+    expected: u64,
+    horizon_limit_h: Option<f64>,
+) -> Result<DispatchInput, Vec<ScheduleRunProblem>> {
+    let mut problems = Vec::new();
+    if plan.bars().is_empty() {
+        problems.push(ScheduleRunProblem {
+            bars: Vec::new(),
+            message: tr!("schedule-run-no-bars"),
+        });
+        return Err(problems);
+    }
+    for bar in plan.bars() {
+        if bar.agent.is_none() {
+            problems.push(ScheduleRunProblem {
+                bars: vec![bar.id],
+                message: tr!("schedule-dispatch-unassigned", bar = bar.name().to_owned()),
+            });
+        }
+    }
+    for (bar, report) in plan.bars().iter().zip(reports) {
+        if !report.is_ready() {
+            problems.push(ScheduleRunProblem {
+                bars: vec![bar.id],
+                message: tr!("schedule-run-bar-not-ready", bar = bar.name().to_owned()),
+            });
+        }
+    }
+    let generations = reports
+        .iter()
+        .filter(|report| report.is_ready())
+        .filter_map(|report| report.generation)
+        .collect::<std::collections::HashSet<_>>();
+    if reports.len() != plan.bars().len() || generations.len() > 1 || generations.iter().any(|generation| *generation != expected) {
+        problems.push(ScheduleRunProblem {
+            bars: plan.bars().iter().map(|bar| bar.id).collect(),
+            message: tr!("schedule-dispatch-generation-changed"),
+        });
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+
+    let agents = plan
+        .agents()
+        .iter()
+        .filter_map(|agent| plan.effective_rate_tph(agent.id).map(|rate_tph| DispatchAgent { agent: agent.id, rate_tph }))
+        .collect();
+    let bars = plan
+        .bars()
+        .iter()
+        .zip(reports)
+        .map(|(bar, report)| DispatchBar {
+            bar: bar.id,
+            agent: bar.agent.expect("checked above"),
+            priority: bar.priority,
+            window: bar.window,
+            blocks: bar
+                .members()
+                .iter()
+                .copied()
+                .zip(&report.members)
+                .map(|(block, member)| DispatchBlock {
+                    block,
+                    resolved: member.resolved.expect("ready members resolve"),
+                    tonnes: member.tonnes.expect("ready members have tonnes"),
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(DispatchInput {
+        generation: expected,
+        horizon_limit_h,
+        agents,
+        bars,
+    })
+}
+
+/// Turn one evaluator refusal into something the Gantt can say, against the
+/// bars it is about.
+pub(crate) fn dispatch_problem(plan: &crate::model::schedule::SchedulePlan, error: DispatchError) -> ScheduleRunProblem {
+    match error {
+        DispatchError::UnknownAgent { bar, .. }
+        | DispatchError::InvalidWindow(bar)
+        | DispatchError::EmptyBar(bar)
+        | DispatchError::InvalidTonnes { bar, .. }
+        | DispatchError::ClockDidNotAdvance(bar) => ScheduleRunProblem {
+            bars: vec![bar],
+            message: tr!("schedule-dispatch-invalid-input"),
+        },
+        DispatchError::DuplicateAgent(agent) | DispatchError::InvalidRate(agent) => ScheduleRunProblem {
+            bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent)).map(|bar| bar.id).collect(),
+            message: tr!("schedule-dispatch-invalid-input"),
+        },
+        DispatchError::InconsistentTonnes { .. } | DispatchError::IterationCap => ScheduleRunProblem {
+            bars: Vec::new(),
+            message: tr!("schedule-dispatch-invalid-input"),
+        },
+    }
 }
 
 impl crate::app::App<'_> {
@@ -201,6 +326,9 @@ impl crate::app::App<'_> {
                 self.editor.schedule_bar_reports.clear();
                 self.redraw_requested = true;
             }
+            if self.editor.schedule_dispatch.take().is_some() {
+                self.redraw_requested = true;
+            }
             // The draft itself is kept: leaving the page puts the Solids
             // preview back the way it was, and coming back shows the same
             // editing session. Only the per-run answers go, because they
@@ -214,31 +342,46 @@ impl crate::app::App<'_> {
             return;
         }
         self.mirror_sequence_editor();
-        let views = self
-            .schedule_reports()
+        let reports = self.schedule_reports();
+        // Nothing is calculated here. Inspection is unconditional and the
+        // readiness of each bar is a read; the timed schedule comes only from
+        // an explicit Run, and what that run found is mirrored separately by
+        // `mirror_schedule_calculation`.
+        let dispatch_problems = self.schedule_run_problems.clone();
+        let views = reports
             .into_iter()
-            .map(|report| ScheduleBarView {
-                bar: report.bar,
-                ready: report.is_ready(),
-                tonnes: report.tonnes,
-                members: report
-                    .members
-                    .into_iter()
-                    .map(|member| ScheduleMemberView {
-                        position: member.position,
-                        name: member.name,
-                        solid_name: member.solid_name,
-                        unresolved: member.unresolved,
-                        tonnes: member.tonnes,
-                    })
-                    .collect(),
-                problems: report.problems.iter().map(|problem| problem.message()).collect(),
+            .map(|report| {
+                let mut problems = report.problems.iter().map(|problem| problem.message()).collect::<Vec<_>>();
+                problems.extend(
+                    dispatch_problems
+                        .iter()
+                        .filter(|problem| problem.bars.contains(&report.bar))
+                        .map(|problem| problem.message.clone()),
+                );
+                ScheduleBarView {
+                    bar: report.bar,
+                    ready: report.is_ready() && problems.is_empty(),
+                    tonnes: report.tonnes,
+                    members: report
+                        .members
+                        .into_iter()
+                        .map(|member| ScheduleMemberView {
+                            position: member.position,
+                            name: member.name,
+                            solid_name: member.solid_name,
+                            unresolved: member.unresolved,
+                            tonnes: member.tonnes,
+                        })
+                        .collect(),
+                    problems,
+                }
             })
             .collect::<Vec<_>>();
         if self.editor.schedule_bar_reports != views {
             self.editor.schedule_bar_reports = views;
             self.redraw_requested = true;
         }
+        self.mirror_schedule_calculation();
     }
 
     /// Mirror what the current run says about each member of the open
@@ -478,6 +621,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                     solid_name: None,
                     unresolved: None,
                     tonnes: None,
+                    resolved: None,
                 })
                 .collect();
             return report;
@@ -501,6 +645,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                 solid_name: None,
                 unresolved: status.message(),
                 tonnes: None,
+                resolved: None,
             });
             total = None;
             continue;
@@ -537,6 +682,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
             solid_name: Some(block.solid_name.clone()),
             unresolved: None,
             tonnes,
+            resolved: Some(block.id),
         });
     }
     let unresolved = report.unresolved_count();
@@ -605,6 +751,26 @@ pub(crate) fn append_or_select(draft: &mut crate::ui::state::SequenceDraft, bloc
 /// execute - a negative sum, or one that overflowed to a non-finite number -
 /// is refused by name rather than passed on: the field was *nominated* as
 /// tonnes, and tonnes are a quantity of ground.
+/// Why the Schedule Setup readiness step could not read one block's tonnage.
+///
+/// Told apart by *why* rather than by the problem's own shape, because the
+/// step treats the two differently: a figure that is there and cannot be
+/// tonnes is a broken project and blocks the step, while one that is simply
+/// absent stops only the bars that reach that ground - and each of those says
+/// so itself.
+pub(crate) struct StageTonnage {
+    pub(crate) message: String,
+    pub(crate) invalid: bool,
+}
+
+/// One block's tonnage, for the Schedule Setup readiness step.
+pub(crate) fn block_tonnes_for_stage(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, StageTonnage> {
+    block_tonnes(block, field).map_err(|problem| StageTonnage {
+        invalid: matches!(problem, ReadinessProblem::InvalidTonnes { .. }),
+        message: problem.message(),
+    })
+}
+
 fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, ReadinessProblem> {
     let unmeasured = |reason: String| ReadinessProblem::Unmeasured {
         block: block.name.clone(),

@@ -64,7 +64,7 @@ const META_SCHEDULE: &str = "incline:schedule";
 /// half-read or migrated. Bumping this retires every file written before it,
 /// deliberately, so that nothing in the app has to carry a shape it no longer
 /// has. That ends when scheduling ships.
-const SCHEDULE_METADATA_VERSION: u64 = 5;
+const SCHEDULE_METADATA_VERSION: u64 = 6;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.

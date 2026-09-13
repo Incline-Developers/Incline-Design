@@ -5,6 +5,8 @@ pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
+pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
+pub(crate) mod schedule_run; // The Gantt's explicit Run Schedule and what it holds
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -368,6 +370,21 @@ pub(crate) struct App<'a> {
     /// The six-stage Solids pipeline's state for the active project; see
     /// [`crate::app::planning_pipeline`]. `None` until a project is open.
     pub(crate) planning_pipeline: Option<crate::app::planning_pipeline::PlanningPipeline>,
+    /// The Schedule Setup pipeline's state for the active project; see
+    /// [`crate::app::schedule_pipeline`]. `None` until a project is open.
+    pub(crate) schedule_pipeline: Option<crate::app::schedule_pipeline::SchedulePipeline>,
+    /// What the last finished Run Schedule calculated, with the inputs it
+    /// captured. Kept across edits and cancellations - an edit marks it stale,
+    /// nothing deletes it - so the page can always say what was true when it
+    /// was last run. See [`crate::app::schedule_run`].
+    pub(crate) schedule_calculation: Option<crate::app::schedule_run::ScheduleCalculation>,
+    /// A Run Schedule in flight, advanced in bounded steps so it can be
+    /// cancelled. Dropping it publishes nothing.
+    pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
+    /// Why the last Run produced no schedule, if it produced none.
+    pub(crate) schedule_run_problems: Vec<crate::app::commands::schedule_readiness::ScheduleRunProblem>,
+    /// Numbers the runs, so a result can be named rather than merely dated.
+    pub(crate) schedule_run_serial: u64,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
@@ -485,6 +502,11 @@ impl<'a> Default for App<'a> {
             solid_view_body_key: None,
             dig_block_identities: Default::default(),
             planning_pipeline: None,
+            schedule_pipeline: None,
+            schedule_calculation: None,
+            pending_schedule_run: None,
+            schedule_run_problems: Vec::new(),
+            schedule_run_serial: 0,
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,

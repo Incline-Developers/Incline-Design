@@ -157,6 +157,33 @@ impl BuiltFrom {
     }
 }
 
+/// What a cut body was cut from: the mesh, and the plan that divided it.
+///
+/// The mesh is identified by the allocation holding it, so a rebuild that
+/// produces a different mesh is a different key and a rebuild that produces
+/// none - a solid still building, a restore still pending - leaves the key it
+/// already has standing. That is what lets the cut body be carried across a
+/// rebuild without being redone every frame while one is in flight.
+fn bench_body_key(source: &OpenTriangulation, plan: &crate::model::BenchingPlan) -> (usize, u64) {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    plan.top.to_bits().hash(&mut hasher);
+    for interval in &plan.intervals {
+        interval.base.to_bits().hash(&mut hasher);
+        interval.bench.to_bits().hash(&mut hasher);
+        interval.flitch.to_bits().hash(&mut hasher);
+    }
+    (Arc::as_ptr(&source.mesh) as usize, hasher.finish())
+}
+
+/// The cut flitch body of a preview, moved across a rebuild.
+#[derive(Default)]
+struct CarriedBody {
+    body: Vec<OpenTriangulation>,
+    bands: Vec<CutBand>,
+    body_key: Option<(usize, u64)>,
+}
+
 pub(crate) enum SolidPreviewStatus {
     /// A build is running on a worker. The mesh it is replacing, when there is
     /// one, stays on screen until it finishes rather than blinking out.
@@ -203,6 +230,40 @@ impl SolidPreview {
     /// and so has to be reconsidered rather than left alone.
     fn is_waiting(&self) -> bool {
         matches!(self.status, SolidPreviewStatus::WaitingForInputs { .. })
+    }
+
+    /// Replace a preview, carrying its cut body across.
+    ///
+    /// Every transition that leaves a solid still being built - a restore
+    /// pending, a worker running, a new mesh landing - goes through here, so
+    /// the one rule they all share is written once: the page keeps drawing
+    /// what it already has, and the cut is redone when the mesh it was cut
+    /// from changes and not before.
+    fn carrying(key: SolidPreviewKey, built_from: BuiltFrom, status: SolidPreviewStatus, carried: CarriedBody) -> Self {
+        Self {
+            key,
+            built_from,
+            status,
+            body: carried.body,
+            bands: carried.bands,
+            body_key: carried.body_key,
+        }
+    }
+
+    /// The cut body to carry into a rebuild.
+    ///
+    /// `body` - not `whole_mesh` - is what the renderer is handed, so a
+    /// rebuild that dropped it would blank the pane for as long as the
+    /// rebuild took, however carefully the mesh behind it was preserved.
+    /// `body_key` names the mesh the body was cut from, so carrying the key
+    /// with the body is what stops the cut being redone for a mesh that has
+    /// not changed - and what makes sure it *is* redone once one has.
+    fn take_body(&mut self) -> CarriedBody {
+        CarriedBody {
+            body: std::mem::take(&mut self.body),
+            bands: std::mem::take(&mut self.bands),
+            body_key: self.body_key.take(),
+        }
     }
 
     /// The mesh to carry into a rebuild, so the page keeps showing the solid
@@ -340,17 +401,7 @@ impl crate::app::App<'_> {
             .flatten()
             .unwrap_or_default();
 
-        let key = {
-            use std::hash::{DefaultHasher, Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            plan.top.to_bits().hash(&mut hasher);
-            for interval in &plan.intervals {
-                interval.base.to_bits().hash(&mut hasher);
-                interval.bench.to_bits().hash(&mut hasher);
-                interval.flitch.to_bits().hash(&mut hasher);
-            }
-            (Arc::as_ptr(&source.mesh) as usize, hasher.finish())
-        };
+        let key = bench_body_key(source, &plan);
         if preview.body_key == Some(key) {
             return;
         }
@@ -455,6 +506,15 @@ impl crate::app::App<'_> {
         // styles and frames it differently. Neither *starts* anything: the
         // artifacts are built when a stage is run, and these pages show what
         // that run committed. Opening a page is not a calculation.
+        // Which sheets the inspector suppresses is a property of the solid
+        // selected right now, so it is recomputed before anything can return.
+        // Left until after the branch below it kept whatever the last Setup
+        // step wrote, and a selection changed while a cut step was open then
+        // suppressed the wrong solid's surfaces on the way back.
+        self.editor.solid_preview_sources.clear();
+        if let Some(solid) = self.editor.planning_selected_solid.and_then(|id| self.workspace.active_document()?.solid(id)) {
+            self.editor.solid_preview_sources.extend([solid.surface, solid.topography].into_iter().flatten());
+        }
         let displaying = super::solids_view::displaying_solid_artifacts(&self.editor);
         let running = self.planning_pipeline.as_ref().and_then(crate::app::planning_pipeline::PlanningPipeline::demand).is_some();
         if displaying || running {
@@ -465,10 +525,6 @@ impl crate::app::App<'_> {
         }
         // Setup owns the shared inspector UI state until View is revisited.
         self.solid_view_body_key = None;
-        self.editor.solid_preview_sources.clear();
-        if let Some(solid) = self.editor.planning_selected_solid.and_then(|id| self.workspace.active_document()?.solid(id)) {
-            self.editor.solid_preview_sources.extend([solid.surface, solid.topography].into_iter().flatten());
-        }
         // Off the steps that show it, the cached solid is left exactly as it is:
         // nothing is built, and nothing is thrown away, so coming back to a
         // solid whose surfaces have since been unloaded still shows it. It is
@@ -525,10 +581,9 @@ impl crate::app::App<'_> {
         {
             return;
         }
-        let previous = if self.solid_preview.as_ref().is_some_and(|preview| preview.key == key) {
-            self.solid_preview.as_mut().and_then(SolidPreview::take_mesh)
-        } else {
-            None
+        let (previous, carried) = match self.solid_preview.as_mut().filter(|preview| preview.key == key) {
+            Some(preview) => (preview.take_mesh(), preview.take_body()),
+            None => (None, CarriedBody::default()),
         };
 
         // A surface whose geometry has been evicted is fetched back rather
@@ -536,20 +591,13 @@ impl crate::app::App<'_> {
         // viewport draws, and has nothing to say about whether this page can
         // show the solid built from it.
         if self.request_solid_input_restore(key, available) {
-            self.solid_preview = Some(SolidPreview {
-                key,
-                built_from: available,
-                status: SolidPreviewStatus::WaitingForInputs { previous },
-                body: Vec::new(),
-                bands: Vec::new(),
-                body_key: None,
-            });
+            self.solid_preview = Some(SolidPreview::carrying(key, available, SolidPreviewStatus::WaitingForInputs { previous }, carried));
             return;
         }
 
         match (key.surface.zip(available.surface), key.topography.zip(available.topography)) {
             // Both surfaces on hand: build the volume between them.
-            (Some((surface, _)), Some((topography, _))) => self.spawn_solid_preview_build(key, available, key.kind, surface, topography, previous),
+            (Some((surface, _)), Some((topography, _))) => self.spawn_solid_preview_build(key, available, key.kind, surface, topography, previous, carried),
             // One of them: show it as it is. There is no volume to enclose
             // with a single sheet, and none is claimed for it.
             (Some((id, _)), None) | (None, Some((id, _))) => {
@@ -568,17 +616,11 @@ impl crate::app::App<'_> {
                     source.color,
                     source.line_color,
                 );
-                self.solid_preview = Some(SolidPreview {
-                    key,
-                    built_from: available,
-                    status: SolidPreviewStatus::Ready {
-                        mesh: Box::new(mesh),
-                        volume: None,
-                    },
-                    body: Vec::new(),
-                    bands: Vec::new(),
-                    body_key: None,
-                });
+                let status = SolidPreviewStatus::Ready {
+                    mesh: Box::new(mesh),
+                    volume: None,
+                };
+                self.solid_preview = Some(SolidPreview::carrying(key, available, status, carried));
             }
             // No geometry to build from, none coming, and nothing built
             // earlier for this solid.
@@ -665,6 +707,7 @@ impl crate::app::App<'_> {
         surface_id: TriangulationId,
         topography_id: TriangulationId,
         previous: Option<Box<OpenTriangulation>>,
+        carried: CarriedBody,
     ) {
         let Some(surface) = self.triangulations.iter().find(|item| item.id == surface_id) else {
             self.solid_preview = None;
@@ -689,14 +732,7 @@ impl crate::app::App<'_> {
         let surface_mesh = surface.mesh.clone();
         let topography_mesh = topography.mesh.clone();
 
-        self.solid_preview = Some(SolidPreview {
-            key,
-            built_from,
-            status: SolidPreviewStatus::Building { previous },
-            body: Vec::new(),
-            bands: Vec::new(),
-            body_key: None,
-        });
+        self.solid_preview = Some(SolidPreview::carrying(key, built_from, SolidPreviewStatus::Building { previous }, carried));
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag,
                             progress: &crate::model::progress::Progress|
@@ -735,14 +771,11 @@ impl crate::app::App<'_> {
                 },
                 Err(error) => SolidPreviewStatus::Failed(format!("{error:#}")),
             };
-            app.solid_preview = Some(SolidPreview {
-                key,
-                built_from,
-                status,
-                body: Vec::new(),
-                bands: Vec::new(),
-                body_key: None,
-            });
+            // The outgoing cut stays on screen until the incoming mesh has
+            // been cut in its turn: `body_key` names the mesh it came from, so
+            // the arrival of a different one is what replaces it.
+            let carried = app.solid_preview.as_mut().map(SolidPreview::take_body).unwrap_or_default();
+            app.solid_preview = Some(SolidPreview::carrying(key, built_from, status, carried));
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Building solid preview…"),

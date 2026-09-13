@@ -12,8 +12,10 @@
 //! rather than in the UI, so a command that arrives from anywhere - a dialog,
 //! a replayed undo, a future script - is checked the same way.
 
+pub(crate) mod dispatch;
 pub(crate) mod sequence;
 
+pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchSchedule};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*
@@ -49,13 +51,52 @@ pub(crate) struct LoaderAgentId(pub(crate) u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct BarId(pub(crate) u64);
 
-/// One authored bar on the Gantt: a named dig order, the machine asked to
-/// work it, the lane it competes in, and the soonest it may begin.
+/// The period a bar is allowed to be worked in.
 ///
-/// A bar carries no duration. Its drawn length is the execution the dispatch
-/// evaluator calculates from this bar's tonnes and its loader's rate, so
-/// dragging or resizing one cannot change what it holds - the position *is*
-/// the earliest start and nothing else.
+/// Start-inclusive and end-exclusive: a bar is eligible at `start_h` and not
+/// at `end_h`, which is what stops a bar that ends where another begins from
+/// being worked twice at the boundary instant.
+///
+/// An absent `end_h` is open-ended - the bar is available from `start_h`
+/// onwards. It is not a very large number: "until the work runs out" and
+/// "until Tuesday" are different statements, and only one of them survives a
+/// change of horizon.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkWindow {
+    pub(crate) start_h: f64,
+    #[serde(default)]
+    pub(crate) end_h: Option<f64>,
+}
+
+impl Default for WorkWindow {
+    fn default() -> Self {
+        Self { start_h: 0.0, end_h: None }
+    }
+}
+
+impl WorkWindow {
+    /// Whether this is a window at all: a finite, non-negative start, and an
+    /// end that is finite and strictly after it. Checked at the command
+    /// boundary and again on load, never clamped into shape.
+    pub(crate) fn is_valid(self) -> bool {
+        self.start_h.is_finite() && self.start_h >= 0.0 && self.end_h.is_none_or(|end| end.is_finite() && end > self.start_h)
+    }
+
+    /// Start-inclusive, end-exclusive.
+    pub(crate) fn contains(self, hour: f64) -> bool {
+        hour >= self.start_h && self.end_h.is_none_or(|end| hour < end)
+    }
+}
+
+/// One authored bar on the Gantt: a named dig order, the machine asked to
+/// work it, the lane it competes in, and the period it may be worked in.
+///
+/// A bar carries no duration of its own work. Its window is the period a
+/// loader is *allowed* to work it; what is actually executed in that period
+/// is the evaluator's answer, drawn as a separate indicator, and a bar whose
+/// work outlasts its window simply leaves the rest in the ground for a later
+/// bar to take.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ScheduleBar {
@@ -68,14 +109,15 @@ pub(crate) struct ScheduleBar {
     /// unassigns its bars rather than taking their work out of the project.
     #[serde(default)]
     pub(crate) agent: Option<LoaderAgentId>,
-    /// Lane within that loader. Lower is higher priority; ties break on
-    /// `earliest_start_h` and then `id`, so the order is never arbitrary.
+    /// Lane within that loader. Lower is higher priority; ties break on the
+    /// window's start and then `id`, so the order is never arbitrary.
     #[serde(default)]
     pub(crate) priority: u32,
-    /// Earliest start, in hours from the schedule origin. This *is* the bar's
-    /// position on the Gantt: dragging it is how the user sets it.
+    /// The period this bar may be worked in, in hours from the schedule
+    /// origin. This *is* the bar's extent on the Gantt: dragging it moves the
+    /// window and dragging an edge resizes it.
     #[serde(default)]
-    pub(crate) earliest_start_h: f64,
+    pub(crate) window: WorkWindow,
 }
 
 impl ScheduleBar {
@@ -145,7 +187,9 @@ pub(crate) enum ScheduleError {
     /// An earliest start that is not a finite number of hours at or after the
     /// schedule origin. Refused rather than clamped: a bar that silently
     /// moved to hour zero would be scheduled against a time nobody chose.
-    InvalidEarliestStart,
+    /// A window that is not one: a start that is negative or not finite, or
+    /// an end that is not finite or does not come after its start.
+    InvalidWindow,
     /// A stored reference whose numbers could not describe any ground.
     MalformedReference,
 }
@@ -165,7 +209,7 @@ impl ScheduleError {
             Self::UnknownMember => tr!("schedule-error-unknown-member"),
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
-            Self::InvalidEarliestStart => tr!("schedule-error-invalid-earliest-start"),
+            Self::InvalidWindow => tr!("schedule-error-invalid-window"),
         }
     }
 }
@@ -458,7 +502,7 @@ impl SchedulePlan {
     /// is created by right-clicking a place on the timeline: adding it at the
     /// origin instead would put new work somewhere the user is not looking,
     /// and moving it back would be a second undo step.
-    pub(crate) fn add_bar(&mut self, name: &str, agent: Option<LoaderAgentId>, priority: u32, earliest_start_h: f64) -> ScheduleResult<BarId> {
+    pub(crate) fn add_bar(&mut self, name: &str, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult<BarId> {
         let name = checked_name(name)?;
         if self.bar_name_taken(&name, None) {
             return Err(ScheduleError::DuplicateName(name));
@@ -466,8 +510,8 @@ impl SchedulePlan {
         if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
             return Err(ScheduleError::UnknownAgent);
         }
-        if !earliest_start_h.is_finite() || earliest_start_h < 0.0 {
-            return Err(ScheduleError::InvalidEarliestStart);
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
         }
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
@@ -475,7 +519,7 @@ impl SchedulePlan {
             order: DigOrder::new(name),
             agent,
             priority,
-            earliest_start_h,
+            window,
         });
         Ok(id)
     }
@@ -546,13 +590,19 @@ impl SchedulePlan {
         Ok(())
     }
 
-    /// Set the soonest a bar may begin, in hours from the schedule origin.
-    pub(crate) fn set_bar_earliest_start(&mut self, id: BarId, hours: f64) -> ScheduleResult {
-        if !hours.is_finite() || hours < 0.0 {
-            return Err(ScheduleError::InvalidEarliestStart);
+    /// Set the period a bar may be worked in, in hours from the schedule
+    /// origin.
+    ///
+    /// Refused rather than clamped: an end at or before its start, or either
+    /// bound not finite, is a window that says nothing, and quietly widening
+    /// one into something workable would schedule work the user never asked
+    /// for.
+    pub(crate) fn set_bar_window(&mut self, id: BarId, window: WorkWindow) -> ScheduleResult {
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
         }
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
-        bar.earliest_start_h = hours;
+        bar.window = window;
         Ok(())
     }
 
@@ -642,8 +692,8 @@ impl SchedulePlan {
             if bar.agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
                 return Err(ScheduleError::UnknownAgent);
             }
-            if !bar.earliest_start_h.is_finite() || bar.earliest_start_h < 0.0 {
-                return Err(ScheduleError::InvalidEarliestStart);
+            if !bar.window.is_valid() {
+                return Err(ScheduleError::InvalidWindow);
             }
             bar.order.check_loaded()?;
         }
@@ -688,13 +738,18 @@ impl SchedulePlan {
             bar.order.name.hash(hasher);
             bar.agent.hash(hasher);
             bar.priority.hash(hasher);
-            bar.earliest_start_h.to_bits().hash(hasher);
+            bar.window.start_h.to_bits().hash(hasher);
+            bar.window.end_h.map(f64::to_bits).hash(hasher);
             for member in bar.members() {
                 member.solid.hash(hasher);
+                member.source.hash(hasher);
                 member.flitch_base.to_bits().hash(hasher);
+                member.flitch_top.to_bits().hash(hasher);
                 member.anchor[0].to_bits().hash(hasher);
                 member.anchor[1].to_bits().hash(hasher);
                 member.plan_area.to_bits().hash(hasher);
+                member.footprint.hash(hasher);
+                member.volume.map(f64::to_bits).hash(hasher);
             }
         }
     }

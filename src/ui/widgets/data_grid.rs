@@ -14,6 +14,9 @@ const TITLE_STRIP: f32 = 38.0;
 const GUTTER: f32 = 24.0;
 /// Fraction of a [`PropertyTable`] row given to the key column.
 const KEY_FRACTION: f32 = 0.54;
+/// Indent given to a row that describes the row above it rather than
+/// standing on its own.
+const SUB_INDENT: f32 = 18.0;
 
 fn grid_row_height(ui: &egui::Ui) -> f32 {
     row_height(ui) + 3.0
@@ -131,7 +134,7 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
     response
 }
 
-/// One cell of a [`grid_number_row`]: an editable number, a number shown but
+/// The value in a [`grid_value_row`]: an editable number, a number shown but
 /// not editable here, or nothing at all.
 pub(crate) enum GridNumber<'a> {
     Edit(&'a mut f64),
@@ -141,146 +144,152 @@ pub(crate) enum GridNumber<'a> {
     Blank,
 }
 
-/// A two-column row of numbers, for the paired lists that describe a plan by
-/// elevation: an RL on the left and the height that applies below it on the
-/// right.
+/// The frame every named row shares: the fill, the rules and the name, with
+/// the cell its control goes in handed back.
 ///
-/// `error` paints the right-hand cell in the error colour, which is how a
-/// flitch height that does not divide its bench is reported.
-pub(crate) fn grid_number_row(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    cells: [GridNumber<'_>; 2],
-    error: Option<&str>,
-    selected: bool,
-) -> (egui::Response, bool) {
+/// `depth` marks a row as belonging to the one above it - a bench height
+/// under the RL it starts at, a pattern under the flitch it styles - which is
+/// the whole of how these lists show their nesting.
+fn grid_named_row(ui: &mut egui::Ui, label: &str, depth: usize) -> (egui::Rect, egui::Response) {
     let height = grid_row_height(ui);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
-    let visuals = ui.visuals();
-    let fill = if selected {
-        visuals.selection.bg_fill
-    } else if response.hovered() {
-        visuals.widgets.hovered.bg_fill
-    } else {
-        super::tree_row_colors(ui).1
+    let (fill, stroke, label_color) = {
+        let visuals = ui.visuals();
+        let fill = if response.hovered() {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            super::tree_row_colors(ui).1
+        };
+        let color = if depth > 0 { visuals.weak_text_color() } else { visuals.text_color() };
+        (fill, visuals.widgets.noninteractive.bg_stroke, color)
     };
-    let stroke = visuals.widgets.noninteractive.bg_stroke;
-    let split = rect.left() + rect.width() * 0.5;
+    let split = rect.left() + rect.width() * KEY_FRACTION;
     ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().line_segment([egui::pos2(split, rect.top()), egui::pos2(split, rect.bottom())], stroke);
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
 
-    let mut changed = false;
-    let id = egui::Id::new(id);
-    for (index, cell) in cells.into_iter().enumerate() {
-        let cell_rect = if index == 0 {
-            egui::Rect::from_min_max(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::pos2(split - 4.0, rect.bottom() - 2.0))
-        } else {
-            egui::Rect::from_min_max(egui::pos2(split + 4.0, rect.top() + 2.0), egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0))
-        };
-        if !cell_rect.is_positive() {
-            continue;
-        }
-        match cell {
-            GridNumber::Blank => {}
-            GridNumber::Fixed(value) => {
-                let text = egui::RichText::new(format!("{value:.2}")).color(ui.visuals().weak_text_color());
-                ui.put(cell_rect, egui::Label::new(text).truncate().halign(egui::Align::Min));
-            }
-            GridNumber::Edit(value) => {
-                let color = if index == 1 && error.is_some() { Some(ui.visuals().error_fg_color) } else { None };
-                let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with(index)).max_rect(cell_rect));
-                if let Some(color) = color {
-                    child.visuals_mut().override_text_color = Some(color);
-                }
-                let field = child.put(cell_rect, egui::DragValue::new(value).speed(0.5).max_decimals(3));
-                changed |= field.changed();
-                if let Some(message) = error {
-                    field.on_hover_text(message);
-                }
-            }
-        }
-    }
-    (response, changed)
-}
-
-/// A row naming a sub-item of the row above it, with the swatches and choice
-/// that style it: a flitch position within a bench, in the flitching list.
-///
-/// Returns whether anything was changed.
-pub(crate) fn grid_style_row(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    label: &str,
-    color: &mut [f32; 4],
-    pattern_color: &mut [f32; 4],
-    pattern: &mut crate::model::FillStyle,
-    pattern_label: impl Fn(crate::model::FillStyle) -> String,
-) -> bool {
-    let height = grid_row_height(ui);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
-    let (fill, rule, label_color) = {
-        let visuals = ui.visuals();
-        (super::tree_row_colors(ui).1, visuals.widgets.noninteractive.bg_stroke, visuals.weak_text_color())
-    };
-    ui.painter().rect_filled(rect, 0.0, fill);
-    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);
-
-    // The controls are laid out from the right so the name keeps whatever is
-    // left, and the row still reads at a narrow column width.
-    const SWATCH: f32 = 26.0;
-    const PATTERN: f32 = 78.0;
-    let mut changed = false;
-    let id = egui::Id::new(id);
-    let mut right = rect.right() - 4.0;
-    let cell = |width: f32, right: &mut f32| {
-        let cell = egui::Rect::from_min_max(egui::pos2(*right - width, rect.top() + 2.0), egui::pos2(*right, rect.bottom() - 2.0));
-        *right -= width + 4.0;
-        cell
-    };
-    let pattern_color_rect = cell(SWATCH, &mut right);
-    let pattern_rect = cell(PATTERN, &mut right);
-    let color_rect = cell(SWATCH, &mut right);
-
-    for (index, (rect, value)) in [(color_rect, &mut *color), (pattern_color_rect, &mut *pattern_color)].into_iter().enumerate() {
-        if rect.is_positive() {
-            changed |= ui
-                .scope_builder(egui::UiBuilder::new().id_salt(id.with(("swatch", index))).max_rect(rect), |ui| {
-                    ui.spacing_mut().interact_size.y = rect.height();
-                    crate::ui::widgets::color::edit_rgba_premultiplied(ui, value)
-                })
-                .inner
-                .changed();
-        }
-    }
-    if pattern_rect.is_positive() {
-        let selected = pattern_label(*pattern);
-        changed |= ui
-            .scope_builder(egui::UiBuilder::new().id_salt(id.with("pattern")).max_rect(pattern_rect), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(pattern_rect));
-                ui.spacing_mut().interact_size.y = pattern_rect.height();
-                let mut picked = false;
-                egui::ComboBox::from_id_salt(id.with("pattern_combo"))
-                    .selected_text(selected)
-                    .width(pattern_rect.width())
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        for option in crate::model::FillStyle::ALL {
-                            picked |= ui.selectable_value(pattern, option, pattern_label(option)).changed();
-                        }
-                    });
-                picked
-            })
-            .inner;
-    }
-    let name_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 20.0, rect.top()), egui::pos2(right.max(rect.left() + 20.0), rect.bottom()));
+    let left = rect.left() + 8.0 + SUB_INDENT * depth as f32;
+    let name_rect = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2((split - 4.0).max(left), rect.bottom()));
     if name_rect.is_positive() {
         ui.put(
             name_rect,
             egui::Label::new(egui::RichText::new(label).color(label_color)).truncate().halign(egui::Align::Min),
         );
     }
-    changed
+    let cell = egui::Rect::from_min_max(egui::pos2(split + 4.0, rect.top() + 2.0), egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0));
+    (cell, response)
+}
+
+/// One named value with its unit: an RL, a bench height, a flitch height.
+///
+/// The unit rides on the value rather than on a column heading because these
+/// lists interleave elevations and heights, and as bare numbers the two read
+/// exactly alike. `error` puts the value in the error colour and hangs the
+/// reason off it.
+pub(crate) fn grid_value_row(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    value: GridNumber<'_>,
+    unit: &str,
+    depth: usize,
+    error: Option<&str>,
+) -> (egui::Response, bool) {
+    let (cell, response) = grid_named_row(ui, label, depth);
+    let mut changed = false;
+    if !cell.is_positive() {
+        return (response, changed);
+    }
+    let id = egui::Id::new(id);
+    match value {
+        GridNumber::Blank => {}
+        GridNumber::Fixed(value) => {
+            let text = egui::RichText::new(format!("{value:.2} {unit}")).color(ui.visuals().weak_text_color());
+            ui.put(cell, egui::Label::new(text).truncate().halign(egui::Align::Min));
+        }
+        GridNumber::Edit(value) => {
+            let error_color = ui.visuals().error_fg_color;
+            let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(cell));
+            if error.is_some() {
+                child.visuals_mut().override_text_color = Some(error_color);
+            }
+            let field = child.put(cell, egui::DragValue::new(value).speed(0.5).max_decimals(3).suffix(format!(" {unit}")));
+            changed = field.changed();
+            if let Some(message) = error {
+                field.on_hover_text(message);
+            }
+        }
+    }
+    (response, changed)
+}
+
+/// One named colour swatch.
+pub(crate) fn grid_color_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, value: &mut [f32; 4], depth: usize) -> bool {
+    let (cell, _) = grid_named_row(ui, label, depth);
+    if !cell.is_positive() {
+        return false;
+    }
+    let swatch = egui::Rect::from_min_max(cell.min, egui::pos2((cell.left() + 34.0).min(cell.right()), cell.bottom()));
+    ui.scope_builder(egui::UiBuilder::new().id_salt(egui::Id::new(id)).max_rect(swatch), |ui| {
+        ui.spacing_mut().interact_size.y = swatch.height();
+        crate::ui::widgets::color::edit_rgba_premultiplied(ui, value)
+    })
+    .inner
+    .changed()
+}
+
+/// One named choice from a fixed set of options.
+pub(crate) fn grid_choice_row<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    value: &mut T,
+    options: impl IntoIterator<Item = T>,
+    option_label: impl Fn(T) -> String,
+    depth: usize,
+) -> bool {
+    let (cell, _) = grid_named_row(ui, label, depth);
+    if !cell.is_positive() {
+        return false;
+    }
+    let id = egui::Id::new(id);
+    let selected = option_label(*value);
+    ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(cell));
+        ui.spacing_mut().interact_size.y = cell.height();
+        let mut picked = false;
+        egui::ComboBox::from_id_salt(id.with("combo"))
+            .selected_text(selected)
+            .width(cell.width())
+            .truncate()
+            .show_ui(ui, |ui| {
+                for option in options {
+                    picked |= ui.selectable_value(value, option, option_label(option)).changed();
+                }
+            });
+        picked
+    })
+    .inner
+}
+
+/// A captioned rule inside a grid, marking off the group of rows beneath it:
+/// the flitching list's styling options from the heights they style.
+pub(crate) fn grid_separator_row(ui: &mut egui::Ui, label: &str, depth: usize) {
+    let height = grid_row_height(ui);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let (fill, rule, color) = {
+        let visuals = ui.visuals();
+        (visuals.widgets.noninteractive.bg_fill, visuals.widgets.noninteractive.bg_stroke, visuals.weak_text_color())
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);
+    let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0 + SUB_INDENT * depth as f32, rect.top()), rect.max);
+    if text_rect.is_positive() {
+        ui.put(
+            text_rect,
+            egui::Label::new(egui::RichText::new(label).color(color).small()).truncate().halign(egui::Align::Min),
+        );
+    }
 }
 
 /// A titled, bordered pane holding a scrollable column of [`grid_row`]s.
