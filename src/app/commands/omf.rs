@@ -343,7 +343,10 @@ impl<'a> App<'a> {
                 let source_crs = coordinate_reference_system.trim();
                 if target_is_empty && target_crs.is_empty() {
                     project.project.metadata.coordinate_reference_system = coordinate_reference_system.clone();
-                } else if !target_crs.is_empty() && !source_crs.is_empty() && target_crs != source_crs {
+                } else if !target_crs.is_empty()
+                    && !source_crs.is_empty()
+                    && crate::model::crs::CoordinateSystem::parse_stored(target_crs) != crate::model::crs::CoordinateSystem::parse_stored(source_crs)
+                {
                     userspace_warn!(
                         "{}",
                         tr_format!(

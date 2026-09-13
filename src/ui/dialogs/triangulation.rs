@@ -673,7 +673,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
             ui.add_space(4.0);
 
-            MenuField::new(tr!(literal = "Z range"))
+            MenuField::new(tr_format!(literal = "%axis% range", axis = crate::model::survey::axis_name(2)))
                 .help_text(tr!(literal = "Minimum and maximum elevations retained in the output surface. The minimum \
                      must be below the maximum."))
                 .show(ui, |ui, row_height, _| {

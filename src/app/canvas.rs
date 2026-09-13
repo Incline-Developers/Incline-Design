@@ -439,6 +439,21 @@ impl<'a> App<'a> {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
                 }
+                // A drape has no geometry of its own - it is painted onto the
+                // surface - so the click that lands on the surface lands on
+                // both. Following what the surface ended up doing covers every
+                // selection mode at once: the raster joins a surface that was
+                // just selected and leaves one that was just dropped.
+                if let SceneEntityId::Triangulation(id) = handle
+                    && let Some(draped) = self.triangulations.iter().find(|item| item.id == id).and_then(|item| item.raster_texture)
+                {
+                    let draped = SceneEntityId::Raster(draped);
+                    if self.editor.selected_handles.contains(&handle) {
+                        self.editor.selected_handles.insert(draped);
+                    } else {
+                        self.editor.selected_handles.remove(&draped);
+                    }
+                }
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
                     _ => None,
@@ -492,6 +507,9 @@ impl<'a> App<'a> {
             SceneEntityId::BlockModel(_) => !objects_only,
             SceneEntityId::DrillHole(_) => !objects_only,
             SceneEntityId::PointCloud(_) => !objects_only,
+            // Nothing to enclose: a raster is painted onto a surface rather
+            // than occupying the scene, so a marquee never produces one.
+            SceneEntityId::Raster(_) => false,
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {

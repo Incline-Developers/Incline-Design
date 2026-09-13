@@ -44,6 +44,8 @@ lyon = "1.0.19"
 #mineflow = { path = "crates/mineflow" } # Crate is ready to be implemented
 omf = { git = "https://github.com/Incline-Developers/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
 png = "0.18.1"
+proj4rs = { version = "0.2.0", default-features = false, features = ["crs-definitions"] }
+crs-definitions = "0.5.0"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 robust = "1.2.0"
