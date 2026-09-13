@@ -140,12 +140,12 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 let coord_width = coord_field_width(ui);
                 match editor.cursor_world {
                     Some(p) => {
-                        for (axis, value) in [(tr!(literal = "X"), p.x), (tr!(literal = "Y"), p.y), (tr!(literal = "Z"), p.z)] {
+                        for (axis, value) in crate::model::survey::axis_names().into_iter().zip([p.x, p.y, p.z]) {
                             coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
                         }
                     }
                     None => {
-                        for axis in [tr!(literal = "X"), tr!(literal = "Y"), tr!(literal = "Z")] {
+                        for axis in crate::model::survey::axis_names() {
                             coord_field(ui, coord_width, format!("{axis}: --"));
                         }
                     }

@@ -10,7 +10,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
+            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -103,7 +103,7 @@ pub(crate) fn draw_selection_appearance(
         })
         .collect();
     objects.sort_by_key(|id| id.0);
-    let mut selected_types = [false; 7];
+    let mut selected_types = [false; 8];
     for handle in &editor.selected_handles {
         let kind = match handle {
             SceneEntityId::Object(id) => match document.get_object(*id) {
@@ -116,6 +116,7 @@ pub(crate) fn draw_selection_appearance(
             SceneEntityId::BlockModel(_) => 4,
             SceneEntityId::DrillHole(_) => 5,
             SceneEntityId::PointCloud(_) => 6,
+            SceneEntityId::Raster(_) => 7,
         };
         selected_types[kind] = true;
     }
@@ -249,15 +250,6 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
                 });
             });
         });
-}
-
-/// Whether a field's edit is finished, rather than mid-drag.
-///
-/// Preferences are written to the config file as they are applied, and object
-/// edits become undo entries, so a drag must land once rather than on every
-/// frame it moves.
-fn committed(response: &egui::Response) -> bool {
-    response.drag_stopped() || (response.changed() && !response.dragged())
 }
 
 /// Runs `add_fields` against the editor's preferences draft and applies it as

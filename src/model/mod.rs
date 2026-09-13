@@ -8,6 +8,7 @@ pub(crate) mod layer_residency;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
 pub(crate) mod block_model;
+pub(crate) mod crs;
 pub(crate) mod drill_hole;
 pub(crate) mod formats;
 pub(crate) mod geometry;
@@ -22,6 +23,7 @@ pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
 pub(crate) mod spatial;
+pub(crate) mod survey;
 pub(crate) mod triangulation;
 
 use std::collections::HashMap;
@@ -44,12 +46,20 @@ pub(crate) enum Axis {
 }
 
 impl Axis {
-    /// Single-letter name used in menus, dialog titles and console reports.
-    pub(crate) fn label(self) -> &'static str {
+    /// Name used in menus, dialog titles and console reports.
+    ///
+    /// X, Y and Z unless the chosen mine coordinate system renamed them: see
+    /// [`crate::model::survey::axis_name`].
+    pub(crate) fn label(self) -> String {
+        crate::model::survey::axis_name(self.index())
+    }
+
+    /// Position of this axis in a coordinate triple.
+    pub(crate) fn index(self) -> usize {
         match self {
-            Self::X => "X",
-            Self::Y => "Y",
-            Self::Z => "Z",
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
         }
     }
 }
@@ -62,6 +72,13 @@ pub(crate) enum SceneEntityId {
     BlockModel(block_model::BlockModelId),
     DrillHole(drill_hole::DrillHoleId),
     PointCloud(point_cloud::PointCloudId),
+    /// A georeferenced image. Unlike the others a raster has no geometry of
+    /// its own in the scene - it is painted onto whatever surface it is draped
+    /// over - so it is never the thing a viewport click hits. It is selected
+    /// from its explorer row, or alongside the surface wearing it when that
+    /// surface is picked. Everything downstream that works on a selection can
+    /// then reach it like any other entity.
+    Raster(raster::RasterTextureId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -768,6 +785,15 @@ impl Document {
         }
     }
 
+    pub(crate) fn set_layer_elevation(&mut self, id: LayerId, elevation: f32) {
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.elevation != elevation
+        {
+            layer.elevation = elevation;
+            self.touch();
+        }
+    }
+
     /// Set a layer's viewport visibility. Returns the new state, or `None`
     /// when the layer no longer exists.
     pub(crate) fn set_layer_loaded(&mut self, id: LayerId, loaded: bool) -> Option<bool> {
@@ -971,6 +997,7 @@ impl ItemRef {
             SceneEntityId::BlockModel(id) => Some(Self::BlockModel(id)),
             SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
             SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
+            SceneEntityId::Raster(id) => Some(Self::Raster(id)),
         }
     }
 }
@@ -1624,6 +1651,25 @@ pub(crate) enum Command {
         index: usize,
         added: Option<OpenItem>,
     },
+    /// Replace one project item's contents in place - what a coordinate
+    /// conversion does to a mesh - keeping its identity, name, style and
+    /// position in the explorer. The item is rewritten, not reissued: nothing
+    /// downstream that holds its id has to be told.
+    ///
+    /// `other` carries whichever version is *not* currently in the project, so
+    /// applying and reverting are the same swap and the history holds one
+    /// extra copy of the data rather than two.
+    #[serde(skip)]
+    ReplaceItem {
+        item: ItemRef,
+        other: Option<OpenItem>,
+    },
+    /// Set a design layer's elevation (undo restores the old one).
+    SetLayerElevation {
+        id: LayerId,
+        before: f32,
+        after: f32,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -1665,7 +1711,8 @@ impl Command {
                 Command::DeleteLayerSnapshot { layer, objects, .. } => {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
-                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } => 0,
+                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } | Command::SetLayerElevation { .. } => 0,
+                Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
@@ -1754,6 +1801,8 @@ impl Command {
             Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::SetInitiation { dataset, .. } => {
                 into.push(ItemRef::DrillHole(*dataset))
             }
+            // The swap lifts the resident version out, so it has to be there.
+            Self::ReplaceItem { item, .. } => into.push(*item),
             Self::Batch(commands) => {
                 for command in commands {
                     command.required_items(undo, into);
@@ -1768,7 +1817,11 @@ impl Command {
     fn touched_items(&self, into: &mut Vec<ItemRef>) {
         match self {
             Command::Archived { items, .. } => into.extend(items.iter().copied()),
-            Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::AddItem { item, .. } | Command::DeleteItem { item, .. } => {
+            Command::SetItemStyle { item, .. }
+            | Command::RenameItem { item, .. }
+            | Command::AddItem { item, .. }
+            | Command::DeleteItem { item, .. }
+            | Command::ReplaceItem { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
                 }
@@ -1791,7 +1844,29 @@ impl Command {
             | Command::AddLayerSnapshot { .. }
             | Command::DeleteLayerSnapshot { .. }
             | Command::SetLayerLoaded { .. }
+            | Command::SetLayerElevation { .. }
             | Command::SetObjectHidden { .. } => {}
+        }
+    }
+
+    /// Swap the resident version of an item for the one held in the command.
+    ///
+    /// Apply and revert are the same operation, which is what makes an
+    /// in-place rewrite exactly reversible however many times it is undone and
+    /// redone. The resident item is lifted first: if it has gone, the held
+    /// version goes straight back into the command rather than being dropped.
+    fn swap_item(item: ItemRef, other: &mut Option<OpenItem>, target: &mut EditTarget<'_>) {
+        let Some(replacement) = other.take() else { return };
+        match target.take_item(item) {
+            Some((index, resident)) => {
+                target.insert_item(index, replacement);
+                // `insert_item` deliberately preserves the epoch it restores,
+                // which is right for undoing a delete and wrong here: this is
+                // different content under the same identity, so it is dirty.
+                target.touch_item(item);
+                *other = Some(resident);
+            }
+            None => *other = Some(replacement),
         }
     }
 
@@ -1872,6 +1947,11 @@ impl Command {
                     *index = taken_index;
                     *removed = Some(taken);
                 }
+            }
+            Command::ReplaceItem { item, other } => Self::swap_item(*item, other, target),
+            Command::SetLayerElevation { id, after, .. } => {
+                target.document.set_layer_elevation(*id, *after);
+                target.effects.document_changed = true;
             }
         }
     }
@@ -1955,6 +2035,11 @@ impl Command {
                 if let Some(item) = removed.take() {
                     target.insert_item(*index, item);
                 }
+            }
+            Command::ReplaceItem { item, other } => Self::swap_item(*item, other, target),
+            Command::SetLayerElevation { id, before, .. } => {
+                target.document.set_layer_elevation(*id, *before);
+                target.effects.document_changed = true;
             }
         }
     }

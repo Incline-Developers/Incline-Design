@@ -1,7 +1,7 @@
 //! File, project, layer, viewport, and properties dialogs.
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     ui::{
         state::EditorState,
         widgets::{
@@ -21,11 +21,15 @@ pub(crate) fn draw_vertical_exaggeration_dialog(ui: &mut egui::Ui, editor: &mut 
         .show(ui.ctx(), |ui| {
             ui.label(tr!(literal = "Scales Z distances visually without changing stored coordinates."));
             ui.add_space(8.0);
-            let response = MenuFieldF64::new(tr!(literal = "Z scale ratio"), &mut editor.vertical_exaggeration_input, 0.1..=20.)
-                .max_decimals(1)
-                .speed(0.1)
-                .suffix(tr!(literal = "x"))
-                .show(ui);
+            let response = MenuFieldF64::new(
+                tr_format!(literal = "%axis% scale ratio", axis = crate::model::survey::axis_name(2)),
+                &mut editor.vertical_exaggeration_input,
+                0.1..=20.,
+            )
+            .max_decimals(1)
+            .speed(0.1)
+            .suffix(tr!(literal = "x"))
+            .show(ui);
             ui.add_space(10.0);
             let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));

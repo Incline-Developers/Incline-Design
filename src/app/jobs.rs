@@ -64,6 +64,7 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    Raster(crate::model::raster::RasterTextureId),
     Project {
         runtime_id: u32,
         document_revision: u64,
@@ -195,6 +196,7 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

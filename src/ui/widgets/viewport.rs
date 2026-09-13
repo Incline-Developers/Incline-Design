@@ -476,11 +476,11 @@ impl<'a> BlockModelProperties<'a> {
         let axis_label_width = 14.0;
         let gap = ui.spacing().item_spacing.x;
         let value_width = ((content_width - axis_label_width - gap * 2.0) * 0.5).max(48.0);
-        for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+        for (axis, label) in crate::model::survey::axis_names().into_iter().enumerate() {
             let extent = (upper[axis] - lower[axis]).abs();
             let speed = (extent / 500.0).max(0.001);
             ui.horizontal(|ui| {
-                ui.add_sized(egui::vec2(axis_label_width, 20.0), egui::Label::new(egui::RichText::new(label).strong()));
+                ui.add_sized(egui::vec2(axis_label_width, 20.0), egui::Label::new(egui::RichText::new(label.clone()).strong()));
                 changed |= ui
                     .add_sized(
                         egui::vec2(value_width, 20.0),
