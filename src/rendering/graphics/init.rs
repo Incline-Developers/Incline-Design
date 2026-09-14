@@ -1563,6 +1563,7 @@ impl<'a> Graphics<'a> {
             embedded_preview_scene_key: None,
             solid_preview: None,
             solid_preview_key: None,
+            solid_preview_framing: None,
             detached_preview_scene_key: None,
         })
     }

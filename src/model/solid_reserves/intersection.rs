@@ -11,6 +11,21 @@ use crate::{
 
 type Polyhedron = Vec<Vec<DVec3>>;
 
+/// Buffers reused across every block/triangle pair in one reserve run.
+///
+/// The column integral clips a fresh copy of the block against four planes per
+/// candidate triangle, and a block model puts millions of pairs through it.
+/// Held here, the working polyhedron and the clipper's own vectors are
+/// allocated once and overwritten in place; owned locally, they were six or
+/// more mallocs per triangle.
+#[derive(Default)]
+pub(super) struct Scratch {
+    stack: Vec<usize>,
+    poly: Polyhedron,
+    cap: Vec<DVec3>,
+    output: Vec<DVec3>,
+}
+
 pub(super) struct Block {
     center: DVec3,
     scale: f64,
@@ -61,13 +76,14 @@ impl Block {
         self.volume * self.scale * self.scale * self.scale
     }
 
-    pub(super) fn fraction(&self, piece: &super::ReservePiece, stack: &mut Vec<usize>, cancel: &CancelFlag) -> anyhow::Result<f64> {
+    pub(super) fn fraction(&self, piece: &super::ReservePiece, scratch: &mut Scratch, cancel: &CancelFlag) -> anyhow::Result<f64> {
         let bounds = piece.mesh.bounds();
         if self.max.x <= bounds.min.x || self.min.x >= bounds.max.x || self.max.y <= bounds.min.y || self.min.y >= bounds.max.y {
             return Ok(0.0);
         }
         let mut sum = 0.0;
         let mut correction = 0.0;
+        let Scratch { stack, poly, cap, output } = scratch;
         piece
             .spatial
             .for_each_xy_bounds_candidate_index_with_stack(self.min.truncate(), self.max.truncate(), stack, |index| {
@@ -84,20 +100,22 @@ impl Block {
                 if sign < 0.0 {
                     points.swap(1, 2);
                 }
-                let mut poly = self.faces.clone();
+                // Overwrites the retained face buffers rather than allocating
+                // a new set for every triangle.
+                poly.clone_from(&self.faces);
                 for i in 0..3 {
                     let a = points[i];
                     let edge = points[(i + 1) % 3] - a;
                     let outward = DVec3::new(edge.y, -edge.x, 0.0).normalize();
-                    clip(&mut poly, outward, outward.dot(a));
+                    clip(poly, outward, outward.dot(a), cap, output);
                     if poly.is_empty() {
                         return;
                     }
                 }
                 let roof = (normal * sign).normalize();
-                clip(&mut poly, roof, roof.dot(points[0]));
+                clip(poly, roof, roof.dot(points[0]), cap, output);
                 // Compensated summation limits cancellation between floor and roof.
-                let value = sign * polyhedron_volume(&poly) - correction;
+                let value = sign * polyhedron_volume(poly) - correction;
                 let next = sum + value;
                 correction = (next - sum) - value;
                 sum = next;
@@ -132,7 +150,7 @@ fn polyhedron_volume(faces: &Polyhedron) -> f64 {
 
 /// Keep n.p <= distance. Working near the block origin avoids mine-coordinate
 /// cancellation. Snap roundoff-sized plane distances consistently on all faces.
-fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64) {
+fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64, cap: &mut Vec<DVec3>, output: &mut Vec<DVec3>) {
     const EPS: f64 = 1e-12;
     let signed = |point: DVec3| {
         let d = normal.dot(point) - distance;
@@ -147,10 +165,11 @@ fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64) {
         faces.clear();
         return;
     }
-    let mut cap = Vec::<DVec3>::new();
+    cap.clear();
     let mut removed = false;
     for face in faces.iter_mut() {
-        let mut output = Vec::with_capacity(face.len() + 1);
+        output.clear();
+        output.reserve(face.len() + 1);
         for i in 0..face.len() {
             let a = face[i];
             let b = face[(i + 1) % face.len()];
@@ -169,14 +188,16 @@ fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64) {
                 cap.push(a);
             }
         }
-        *face = output;
+        // Swapped rather than assigned: the face takes the list just built and
+        // the scratch buffer inherits the face's allocation for the next one.
+        std::mem::swap(face, output);
     }
     faces.retain(|face| face.len() >= 3);
     if !removed || faces.is_empty() {
         return;
     }
-    let mut unique = Vec::<DVec3>::new();
-    for p in cap {
+    let mut unique = Vec::<DVec3>::with_capacity(cap.len());
+    for &p in cap.iter() {
         if !unique.iter().any(|q| p.distance_squared(*q) <= EPS * EPS) {
             unique.push(p);
         }
@@ -188,10 +209,24 @@ fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64) {
     let axis = if normal.x.abs() < 0.8 { DVec3::X } else { DVec3::Y };
     let u = normal.cross(axis).normalize();
     let v = normal.cross(u);
-    unique.sort_by(|a, b| {
-        let a = *a - center;
-        let b = *b - center;
-        a.dot(v).atan2(a.dot(u)).total_cmp(&b.dot(v).atan2(b.dot(u)))
-    });
+    unique.sort_by(|a, b| pseudo_angle(*a - center, u, v).total_cmp(&pseudo_angle(*b - center, u, v)));
     faces.push(unique);
+}
+
+/// Orders a direction in the cap plane exactly as `atan2` would, without the
+/// transcendental call.
+///
+/// Only the ordering of the cap's points matters - the angle itself is never
+/// read - and this rises strictly with the true angle across the same
+/// (-pi, pi] sweep, so the polygon comes out in the same rotation for a
+/// division and a few absolute values. `atan2` was the single most expensive
+/// thing in the whole reserve calculation.
+fn pseudo_angle(offset: DVec3, u: DVec3, v: DVec3) -> f64 {
+    let (x, y) = (offset.dot(u), offset.dot(v));
+    let sum = x.abs() + y.abs();
+    if sum == 0.0 {
+        return 0.0;
+    }
+    let quadrant = x / sum;
+    if y < 0.0 { quadrant - 1.0 } else { 1.0 - quadrant }
 }

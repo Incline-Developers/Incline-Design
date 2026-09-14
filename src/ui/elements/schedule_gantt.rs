@@ -51,9 +51,15 @@ use crate::{
 const HEADER_WIDTH: f32 = 200.0;
 /// Least height of one agent's row, which is what its name and class need.
 const ROW_HEIGHT: f32 = 34.0;
-/// Height of one priority lane inside a row. A row is as tall as its lanes
-/// need, and never shorter than [`ROW_HEIGHT`].
-const LANE_HEIGHT: f32 = 26.0;
+/// Breathing room between loader units, also serving as a clear drop slot
+/// while a sequence is moved vertically.
+const LOADER_GAP: f32 = 12.0;
+/// How close to the seam between two lanes a vertical drag has to come before
+/// it reads as asking for a lane of its own there rather than for one of the
+/// two. The gap between loader units falls inside this either side, so the
+/// space between two machines is a live target as well as the seams within
+/// one.
+const LANE_INSERT_ZONE: f32 = 9.0;
 /// Least width a bar is drawn at, whatever its window is worth on screen.
 /// A window of minutes at a month's zoom is still something to grab.
 const MIN_BAR_WIDTH: f32 = 18.0;
@@ -112,7 +118,7 @@ pub(crate) fn instant_label(seconds: f64) -> String {
 
 /// The Gantt page. Returns the rect it claimed, for the caller to round off
 /// as one chrome region.
-pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &crate::model::Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
     // Cloned rather than borrowed: the canvas takes `editor` mutably to hold
     // its drag and its selection. Every edit below is addressed to the project
     // this plan was read from, so one queued against a project that is closed
@@ -137,7 +143,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
         .rect;
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
-    crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
     rect
 }
 
@@ -188,6 +194,18 @@ impl Row {
         let top = body_top + self.top - scroll + lane.offset;
         egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, top + lane.height))
     }
+}
+
+/// Where a vertical drag would put a bar: whose row, which lane, and whether
+/// that lane exists yet.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Placement {
+    agent: Option<LoaderAgentId>,
+    priority: u32,
+    /// Whether `priority` names a lane to open rather than one to join. A bar
+    /// let go on the seam between two lanes is asking for a lane of its own
+    /// between them, which is the only way to make one from the Gantt.
+    insert: bool,
 }
 
 /// Where one bar's window sits along the timeline.
@@ -252,7 +270,10 @@ impl Layout {
 /// Measure every bar's marker once, for the layout and the drawing both, so
 /// the rectangle that is packed is the rectangle that is painted and hit.
 fn layout_markers(ui: &egui::Ui, editor: &EditorState, plan: &SchedulePlan, body: egui::Rect) -> Vec<Marker> {
-    let font = egui::TextStyle::Small.resolve(ui.style());
+    // Body rather than Small throughout the timeline: a bar's name, the day
+    // under a tick and a lane's number are the page's content, not its
+    // footnotes, and a marker nobody can read names nothing.
+    let font = egui::TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().strong_text_color();
     let view = editor.gantt;
     plan.bars()
@@ -377,7 +398,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
             if lane.stacks.is_empty() {
                 lane.stacks.push(Vec::new());
             }
-            lane.height = LANE_HEIGHT * lane.stacks.len() as f32;
+            lane.height = (plan.bar_height() + WORK_STRIP + 6.0) * lane.stacks.len() as f32;
             lanes_height += lane.height;
         }
         // A row is never shorter than a machine's name and its class need.
@@ -392,7 +413,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
         }
         row.height = offset.max(ROW_HEIGHT);
         row.top = top;
-        top += row.height;
+        top += row.height + LOADER_GAP;
     }
     rows
 }
@@ -497,11 +518,12 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
                 } else {
                     text.weak()
                 };
-                ui.add(egui::Label::new(text).truncate()).on_hover_text(tr_format!(
-                    literal = "%status%\n%note%",
-                    status = editor.schedule_run_status.clone(),
-                    note = tr!("schedule-gantt-inspect-note")
-                ));
+                // The status in full, for when the bar is too narrow to hold
+                // it. Nothing else: a tooltip that explains the page rather
+                // than finishing the sentence under the pointer is a tutorial,
+                // and it is in the way of every reading of the status after
+                // the first.
+                ui.add(egui::Label::new(text).truncate()).on_hover_text(editor.schedule_run_status.clone());
             }
             if !editor.schedule_calculation_status.is_empty() {
                 ui.add_space(8.0);
@@ -588,7 +610,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // The lanes first and the bars over them, both after the canvas: a click
     // on a bar is a click on the bar rather than a pan of the timeline, and a
     // right-click on empty lane space is that lane's own menu.
-    draw_row_menus(ui, body, editor, plan, &layout.rows);
+    draw_row_menus(ui, body, editor, &layout.rows, session, commands);
     draw_bars(ui, body, editor, plan, &layout, session, commands, schedule.as_ref());
     // Idle is a row-level indicator and must remain visible even beneath an
     // authored bar that has no executable material, so paint it over the bar
@@ -635,7 +657,7 @@ fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64, d
                     egui::pos2(left + 6.0, rect.top() + RULER_BAND * 0.5),
                     egui::Align2::LEFT_CENTER,
                     tr!("gantt-day", day = day_of(start + 1.0).to_string()),
-                    egui::TextStyle::Small.resolve(ui.style()),
+                    egui::TextStyle::Body.resolve(ui.style()),
                     text_color,
                 );
             }
@@ -659,7 +681,7 @@ fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64, d
             egui::pos2(x + 4.0, minor_band.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::TextStyle::Small.resolve(ui.style()),
+            egui::TextStyle::Body.resolve(ui.style()),
             text_color,
         );
     }
@@ -704,8 +726,7 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         // still readable without widening the column.
         let width = (name_cell.width() - 16.0).max(0.0);
         let name = egui::WidgetText::from(bold(&row.title).color(text_color)).into_galley(ui, Some(egui::TextWrapMode::Truncate), width, egui::TextStyle::Body);
-        let detail =
-            egui::WidgetText::from(egui::RichText::new(&row.subtitle).small().color(weak)).into_galley(ui, Some(egui::TextWrapMode::Truncate), width, egui::TextStyle::Small);
+        let detail = egui::WidgetText::from(egui::RichText::new(&row.subtitle).color(weak)).into_galley(ui, Some(egui::TextWrapMode::Truncate), width, egui::TextStyle::Body);
         let painter = ui.painter_at(header);
         painter.galley(egui::pos2(name_cell.left() + 8.0, name_cell.top() + 4.0), name, text_color);
         painter.galley(egui::pos2(name_cell.left() + 8.0, name_cell.top() + 4.0 + ROW_HEIGHT * 0.45), detail, weak);
@@ -718,7 +739,7 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
                     egui::pos2(name_cell.right() - 6.0, top + lane.offset + lane.height * 0.5),
                     egui::Align2::RIGHT_CENTER,
                     label,
-                    egui::TextStyle::Small.resolve(ui.style()),
+                    egui::TextStyle::Body.resolve(ui.style()),
                     weak,
                 );
             }
@@ -734,19 +755,26 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
     }
 }
 
-/// What one bar's marker says: its name, its tonnes once they can be stated,
-/// and how many dig blocks it holds.
+/// The label a bar carries wherever it is named, for callers that hold the
+/// editor rather than the bar's own report. One rule in one place: the Gantt
+/// marker, the sequence editor's title and its discard prompt cannot end up
+/// calling the same bar three different things.
+pub(crate) fn bar_display_name(editor: &EditorState, bar: &ScheduleBar) -> String {
+    bar_label(bar, editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id))
+}
+
+/// What one bar's marker says.
 ///
-/// Tonnes appear only when the readiness report produced a complete figure.
-/// A bar whose tonnage cannot be stated says how many blocks it holds instead
-/// - never a zero, and never a number carried over from an older run.
+/// A bar the user has named says that name and nothing else. An unnamed one
+/// borrows the ground-derived label the readiness report built from its
+/// members' pit, bench and blast. Neither carries tonnes or a block count:
+/// the marker names the work, and the figures belong in the hover.
 fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>) -> String {
-    let detail = match report.and_then(|report| report.tonnes) {
-        Some(tonnes) => tr_format!(literal = "%tonnes% %unit%", tonnes = tonnes.to_string(), unit = tr!(literal = "t")),
-        None if bar.members().is_empty() => tr!("schedule-bar-empty"),
-        None => tr!("schedule-bar-blocks", count = bar.members().len().to_string()),
-    };
-    tr_format!(literal = "%name% · %detail%", name = bar.name().to_owned(), detail = detail)
+    if bar.has_custom_name() {
+        bar.name().to_owned()
+    } else {
+        report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!(literal = "Dig sequence"))
+    }
 }
 
 /// Everything the bar's hover says: what it is, the period it may be worked
@@ -845,7 +873,7 @@ fn execution_tooltip(segment: &crate::model::schedule::dispatch::ExecutionSegmen
         tr_format!(
             literal = "%kind% — %bar%",
             kind = tr!("schedule-dispatch-execution"),
-            bar = plan.bar(segment.bar).map(|bar| bar.name().to_owned()).unwrap_or_default()
+            bar = plan.bar(segment.bar).map(|bar| bar_label(bar, None)).unwrap_or_default()
         ),
         tr_format!(
             literal = "%from% → %to%",
@@ -974,6 +1002,77 @@ fn drag_mode_at(pointer_x: f32, left: f32, right: f32, bounded: bool) -> GanttDr
     }
 }
 
+/// What a vertical drag at `pointer_y` is pointing at.
+///
+/// The seams are read before the lanes themselves. Lanes sit flush against one
+/// another, so without that a pointer between two of them always lands in one
+/// of the two and a new lane could never be asked for at all - which is
+/// exactly what it looked like from the Gantt.
+fn placement_at(pointer_y: f32, body: egui::Rect, scroll: f32, rows: &[Row]) -> Option<Placement> {
+    let row = rows.iter().min_by(|left, right| {
+        let distance = |row: &Row| {
+            let top = body.top() + row.top - scroll;
+            if pointer_y < top {
+                top - pointer_y
+            } else if pointer_y > top + row.height {
+                pointer_y - top - row.height
+            } else {
+                0.0
+            }
+        };
+        distance(left).total_cmp(&distance(right))
+    })?;
+    let row_top = body.top() + row.top - scroll;
+    let local = (pointer_y - row_top).clamp(0.0, row.height);
+    let insert = |priority: u32| {
+        Some(Placement {
+            agent: row.agent,
+            priority,
+            insert: true,
+        })
+    };
+    let first = row.lanes.first().expect("every row has a lane");
+    let last = row.lanes.last().expect("every row has a lane");
+    if local <= LANE_INSERT_ZONE {
+        return insert(first.priority);
+    }
+    if local >= last.offset + last.height - LANE_INSERT_ZONE {
+        // One lane further out than the row's last: nothing has to move for
+        // this one, whatever `insert_lane` then finds at or below it.
+        return insert(last.priority.saturating_add(1));
+    }
+    if let Some(seam) = row.lanes.iter().skip(1).find(|lane| (local - lane.offset).abs() <= LANE_INSERT_ZONE) {
+        return insert(seam.priority);
+    }
+    let lane = row
+        .lanes
+        .iter()
+        .min_by(|left, right| {
+            let centre = |lane: &Lane| lane.offset + lane.height * 0.5;
+            (local - centre(left)).abs().total_cmp(&(local - centre(right)).abs())
+        })
+        .expect("every row has a lane");
+    Some(Placement {
+        agent: row.agent,
+        priority: lane.priority,
+        insert: false,
+    })
+}
+
+/// Top of the slot a placement names, in screen points.
+///
+/// A lane that is only being asked for has no height of its own yet, so what
+/// comes back for one is the seam it would open at.
+fn placement_top(placement: Placement, body: egui::Rect, scroll: f32, rows: &[Row]) -> Option<f32> {
+    let row = rows.iter().find(|row| row.agent == placement.agent)?;
+    let top = body.top() + row.top - scroll;
+    match row.lanes.iter().find(|lane| lane.priority == placement.priority) {
+        Some(lane) => Some(top + lane.offset),
+        None if placement.insert => row.lanes.last().map(|lane| top + lane.offset + lane.height),
+        None => row.lanes.first().map(|lane| top + lane.offset),
+    }
+}
+
 /// The bars themselves: drawn with their calculated work, hit-tested, dragged,
 /// resized and right-clicked.
 #[allow(
@@ -1024,7 +1123,20 @@ fn draw_bars(
         let dt = ui.input(|input| input.stable_dt);
         let seconds = pointer.map(|pos| view.seconds_at(pos.x, body.left(), body.width()));
         match advance_drag(active, seconds, up, down, cancelled) {
-            DragStep::Continue(moved) => {
+            DragStep::Continue(mut moved) => {
+                // A vertical drag is a move in its own right: crossing into
+                // another lane counts as having moved even when the bar's
+                // time never changed, so the release commits the reassignment.
+                if moved.mode == GanttDragMode::Move
+                    && let Some(pos) = pointer
+                    && let Some(placement) = placement_at(pos.y, body, scroll, &layout.rows)
+                    && placement != previewed(moved)
+                {
+                    moved.preview_agent = placement.agent;
+                    moved.preview_priority = placement.priority;
+                    moved.preview_insert = placement.insert;
+                    moved.moved = true;
+                }
                 drag = Some(moved);
                 // Follow the pointer out past the edge instead of leaving a
                 // dead zone there: a bar can be dragged to a time the window
@@ -1038,12 +1150,39 @@ fn draw_bars(
                     }
                 }
             }
-            DragStep::Commit(finished) => {
+            DragStep::Commit(mut finished) => {
+                if finished.mode == GanttDragMode::Move
+                    && let Some(pos) = pointer
+                    && let Some(placement) = placement_at(pos.y, body, scroll, &layout.rows)
+                {
+                    finished.preview_agent = placement.agent;
+                    finished.preview_priority = placement.priority;
+                    finished.preview_insert = placement.insert;
+                }
                 drag = None;
                 released = Some(finished);
             }
             DragStep::Abandon => drag = None,
         }
+    }
+
+    if let Some(active) = drag.filter(|drag| drag.mode == GanttDragMode::Move)
+        && let Some(top) = placement_top(previewed(active), body, scroll, &layout.rows)
+    {
+        // A lane being joined is shown as the space the bar would occupy; a
+        // lane being opened has no space yet, so what is shown is the seam it
+        // would part - the space appears when the drag is let go.
+        let slot = if active.preview_insert {
+            egui::Rect::from_min_size(egui::pos2(body.left(), top - 1.5), egui::vec2(body.width(), 3.0))
+        } else {
+            egui::Rect::from_min_size(egui::pos2(body.left(), top), egui::vec2(body.width(), plan.bar_height() + WORK_STRIP + 6.0))
+        };
+        let fill = if active.preview_insert {
+            visuals.selection.stroke.color
+        } else {
+            visuals.selection.bg_fill.gamma_multiply(0.18)
+        };
+        painter.rect_filled(slot.intersect(body), GROUP_CORNER_RADIUS, fill);
     }
 
     for row in &layout.rows {
@@ -1075,12 +1214,14 @@ fn draw_bars(
                     if right < body.left() || left > body.right() {
                         continue;
                     }
-                    let slot_top = top + lane.offset + stack_height * stack as f32;
+                    let slot_top = match drag {
+                        Some(drag) if drag.bar == bar.id && drag.mode == GanttDragMode::Move => {
+                            placement_top(previewed(drag), body, scroll, &layout.rows).unwrap_or(top + lane.offset)
+                        }
+                        _ => top + lane.offset + stack_height * stack as f32,
+                    };
                     let strip = egui::Rect::from_min_max(egui::pos2(left, slot_top + 1.0), egui::pos2(right, slot_top + 1.0 + WORK_STRIP));
-                    let rect = egui::Rect::from_min_max(
-                        egui::pos2(left, strip.bottom() + 1.0),
-                        egui::pos2(right, (slot_top + stack_height - 3.0).max(strip.bottom() + 9.0)),
-                    );
+                    let rect = egui::Rect::from_min_size(egui::pos2(left, strip.bottom() + 1.0), egui::vec2(right - left, plan.bar_height()));
 
                     let response = ui.interact(rect.intersect(body), ui.id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
                     let is_selected = selected == Some(bar.id);
@@ -1170,6 +1311,11 @@ fn draw_bars(
                             grab_offset_seconds: view.seconds_at(pointer, body.left(), body.width()) - start_seconds,
                             preview_start_seconds: start_seconds,
                             preview_end_seconds: window.end_h.map(|end| end * GanttView::HOUR),
+                            from_agent: bar.agent,
+                            from_priority: bar.priority,
+                            preview_agent: bar.agent,
+                            preview_priority: bar.priority,
+                            preview_insert: false,
                             moved: false,
                         });
                     }
@@ -1181,13 +1327,15 @@ fn draw_bars(
                     {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                     }
-                    let menu_label = bar.name().to_owned();
+                    let menu_label = bar_label(bar, report);
                     context_menu_popup(&response, &menu_label, |ui| {
                         if ContextMenuAction::new(tr!("schedule-bar-edit-sequence")).show(ui).clicked() {
                             // Opening reads the bar and nothing else: the
                             // draft is editor state, and no geometry, run or
                             // pipeline demand is touched by opening a window.
                             open_editor = Some(crate::ui::state::SequenceDraft::open(session, bar.id, bar.members()));
+                            editor.solids_view_selection.clear();
+                            editor.selected_blast = None;
                             ui.close();
                         }
                         // Dragging an edge is quick and imprecise; a real
@@ -1199,10 +1347,7 @@ fn draw_bars(
                         }
                         if ContextMenuAction::new(tr!("schedule-rename-bar-action")).show(ui).clicked() {
                             open_dialog = Some(BarNameDialog {
-                                target: Some(bar.id),
-                                agent: bar.agent,
-                                priority: bar.priority,
-                                window: bar.window,
+                                target: bar.id,
                                 name: bar.name().to_owned(),
                             });
                             ui.close();
@@ -1275,13 +1420,18 @@ fn draw_bars(
     // never moved is a selection and commits nothing.
     if let Some(finished) = released
         && finished.moved
-        && (finished.preview_start_seconds, finished.preview_end_seconds) != (finished.from_start_seconds, finished.from_end_seconds)
+        && ((finished.preview_start_seconds, finished.preview_end_seconds) != (finished.from_start_seconds, finished.from_end_seconds)
+            || (finished.preview_agent, finished.preview_priority) != (finished.from_agent, finished.from_priority)
+            || finished.preview_insert)
     {
         commands.push(UiCommand::schedule(
             session,
-            ScheduleEdit::SetBarWindow {
+            ScheduleEdit::SetBarPlacement {
                 bar: finished.bar,
+                agent: finished.preview_agent,
+                priority: finished.preview_priority,
                 window: finished.preview_window(),
+                insert_lane: finished.preview_insert,
             },
         ));
     }
@@ -1298,18 +1448,26 @@ fn draw_bars(
     }
 }
 
+/// The placement a drag is currently previewing, as one value.
+fn previewed(drag: GanttDrag) -> Placement {
+    Placement {
+        agent: drag.preview_agent,
+        priority: drag.preview_priority,
+        insert: drag.preview_insert,
+    }
+}
+
 /// The empty space of each row: right-click it to add a bar to that machine,
 /// in that lane.
 ///
 /// Sensed after the bars, so a right-click that lands on a bar opens the bar's
 /// menu rather than this one.
-fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, rows: &[Row]) {
+fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
     if !body.is_positive() {
         return;
     }
     let scroll = editor.gantt.row_scroll;
     let view = editor.gantt;
-    let mut open_dialog = None;
     for (index, row) in rows.iter().enumerate() {
         let top = body.top() + row.top - scroll;
         if top + row.height < body.top() || top > body.bottom() {
@@ -1336,9 +1494,6 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
             let priority = row.lanes[lane].priority;
             context_menu_popup(&response, title, |ui| {
                 if ContextMenuAction::new(tr!("schedule-new-bar")).show(ui).clicked() {
-                    // Seeded as the dialog opens, not while it is on screen: a
-                    // name refilled every frame could never be cleared and
-                    // retyped.
                     // The new bar lands in the row, the lane and at the instant
                     // it was asked for, rather than unassigned at hour zero
                     // somewhere off screen: right-clicking a machine's lane at
@@ -1347,23 +1502,22 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                     // bar is something to resize, and a window with no end
                     // has no edge to take hold of.
                     let start_h = ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR;
-                    open_dialog = Some(BarNameDialog {
-                        target: None,
-                        agent: row.agent,
-                        priority,
-                        window: WorkWindow {
-                            start_h,
-                            end_h: Some(start_h + crate::app::schedule_run::PERIOD_H),
+                    commands.push(UiCommand::schedule(
+                        session,
+                        ScheduleEdit::AddBar {
+                            name: String::new(),
+                            agent: row.agent,
+                            priority,
+                            window: WorkWindow {
+                                start_h,
+                                end_h: Some(start_h + crate::app::schedule_run::PERIOD_H),
+                            },
                         },
-                        name: crate::ui::elements::schedule_setup::suggested_bar_name(plan),
-                    });
+                    ));
                     ui.close();
                 }
             });
         }
-    }
-    if let Some(dialog) = open_dialog {
-        editor.bar_name_dialog = Some(dialog);
     }
 }
 

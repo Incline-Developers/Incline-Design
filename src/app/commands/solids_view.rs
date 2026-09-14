@@ -685,12 +685,6 @@ pub(crate) struct DigBlockIdentity {
 }
 
 /// `amount` of the way from `color` towards `towards`, alpha untouched.
-/// What a block already dug at the order preview's position is tinted
-/// towards. Deliberately not transparency: a dug block is still there to be
-/// clicked, and still occludes the ones behind it, which is what makes the
-/// preview read as a pit being taken apart rather than as blocks vanishing.
-const DUG_BLOCK_COLOR: [f32; 4] = [0.32, 0.34, 0.38, 1.0];
-
 fn blended(color: [f32; 4], towards: [f32; 4], amount: f32) -> [f32; 4] {
     let mut blend = color;
     for (channel, target) in blend.iter_mut().zip(towards).take(3) {
@@ -838,7 +832,7 @@ fn next_view_id() -> TriangulationId {
 /// [`crate::app::App::sync_solids_view`] is the pipeline's own demand, and
 /// only a running stage sets that.
 pub(crate) fn displaying_solid_artifacts(editor: &crate::ui::state::EditorState) -> bool {
-    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active()
+    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active() || editor.is_schedule_animation()
 }
 
 fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::planning_pipeline::GeometryDemand {
@@ -1412,8 +1406,8 @@ impl crate::app::App<'_> {
         // selection is not even on screen to be seen or changed.
         let sequencing = self.editor.sequence_editor_active();
         let selected_block = (!sequencing).then_some(self.editor.selected_dig_block).flatten();
-        let selected_blast = (!sequencing).then_some(self.editor.selected_blast).flatten();
-        let view_selection: Vec<SolidsViewRow> = if sequencing { Vec::new() } else { self.editor.solids_view_selection.clone() };
+        let selected_blast = self.editor.selected_blast;
+        let view_selection: Vec<SolidsViewRow> = self.editor.solids_view_selection.clone();
         // Which draft position each block sits at, and how far the order
         // preview has been walked. Taken from the mirror rather than resolved
         // again here: the mirror is this frame's, and resolving one reference
@@ -1615,14 +1609,12 @@ impl crate::app::App<'_> {
                 // bar at all. All three stay drawn and stay pickable - a
                 // dimmed block is ground that can still be added.
                 if let Some(position) = part.block.as_ref().and_then(|piece| order.get(&piece.id).copied()) {
-                    mesh.flitch_style = None;
-                    if position < dug_through {
-                        mesh.color = blended(mesh.color, DUG_BLOCK_COLOR, 0.75);
-                        mesh.line_color = blended(mesh.line_color, DUG_BLOCK_COLOR, 0.6);
-                    } else {
-                        mesh.line_color = crate::ui::SELECTION_COLOR_F32;
-                        mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                    if sequencing && position < dug_through {
+                        continue;
                     }
+                    mesh.flitch_style = None;
+                    mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                    mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
                 }
                 if counted {
                     // Reserves are measured over the flitch-level partition,

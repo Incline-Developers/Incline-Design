@@ -32,7 +32,7 @@
 
 use super::solids_view::{DigBlockRecord, MaterialState, PlanningSnapshot};
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     model::{
         Document, ReserveAggregation, ReserveFieldId,
         schedule::{BarId, DigBlockPick, DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, sequence::BlockGround},
@@ -40,6 +40,65 @@ use crate::{
     },
     ui::state::{ScheduleBarView, ScheduleMemberView, SequenceMemberView},
 };
+
+fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String, String, String, String) {
+    let solid_type = document
+        .solid(block.solid)
+        .map(|solid| crate::ui::dialogs::solids::kind_label(solid.kind))
+        .unwrap_or_else(|| tr!(literal = "Solid"));
+    // The same RL spelling the Solids tree beside these rows uses, so a
+    // bench read in the navigation panel and the same bench read in the dig
+    // order are recognisably the one bench. Bare: these are read in a row
+    // that is nothing but elevations and names, where a unit on two of the
+    // six fields is length rather than information.
+    let rl = crate::ui::elements::solids_view::format_rl;
+    let bench = rl(block.bench.base);
+    let flitch = rl(block.flitch.base);
+    let blast = block
+        .blast
+        .and_then(|reference| {
+            document
+                .solid(reference.solid)?
+                .blasting
+                .bench(reference.bench_base())?
+                .blasts
+                .iter()
+                .find(|blast| blast.anchor == reference.anchor())
+                .map(|blast| blast.name.clone())
+        })
+        .unwrap_or_else(|| tr!(literal = "Unblasted"));
+    // The bar's own name when nothing was authored: pit, bench and blast,
+    // which is how a dig area is spoken about. The bench drops its unit here
+    // - the hyphens already say which field is which, and a marker is short.
+    let area = tr_format!(
+        literal = "%pit%-%bench%-%blast%",
+        pit = block.solid_name.clone(),
+        bench = rl(block.bench.base),
+        blast = blast.clone()
+    );
+    (solid_type, bench, blast, flitch, area)
+}
+
+/// What an unnamed bar is called: the dig area it covers.
+///
+/// A bar usually holds one pit, bench and blast, and is named after it. One
+/// that spans more says the first and how many others follow, rather than
+/// listing them - a marker has room for a name, not an inventory. The order
+/// is the dig order, so the leading area is the one dug first, and repeats
+/// are counted once however many blocks of that area the bar holds.
+fn default_bar_name<'a>(areas: impl Iterator<Item = &'a str>) -> String {
+    let mut distinct: Vec<&str> = Vec::new();
+    for area in areas {
+        if !distinct.contains(&area) {
+            distinct.push(area);
+        }
+    }
+    match distinct.as_slice() {
+        [] => tr!(literal = "Dig sequence"),
+        [only] => (*only).to_owned(),
+        [first, rest @ ..] => tr_format!(literal = "%area% (+%count%)", area = (*first).to_owned(), count = rest.len().to_string()),
+    }
+}
 
 /// Why a bar cannot be turned into work yet.
 ///
@@ -103,6 +162,12 @@ pub(crate) struct MemberReport {
     /// What the block is called in the Solids panels, when it was found.
     pub(crate) name: Option<String>,
     pub(crate) solid_name: Option<String>,
+    pub(crate) solid_type: Option<String>,
+    pub(crate) bench: Option<String>,
+    pub(crate) blast: Option<String>,
+    pub(crate) flitch: Option<String>,
+    /// The pit/bench/blast identity used to derive an unnamed bar's label.
+    pub(crate) area_name: Option<String>,
     /// Why it was not found, when it was not. The member is still in the
     /// dig order either way.
     pub(crate) unresolved: Option<String>,
@@ -358,8 +423,10 @@ impl crate::app::App<'_> {
                         .filter(|problem| problem.bars.contains(&report.bar))
                         .map(|problem| problem.message.clone()),
                 );
+                let default_name = default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref()));
                 ScheduleBarView {
                     bar: report.bar,
+                    default_name,
                     ready: report.is_ready() && problems.is_empty(),
                     tonnes: report.tonnes,
                     members: report
@@ -369,6 +436,10 @@ impl crate::app::App<'_> {
                             position: member.position,
                             name: member.name,
                             solid_name: member.solid_name,
+                            solid_type: member.solid_type,
+                            bench: member.bench,
+                            blast: member.blast,
+                            flitch: member.flitch,
                             unresolved: member.unresolved,
                             tonnes: member.tonnes,
                         })
@@ -414,14 +485,16 @@ impl crate::app::App<'_> {
             Err(_) => draft
                 .members
                 .iter()
-                .map(|member| SequenceMemberView {
+                .map(|_| SequenceMemberView {
                     name: None,
                     solid_name: None,
+                    solid_type: None,
+                    bench: None,
+                    blast: None,
+                    flitch: None,
                     unresolved: None,
                     tonnes: None,
-                    is_new: matches!(member, DraftMember::Picked(_)),
                     stale_pick: false,
-                    anchor: None,
                     block: None,
                 })
                 .collect(),
@@ -438,6 +511,11 @@ impl crate::app::App<'_> {
                         .find(|field| field.id == id && field.aggregation == ReserveAggregation::Sum)
                         .map(|field| field.id)
                 });
+                // Looked up once rather than once per member, and kept as an
+                // Option: the block above already allows for there being no
+                // active document, so a label that cannot be built is left
+                // unstated here the same way a tonnage figure is.
+                let document = self.workspace.active_document();
                 draft
                     .members
                     .iter()
@@ -457,16 +535,17 @@ impl crate::app::App<'_> {
                             }
                         };
                         let block = found.and_then(|index| snapshot.blocks.get(index));
+                        let labels = block.zip(document).map(|(block, document)| block_labels(document, block));
                         SequenceMemberView {
                             name: block.map(|block| block.name.clone()),
                             solid_name: block.map(|block| block.solid_name.clone()),
+                            solid_type: labels.as_ref().map(|labels| labels.0.clone()),
+                            bench: labels.as_ref().map(|labels| labels.1.clone()),
+                            blast: labels.as_ref().map(|labels| labels.2.clone()),
+                            flitch: labels.as_ref().map(|labels| labels.3.clone()),
                             unresolved,
                             tonnes: block.zip(field).and_then(|(block, field)| block_tonnes(block, field).ok()),
-                            is_new: matches!(member, DraftMember::Picked(_)),
                             stale_pick,
-                            // The flitch top, so the number floats on the
-                            // block's own upper surface rather than inside it.
-                            anchor: block.map(|block| [block.anchor[0], block.anchor[1], block.flitch.top]),
                             block: block.map(|block| block.id),
                         }
                     })
@@ -496,9 +575,12 @@ impl crate::app::App<'_> {
     /// rather than relabelled: refreshing provenance to fit is exactly the
     /// silent repair the identity layer exists to prevent.
     pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>, generation: u64) {
+        // A stroke that ran off the ground has not finished: the pointer is
+        // still down and will cross more blocks. Only a click clears.
+        let painting = self.editor.sequence_paint.is_some();
         let Some(block) = block else {
-            if let Some(draft) = self.editor.sequence_editor.as_mut() {
-                draft.selected = None;
+            if let Some(draft) = self.editor.sequence_editor.as_mut().filter(|_| !painting) {
+                draft.selected.clear();
             }
             return;
         };
@@ -520,9 +602,24 @@ impl crate::app::App<'_> {
             crate::userspace_warn!("{}", tr!("sequence-pick-unknown-block"));
             return;
         };
+        // A stroke works one flitch at a time, and the first block it took
+        // said which. The pane cannot enforce that - it is a picture, and the
+        // flitch below is behind what the pointer is crossing rather than
+        // beside it - so the stroke is bounded here, where the block's own
+        // flitch is known. A block off it is skipped, silently: sliding over
+        // the level below is part of drawing the stroke, not a mistake to be
+        // reported.
+        let flitch = snapshot.blocks[index].flitch.base;
+        if let Some(paint) = self.editor.sequence_paint.as_mut() {
+            match paint.flitch {
+                Some(started) if started != flitch => return,
+                Some(_) => {}
+                None => paint.flitch = Some(flitch),
+            }
+        }
         let ground = ground_of(&snapshot);
         if let Some(draft) = self.editor.sequence_editor.as_mut() {
-            append_or_select(draft, block, index, generation, &ground);
+            insert_or_select(draft, block, index, generation, &ground);
         }
         self.redraw_requested = true;
     }
@@ -560,7 +657,7 @@ impl crate::app::App<'_> {
     pub(crate) fn add_dig_block(&self, pick: &DigBlockPick) -> std::result::Result<crate::model::schedule::DigBlockRef, String> {
         let snapshot = self.planning_snapshot().map_err(|reason| reason.describe())?;
         if snapshot.generation != pick.generation {
-            return Err(tr!("sequence-pick-stale", was = pick.generation.to_string(), now = snapshot.generation.to_string()));
+            return Err(tr!("sequence-pick-stale"));
         }
         let Some(block) = snapshot.blocks.iter().find(|block| block.id == pick.block) else {
             return Err(tr!("sequence-pick-unknown-block"));
@@ -619,6 +716,11 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                     position: index + 1,
                     name: None,
                     solid_name: None,
+                    solid_type: None,
+                    bench: None,
+                    blast: None,
+                    flitch: None,
+                    area_name: None,
                     unresolved: None,
                     tonnes: None,
                     resolved: None,
@@ -643,6 +745,11 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                 position: index + 1,
                 name: None,
                 solid_name: None,
+                solid_type: None,
+                bench: None,
+                blast: None,
+                flitch: None,
+                area_name: None,
                 unresolved: status.message(),
                 tonnes: None,
                 resolved: None,
@@ -676,10 +783,16 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
             total = None;
         }
         total = total.zip(tonnes).map(|(running, tonnes)| running + tonnes);
+        let labels = block_labels(document, block);
         report.members.push(MemberReport {
             position: index + 1,
             name: Some(block.name.clone()),
             solid_name: Some(block.solid_name.clone()),
+            solid_type: Some(labels.0),
+            bench: Some(labels.1),
+            blast: Some(labels.2),
+            flitch: Some(labels.3),
+            area_name: Some(labels.4),
             unresolved: None,
             tonnes,
             resolved: Some(block.id),
@@ -719,14 +832,22 @@ fn ground_of(snapshot: &PlanningSnapshot) -> Vec<BlockGround> {
         .collect()
 }
 
-/// Take one gated pick into the draft: append it, or select the member that
-/// already holds this ground.
+/// Take one gated pick into the draft: insert it where the preview slider
+/// stands, or select the member that already holds this ground.
+///
+/// The slider is the insertion point rather than the end of the list because
+/// it is where the user is *looking*: the 3D pane shows the ground as it
+/// stands at that point in the order, so the block just clicked is the next
+/// one to be dug from what is on screen. Wound back to the start, picks build
+/// the order from the beginning; left at the end - where it sits after every
+/// previous pick - they append, which is the same behaviour a list that only
+/// ever appended had.
 ///
 /// Kept pure so the pick's own rules can be checked without a running
-/// application: a completed pick appends exactly one member, carrying the run
-/// it was made against, and selects - never duplicates - ground the draft
+/// application: a completed pick adds exactly one member, carrying the run it
+/// was made against, and selects - never duplicates - ground the draft
 /// already holds, whatever anchor that ground was captured with.
-pub(crate) fn append_or_select(draft: &mut crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) {
+pub(crate) fn insert_or_select(draft: &mut crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) {
     use crate::ui::state::DraftMember;
 
     let existing = draft.members.iter().position(|member| match member {
@@ -734,10 +855,15 @@ pub(crate) fn append_or_select(draft: &mut crate::ui::state::SequenceDraft, bloc
         DraftMember::Picked(pick) => pick.block == block && pick.generation == generation,
     });
     match existing {
-        Some(position) => draft.selected = Some(position),
+        Some(position) => draft.selected = std::iter::once(position).collect(),
         None => {
-            draft.members.push(DraftMember::Picked(DigBlockPick { block, generation }));
-            draft.selected = Some(draft.members.len() - 1);
+            let at = draft.preview.min(draft.members.len());
+            draft.members.insert(at, DraftMember::Picked(DigBlockPick { block, generation }));
+            draft.selected = std::iter::once(at).collect();
+            // The picked block has just been dug, so the slider steps over it:
+            // it disappears from the pane, the next pick lands after it, and a
+            // stroke lays its blocks down in the order it crossed them.
+            draft.preview = at + 1;
         }
     }
 }

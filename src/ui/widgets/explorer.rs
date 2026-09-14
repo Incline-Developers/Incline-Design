@@ -144,6 +144,7 @@ pub(crate) struct ExplorerEntry {
     selected: bool,
     reserve_toggle_gutter: bool,
     toggles: Option<EntryToggles>,
+    visibility_only: Option<bool>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
     header_aligned_icon: bool,
     error: Option<String>,
@@ -157,6 +158,7 @@ impl ExplorerEntry {
             selected: false,
             reserve_toggle_gutter: false,
             toggles: None,
+            visibility_only: None,
             leading_icon: None,
             header_aligned_icon: false,
             error: None,
@@ -206,6 +208,13 @@ impl ExplorerEntry {
         self
     }
 
+    /// Draw only the trailing eye. Used by derived navigation rows that have
+    /// visibility but are not editable project entities with a lock state.
+    pub(crate) fn visibility_toggle(mut self, visible: bool) -> Self {
+        self.visibility_only = Some(visible);
+        self
+    }
+
     /// Lay the row out, returning its label response alongside the toggles.
     ///
     /// [`egui::Widget`] can only hand back the label response, so rows that
@@ -217,6 +226,7 @@ impl ExplorerEntry {
             selected,
             reserve_toggle_gutter,
             toggles,
+            visibility_only,
             leading_icon,
             header_aligned_icon,
             error,
@@ -267,7 +277,14 @@ impl ExplorerEntry {
                 // as a floor, so the name would truncate at the row's edge and
                 // shove the toggles past it - which is what stopped the panel
                 // from being dragged narrower than its longest entry.
-                let label_width = (ui.available_width() - if toggles.is_some() { 2.0 * TOGGLE_WIDTH } else { 0.0 }).max(0.0);
+                let toggle_width = if toggles.is_some() {
+                    2.0 * TOGGLE_WIDTH
+                } else if visibility_only.is_some() {
+                    TOGGLE_WIDTH
+                } else {
+                    0.0
+                };
+                let label_width = (ui.available_width() - toggle_width).max(0.0);
                 let response = ui
                     .allocate_ui_with_layout(egui::vec2(label_width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.add(
@@ -279,8 +296,8 @@ impl ExplorerEntry {
                         )
                     })
                     .inner;
-                let (visibility_clicked, lock_clicked) = match toggles {
-                    Some(EntryToggles { visible, locked }) => {
+                let (visibility_clicked, lock_clicked) = match (toggles, visibility_only) {
+                    (Some(EntryToggles { visible, locked }), _) => {
                         let visibility_clicked = entry_toggle(
                             ui,
                             if visible {
@@ -305,7 +322,21 @@ impl ExplorerEntry {
                         );
                         (visibility_clicked, lock_clicked)
                     }
-                    None => (false, false),
+                    (None, Some(visible)) => (
+                        entry_toggle(
+                            ui,
+                            if visible {
+                                crate::ui::unthemed_icon!("entry_visible.svg")
+                            } else {
+                                crate::ui::unthemed_icon!("entry_hidden.svg")
+                            },
+                            visible,
+                            true,
+                            height,
+                        ),
+                        false,
+                    ),
+                    (None, None) => (false, false),
                 };
                 ExplorerEntryResponse {
                     response,

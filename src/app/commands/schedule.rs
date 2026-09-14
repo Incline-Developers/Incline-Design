@@ -50,6 +50,7 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
+            ScheduleEdit::SetBarHeight(height) => self.set_bar_height(height),
             ScheduleEdit::AddBar { name, agent, priority, window } => self.add_bar(name, agent, priority, window),
             ScheduleEdit::RenameBar { bar, name } => self.rename_bar(bar, name),
             ScheduleEdit::DeleteBar(bar) => self.delete_bar(bar),
@@ -57,6 +58,13 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetBarAgent { bar, agent } => self.set_bar_agent(bar, agent),
             ScheduleEdit::SetBarPriority { bar, priority } => self.set_bar_priority(bar, priority),
             ScheduleEdit::SetBarWindow { bar, window } => self.set_bar_window(bar, window),
+            ScheduleEdit::SetBarPlacement {
+                bar,
+                agent,
+                priority,
+                window,
+                insert_lane,
+            } => self.set_bar_placement(bar, agent, priority, window, insert_lane),
             ScheduleEdit::AddMember { bar, position, pick } => self.add_bar_member(bar, position, pick),
             ScheduleEdit::RemoveMember { bar, position } => self.remove_bar_member(bar, position),
             ScheduleEdit::MoveMember { bar, from, to } => self.move_bar_member(bar, from, to),
@@ -166,6 +174,10 @@ impl crate::app::App<'_> {
         });
     }
 
+    fn set_bar_height(&mut self, height: f32) {
+        self.edit_schedule(|plan| plan.set_bar_height(height));
+    }
+
     fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow) {
         let mut added = None;
         self.edit_schedule(|plan| {
@@ -207,8 +219,12 @@ impl crate::app::App<'_> {
             userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownBar.message());
             return;
         };
-        let base = tr!("schedule-bar-copy-name", name = source.name().to_owned());
-        let name = crate::model::schedule::suggested_name(&base, plan.bars().iter().map(|bar| bar.name().to_owned()));
+        let name = if source.has_custom_name() {
+            let base = tr!("schedule-bar-copy-name", name = source.name().to_owned());
+            crate::model::schedule::suggested_name(&base, plan.bars().iter().filter(|bar| bar.has_custom_name()).map(|bar| bar.name().to_owned()))
+        } else {
+            String::new()
+        };
         let mut added = None;
         self.edit_schedule(|plan| {
             added = Some(plan.copy_bar(id, &name)?);
@@ -230,6 +246,10 @@ impl crate::app::App<'_> {
 
     fn set_bar_window(&mut self, id: BarId, window: crate::model::schedule::WorkWindow) {
         self.edit_schedule(|plan| plan.set_bar_window(id, window));
+    }
+
+    fn set_bar_placement(&mut self, id: BarId, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, insert_lane: bool) {
+        self.edit_schedule(|plan| plan.set_bar_placement(id, agent, priority, window, insert_lane));
     }
 
     fn add_bar_member(&mut self, id: BarId, position: usize, pick: crate::model::schedule::DigBlockPick) {

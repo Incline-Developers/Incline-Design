@@ -84,6 +84,13 @@ impl ProjectItemState {
         previous
     }
 
+    /// Record that the item was paged in or out. The revision advances, so
+    /// anything keyed on it reloads, but the epoch does not: the item is
+    /// holding the same content it was holding before, in a different place.
+    pub(crate) fn touch_residency(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(crate) fn epoch(&self) -> u64 {
         self.epoch
     }

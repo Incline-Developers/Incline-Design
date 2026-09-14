@@ -284,6 +284,8 @@ pub(crate) struct Graphics<'a> {
     /// what it last drew.
     solid_preview: Option<solid_preview::SolidPreviewTarget>,
     solid_preview_key: Option<u64>,
+    /// The framing the preview is being held at, while a pane is holding it.
+    solid_preview_framing: Option<solid_preview::HeldFraming>,
     pub(super) surface: wgpu::Surface<'a>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) adapter: wgpu::Adapter,

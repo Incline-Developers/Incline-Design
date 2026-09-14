@@ -371,7 +371,7 @@ pub(crate) fn stage_tooltip_parts(
         ui.label(message);
     }
     if let Some(summary) = last_success {
-        ui.label(tr!("stage-last-run", generation = summary.generation.to_string(), entities = summary.entities.to_string()));
+        ui.label(tr!("stage-last-run", entities = summary.entities.to_string()));
     }
     if diagnostics.is_empty() {
         return;

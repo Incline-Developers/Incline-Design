@@ -193,6 +193,10 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
     }
 
+    pub(crate) fn is_schedule_animation(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Animate
+    }
+
     /// Whether the floating sequence editor is on screen.
     ///
     /// It is the Gantt's own editor, so it is shown - and owns the shared
@@ -202,6 +206,25 @@ impl EditorState {
     /// the same draft again.
     pub(crate) fn sequence_editor_active(&self) -> bool {
         self.sequence_editor.is_some() && self.is_schedule_gantt()
+    }
+
+    /// What the offscreen preview's framing is being held still for, if
+    /// anything is holding it.
+    ///
+    /// Framing is measured from the meshes on screen, and digging a block
+    /// takes its mesh out of them. Measured afresh every frame, the camera
+    /// would creep in towards whatever ground was left each time a block was
+    /// clicked or the order preview moved - which reads as the view wandering
+    /// off on its own. So while the sequence editor owns the preview the
+    /// framing is pinned to one editing session against one run, and only a
+    /// reload or a rerun starts it over. The Solids pages keep re-fitting
+    /// theirs: there the display list *is* the tree selection, and following
+    /// it is the whole point.
+    pub(crate) fn preview_framing_hold(&self) -> Option<PreviewFramingHold> {
+        self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()).map(|draft| PreviewFramingHold {
+            edition: draft.edition,
+            generation: self.sequence_generation,
+        })
     }
 
     /// The orbit the offscreen preview is drawn with.
@@ -222,7 +245,8 @@ impl EditorState {
         self.sequence_members.clear();
         self.sequence_generation = None;
         self.sequence_unavailable = None;
-        self.sequence_label_uv.clear();
+        self.sequence_list_drag = None;
+        self.sequence_paint = None;
         // A click made in the session being closed is nobody's: left pending,
         // it could only be answered into whatever is drawn over the Gantt next.
         if matches!(self.solid_preview_pick.map(|pick| pick.owner), Some(SolidPreviewPickOwner::SequenceEditor { .. })) {
@@ -696,6 +720,14 @@ impl SolidPreviewView {
         self.pan[0].to_bits().hash(hasher);
         self.pan[1].to_bits().hash(hasher);
     }
+}
+
+/// What a held preview framing is held for: one editing session of the
+/// sequence editor, measured against one Solids run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreviewFramingHold {
+    pub(crate) edition: u64,
+    pub(crate) generation: Option<u64>,
 }
 
 /// Which of the two volumes a design surface and a topography enclose is
@@ -2231,6 +2263,7 @@ pub(crate) struct EditorState {
     pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
     pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
     pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
+    pub(crate) schedule_bar_height_draft: Option<ScheduleBarHeightDraft>,
     /// The selected Gantt bar, the selected place in its dig order, and the
     /// name being typed into it. The selected member is a position rather
     /// than a block reference: the order is what is being edited, and two
@@ -2268,6 +2301,26 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_stale: bool,
     /// Whether a Run Schedule is in flight, so the controls can offer Cancel.
     pub(crate) schedule_run_working: bool,
+    /// Schedule Animate is session-only: selection and visibility here never
+    /// move the Solids View page or alter saved project item visibility.
+    pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
+    pub(crate) schedule_animation_hidden_solids: HashSet<crate::model::SolidId>,
+    pub(crate) schedule_animation_hidden_rows: Vec<SolidsViewRow>,
+    pub(crate) schedule_animation_hidden_blasts: HashSet<BlastShapeRef>,
+    pub(crate) schedule_animation_time_h: f64,
+    /// The instant the geometry on screen was actually cut for, which trails
+    /// the cursor while a batch is in flight.  The readout names this rather
+    /// than the cursor, so the number never claims ground the view is not
+    /// showing yet.
+    pub(crate) schedule_animation_shown_h: f64,
+    pub(crate) schedule_animation_horizon_h: f64,
+    pub(crate) schedule_animation_enabled: bool,
+    pub(crate) schedule_animation_pending: bool,
+    /// Set while a block that would not cut is on screen holding an older cut.
+    /// The view is then not the instant it names, and says so, for as long as
+    /// that stands.
+    pub(crate) schedule_animation_degraded: bool,
+    pub(crate) schedule_animation_status: String,
     /// The floating 3D sequence editor's draft, while one is open.
     pub(crate) sequence_editor: Option<SequenceDraft>,
     /// What the current run says about each draft member, in draft order.
@@ -2278,13 +2331,11 @@ pub(crate) struct EditorState {
     /// run it cannot name.
     pub(crate) sequence_generation: Option<u64>,
     pub(crate) sequence_unavailable: Option<String>,
-    /// Where each member's order number goes over the preview image, in image
-    /// UVs, projected by the renderer through the camera the image was
-    /// actually drawn with. Indexed alongside `sequence_members`; a length
-    /// that does not match means the draft moved since the last render, and
-    /// the numbers are left off for that frame rather than drawn in the wrong
-    /// places.
-    pub(crate) sequence_label_uv: Vec<Option<[f32; 2]>>,
+    /// The press being held in the sequence editor's dig order, while one is.
+    pub(crate) sequence_list_drag: Option<SequenceListDrag>,
+    /// The stroke being drawn across the sequence editor's 3D pane, while one
+    /// is being drawn.
+    pub(crate) sequence_paint: Option<SequencePaint>,
     /// Whether the New Loader Class / New Loader Agent dialogs are open, and
     /// their draft contents. A draft is not in the project until it is valid
     /// and committed, so cancelling one leaves nothing behind.
@@ -2575,6 +2626,7 @@ impl EditorState {
         self.schedule_class_draft = None;
         self.schedule_agent_draft = None;
         self.schedule_name_draft = None;
+        self.schedule_bar_height_draft = None;
         self.schedule_selected_bar = None;
         self.schedule_selected_member = None;
         self.bar_name_dialog = None;
@@ -3146,6 +3198,7 @@ impl EditorState {
             schedule_class_draft: None,
             schedule_agent_draft: None,
             schedule_name_draft: None,
+            schedule_bar_height_draft: None,
             schedule_selected_bar: None,
             schedule_selected_member: None,
             bar_name_dialog: None,
@@ -3156,11 +3209,23 @@ impl EditorState {
             schedule_run_status: String::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
+            schedule_animation_selection: Vec::new(),
+            schedule_animation_hidden_solids: HashSet::new(),
+            schedule_animation_hidden_rows: Vec::new(),
+            schedule_animation_hidden_blasts: HashSet::new(),
+            schedule_animation_time_h: 0.0,
+            schedule_animation_shown_h: 0.0,
+            schedule_animation_horizon_h: 0.0,
+            schedule_animation_enabled: false,
+            schedule_animation_pending: false,
+            schedule_animation_degraded: false,
+            schedule_animation_status: String::new(),
             sequence_editor: None,
             sequence_members: Vec::new(),
             sequence_generation: None,
             sequence_unavailable: None,
-            sequence_label_uv: Vec::new(),
+            sequence_list_drag: None,
+            sequence_paint: None,
             new_loader_class_open: false,
             new_loader_class_name: String::new(),
             new_loader_class_rate: String::new(),
@@ -3690,6 +3755,7 @@ pub(crate) enum UiCommand {
     ApplyPreferences(PreferencesDraft),
     SetPlanningPage(PlanningPage),
     SetPlanningSubpage(PlanningSubpage),
+    FocusScheduleAnimationSolid(crate::model::SolidId),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -4027,6 +4093,7 @@ impl UiCommand {
             | Self::ApplyPreferences(_)
             | Self::SetPlanningPage(_)
             | Self::SetPlanningSubpage(_)
+            | Self::FocusScheduleAnimationSolid(_)
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
@@ -4160,6 +4227,7 @@ impl UiCommand {
                 | ScheduleEdit::SetAgentClass { .. }
                 | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
+                | ScheduleEdit::SetBarHeight(_)
                 // Assignment, lane and earliest-start edits are cell edits of
                 // one bar, and dragging one produces a stream of them: the
                 // Gantt shows the result in place, and a console line per
@@ -4167,6 +4235,7 @@ impl UiCommand {
                 | ScheduleEdit::SetBarAgent { .. }
                 | ScheduleEdit::SetBarPriority { .. }
                 | ScheduleEdit::SetBarWindow { .. }
+                | ScheduleEdit::SetBarPlacement { .. }
                 // Membership edits are cell edits of the dig order: the bar's
                 // own panel shows the result, and a console line per block
                 // would bury the log once a bar is picked out of a viewport.
@@ -4786,6 +4855,8 @@ pub(crate) enum ScheduleEdit {
     /// Nominate the reserve field whose summed value is read as tonnes, or
     /// clear the choice. Never inferred from a field's name.
     SetTonnageField(Option<crate::model::ReserveFieldId>),
+    /// Set the logical-point height of dig-sequence bars on the Gantt.
+    SetBarHeight(f32),
     /// Add an empty Gantt bar to one machine's lane - the row it was asked
     /// for - at the instant it was asked for. Its ground is chosen afterwards.
     AddBar {
@@ -4822,6 +4893,20 @@ pub(crate) enum ScheduleEdit {
     SetBarWindow {
         bar: crate::model::schedule::BarId,
         window: crate::model::schedule::WorkWindow,
+    },
+    /// Commit a Gantt drag's time, loader and lane as one undoable move.
+    SetBarPlacement {
+        bar: crate::model::schedule::BarId,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        /// Whether `priority` names a lane to open rather than one to join.
+        /// A bar let go between two lanes is asking for a lane of its own
+        /// there, so that loader's bars from `priority` down move one lane
+        /// further out to make the room. Part of the same edit, because a
+        /// half-applied lane insert is a schedule with two bars in a lane
+        /// that was meant to hold one.
+        insert_lane: bool,
     },
     /// Put one dug block into a sequence's dig order, at `position` or - when
     /// that is past the end - after everything already in it. The pick names
@@ -4873,16 +4958,10 @@ pub(crate) enum ScheduleEdit {
 /// exactly as it found them.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BarNameDialog {
-    /// The bar being renamed, or `None` while a new one is being named.
-    pub(crate) target: Option<crate::model::schedule::BarId>,
-    /// For a new bar, the machine and lane of the row it was asked for, so it
-    /// appears where the user right-clicked rather than somewhere else. Ignored
-    /// for a rename, which changes the name and nothing else.
-    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
-    pub(crate) priority: u32,
-    /// For a new bar, the period it will be created over - the instant the
-    /// lane was right-clicked at, and one period of it. Ignored for a rename.
-    pub(crate) window: crate::model::schedule::WorkWindow,
+    pub(crate) target: crate::model::schedule::BarId,
+    /// The name being typed. Empty is a real answer rather than a missing
+    /// one: it clears the override and returns the bar to the name its
+    /// ground derives.
     pub(crate) name: String,
 }
 
@@ -4926,6 +5005,14 @@ pub(crate) struct GanttDrag {
     /// project, until the drag is released.
     pub(crate) preview_start_seconds: f64,
     pub(crate) preview_end_seconds: Option<f64>,
+    pub(crate) from_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) from_priority: u32,
+    pub(crate) preview_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) preview_priority: u32,
+    /// Whether the drag is over the seam between two lanes rather than over a
+    /// lane: released there it opens a lane of its own at `preview_priority`,
+    /// pushing that loader's bars from there down one lane further out.
+    pub(crate) preview_insert: bool,
     /// Whether the pointer has actually moved. A click that never moves is a
     /// selection, and must not commit an edit or dirty the project.
     pub(crate) moved: bool,
@@ -4986,6 +5073,10 @@ pub(crate) struct ScheduleMemberView {
     /// resolved.
     pub(crate) name: Option<String>,
     pub(crate) solid_name: Option<String>,
+    pub(crate) solid_type: Option<String>,
+    pub(crate) bench: Option<String>,
+    pub(crate) blast: Option<String>,
+    pub(crate) flitch: Option<String>,
     /// Why the reference did not resolve, when it did not.
     pub(crate) unresolved: Option<String>,
     /// Its complete measured tonnage, when everything needed to state one was
@@ -4998,6 +5089,8 @@ pub(crate) struct ScheduleMemberView {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleBarView {
     pub(crate) bar: crate::model::schedule::BarId,
+    /// Ground-derived name used while the bar has no authored override.
+    pub(crate) default_name: String,
     pub(crate) ready: bool,
     pub(crate) tonnes: Option<f64>,
     pub(crate) members: Vec<ScheduleMemberView>,
@@ -5017,6 +5110,50 @@ pub(crate) struct ScheduleBarView {
 pub(crate) enum DraftMember {
     Held(crate::model::schedule::DigBlockRef),
     Picked(crate::model::schedule::DigBlockPick),
+}
+
+/// A press being held in the sequence editor's dig order.
+///
+/// Which gesture it is was settled at the press rather than inferred from the
+/// movement, because both gestures are the same movement - a drag down a list.
+/// A press on a row outside the selection sweeps a new one out of the rows it
+/// crosses; a press on a row inside it carries the whole selection to wherever
+/// it is let go. That is the rule a file list uses, and it is the only reading
+/// under which selecting several rows and then moving them are both possible
+/// with one pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SequenceListDrag {
+    pub(crate) mode: SequenceListDragMode,
+    /// The row the press landed on. A sweep runs from here to the row under
+    /// the pointer.
+    pub(crate) from: usize,
+    /// Where a carry would drop the rows it holds: a gap in the order,
+    /// `0..=members.len()`, counted before anything is taken out.
+    pub(crate) to: usize,
+}
+
+/// One left-drag across the sequence editor's 3D pane, picking every dig
+/// block it crosses.
+///
+/// `flitch` is the base RL of the first block the stroke took, and it is the
+/// stroke's whole extent: a later block on any other flitch is not painted.
+/// A stroke reads as one pass over one working level, and the pane is a
+/// picture - ground a flitch below is *behind* what the pointer is crossing,
+/// not beside it, so a stroke that slid onto it would add blocks the user
+/// never saw themselves touch. It is held here rather than in the draft
+/// because a stroke is a gesture, not an edit: cancelling the editor leaves
+/// nothing of it behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct SequencePaint {
+    pub(crate) flitch: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SequenceListDragMode {
+    /// Select the rows the pointer crosses.
+    Sweep,
+    /// Move the selected rows to where the pointer is let go.
+    Carry,
 }
 
 /// The floating 3D sequence editor's draft.
@@ -5047,10 +5184,12 @@ pub(crate) struct SequenceDraft {
     /// newer edit with an older list.
     pub(crate) opened_from: Vec<crate::model::schedule::DigBlockRef>,
     pub(crate) members: Vec<DraftMember>,
-    /// The selected row of the ordered list, as a position - the order is
+    /// The selected rows of the ordered list, as positions - the order is
     /// what is being edited, and two positions can hold ground that resolves
-    /// to nothing at all.
-    pub(crate) selected: Option<usize>,
+    /// to nothing at all. A set rather than one row because a run of rows is
+    /// moved through the order together, which is how a dig order is actually
+    /// rearranged.
+    pub(crate) selected: std::collections::BTreeSet<usize>,
     /// The order-preview slider, `0..=members.len()`: at *k* the first *k*
     /// blocks draw as dug. This previews the authored order and nothing else.
     /// It is not a time axis, consults no loader rate, and is not the
@@ -5080,7 +5219,7 @@ impl SequenceDraft {
             edition: Self::next_edition(),
             opened_from: members.to_vec(),
             members: members.iter().copied().map(DraftMember::Held).collect(),
-            selected: None,
+            selected: std::collections::BTreeSet::new(),
             // Nothing dug: the editor opens on the whole authored order, and
             // the slider walks forward through it from there.
             preview: 0,
@@ -5112,21 +5251,18 @@ pub(crate) struct SequenceMemberView {
     /// The block's name and solid in the Solids panels, when it resolved.
     pub(crate) name: Option<String>,
     pub(crate) solid_name: Option<String>,
+    pub(crate) solid_type: Option<String>,
+    pub(crate) bench: Option<String>,
+    pub(crate) blast: Option<String>,
+    pub(crate) flitch: Option<String>,
     /// Why it did not resolve, when it did not. An unresolved member stays in
     /// the list, stays numbered and stays removable.
     pub(crate) unresolved: Option<String>,
     pub(crate) tonnes: Option<f64>,
-    /// True for a block picked in this editing session rather than one the
-    /// bar already held.
-    pub(crate) is_new: bool,
     /// True when this member was picked against a run that has since been
     /// replaced. Apply will refuse it; saying so here is what stops that
     /// being a surprise.
     pub(crate) stale_pick: bool,
-    /// A point inside the block, for the order number drawn over the 3D view.
-    /// `None` when the member did not resolve, which is also why an
-    /// unresolved member carries no number in the image.
-    pub(crate) anchor: Option<[f64; 3]>,
     /// The block of the current run this member landed on, so the display
     /// list can pick it out without resolving every reference a second time.
     /// Session-scoped and display-only: nothing durable is ever keyed by it.
@@ -5138,6 +5274,12 @@ pub(crate) struct SequenceMemberView {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleNameDraft {
     pub(crate) source: String,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleBarHeightDraft {
+    pub(crate) source: f32,
     pub(crate) text: String,
 }
 

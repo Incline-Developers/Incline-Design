@@ -303,7 +303,7 @@ fn mesh_z_extent(mesh: &crate::model::formats::mesh_data::Triangulation) -> Opti
 }
 
 /// Wrap a finished mesh as the renderable preview surface.
-pub(super) fn preview_triangulation(
+pub(crate) fn preview_triangulation(
     name: String,
     mesh: Arc<crate::model::formats::mesh_data::Triangulation>,
     spatial: Arc<crate::model::spatial::TriangleBvh>,

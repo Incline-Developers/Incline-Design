@@ -134,6 +134,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllScheduleStages
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunWholeSchedule
+                | UiCommand::FocusScheduleAnimationSolid(_)
                 | UiCommand::Schedule { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -769,6 +770,10 @@ impl<'a> App<'a> {
                     }
                     self.redraw_requested = true;
                 }
+                Ok(())
+            }
+            UiCommand::FocusScheduleAnimationSolid(solid) => {
+                self.focus_schedule_animation_solid(solid);
                 Ok(())
             }
             UiCommand::SetPlanningPage(page) => {

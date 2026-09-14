@@ -319,6 +319,34 @@ pub(crate) struct GroundIdentity {
     footprint: Footprint,
 }
 
+/// A hashable stand-in for [`GroundIdentity`], so resolving many references
+/// against many blocks is one lookup each rather than a walk of the list.
+///
+/// Equality here is equality there. The RLs go in as bits with zero
+/// normalised, so `-0.0` and `0.0` still name one flitch; a non-finite RL is
+/// the single divergence, and benching produces none.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct GroundKey {
+    solid: SolidId,
+    source: GroundSourceStamp,
+    flitch_base: u64,
+    flitch_top: u64,
+    footprint: Footprint,
+}
+
+impl GroundIdentity {
+    pub(crate) fn key(&self) -> GroundKey {
+        let bits = |value: f64| if value == 0.0 { 0.0_f64.to_bits() } else { value.to_bits() };
+        GroundKey {
+            solid: self.solid,
+            source: self.source,
+            flitch_base: bits(self.flitch_base),
+            flitch_top: bits(self.flitch_top),
+            footprint: self.footprint,
+        }
+    }
+}
+
 /// What a current run says about one stored reference.
 ///
 /// Everything but [`Self::Resolved`] keeps the member in the sequence and

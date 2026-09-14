@@ -126,73 +126,57 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
     }
 }
 
-/// Add one dig sequence. It starts empty: its ground is chosen afterwards,
-/// once the 3D block editor exists to pick it from.
-/// Name a new Gantt bar, or rename one.
+/// Rename one Gantt bar, or clear the name it was given.
 ///
-/// One dialog for both, because they ask the same question and are subject to
-/// the same rule: a bar's name must be its own. Which one it is doing is the
-/// dialog's `target` - `None` adds, `Some` renames - and the confirm button
-/// says so.
+/// A bar is created without being named - its label comes from the pit, bench
+/// and blast its dig order covers - so this only ever overrides that. An empty
+/// name is a valid answer and hands the bar back to its ground-derived label,
+/// which is why a blank field is not treated as an unfinished one.
 pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    let Some((target, agent, priority, window)) = editor
-        .bar_name_dialog
-        .as_ref()
-        .map(|dialog: &BarNameDialog| (dialog.target, dialog.agent, dialog.priority, dialog.window))
-    else {
+    let Some(target) = editor.bar_name_dialog.as_ref().map(|dialog: &BarNameDialog| dialog.target) else {
         return;
     };
     // A rename whose bar went away while the dialog was open has nothing left
     // to rename; it closes rather than committing against a missing id.
-    if target.is_some_and(|id| plan.bar(id).is_none()) {
+    if plan.bar(target).is_none() {
         editor.bar_name_dialog = None;
         return;
     }
-    let title = if target.is_some() { tr!("schedule-rename-bar") } else { tr!("schedule-new-bar") };
-    let confirm = if target.is_some() { tr!("schedule-rename-bar") } else { tr!("schedule-add-bar") };
     let mut open = true;
     let mut close = false;
     let draft = editor.bar_name_dialog.as_mut().expect("checked above");
-    DragableMenu::new("bar_name_dialog", title).open(&mut open).min_width(320.0).show(ui.ctx(), |ui| {
-        MenuFieldText::new(tr!("planning-name"), &mut draft.name).hint_text(tr!(literal = "Required")).show(ui);
-        // Where the new bar will land, stated rather than assumed: it is
-        // created at the instant the lane was right-clicked, which is not
-        // necessarily the start of the schedule.
-        if target.is_none() {
-            ui.label(
-                egui::RichText::new(tr!(
-                    "schedule-bar-earliest-start",
-                    instant = crate::ui::elements::schedule_gantt::instant_label(window.start_h * crate::ui::state::GanttView::HOUR)
-                ))
-                .weak(),
-            );
-        }
-        let name = draft.name.trim().to_owned();
-        // Rejected before it is offered rather than after it is pressed: the
-        // same rules the domain enforces, applied to the draft. A bar keeping
-        // its own name is not a duplicate of itself.
-        let taken = plan.bars().iter().any(|bar| Some(bar.id) != target && bar.name().trim().eq_ignore_ascii_case(&name));
-        let can_commit = !name.is_empty() && !taken;
-        if taken {
-            ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
-        }
-        menu::menu_actions(ui, |ui| {
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add(MenuButton::new(confirm).primary().enabled(can_commit)).clicked()) && can_commit {
-                commands.push(UiCommand::schedule(
-                    session,
-                    match target {
-                        Some(bar) => ScheduleEdit::RenameBar { bar, name },
-                        None => ScheduleEdit::AddBar { name, agent, priority, window },
-                    },
-                ));
-                close = true;
+    DragableMenu::new("bar_name_dialog", tr!("schedule-rename-bar"))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldText::new(tr!("planning-name"), &mut draft.name)
+                .hint_text(tr!(literal = "Leave blank to use the ground-derived name"))
+                .show(ui);
+            let name = draft.name.trim().to_owned();
+            // Rejected before it is offered rather than after it is pressed:
+            // the same rules the domain enforces, applied to the draft. A bar
+            // keeping its own name is not a duplicate of itself, and the
+            // unnamed bars are not duplicates of each other.
+            let taken = !name.is_empty()
+                && plan
+                    .bars()
+                    .iter()
+                    .any(|bar| bar.id != target && bar.has_custom_name() && bar.name().trim().eq_ignore_ascii_case(&name));
+            let can_commit = !taken;
+            if taken {
+                ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
             }
-            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                close = true;
-            }
+            menu::menu_actions(ui, |ui| {
+                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!("schedule-rename-bar")).primary().enabled(can_commit)).clicked()) && can_commit {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::RenameBar { bar: target, name }));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
         });
-    });
     if close || !open {
         editor.bar_name_dialog = None;
     }

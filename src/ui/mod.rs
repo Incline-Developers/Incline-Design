@@ -545,7 +545,11 @@ fn draw_ui(
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     if editor.is_planning_setup() {
-        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
+        let explorer = if editor.is_schedule_gantt() {
+            elements::explorer::ExplorerLayout::empty()
+        } else {
+            elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+        };
         let console_rect = editor.show_console.then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
@@ -562,7 +566,7 @@ fn draw_ui(
             // The Gantt owns the whole pane rather than arranging islands in
             // it, so - like the Solids View - it hands its own rect back to be
             // rounded off as one region.
-            elements::schedule_gantt::draw_details(root_ui, editor, project, commands)
+            elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
         } else {
             planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
             planning_layout.rect
@@ -624,6 +628,15 @@ fn draw_ui(
     }
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    let animation_timeline_rect = if editor.is_schedule_animation() {
+        elements::schedule_animation::draw_timeline(root_ui, editor)
+    } else {
+        // As above: keep the root auto-id sequence the same whether or not
+        // this optional panel is drawn, so leaving Animate does not renumber
+        // every panel after it.
+        root_ui.skip_ahead_auto_ids(1);
+        egui::Rect::NOTHING
+    };
 
     // The Drill & Blast workspace's products, down the right edge. Claimed
     // after the two strips below it, so it stops at the bottom toolbar's top
@@ -656,8 +669,8 @@ fn draw_ui(
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(
-        || status_bar_rect.top().min(bottom_toolbar_rect.top()),
-        |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(rect.top()),
+        || status_bar_rect.top().min(bottom_toolbar_rect.top()).min(animation_timeline_rect.top()),
+        |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(animation_timeline_rect.top()).min(rect.top()),
     );
     // The scene is a region like any other, so it takes the same gap around it
     // as its neighbours do.
@@ -1171,9 +1184,16 @@ fn draw_ui(
     let products_regions: Vec<egui::Rect> = products_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
     chrome::paint_regions(
         &ctx,
-        [viewport_bar_rect, left_toolbar_rect, bottom_toolbar_rect, console_claimed, scene_claimed]
-            .into_iter()
-            .chain(products_regions),
+        [
+            viewport_bar_rect,
+            left_toolbar_rect,
+            bottom_toolbar_rect,
+            animation_timeline_rect,
+            console_claimed,
+            scene_claimed,
+        ]
+        .into_iter()
+        .chain(products_regions),
     );
     // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(

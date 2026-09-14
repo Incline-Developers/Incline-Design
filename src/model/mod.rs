@@ -2163,11 +2163,44 @@ impl EditTarget<'_> {
         self.effects.items_changed = true;
     }
 
+    /// Record that an item was paged in or out, which is not a change to what
+    /// the item *is*.
+    ///
+    /// The project is dirty either way - residency is saved with it - and the
+    /// item's revision moves, so caches and pending residency jobs see it. Its
+    /// content epoch does not, and that is the point: the planning pipeline
+    /// keys a stage's staleness on the content epochs of the surfaces it was
+    /// built from, so loading one to look at it would otherwise retire a
+    /// finished Dig Strips run and empty every page reading from it.
+    fn touch_item_residency(&mut self, item: ItemRef) {
+        if let Some(state) = self.item_state_mut(item) {
+            state.touch_residency();
+        }
+        self.content.touch();
+        self.effects.items_changed = true;
+    }
+
+    /// The style an item is currently wearing, for telling a residency change
+    /// apart from an edit to the item itself.
+    fn item_style(&self, item: ItemRef) -> Option<ItemStyle> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(ItemStyle::of_triangulation),
+            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(ItemStyle::of_block_model),
+            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(ItemStyle::of_drill_hole),
+            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(ItemStyle::of_point_cloud),
+            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(ItemStyle::of_raster),
+        }
+    }
+
     /// Write a style snapshot back onto its item. A mismatched pair (a block
     /// model style handed a triangulation id) is ignored rather than partially
     /// applied, so a malformed command cannot leave an item half-styled.
     fn set_item_style(&mut self, item: ItemRef, style: &ItemStyle) {
         let was_loaded = self.item_state_mut(item).is_some_and(|state| state.loaded);
+        // Whether this command only pages the item in or out. Taken before
+        // anything is written, because afterwards there is nothing left to
+        // compare against.
+        let residency_only = self.item_style(item).is_some_and(|before| before.with_loaded(style.loaded()) == *style);
         let mut changed = false;
         match (item, style) {
             (
@@ -2250,7 +2283,11 @@ impl EditTarget<'_> {
             if was_loaded && !style.loaded() {
                 self.effects.unloaded_items.push(item);
             }
-            self.touch_item(item);
+            if residency_only {
+                self.touch_item_residency(item);
+            } else {
+                self.touch_item(item);
+            }
         }
     }
 

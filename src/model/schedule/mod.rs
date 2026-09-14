@@ -12,6 +12,7 @@
 //! rather than in the UI, so a command that arrives from anywhere - a dialog,
 //! a replayed undo, a future script - is checked the same way.
 
+pub(crate) mod animation;
 pub(crate) mod dispatch;
 pub(crate) mod sequence;
 
@@ -125,6 +126,10 @@ impl ScheduleBar {
         &self.order.name
     }
 
+    pub(crate) fn has_custom_name(&self) -> bool {
+        !self.order.name.trim().is_empty()
+    }
+
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         self.order.members()
     }
@@ -190,6 +195,9 @@ pub(crate) enum ScheduleError {
     /// A window that is not one: a start that is negative or not finite, or
     /// an end that is not finite or does not come after its start.
     InvalidWindow,
+    /// Gantt bars must remain large enough to interact with and small enough
+    /// not to make a single loader consume the whole workspace.
+    InvalidBarHeight,
     /// A stored reference whose numbers could not describe any ground.
     MalformedReference,
 }
@@ -210,6 +218,7 @@ impl ScheduleError {
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
             Self::InvalidWindow => tr!("schedule-error-invalid-window"),
+            Self::InvalidBarHeight => tr!("schedule-error-invalid-bar-height"),
         }
     }
 }
@@ -220,7 +229,15 @@ pub(crate) type ScheduleResult<T = ()> = Result<T, ScheduleError>;
 ///
 /// Ordered lists, not maps: the Gantt draws one row per agent in this order,
 /// and a file that round-trips must bring the same order back.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) const DEFAULT_BAR_HEIGHT: f32 = 40.0;
+pub(crate) const MIN_BAR_HEIGHT: f32 = 20.0;
+pub(crate) const MAX_BAR_HEIGHT: f32 = 160.0;
+
+fn default_bar_height() -> f32 {
+    DEFAULT_BAR_HEIGHT
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SchedulePlan {
     /// What this project's schedule is called. Free text, may be empty.
@@ -251,6 +268,25 @@ pub(crate) struct SchedulePlan {
     /// one, which is a readiness problem rather than a reason to assume.
     #[serde(default)]
     tonnage_field: Option<ReserveFieldId>,
+    /// Height of a dig-sequence bar in the Gantt, in logical UI points.
+    #[serde(default = "default_bar_height")]
+    bar_height: f32,
+}
+
+impl Default for SchedulePlan {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            classes: Vec::new(),
+            agents: Vec::new(),
+            next_class_id: 0,
+            next_agent_id: 0,
+            bars: Vec::new(),
+            next_bar_id: 0,
+            tonnage_field: None,
+            bar_height: DEFAULT_BAR_HEIGHT,
+        }
+    }
 }
 
 /// Whether two names are the same name, for the uniqueness rules. Trimmed and
@@ -282,7 +318,7 @@ fn checked_rate(rate: f64) -> ScheduleResult<f64> {
 
 impl SchedulePlan {
     pub(crate) fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.bars.is_empty() && self.tonnage_field.is_none()
+        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.bars.is_empty() && self.tonnage_field.is_none() && self.bar_height == DEFAULT_BAR_HEIGHT
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -477,6 +513,18 @@ impl SchedulePlan {
         self.tonnage_field = field;
     }
 
+    pub(crate) fn bar_height(&self) -> f32 {
+        self.bar_height
+    }
+
+    pub(crate) fn set_bar_height(&mut self, height: f32) -> ScheduleResult {
+        if !height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&height) {
+            return Err(ScheduleError::InvalidBarHeight);
+        }
+        self.bar_height = height;
+        Ok(())
+    }
+
     /// Every bar holding this ground, for a report that must say where a
     /// block is already committed - including when the duplication arrived by
     /// copying a bar.
@@ -486,7 +534,7 @@ impl SchedulePlan {
     }
 
     fn bar_name_taken(&self, name: &str, except: Option<BarId>) -> bool {
-        self.bars.iter().any(|bar| Some(bar.id) != except && same_name(bar.name(), name))
+        !name.trim().is_empty() && self.bars.iter().any(|bar| Some(bar.id) != except && bar.has_custom_name() && same_name(bar.name(), name))
     }
 
     fn allocate_bar_id(&mut self) -> ScheduleResult<BarId> {
@@ -503,7 +551,7 @@ impl SchedulePlan {
     /// origin instead would put new work somewhere the user is not looking,
     /// and moving it back would be a second undo step.
     pub(crate) fn add_bar(&mut self, name: &str, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult<BarId> {
-        let name = checked_name(name)?;
+        let name = name.trim().to_owned();
         if self.bar_name_taken(&name, None) {
             return Err(ScheduleError::DuplicateName(name));
         }
@@ -525,7 +573,7 @@ impl SchedulePlan {
     }
 
     pub(crate) fn rename_bar(&mut self, id: BarId, name: &str) -> ScheduleResult {
-        let name = checked_name(name)?;
+        let name = name.trim().to_owned();
         if !self.bars.iter().any(|bar| bar.id == id) {
             return Err(ScheduleError::UnknownBar);
         }
@@ -558,7 +606,7 @@ impl SchedulePlan {
     /// same ground, which the readiness report names as a conflict rather
     /// than resolving on the user's behalf.
     pub(crate) fn copy_bar(&mut self, id: BarId, name: &str) -> ScheduleResult<BarId> {
-        let name = checked_name(name)?;
+        let name = name.trim().to_owned();
         if self.bar_name_taken(&name, None) {
             return Err(ScheduleError::DuplicateName(name));
         }
@@ -587,6 +635,39 @@ impl SchedulePlan {
     pub(crate) fn set_bar_priority(&mut self, id: BarId, priority: u32) -> ScheduleResult {
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
         bar.priority = priority;
+        Ok(())
+    }
+
+    /// Put a bar on a machine, in a lane, over a period, in one edit.
+    ///
+    /// With `insert_lane`, `priority` is a lane to *open* rather than one to
+    /// join: that machine's bars from `priority` down move one lane further
+    /// out first, so the bar lands in a lane of its own. Everything is checked
+    /// before anything moves - a refusal leaves every bar's lane as it found
+    /// it, rather than a schedule shifted to make room for a bar that never
+    /// arrived.
+    pub(crate) fn set_bar_placement(&mut self, id: BarId, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow, insert_lane: bool) -> ScheduleResult {
+        if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+            return Err(ScheduleError::UnknownAgent);
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        if !self.bars.iter().any(|bar| bar.id == id) {
+            return Err(ScheduleError::UnknownBar);
+        }
+        if insert_lane {
+            // Saturating rather than wrapping: at the very last lane number
+            // there is nowhere further out to go, and the two bars share a
+            // lane instead of one of them reappearing at the top of the row.
+            for bar in self.bars.iter_mut().filter(|bar| bar.id != id && bar.agent == agent && bar.priority >= priority) {
+                bar.priority = bar.priority.saturating_add(1);
+            }
+        }
+        let bar = self.bars.iter_mut().find(|bar| bar.id == id).expect("checked above");
+        bar.agent = agent;
+        bar.priority = priority;
+        bar.window = window;
         Ok(())
     }
 
@@ -659,6 +740,9 @@ impl SchedulePlan {
     /// is added. Raising the counters past every stored id costs nothing and
     /// removes that possibility.
     pub(crate) fn validate_loaded(&mut self) -> ScheduleResult {
+        if !self.bar_height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&self.bar_height) {
+            return Err(ScheduleError::InvalidBarHeight);
+        }
         for (index, class) in self.classes.iter().enumerate() {
             if self.classes[..index].iter().any(|earlier| earlier.id == class.id) {
                 return Err(ScheduleError::DuplicateId);
@@ -685,8 +769,7 @@ impl SchedulePlan {
             if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
                 return Err(ScheduleError::DuplicateId);
             }
-            checked_name(bar.name())?;
-            if self.bars[..index].iter().any(|earlier| same_name(earlier.name(), bar.name())) {
+            if bar.has_custom_name() && self.bars[..index].iter().any(|earlier| earlier.has_custom_name() && same_name(earlier.name(), bar.name())) {
                 return Err(ScheduleError::DuplicateName(bar.name().to_owned()));
             }
             if bar.agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
@@ -733,6 +816,7 @@ impl SchedulePlan {
             agent.class_id.hash(hasher);
         }
         self.tonnage_field.hash(hasher);
+        self.bar_height.to_bits().hash(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.order.name.hash(hasher);

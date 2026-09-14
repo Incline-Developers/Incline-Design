@@ -5,6 +5,7 @@ pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
+pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
 pub(crate) mod schedule_run; // The Gantt's explicit Run Schedule and what it holds
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
@@ -185,6 +186,11 @@ struct BackgroundTaskState {
     /// Tickets that carry a status-bar label, oldest first: the bar reports
     /// the longest-running task rather than flickering between concurrent ones.
     reported: Vec<ReportedTask>,
+    /// Tickets that asked not to announce themselves: no status-bar row and no
+    /// busy pointer. Work that reruns on every drag of a slider is reported
+    /// where the user is already looking, not by a readout and a cursor
+    /// blinking on and off several times a second.
+    quiet: HashSet<BackgroundTaskTicket>,
 }
 
 impl BackgroundTaskState {
@@ -230,25 +236,35 @@ impl BackgroundTaskState {
         if needs_gpu {
             let inserted = self.gpu_pending.insert(ticket);
             debug_assert!(inserted, "background ticket was already pending GPU upload");
+        } else {
+            self.quiet.remove(&ticket);
         }
     }
 
     fn cancel(&mut self, ticket: BackgroundTaskTicket) {
         self.stop_reporting(ticket);
+        self.quiet.remove(&ticket);
         let removed = self.cpu_pending.remove(&ticket) || self.awaiting_apply.remove(&ticket) || self.gpu_pending.remove(&ticket);
         debug_assert!(removed, "unknown or double-cancelled background ticket {ticket:?}");
     }
 
     fn finish_gpu_uploads(&mut self) {
-        self.gpu_pending.clear();
+        for ticket in std::mem::take(&mut self.gpu_pending) {
+            self.quiet.remove(&ticket);
+        }
     }
 
     fn has_gpu_uploads(&self) -> bool {
         !self.gpu_pending.is_empty()
     }
 
+    /// Whether the pointer should say the app is working. A quiet task is
+    /// still running; it is just not something the user is waiting on.
     fn is_busy(&self) -> bool {
-        !self.cpu_pending.is_empty() || !self.awaiting_apply.is_empty() || !self.gpu_pending.is_empty()
+        [&self.cpu_pending, &self.awaiting_apply, &self.gpu_pending]
+            .into_iter()
+            .flatten()
+            .any(|ticket| !self.quiet.contains(ticket))
     }
 }
 
@@ -385,6 +401,7 @@ pub(crate) struct App<'a> {
     pub(crate) schedule_run_problems: Vec<crate::app::commands::schedule_readiness::ScheduleRunProblem>,
     /// Numbers the runs, so a result can be named rather than merely dated.
     pub(crate) schedule_run_serial: u64,
+    pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
@@ -507,6 +524,7 @@ impl<'a> Default for App<'a> {
             pending_schedule_run: None,
             schedule_run_problems: Vec::new(),
             schedule_run_serial: 0,
+            schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
@@ -1425,6 +1443,17 @@ impl<'a> App<'a> {
         let progress = crate::model::progress::Progress::new();
         self.background_tasks.report(ticket, label.into(), progress.clone());
         (ticket, progress)
+    }
+
+    /// Begin a background task that says nothing about itself: no status-bar
+    /// row, no busy pointer, and no frame held open on its behalf. For work
+    /// whose progress the page it belongs to already shows, and for work that
+    /// reruns often enough that a readout would be a flicker rather than a
+    /// report.
+    pub(crate) fn begin_quiet_task(&mut self) -> (BackgroundTaskTicket, crate::model::progress::Progress) {
+        let ticket = self.begin_topology_load();
+        self.background_tasks.quiet.insert(ticket);
+        (ticket, crate::model::progress::Progress::new())
     }
 
     /// Point the status bar at the longest-running reported task (or clear it

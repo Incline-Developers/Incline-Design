@@ -73,6 +73,15 @@ pub(crate) struct ExplorerLayout {
     pub(crate) grip: crate::ui::chrome::Grip,
 }
 
+impl ExplorerLayout {
+    pub(crate) fn empty() -> Self {
+        Self {
+            regions: Vec::new(),
+            grip: crate::ui::chrome::Grip::new(egui::Rect::NOTHING, crate::ui::chrome::Edge::Right, PANEL_ID),
+        }
+    }
+}
+
 /// Draw the full-height project explorer.
 pub(crate) fn draw_explorer(
     ui: &mut egui::Ui,
@@ -137,6 +146,23 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
+            let animation_solids = if editor.is_schedule_animation() {
+                egui::Panel::top("schedule_animation_solids_navigation")
+                    .resizable(true)
+                    .default_size((ui.available_height() * 0.5).max(120.0))
+                    .min_size(90.0)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(crate::i18n::tr!(literal = "Solids Navigation")).strong());
+                        super::solids_view::draw_animation_tree(ui, editor, document, commands);
+                    })
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
             let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
@@ -169,7 +195,7 @@ pub(crate) fn draw_explorer(
                 })
                 .response
                 .rect;
-            [run_controls, steps, tree]
+            vec![run_controls, steps, animation_solids, tree]
         });
 
     // The panes are the regions; the column itself carries no frame.

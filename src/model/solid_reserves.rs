@@ -13,6 +13,8 @@ use std::{
     sync::Arc,
 };
 
+use rayon::prelude::*;
+
 use super::{
     ReserveAggregation, ReserveField, ReserveFieldId, ReserveFieldIssue,
     block_model::{BlockBoundsSource, ReserveFieldMapping, ReserveMappingSource},
@@ -30,6 +32,21 @@ use super::{
 /// clipper itself works in block-local units, so they are scale free.
 const OVERLAP_FLOOR: f64 = 1e-7;
 const OVERLAP_PER_PIECE: f64 = 1e-9;
+
+/// How many blocks are measured before their totals are added up.
+///
+/// Large enough that the threads have real work to divide and the join at the
+/// end of each chunk costs nothing next to it; small enough that the
+/// measurements waiting to be accumulated stay a couple of megabytes instead
+/// of growing with the model.
+const MEASURED_CHUNK: usize = 8192;
+
+/// One block's overlaps with the partition, in the order a single-threaded
+/// scan would have found them.
+struct BlockOverlaps {
+    volume: f64,
+    hits: Vec<(usize, f64)>,
+}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NumericTotal {
@@ -378,37 +395,67 @@ pub(crate) fn compute(
     let mut counted: Vec<bool> = vec![false; numeric.len()];
     let mut contributing_blocks = 0u64;
 
-    let mut stack = Vec::new();
-    for index in 0..blocks.len() {
-        if index.is_multiple_of(1024) {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-            progress.set_items(index as u64, blocks.len() as u64);
-        }
-        let bounds = blocks.get(index).ok_or_else(|| anyhow::anyhow!("Missing block geometry at {index}"))?;
-        let block = intersection::Block::new(model, bounds)?;
-        let block_volume = block.world_volume();
-        // Bands are ordered, so the first that can reach this block is found
-        // by bisection and the scan stops as soon as one starts above it.
-        let first = partition.bands.partition_point(|band| band.top <= block.min.z);
-        let mut assigned = 0.0;
-        let mut touched = 0usize;
-        counted.iter_mut().for_each(|flag| *flag = false);
-        for band in &partition.bands[first..] {
-            if band.base >= block.max.z {
-                break;
-            }
-            for piece in &band.pieces {
-                let fraction = block.fraction(piece, &mut stack, cancel)?;
-                if fraction <= 0.0 {
-                    continue;
+    // Measured in parallel, added up in block order.
+    //
+    // The clipping is effectively the whole cost of a run and every block's is
+    // independent of every other's, but the totals cannot simply be summed per
+    // thread: float addition is not associative, so a sum split across threads
+    // is a different number, and one split differently on the next run is
+    // different again - the same project would quietly stop agreeing with
+    // itself. The threads therefore only measure. The accumulation below walks
+    // the measurements in the order one thread would have produced them, so
+    // the figures are bit for bit the ones this scan has always reported.
+    let mut chunk_start = 0usize;
+    while chunk_start < blocks.len() {
+        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        progress.set_items(chunk_start as u64, blocks.len() as u64);
+        let chunk_end = (chunk_start + MEASURED_CHUNK).min(blocks.len());
+        // One scratch per worker rather than per block: the clipper's buffers
+        // are the reason a block costs what it does.
+        let measured: Vec<anyhow::Result<BlockOverlaps>> = (chunk_start..chunk_end)
+            .into_par_iter()
+            .map_init(intersection::Scratch::default, |scratch, index| {
+                let bounds = blocks.get(index).ok_or_else(|| anyhow::anyhow!("Missing block geometry at {index}"))?;
+                let block = intersection::Block::new(model, bounds)?;
+                // Bands are ordered, so the first that can reach this block is
+                // found by bisection and the scan stops as soon as one starts
+                // above it.
+                let first = partition.bands.partition_point(|band| band.top <= block.min.z);
+                let mut hits = Vec::new();
+                for band in &partition.bands[first..] {
+                    if band.base >= block.max.z {
+                        break;
+                    }
+                    for piece in &band.pieces {
+                        let fraction = block.fraction(piece, scratch, cancel)?;
+                        if fraction > 0.0 {
+                            hits.push((piece.slot, fraction));
+                        }
+                    }
                 }
+                Ok(BlockOverlaps {
+                    volume: block.world_volume(),
+                    hits,
+                })
+            })
+            .collect();
+
+        for (offset, measured) in measured.into_iter().enumerate() {
+            let index = chunk_start + offset;
+            // Taken in index order, so a chunk whose blocks failed in several
+            // places reports the same one the sequential scan reported.
+            let BlockOverlaps { volume: block_volume, hits } = measured?;
+            let mut assigned = 0.0;
+            let mut touched = 0usize;
+            counted.iter_mut().for_each(|flag| *flag = false);
+            for (slot, fraction) in hits {
                 touched += 1;
                 assigned += fraction;
                 anyhow::ensure!(
                     assigned <= 1.0 + OVERLAP_FLOOR + OVERLAP_PER_PIECE * touched as f64,
                     "Block overlap exceeds its volume across planning pieces; the partition overlaps itself"
                 );
-                let total = &mut totals[piece.slot];
+                let total = &mut totals[slot];
                 add(&mut total.all, &numeric, index, fraction, block_volume, Some((&mut counted, &mut counters)));
                 for field in &categories {
                     let value = field.values.at(index);
@@ -438,8 +485,9 @@ pub(crate) fn compute(
                     add(group, &numeric, index, fraction, block_volume, None);
                 }
             }
+            contributing_blocks += u64::from(touched > 0);
         }
-        contributing_blocks += u64::from(touched > 0);
+        chunk_start = chunk_end;
     }
     progress.set_items(blocks.len() as u64, blocks.len() as u64);
     // A field every contributing block was missing is not a measured zero.

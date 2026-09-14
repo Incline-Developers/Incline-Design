@@ -156,13 +156,6 @@ impl SchedulePipeline {
         self.running.is_some() || !self.queue.is_empty()
     }
 
-    /// The last completed run, whether or not it is still current. Reading it
-    /// is always allowed: a held result is how the page says what was checked,
-    /// and hiding it the moment it goes stale would leave nothing to label.
-    pub(crate) fn held_result(&self) -> Option<&ScheduleRunResult> {
-        self.result.as_ref()
-    }
-
     pub(crate) fn step_inputs_match(&self, step: ScheduleStep) -> bool {
         self.steps[step.index()].completed_inputs == Some(self.fingerprints[step.index()])
     }
@@ -521,10 +514,7 @@ impl crate::app::App<'_> {
         // Held where the run controls are as well as on the Gantt, so an unmet
         // prerequisite is visible from the page that can fix it.
         let calculation = match self.schedule_run_inputs() {
-            Ok(inputs) => {
-                let run = self.schedule_pipeline.as_ref().and_then(SchedulePipeline::held_result).map_or(0, |result| result.run);
-                tr!("schedule-calculation-ready", run = run.to_string(), generation = inputs.generation.to_string())
-            }
+            Ok(_) => tr!("schedule-calculation-ready"),
             Err(reason) => tr!("schedule-calculation-blocked", reason = reason.describe()),
         };
         if self.editor.schedule_stages != views || self.editor.schedule_run_active != running || self.editor.schedule_calculation_status != calculation {

@@ -39,6 +39,16 @@ use crate::{
     model::{progress::Progress, triangulation::TriangulationId},
 };
 
+/// Whether a job announces itself to the user while it runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    /// Report in the bottom-right readout, turn the pointer to the busy
+    /// cursor, and keep the frame redrawing so a percentage advances.
+    StatusBar,
+    /// Say nothing anywhere.
+    Quietly,
+}
+
 /// Identifies the sources a job derives from, so stale in-flight jobs can be
 /// cancelled when their source changes or is removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +88,12 @@ pub(crate) enum JobKey {
         solid: crate::model::SolidId,
         kind: crate::app::commands::solids_view::SolidArtifact,
         token: u64,
+    },
+    /// One coalesced Schedule Animate geometry request.
+    ScheduleAnimation {
+        runtime: u32,
+        run: u64,
+        request: u64,
     },
     ReserveStats(crate::model::block_model::BlockModelId, u64),
     Project {
@@ -217,6 +233,7 @@ impl<'a> App<'a> {
             JobKey::ReserveStats(id, key) => self.block_models.iter().any(|model| model.id == id && model.reserve_totals_key == Some(key)),
             JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
             JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
+            JobKey::ScheduleAnimation { runtime, run, request } => self.schedule_animation.accepts(runtime, run, request),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -252,7 +269,25 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
-        self.spawn_job_reporting_progress(label, keys, move |cancel, _progress| compute(cancel), apply);
+        self.spawn_announced_job(Announce::StatusBar, label, keys, move |cancel, _progress| compute(cancel), apply);
+    }
+
+    /// As [`App::spawn_job`], but the task never reaches the status bar or the
+    /// busy pointer, and the frame is not held open while it runs.
+    ///
+    /// For work that reports itself where the user is already looking. The
+    /// status bar keeps redrawing for as long as it has something to show, so
+    /// a job that fires on every drag of a slider would otherwise keep the
+    /// whole scene redrawing between the drags as well as during them. `label`
+    /// is still carried, because a stale or lost result has to be able to name
+    /// itself in the activity console.
+    pub(crate) fn spawn_job_quietly<T, C, A>(&mut self, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
+        self.spawn_announced_job(Announce::Quietly, label, keys, move |cancel, _progress| compute(cancel), apply);
     }
 
     /// As [`App::spawn_job`], but the compute closure also gets a
@@ -265,8 +300,20 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
+        self.spawn_announced_job(Announce::StatusBar, label, keys, compute, apply);
+    }
+
+    fn spawn_announced_job<T, C, A>(&mut self, announce: Announce, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
         let label = label.into();
-        let (ticket, progress) = self.begin_reported_task(label.clone());
+        let (ticket, progress) = match announce {
+            Announce::StatusBar => self.begin_reported_task(label.clone()),
+            Announce::Quietly => self.begin_quiet_task(),
+        };
         let mut console_report = crate::logging::retain_current_report();
 
         let (tx, rx) = mpsc::channel();

@@ -450,11 +450,7 @@ impl crate::app::App<'_> {
         // run controls are: the readiness gate is the point of the pipeline,
         // so it should not be invisible until something consumes it.
         let snapshot = match self.planning_snapshot() {
-            Ok(snapshot) => tr!(
-                "planning-snapshot-ready",
-                generation = snapshot.generation.to_string(),
-                blocks = snapshot.blocks.len().to_string()
-            ),
+            Ok(snapshot) => tr!("planning-snapshot-ready", blocks = snapshot.blocks.len().to_string()),
             Err(reason) => reason.describe(),
         };
         if self.editor.planning_stages != views || self.editor.planning_run_active != running || self.editor.planning_snapshot_status != snapshot {

@@ -179,6 +179,7 @@ impl<'a> App<'a> {
                     // demand that the same frame's edit had already retired.
                     self.sync_planning_pipeline();
                     self.sync_solid_preview();
+                    self.sync_schedule_animation();
                     self.sync_reserve_setup_stats();
                     self.sync_blasting_view();
                     self.sync_blasting_bench();
@@ -190,6 +191,7 @@ impl<'a> App<'a> {
                     // display list the Solids View page does, through the same
                     // offscreen preview - one renderer, not two.
                     let showing_solids_view = self.editor.is_solids_view() || self.editor.sequence_editor_active();
+                    let showing_schedule_animation = self.editor.is_schedule_animation();
                     // Blasting draws into the real viewport, so its bench
                     // slabs are the scene rather than an offscreen preview.
                     let blasting = self.editor.is_planning_cut_step();
@@ -221,7 +223,13 @@ impl<'a> App<'a> {
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
-                            triangulations: if blasting { &self.solid_view_body } else { &self.triangulations },
+                            triangulations: if blasting {
+                                &self.solid_view_body
+                            } else if showing_schedule_animation {
+                                self.schedule_animation.scene()
+                            } else {
+                                &self.triangulations
+                            },
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
                             point_clouds: &self.point_clouds,

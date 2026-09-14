@@ -12,7 +12,7 @@ use crate::{
         EditorState, UiProjectView, chrome,
         dialogs::solids::{block_model_label, kind_label},
         fonts::bold,
-        state::{BenchSelection, SolidsViewRow, UiCommand},
+        state::{BenchSelection, BlastShapeRef, SolidsViewRow, UiCommand},
         unthemed_icon,
         widgets::{
             data_grid::{PropertyTable, property_table_height},
@@ -31,6 +31,184 @@ use crate::{
 /// benches are what the tree is read for.
 pub(crate) fn draw_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document) {
     draw_tree_to_depth(ui, editor, document, true);
+}
+
+/// Animate's independent hierarchy. Every row has the same eye affordance as
+/// the Objects navigator, while clicking a solid also frames it in the main
+/// viewport.
+pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let (slot, top) = reserve_fixed_stripes(ui);
+        if document.solids().is_empty() {
+            explorer_note(ui, tr!(literal = "No solids yet - add one on the Setup page"));
+        }
+        for kind in SolidKind::ALL {
+            let solids: Vec<_> = document.solids().iter().filter(|solid| solid.kind == kind).collect();
+            if solids.is_empty() {
+                continue;
+            }
+            let kind_visible = solids.iter().any(|solid| !editor.schedule_animation_hidden_solids.contains(&solid.id));
+            let (_, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_kind", kind as u8)), &kind_label(kind), false, kind_visible, |ui| {
+                for solid in &solids {
+                    draw_animation_solid(ui, editor, document, solid, commands);
+                }
+            });
+            if visibility_clicked {
+                for solid in &solids {
+                    set_animation_solid_visible(editor, solid.id, !kind_visible);
+                }
+            }
+        }
+        paint_fixed_stripes(ui, slot, top, crate::ui::widgets::tree_row_colors(ui).1);
+    });
+}
+
+fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: &Document, solid: &crate::model::Solid, commands: &mut Vec<UiCommand>) {
+    let occupied = editor.solid_view_bands.get(&solid.id).cloned();
+    let solid_rows = descendants(solid, occupied.as_ref(), true);
+    let selected = group_selected(&editor.schedule_animation_selection, &solid_rows);
+    let visible = !editor.schedule_animation_hidden_solids.contains(&solid.id);
+    let (clicked, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_solid", solid.id.0)), &solid.name, selected, visible, |ui| {
+        if occupied.is_none() {
+            explorer_note(ui, tr!("planning-solid-geometry-pending"));
+        }
+        for bench in solid.benching.benches().iter().rev().filter(|bench| holds(occupied.as_ref(), bench.base, bench.top())) {
+            let bench_band = BenchSelection {
+                base: bench.base,
+                top: bench.top(),
+                is_flitch: false,
+            };
+            let bench_row = SolidsViewRow {
+                solid: solid.id,
+                band: Some(bench_band),
+            };
+            let bench_selected = group_selected(&editor.schedule_animation_selection, std::slice::from_ref(&bench_row));
+            let bench_visible = visible && !editor.schedule_animation_hidden_rows.contains(&bench_row);
+            let (bench_clicked, bench_visibility_clicked) = animation_parent_row(
+                ui,
+                egui::Id::new(("animation_bench", solid.id.0, bench.base.to_bits())),
+                &format_rl(bench.base),
+                bench_selected,
+                bench_visible,
+                |ui| {
+                    let blasts = solid.blasting.bench(bench.base).map(|entry| entry.blasts.as_slice()).unwrap_or_default();
+                    for (blast_index, blast) in blasts.iter().enumerate() {
+                        let blast_ref = BlastShapeRef::new(solid.id, bench.base, blast.anchor);
+                        let blast_visible = bench_visible && !editor.schedule_animation_hidden_blasts.contains(&blast_ref);
+                        let (_, blast_visibility_clicked) = animation_parent_row(
+                            ui,
+                            egui::Id::new(("animation_blast", solid.id.0, bench.base.to_bits(), blast_index)),
+                            &blast.name,
+                            false,
+                            blast_visible,
+                            |ui| {
+                                for flitch in bench.flitches.iter().rev().filter(|flitch| holds(occupied.as_ref(), flitch.base, flitch.top())) {
+                                    let flitch_row = SolidsViewRow {
+                                        solid: solid.id,
+                                        band: Some(BenchSelection {
+                                            base: flitch.base,
+                                            top: flitch.top(),
+                                            is_flitch: true,
+                                        }),
+                                    };
+                                    let flitch_visible = blast_visible && !editor.schedule_animation_hidden_rows.contains(&flitch_row);
+                                    let row = animation_leaf_row(
+                                        ui,
+                                        egui::Id::new(("animation_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
+                                        &format_rl(flitch.base),
+                                        group_selected(&editor.schedule_animation_selection, std::slice::from_ref(&flitch_row)),
+                                        flitch_visible,
+                                    );
+                                    if row.0 {
+                                        select_animation_rows(ui, editor, vec![flitch_row]);
+                                    }
+                                    if row.1 {
+                                        set_animation_row_visible(editor, flitch_row, bench_row, !flitch_visible);
+                                    }
+                                }
+                            },
+                        );
+                        if blast_visibility_clicked {
+                            set_animation_blast_visible(editor, blast_ref, bench_row, !blast_visible);
+                        }
+                    }
+                },
+            );
+            if bench_clicked {
+                select_animation_rows(ui, editor, vec![bench_row]);
+            }
+            if bench_visibility_clicked {
+                set_animation_row_visible(editor, bench_row, bench_row, !bench_visible);
+            }
+        }
+    });
+    if clicked {
+        select_animation_rows(ui, editor, solid_rows);
+        commands.push(UiCommand::FocusScheduleAnimationSolid(solid.id));
+    }
+    if visibility_clicked {
+        set_animation_solid_visible(editor, solid.id, !visible);
+    }
+}
+
+fn animation_parent_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, visible: bool, body: impl FnOnce(&mut egui::Ui)) -> (bool, bool) {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let row = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+            ExplorerEntry::new(id.with("row"), label.to_owned()).selected(selected).visibility_toggle(visible).show(ui)
+        })
+        .inner;
+    state.show_body_indented(&row.response, ui, body);
+    (row.response.clicked(), row.visibility_clicked)
+}
+
+fn animation_leaf_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, visible: bool) -> (bool, bool) {
+    let row = ExplorerEntry::new(id, label.to_owned())
+        .reserve_toggle_gutter(true)
+        .selected(selected)
+        .visibility_toggle(visible)
+        .show(ui);
+    (row.response.clicked(), row.visibility_clicked)
+}
+
+fn select_animation_rows(ui: &egui::Ui, editor: &mut EditorState, rows: Vec<SolidsViewRow>) {
+    let extend = ui.input(|input| input.modifiers.command || input.modifiers.shift);
+    apply_selection(&mut editor.schedule_animation_selection, &rows, extend);
+    ui.ctx().request_repaint();
+}
+
+fn set_animation_solid_visible(editor: &mut EditorState, solid: crate::model::SolidId, visible: bool) {
+    if visible {
+        editor.schedule_animation_hidden_solids.remove(&solid);
+        editor.schedule_animation_hidden_rows.retain(|row| row.solid != solid);
+        editor.schedule_animation_hidden_blasts.retain(|blast| blast.solid != solid);
+    } else {
+        editor.schedule_animation_hidden_solids.insert(solid);
+    }
+}
+
+fn set_animation_row_visible(editor: &mut EditorState, row: SolidsViewRow, parent: SolidsViewRow, visible: bool) {
+    editor.schedule_animation_hidden_solids.remove(&row.solid);
+    if visible {
+        editor.schedule_animation_hidden_rows.retain(|hidden| *hidden != row && *hidden != parent);
+    } else if !editor.schedule_animation_hidden_rows.contains(&row) {
+        editor.schedule_animation_hidden_rows.push(row);
+    }
+}
+
+fn set_animation_blast_visible(editor: &mut EditorState, blast: BlastShapeRef, bench: SolidsViewRow, visible: bool) {
+    editor.schedule_animation_hidden_solids.remove(&blast.solid);
+    editor.schedule_animation_hidden_rows.retain(|row| *row != bench);
+    if visible {
+        editor.schedule_animation_hidden_blasts.remove(&blast);
+    } else {
+        editor.schedule_animation_hidden_blasts.insert(blast);
+    }
 }
 
 /// The same tree stopping at benches, for the Blasting step: a blast divides

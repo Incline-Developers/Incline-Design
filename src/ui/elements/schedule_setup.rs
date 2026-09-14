@@ -15,7 +15,7 @@ use crate::{
     ui::{
         EditorState,
         fonts::bold,
-        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
+        state::{ScheduleAgentDraft, ScheduleBarHeightDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridRow, PropertyTable, grid_row, property_table_height},
@@ -140,8 +140,8 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
         .unwrap_or_else(|| tr!("schedule-tonnage-field-none"));
     let result = match summary {
         None => tr!("schedule-readiness-never-run"),
-        Some(summary) if status.state == StageState::Complete => tr!("schedule-readiness-result-current", run = summary.generation.to_string()),
-        Some(summary) => tr!("schedule-readiness-result-stale", run = summary.generation.to_string()),
+        Some(_) if status.state == StageState::Complete => tr!("schedule-readiness-result-current"),
+        Some(_) => tr!("schedule-readiness-result-stale"),
     };
     let blocks = summary.map_or_else(|| tr!(literal = "—"), |summary| summary.entities.to_string());
 
@@ -179,8 +179,6 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(bold(&editor.schedule_calculation_status)).wrap());
             }
-            ui.add_space(8.0);
-            ui.add(egui::Label::new(egui::RichText::new(tr!("schedule-readiness-intro")).weak().small()).wrap());
         });
     });
 }
@@ -221,18 +219,37 @@ pub(crate) fn draw_configuration(
         });
     }
     let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
+    if editor.schedule_bar_height_draft.as_ref().is_none_or(|draft| draft.source != plan.bar_height()) {
+        editor.schedule_bar_height_draft = Some(ScheduleBarHeightDraft {
+            source: plan.bar_height(),
+            text: plan.bar_height().to_string(),
+        });
+    }
+    let height_draft = editor.schedule_bar_height_draft.as_mut().expect("just ensured");
+    let parsed_height = height_draft.text.trim().parse::<f32>().ok();
+    let height_error = (!parsed_height
+        .is_some_and(|height| height.is_finite() && (crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT).contains(&height)))
+    .then(|| crate::model::schedule::ScheduleError::InvalidBarHeight.message());
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
     // Header + schedule name + scheduling quantity, plus the explanatory
     // empty-field row when the project has no reserve schema. The header is a
     // table row too; omitting it from this count clips the quantity combo.
-    let rows = 3 + usize::from(no_fields);
+    let rows = 4 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
     PropertyTable::new("schedule_configuration", table_rect, &tr!("planning-configuration")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let response = rows.field(&tr!("planning-schedule-name"), &mut draft.text, None);
         if response.lost_focus() && draft.text.trim() != plan.name {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetName(draft.text.trim().to_owned())));
+        }
+        let response = rows.field(&tr!("schedule-bar-height"), &mut height_draft.text, height_error.as_deref());
+        if response.lost_focus()
+            && let Some(height) = parsed_height
+            && height != plan.bar_height()
+            && height_error.is_none()
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
         }
         let mut tonnage = plan.tonnage_field();
         let selected_text = tonnage
@@ -488,9 +505,4 @@ pub(crate) fn suggested_class_name(plan: &SchedulePlan) -> String {
 
 pub(crate) fn suggested_agent_name(plan: &SchedulePlan) -> String {
     crate::model::schedule::suggested_name(&tr!("schedule-loader-agent-default"), plan.agents().iter().map(|agent| agent.name.clone()))
-}
-
-/// A name for a new bar that no bar in this plan already has.
-pub(crate) fn suggested_bar_name(plan: &SchedulePlan) -> String {
-    crate::model::schedule::suggested_name(&tr!("schedule-bar-default-name"), plan.bars().iter().map(|bar| bar.name().to_owned()))
 }

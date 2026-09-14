@@ -156,8 +156,9 @@ impl SolidPreviewTarget {
     }
 }
 
-/// Centre and bounding radius of a mesh, in world units.
-pub(super) fn mesh_framing(meshes: &[OpenTriangulation]) -> (glam::DVec3, f64) {
+/// Corners of the box a set of meshes occupies, in world units, or `None`
+/// when there is nothing there to bound.
+fn mesh_bounds(meshes: &[OpenTriangulation]) -> Option<(glam::DVec3, glam::DVec3)> {
     let mut lower = glam::DVec3::splat(f64::INFINITY);
     let mut upper = glam::DVec3::splat(f64::NEG_INFINITY);
     for mesh in meshes {
@@ -165,14 +166,26 @@ pub(super) fn mesh_framing(meshes: &[OpenTriangulation]) -> (glam::DVec3, f64) {
         lower = lower.min(glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z));
         upper = upper.max(glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
     }
-    if !lower.is_finite() || !upper.is_finite() {
-        return (glam::DVec3::ZERO, 1.0);
-    }
-    let center = (lower + upper) * 0.5;
+    (lower.is_finite() && upper.is_finite()).then_some((lower, upper))
+}
+
+/// Centre and bounding radius of a box.
+fn framing_of(lower: glam::DVec3, upper: glam::DVec3) -> (glam::DVec3, f64) {
     // Half the diagonal, so the mesh stays inside the frame at every orbit
     // angle rather than only the one it was fitted at.
-    let radius = ((upper - lower).length() * 0.5).max(1e-3);
-    (center, radius)
+    ((lower + upper) * 0.5, ((upper - lower).length() * 0.5).max(1e-3))
+}
+
+/// Centre and bounding radius of a mesh, in world units.
+pub(super) fn mesh_framing(meshes: &[OpenTriangulation]) -> (glam::DVec3, f64) {
+    mesh_bounds(meshes).map_or((glam::DVec3::ZERO, 1.0), |(lower, upper)| framing_of(lower, upper))
+}
+
+/// A preview framing being held still, and what it is being held for.
+pub(super) struct HeldFraming {
+    hold: crate::ui::state::PreviewFramingHold,
+    lower: glam::DVec3,
+    upper: glam::DVec3,
 }
 
 /// Advance the preview's content revision over a redraw that changes what is
@@ -196,6 +209,31 @@ pub(crate) fn click_names_current_image(request_image: u64, image_revision: u64)
 }
 
 impl Graphics<'_> {
+    /// Centre and radius to draw the preview at, held still while a pane is
+    /// holding them - see [`crate::ui::state::EditorState::preview_framing_hold`].
+    ///
+    /// A held framing is only ever grown. A run's meshes arrive over several
+    /// frames, so the first frame's bounds are not the run's, and the framing
+    /// has to be able to catch up to ground that appears; but it must never
+    /// follow ground that *disappears*, because that is what digging a block
+    /// does and the camera chasing it is the thing being prevented.
+    fn preview_framing(&mut self, preview: &[OpenTriangulation], hold: Option<crate::ui::state::PreviewFramingHold>) -> (glam::DVec3, f64) {
+        let Some((lower, upper)) = mesh_bounds(preview) else {
+            return (glam::DVec3::ZERO, 1.0);
+        };
+        let Some(hold) = hold else {
+            self.solid_preview_framing = None;
+            return framing_of(lower, upper);
+        };
+        let held = match self.solid_preview_framing.as_mut().filter(|held| held.hold == hold) {
+            Some(held) => held,
+            None => self.solid_preview_framing.insert(HeldFraming { hold, lower, upper }),
+        };
+        held.lower = held.lower.min(lower);
+        held.upper = held.upper.max(upper);
+        framing_of(held.lower, held.upper)
+    }
+
     /// Draw the solid being inspected into its own texture, and hand egui the
     /// id to paint it with. Does nothing - and releases the previous id - when
     /// no solid is being previewed.
@@ -213,7 +251,7 @@ impl Graphics<'_> {
         }
         editor.solid_preview_texture = Some(target.texture_id);
 
-        let (center, radius) = mesh_framing(preview);
+        let (center, radius) = self.preview_framing(preview, editor.preview_framing_hold());
         // Whichever pane is showing this image owns the orbit. The sequence
         // editor keeps its own, so opening it moves nothing on the Solids
         // pages and closing it puts the user back where they left off.
@@ -256,15 +294,15 @@ impl Graphics<'_> {
             )
             .hash(&mut hasher);
             (requested.width, requested.height).hash(&mut hasher);
+            // The framing is half of the camera and is deliberately not a
+            // function of the meshes above: while it is held, ground can leave
+            // the display list without it moving. Hashed so the image is still
+            // redrawn on the frames it does move.
+            for value in [center.x, center.y, center.z, radius] {
+                value.to_bits().hash(&mut hasher);
+            }
             view.hash_into(&mut hasher);
             editor.dig_outlines_key.hash(&mut hasher);
-            // The order numbers are projected during the render, so the draft
-            // they belong to is part of what the image depends on. Without
-            // this a reorder - which changes no block's colour - would leave
-            // last render's positions numbered in the new order.
-            for member in &editor.sequence_members {
-                member.anchor.map(|anchor| anchor.map(f64::to_bits)).hash(&mut hasher);
-            }
             hasher.finish()
         };
         // A click changes nothing about the image, so it would not re-render on
@@ -286,30 +324,6 @@ impl Graphics<'_> {
             self.render_solid_preview_inner(&mut target, preview, &scene, center, radius, view, editor);
         }
         self.solid_preview = Some(target);
-    }
-
-    /// Project each open sequence draft member's anchor into image UVs.
-    ///
-    /// An unresolved member has no anchor and so gets no number in the image:
-    /// it keeps its place and its number in the ordered list beside it, which
-    /// is where a reference nothing can be found for belongs.
-    fn project_sequence_labels(&self, editor: &mut EditorState) {
-        if editor.sequence_members.is_empty() {
-            editor.sequence_label_uv.clear();
-            return;
-        }
-        let matrix = crate::rendering::camera::scene_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
-        let size = (self.size.width as f32, self.size.height as f32);
-        editor.sequence_label_uv = editor
-            .sequence_members
-            .iter()
-            .map(|member| {
-                let anchor = member.anchor?;
-                let world = glam::DVec3::new(anchor[0], anchor[1], anchor[2]) - self.scene_origin;
-                let point = crate::rendering::pick::world_to_screen(&matrix, world, size)?;
-                Some([(point.x / f64::from(size.0.max(1.0))) as f32, (point.y / f64::from(size.1.max(1.0))) as f32])
-            })
-            .collect();
     }
 
     /// Resolve a click on the preview image to the solid it landed on.
@@ -415,12 +429,6 @@ impl Graphics<'_> {
                 });
             }
         }
-        // Where each of the sequence editor's members sits in this image, for
-        // its order number to be drawn at. Projected here, through the camera
-        // the image is actually being drawn with and rebased the same way the
-        // pick above is, so a number cannot drift from the block it names.
-        self.project_sequence_labels(editor);
-
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Solid preview encoder"),
         });

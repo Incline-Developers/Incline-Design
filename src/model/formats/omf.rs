@@ -64,11 +64,33 @@ const META_SCHEDULE: &str = "incline:schedule";
 /// half-read or migrated. Bumping this retires every file written before it,
 /// deliberately, so that nothing in the app has to carry a shape it no longer
 /// has. That ends when scheduling ships.
-const SCHEDULE_METADATA_VERSION: u64 = 6;
+const SCHEDULE_METADATA_VERSION: u64 = 7;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
+/// Every `incline:` key the writer puts on an element.
+///
+/// A key absent from here is read back as somebody else's metadata, and the
+/// save dialog offers to drop it - so a file Incline wrote would announce
+/// itself as foreign, and go on doing so after every save and reopen, the
+/// save having faithfully written the key again. Anything added to the
+/// constants above belongs in this list.
+const KNOWN_ELEMENT_METADATA: &[&str] = &[
+    META_GEOMETRY,
+    META_KIND,
+    META_NAME,
+    META_OBJECT,
+    META_LAYER,
+    META_SOURCE,
+    META_STYLE,
+    META_ID,
+    META_DRILL_HOLE,
+    META_TIE_INS,
+    META_RESERVE_FIELDS,
+    META_SOLIDS,
+    META_SCHEDULE,
+];
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -1452,21 +1474,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn record_unsupported_content(&mut self, element: &omf_crate::Element) {
-        const KNOWN_METADATA: &[&str] = &[
-            META_KIND,
-            META_NAME,
-            META_OBJECT,
-            META_LAYER,
-            META_SOURCE,
-            META_STYLE,
-            META_ID,
-            META_DRILL_HOLE,
-            META_TIE_INS,
-            META_RESERVE_FIELDS,
-            META_SOLIDS,
-            META_SCHEDULE,
-        ];
-        let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
+        let unknown_metadata = element
+            .metadata
+            .keys()
+            .filter(|key| !KNOWN_ELEMENT_METADATA.contains(&key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
             self.bundle
                 .warnings
