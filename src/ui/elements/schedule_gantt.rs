@@ -38,7 +38,7 @@ use crate::{
     ui::{
         EditorState, UiProjectView, chrome,
         fonts::bold,
-        state::{BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, ScheduleBarView, ScheduleEdit, UiCommand},
+        state::{BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningSubpage, ScheduleBarView, ScheduleEdit, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             toolbar::GROUP_CORNER_RADIUS,
@@ -133,7 +133,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let toolbar_height = ui.spacing().interact_size.y + 8.0;
             let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
             let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, commands);
+            draw_toolbar(ui, toolbar, editor, &plan, session, commands);
             if canvas.is_positive() {
                 draw_canvas(ui, canvas, editor, &plan, session, commands);
             }
@@ -425,7 +425,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// same icons: a schedule is run the way everything else in this project is
 /// run, and a control that looked different here would suggest it did
 /// something different.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     use crate::ui::{
         elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
         widgets::toolbar::ToolbarButton,
@@ -443,7 +443,11 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
                 !working,
                 ToolbarButton::new(
                     egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, !working)),
-                    tr!("schedule-run-period-note"),
+                    tr_format!(
+                        literal = "%action%\n%assumptions%",
+                        action = tr!("schedule-run-period-note"),
+                        assumptions = tr!("schedule-run-assumptions")
+                    ),
                 )
                 .button_side(side)
                 .id_salt("gantt_run_period"),
@@ -457,7 +461,11 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
                 !working,
                 ToolbarButton::new(
                     egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, !working)),
-                    tr!("schedule-run-whole-note"),
+                    tr_format!(
+                        literal = "%action%\n%assumptions%",
+                        action = tr!("schedule-run-whole-note"),
+                        assumptions = tr!("schedule-run-assumptions")
+                    ),
                 )
                 .button_side(side)
                 .id_salt("gantt_run_whole"),
@@ -479,6 +487,23 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
             .clicked()
         {
             commands.push(UiCommand::CancelScheduleCalculation);
+        }
+        if plan.bars().is_empty()
+            && let Some(agent) = plan.agents().first()
+            && ui.add(egui::Button::new(tr!("schedule-add-work")).corner_radius(GROUP_CORNER_RADIUS)).clicked()
+        {
+            commands.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::AddBar {
+                    name: String::new(),
+                    agent: Some(agent.id),
+                    priority: 0,
+                    window: WorkWindow {
+                        start_h: 0.0,
+                        end_h: Some(crate::app::schedule_run::PERIOD_H),
+                    },
+                },
+            ));
         }
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add_space(8.0);
@@ -508,6 +533,9 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
         // editable whatever they say, and only the calculation waits.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
+            if editor.schedule_run_blocked && ui.button(tr!("schedule-open-setup")).clicked() {
+                commands.push(UiCommand::SetPlanningSubpage(PlanningSubpage::Setup));
+            }
             if !editor.schedule_run_status.is_empty() {
                 let text = egui::RichText::new(&editor.schedule_run_status);
                 let calculated = editor.schedule_dispatch.is_some();
@@ -518,12 +546,21 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
                 } else {
                     text.weak()
                 };
-                // The status in full, for when the bar is too narrow to hold
-                // it. Nothing else: a tooltip that explains the page rather
-                // than finishing the sentence under the pointer is a tutorial,
-                // and it is in the way of every reading of the status after
-                // the first.
-                ui.add(egui::Label::new(text).truncate()).on_hover_text(editor.schedule_run_status.clone());
+                // Detailed mass accounting is useful when interpreting a
+                // result, but not worth a permanent statistics strip.
+                ui.add(egui::Label::new(text).truncate()).on_hover_ui(|ui| {
+                    ui.label(&editor.schedule_run_status);
+                    if let Some(schedule) = &editor.schedule_dispatch {
+                        let started: f64 = schedule.balances.iter().map(|balance| balance.started_t).sum();
+                        let remaining: f64 = schedule.balances.iter().map(|balance| balance.remaining_t).sum();
+                        ui.label(tr!(
+                            "schedule-result-summary",
+                            started = format!("{started:.1}"),
+                            extracted = format!("{:.1}", started - remaining),
+                            remaining = format!("{remaining:.1}")
+                        ));
+                    }
+                });
             }
             if !editor.schedule_calculation_status.is_empty() {
                 ui.add_space(8.0);
@@ -611,11 +648,11 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // on a bar is a click on the bar rather than a pan of the timeline, and a
     // right-click on empty lane space is that lane's own menu.
     draw_row_menus(ui, body, editor, &layout.rows, session, commands);
-    draw_bars(ui, body, editor, plan, &layout, session, commands, schedule.as_ref());
+    draw_bars(ui, body, editor, plan, &layout, session, commands, schedule.as_deref());
     // Idle is a row-level indicator and must remain visible even beneath an
     // authored bar that has no executable material, so paint it over the bar
     // foot rather than letting the bar cover most of a four-pixel strip.
-    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_ref(), &layout.rows);
+    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows);
     editor.schedule_dispatch = schedule;
 
     if plan.agents().is_empty() && layout.rows.is_empty() {
@@ -627,7 +664,25 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
         let used = (rows_height - editor.gantt.row_scroll).max(0.0);
         let free = egui::Rect::from_min_max(egui::pos2(body.left(), body.top() + used), body.max);
         if free.height() > 32.0 {
-            centred_note(ui, free, tr!("gantt-no-bars"));
+            let label = tr!("schedule-add-work");
+            let size = egui::vec2(120.0, ui.spacing().interact_size.y);
+            let button_rect = egui::Rect::from_center_size(free.center(), size);
+            if ui.put(button_rect, egui::Button::new(label).corner_radius(GROUP_CORNER_RADIUS)).clicked()
+                && let Some(agent) = plan.agents().first()
+            {
+                commands.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::AddBar {
+                        name: String::new(),
+                        agent: Some(agent.id),
+                        priority: 0,
+                        window: WorkWindow {
+                            start_h: 0.0,
+                            end_h: Some(crate::app::schedule_run::PERIOD_H),
+                        },
+                    },
+                ));
+            }
         }
     }
 }
@@ -800,8 +855,8 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         let left_behind = schedule.bar_left_behind(bar.members());
         if left_behind > 0.0 {
             lines.push(tr!("schedule-bar-left-behind", tonnes = format!("{left_behind:.1}")));
-        } else if let Some(end) = schedule.bar_end_h(bar.id)
-            && window.end_h.is_some_and(|close| end < close)
+        } else if let Some(completed) = schedule.bar_completion_h(bar.members())
+            && window.end_h.is_some_and(|close| completed < close)
         {
             lines.push(tr!("schedule-bar-finished-early"));
         }

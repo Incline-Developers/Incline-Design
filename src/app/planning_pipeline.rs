@@ -478,7 +478,12 @@ impl crate::app::App<'_> {
         let fields = document.map(|document| document.reserve_fields().to_vec()).unwrap_or_default();
         let solids = document.map(|document| document.solids().to_vec()).unwrap_or_default();
 
-        let field_list = hash_of(serde_json::to_vec(&fields).unwrap_or_default());
+        // Names are presentation: reserve artifacts and schedule tonnes are
+        // keyed by durable field id and aggregation. A rename must refresh
+        // labels without forcing the Solids run (and every calculated
+        // schedule above it) stale.
+        let field_rules: Vec<_> = fields.iter().map(|field| (field.id.0, field.aggregation)).collect();
+        let field_list = hash_of(serde_json::to_vec(&field_rules).unwrap_or_default());
 
         // Block Models: the bindings and the data behind them. Attribute
         // arrays are immutable and shared, so their identity stands in for

@@ -30,12 +30,20 @@
 //!   that is not finite, each stop the bar with a named problem. A measured
 //!   zero is an answer and passes.
 
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use super::solids_view::{DigBlockRecord, MaterialState, PlanningSnapshot};
 use crate::{
     i18n::{tr, tr_format},
     model::{
         Document, ReserveAggregation, ReserveFieldId,
-        schedule::{BarId, DigBlockPick, DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, sequence::BlockGround},
+        schedule::{
+            BarId, DigBlockPick, DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput,
+            sequence::{BlockGround, GroundIndex},
+        },
         solid_reserves::ReserveTotals,
     },
     ui::state::{ScheduleBarView, ScheduleMemberView, SequenceMemberView},
@@ -209,6 +217,20 @@ pub(crate) struct ScheduleRunProblem {
     pub(crate) message: String,
 }
 
+/// Scheduling ground and readiness derived for one exact set of inputs.
+/// Shared by the Gantt, run preparation, and the sequence inspector so an
+/// unchanged frame neither recollects blocks nor resolves references again.
+pub(crate) struct ScheduleReportCache {
+    key: u64,
+    snapshot: Option<Arc<PlanningSnapshot>>,
+    ground: Arc<Vec<BlockGround>>,
+    index: Arc<GroundIndex>,
+    unavailable: Option<String>,
+    reports: Arc<Vec<BarReport>>,
+    bar_views_key: Option<u64>,
+    sequence_key: Option<u64>,
+}
+
 /// The project's tonnage field, or what is wrong with the choice.
 enum TonnageField {
     Chosen(ReserveFieldId),
@@ -346,37 +368,145 @@ impl crate::app::App<'_> {
         let document = self.workspace.active_document()?;
         let bar = document.schedule().bar(id)?;
         let snapshot = self.planning_snapshot();
+        let ground = snapshot.as_ref().ok().map(ground_of);
+        let index = ground.as_deref().map(GroundIndex::build);
         let run = snapshot.as_ref().map(|snapshot| CurrentRun {
             snapshot,
-            ground: ground_of(snapshot),
+            ground: ground.as_deref().expect("built for a finished snapshot"),
+            index: index.as_ref().expect("built for a finished snapshot"),
         });
         Some(report_against(document, bar, run.as_ref().map_err(|reason| *reason)))
     }
 
-    /// Every bar, measured. Used by the Gantt and, in checkpoint 4, by the
-    /// dispatch evaluator's own gate.
-    ///
-    /// One snapshot serves them all: every report then describes the same
-    /// generation, and the run is collected once however many bars the
-    /// project holds.
-    pub(crate) fn schedule_reports(&self) -> Vec<BarReport> {
-        let Some(document) = self.workspace.active_document() else {
-            return Vec::new();
-        };
-        if document.schedule().bars().is_empty() {
-            return Vec::new();
+    fn schedule_report_key(&self) -> u64 {
+        let runtime = self.workspace.active_project().map_or(0, |project| project.runtime_id);
+        let mut status_hasher = std::collections::hash_map::DefaultHasher::new();
+        match self.planning_snapshot_status() {
+            Ok(generation) => (0_u8, generation, String::new()).hash(&mut status_hasher),
+            Err(reason) => (1_u8, 0_u64, reason.describe()).hash(&mut status_hasher),
         }
+        let status_key = status_hasher.finish();
+        let document_revision = self.workspace.active_document().map_or(0, Document::revision);
+        if let Some((held_runtime, held_revision, held_status, key)) = self.schedule_report_key_cache.get()
+            && (held_runtime, held_revision, held_status) == (runtime, document_revision, status_key)
+        {
+            return key;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        runtime.hash(&mut hasher);
+        // Conservatively include the document revision: reserve mappings and
+        // model content can change measured tonnes without changing the
+        // selected field's identity. Presentation-only edits may rebuild this
+        // derived cache once, but still do not invalidate dispatch results.
+        document_revision.hash(&mut hasher);
+        status_key.hash(&mut hasher);
+        let Some(document) = self.workspace.active_document() else {
+            let key = hasher.finish();
+            self.schedule_report_key_cache.set(Some((runtime, document_revision, status_key, key)));
+            return key;
+        };
+        let plan = document.schedule();
+        plan.tonnage_field().map(|field| field.0).hash(&mut hasher);
+        if let Some(field) = plan.tonnage_field().and_then(|id| document.reserve_fields().iter().find(|field| field.id == id)) {
+            field.id.0.hash(&mut hasher);
+            field.name.hash(&mut hasher);
+            format!("{:?}", field.aggregation).hash(&mut hasher);
+        }
+        for bar in plan.bars() {
+            bar.id.0.hash(&mut hasher);
+            for member in bar.members() {
+                member.solid.hash(&mut hasher);
+                member.source.hash(&mut hasher);
+                member.flitch_base.to_bits().hash(&mut hasher);
+                member.flitch_top.to_bits().hash(&mut hasher);
+                member.anchor.map(f64::to_bits).hash(&mut hasher);
+                member.plan_area.to_bits().hash(&mut hasher);
+                member.footprint.hash(&mut hasher);
+                member.volume.map(f64::to_bits).hash(&mut hasher);
+            }
+        }
+        // These names feed resolved member labels and unnamed bar labels but
+        // do not alter scheduling numerics. Keeping them in this presentation
+        // key refreshes text without retiring a calculated result.
+        for solid in document.solids() {
+            solid.id.hash(&mut hasher);
+            solid.name.hash(&mut hasher);
+            (solid.kind as u8).hash(&mut hasher);
+            for bench in &solid.blasting.benches {
+                bench.base.to_bits().hash(&mut hasher);
+                for blast in &bench.blasts {
+                    blast.name.hash(&mut hasher);
+                    blast.anchor.map(f64::to_bits).hash(&mut hasher);
+                }
+            }
+        }
+        let key = hasher.finish();
+        self.schedule_report_key_cache.set(Some((runtime, document_revision, status_key, key)));
+        key
+    }
+
+    fn ensure_schedule_report_cache(&mut self) {
+        let key = self.schedule_report_key();
+        if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.key == key) {
+            return;
+        }
+        let rebuild_started = std::time::Instant::now();
         let snapshot = self.planning_snapshot();
-        let run = snapshot.as_ref().map(|snapshot| CurrentRun {
+        let Some(document) = self.workspace.active_document() else {
+            self.schedule_report_cache = Some(ScheduleReportCache {
+                key,
+                snapshot: None,
+                ground: Arc::default(),
+                index: Arc::new(GroundIndex::build(&[])),
+                unavailable: snapshot.err().map(|reason| reason.describe()),
+                reports: Arc::default(),
+                bar_views_key: None,
+                sequence_key: None,
+            });
+            log::debug!("schedule report cache rebuilt without a project in {:?}", rebuild_started.elapsed());
+            return;
+        };
+        let (snapshot, ground, index, unavailable, reports) = match snapshot {
+            Ok(snapshot) => {
+                let snapshot = Arc::new(snapshot);
+                let ground = Arc::new(ground_of(&snapshot));
+                let index = Arc::new(GroundIndex::build(&ground));
+                let run = CurrentRun {
+                    snapshot: &snapshot,
+                    ground: &ground,
+                    index: &index,
+                };
+                let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Ok(&run))).collect();
+                (Some(snapshot), ground, index, None, Arc::new(reports))
+            }
+            Err(reason) => {
+                let unavailable = reason.describe();
+                let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Err(&reason))).collect();
+                (None, Arc::default(), Arc::new(GroundIndex::build(&[])), Some(unavailable), Arc::new(reports))
+            }
+        };
+        let block_count = snapshot.as_ref().map_or(0, |snapshot| snapshot.blocks.len());
+        let report_count = reports.len();
+        self.schedule_report_cache = Some(ScheduleReportCache {
+            key,
             snapshot,
-            ground: ground_of(snapshot),
+            ground,
+            index,
+            unavailable,
+            reports,
+            bar_views_key: None,
+            sequence_key: None,
         });
-        document
-            .schedule()
-            .bars()
-            .iter()
-            .map(|bar| report_against(document, bar, run.as_ref().map_err(|reason| *reason)))
-            .collect()
+        log::debug!(
+            "schedule report cache rebuilt {block_count} blocks / {report_count} bars in {:?}",
+            rebuild_started.elapsed()
+        );
+    }
+
+    /// Every bar measured against one cached, coherent ground snapshot.
+    pub(crate) fn schedule_reports(&mut self) -> Arc<Vec<BarReport>> {
+        self.ensure_schedule_report_cache();
+        self.schedule_report_cache.as_ref().map(|cache| cache.reports.clone()).unwrap_or_default()
     }
 
     /// Mirror the bar readiness reports into the editor state the Gantt reads.
@@ -393,6 +523,10 @@ impl crate::app::App<'_> {
             }
             if self.editor.schedule_dispatch.take().is_some() {
                 self.redraw_requested = true;
+            }
+            if let Some(cache) = self.schedule_report_cache.as_mut() {
+                cache.bar_views_key = None;
+                cache.sequence_key = None;
             }
             // The draft itself is kept: leaving the page puts the Solids
             // preview back the way it was, and coming back shows the same
@@ -412,9 +546,27 @@ impl crate::app::App<'_> {
         // readiness of each bar is a read; the timed schedule comes only from
         // an explicit Run, and what that run found is mirrored separately by
         // `mirror_schedule_calculation`.
-        let dispatch_problems = self.schedule_run_problems.clone();
+        let diagnostics_are_current = self
+            .schedule_run_diagnostics
+            .as_ref()
+            .is_some_and(|diagnostics| self.schedule_run_inputs().ok() == Some(diagnostics.inputs) && self.schedule_plan_revision() == diagnostics.plan_revision);
+        if !diagnostics_are_current {
+            self.schedule_run_diagnostics = None;
+        }
+        let dispatch_problems: &[ScheduleRunProblem] = self.schedule_run_diagnostics.as_ref().map_or(&[], |diagnostics| &diagnostics.problems);
+        let mut views_hasher = std::collections::hash_map::DefaultHasher::new();
+        self.schedule_report_cache.as_ref().map(|cache| cache.key).hash(&mut views_hasher);
+        for problem in dispatch_problems {
+            problem.bars.hash(&mut views_hasher);
+            problem.message.hash(&mut views_hasher);
+        }
+        let views_key = views_hasher.finish();
+        if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.bar_views_key == Some(views_key)) {
+            self.mirror_schedule_calculation();
+            return;
+        }
         let views = reports
-            .into_iter()
+            .iter()
             .map(|report| {
                 let mut problems = report.problems.iter().map(|problem| problem.message()).collect::<Vec<_>>();
                 problems.extend(
@@ -427,20 +579,24 @@ impl crate::app::App<'_> {
                 ScheduleBarView {
                     bar: report.bar,
                     default_name,
-                    ready: report.is_ready() && problems.is_empty(),
+                    // A refused attempt is historical evidence about these
+                    // still-current inputs, not part of live readiness. The
+                    // messages remain available, while repairs immediately
+                    // restore the readiness computed above.
+                    ready: report.is_ready(),
                     tonnes: report.tonnes,
                     members: report
                         .members
-                        .into_iter()
+                        .iter()
                         .map(|member| ScheduleMemberView {
                             position: member.position,
-                            name: member.name,
-                            solid_name: member.solid_name,
-                            solid_type: member.solid_type,
-                            bench: member.bench,
-                            blast: member.blast,
-                            flitch: member.flitch,
-                            unresolved: member.unresolved,
+                            name: member.name.clone(),
+                            solid_name: member.solid_name.clone(),
+                            solid_type: member.solid_type.clone(),
+                            bench: member.bench.clone(),
+                            blast: member.blast.clone(),
+                            flitch: member.flitch.clone(),
+                            unresolved: member.unresolved.clone(),
                             tonnes: member.tonnes,
                         })
                         .collect(),
@@ -451,6 +607,9 @@ impl crate::app::App<'_> {
         if self.editor.schedule_bar_reports != views {
             self.editor.schedule_bar_reports = views;
             self.redraw_requested = true;
+        }
+        if let Some(cache) = self.schedule_report_cache.as_mut() {
+            cache.bar_views_key = Some(views_key);
         }
         self.mirror_schedule_calculation();
     }
@@ -466,23 +625,58 @@ impl crate::app::App<'_> {
     fn mirror_sequence_editor(&mut self) {
         use crate::ui::state::DraftMember;
 
-        let Some(draft) = self.editor.sequence_editor.clone() else {
-            if !self.editor.sequence_members.is_empty() {
+        self.ensure_schedule_report_cache();
+        let Some(draft) = self.editor.sequence_editor.as_ref() else {
+            if !self.editor.sequence_members.is_empty() || self.editor.sequence_generation.is_some() || self.editor.sequence_unavailable.is_some() {
                 self.editor.sequence_members.clear();
+                self.editor.sequence_generation = None;
+                self.editor.sequence_unavailable = None;
                 self.redraw_requested = true;
+            }
+            if let Some(cache) = self.schedule_report_cache.as_mut() {
+                cache.sequence_key = None;
             }
             return;
         };
-        let snapshot = self.planning_snapshot();
-        let (generation, unavailable) = match &snapshot {
-            Ok(snapshot) => (Some(snapshot.generation), None),
-            Err(reason) => (None, Some(reason.describe())),
-        };
-        let members = match &snapshot {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.schedule_report_cache.as_ref().map(|cache| cache.key).hash(&mut hasher);
+        draft.edition.hash(&mut hasher);
+        for member in &draft.members {
+            match member {
+                DraftMember::Held(reference) => {
+                    0_u8.hash(&mut hasher);
+                    reference.solid.hash(&mut hasher);
+                    reference.source.hash(&mut hasher);
+                    reference.flitch_base.to_bits().hash(&mut hasher);
+                    reference.flitch_top.to_bits().hash(&mut hasher);
+                    reference.anchor.map(f64::to_bits).hash(&mut hasher);
+                    reference.plan_area.to_bits().hash(&mut hasher);
+                    reference.footprint.hash(&mut hasher);
+                    reference.volume.map(f64::to_bits).hash(&mut hasher);
+                }
+                DraftMember::Picked(pick) => {
+                    1_u8.hash(&mut hasher);
+                    pick.block.hash(&mut hasher);
+                    pick.generation.hash(&mut hasher);
+                }
+            }
+        }
+        let sequence_key = hasher.finish();
+        if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.sequence_key == Some(sequence_key)) {
+            return;
+        }
+        let draft = draft.clone();
+        let (snapshot, ground, index, unavailable) = self
+            .schedule_report_cache
+            .as_ref()
+            .map(|cache| (cache.snapshot.clone(), cache.ground.clone(), cache.index.clone(), cache.unavailable.clone()))
+            .unwrap_or_else(|| (None, Arc::default(), Arc::new(GroundIndex::build(&[])), None));
+        let generation = snapshot.as_ref().map(|snapshot| snapshot.generation);
+        let members = match snapshot.as_deref() {
             // No finished run: every member keeps its place and its number,
             // and none of them is described. An absent run is stated once, by
             // the window, rather than as a fault of every block in the list.
-            Err(_) => draft
+            None => draft
                 .members
                 .iter()
                 .map(|_| SequenceMemberView {
@@ -498,8 +692,7 @@ impl crate::app::App<'_> {
                     block: None,
                 })
                 .collect(),
-            Ok(snapshot) => {
-                let ground = ground_of(snapshot);
+            Some(snapshot) => {
                 // The same rule the readiness report applies: a field that
                 // is gone, or no longer summed, produces no figure rather
                 // than a wrong one.
@@ -525,7 +718,7 @@ impl crate::app::App<'_> {
                         // and is stale when that run is no longer this one.
                         let (found, unresolved, stale_pick) = match member {
                             DraftMember::Held(reference) => {
-                                let status = reference.resolve(&ground);
+                                let status = reference.resolve_indexed(&ground, &index);
                                 (status.resolved(), status.message(), false)
                             }
                             DraftMember::Picked(pick) => {
@@ -557,6 +750,9 @@ impl crate::app::App<'_> {
             self.editor.sequence_generation = generation;
             self.editor.sequence_unavailable = unavailable;
             self.redraw_requested = true;
+        }
+        if let Some(cache) = self.schedule_report_cache.as_mut() {
+            cache.sequence_key = Some(sequence_key);
         }
     }
 
@@ -671,7 +867,8 @@ impl crate::app::App<'_> {
 /// the run rather than one each.
 struct CurrentRun<'a> {
     snapshot: &'a PlanningSnapshot,
-    ground: Vec<BlockGround>,
+    ground: &'a [BlockGround],
+    index: &'a GroundIndex,
 }
 
 /// Measure one bar against the run the project currently holds, or against
@@ -739,7 +936,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     // the last gate before a total becomes work.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
     for (index, member) in bar.members().iter().enumerate() {
-        let status = member.resolve(&run.ground);
+        let status = member.resolve_indexed(run.ground, run.index);
         let Some(found) = status.resolved() else {
             report.members.push(MemberReport {
                 position: index + 1,

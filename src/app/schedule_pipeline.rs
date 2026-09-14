@@ -359,17 +359,21 @@ impl crate::app::App<'_> {
     /// artifacts.
     pub(crate) fn sync_schedule_pipeline(&mut self) {
         let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { .. }));
             self.schedule_pipeline = None;
             // A calculated schedule describes one project's ground; it does
             // not outlive the project it was calculated for.
             self.schedule_calculation = None;
             self.pending_schedule_run = None;
-            self.schedule_run_problems.clear();
+            self.schedule_run_diagnostics = None;
             self.mirror_schedule_stages();
             return;
         };
         if self.schedule_pipeline.as_ref().is_none_or(|pipeline| pipeline.runtime != runtime) {
+            self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { .. }));
+            self.pending_schedule_run = None;
             self.schedule_pipeline = Some(SchedulePipeline::new(runtime));
+            self.schedule_run_diagnostics = None;
         }
         let fingerprints = self.schedule_fingerprints();
         let mut earliest_change = None;
@@ -426,18 +430,14 @@ impl crate::app::App<'_> {
                 .reserve_fields()
                 .iter()
                 .find(|field| field.id == id)
-                .map(|field| (id.0, field.name.clone(), format!("{:?}", field.aggregation)))
+                .map(|field| (id.0, format!("{:?}", field.aggregation)))
         });
-        let configuration = hash_of((plan.name.clone(), plan.tonnage_field().map(|id| id.0), field));
+        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field));
 
-        let classes: Vec<_> = plan
-            .classes()
-            .iter()
-            .map(|class| (class.id.0, class.name.clone(), class.default_dig_rate_tph.to_bits()))
-            .collect();
+        let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits())).collect();
         let classes_step = hash_of((configuration, classes));
 
-        let agents: Vec<_> = plan.agents().iter().map(|agent| (agent.id.0, agent.name.clone(), agent.class_id.0)).collect();
+        let agents: Vec<_> = plan.agents().iter().map(|agent| (agent.id.0, agent.class_id.0)).collect();
         let agents_step = hash_of((classes_step, agents));
 
         // Where the Solids run stands, not what it produced: a status is
@@ -456,7 +456,7 @@ impl crate::app::App<'_> {
     /// [`crate::app::App::planning_snapshot`] walks every solid's cache to
     /// build the block list; this asks the same gate the same question and
     /// stops at the answer, which is what makes it safe to call each frame.
-    fn planning_snapshot_status(&self) -> Result<u64, crate::app::commands::solids_view::PlanningNotReady> {
+    pub(crate) fn planning_snapshot_status(&self) -> Result<u64, crate::app::commands::solids_view::PlanningNotReady> {
         use crate::app::{commands::solids_view::PlanningNotReady, planning_pipeline::StageNotReady};
 
         let Some(project) = self.workspace.active_project() else {

@@ -71,8 +71,9 @@ pub(crate) struct DispatchBar {
 pub(crate) struct DispatchInput {
     pub(crate) generation: u64,
     /// Where the run is asked to stop, in hours, or `None` to run to
-    /// completion. A run stopped here keeps everything it calculated and says
-    /// it was truncated; it never pretends the remaining work does not exist.
+    /// completion. A run stopped here keeps everything it calculated and
+    /// distinguishes executable remaining work from material stranded behind
+    /// closed work windows.
     pub(crate) horizon_limit_h: Option<f64>,
     pub(crate) agents: Vec<DispatchAgent>,
     pub(crate) bars: Vec<DispatchBar>,
@@ -132,9 +133,20 @@ pub(crate) struct DispatchSchedule {
     pub(crate) idle: Vec<IdleSegment>,
     /// Every resolved block the run touched, in first-seen order.
     pub(crate) balances: Vec<BlockBalance>,
-    /// Whether the run stopped at [`DispatchInput::horizon_limit_h`] with
-    /// work still to do, rather than because there was nothing left to do.
-    pub(crate) truncated: bool,
+    /// Why simulation stopped. This distinguishes a period boundary from
+    /// material that no authored work window can reach.
+    pub(crate) outcome: DispatchOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DispatchOutcome {
+    /// Every distinct block in the shared ledger is empty.
+    Exhausted,
+    /// Material remains and at least one bar can work it after the requested
+    /// period boundary.
+    Limited,
+    /// Material remains, but no bar has a future window in which to work it.
+    Stranded,
 }
 
 impl DispatchSchedule {
@@ -145,15 +157,6 @@ impl DispatchSchedule {
     /// What one bar's loader actually took out of the ground within it.
     pub(crate) fn bar_tonnes(&self, bar: BarId) -> f64 {
         self.execution.iter().filter(|segment| segment.bar == bar).map(|segment| segment.tonnes).sum()
-    }
-
-    /// The last instant any of this bar's work was executed, if any was.
-    pub(crate) fn bar_end_h(&self, bar: BarId) -> Option<f64> {
-        self.execution
-            .iter()
-            .filter(|segment| segment.bar == bar)
-            .map(|segment| segment.end_h)
-            .max_by(f64::total_cmp)
     }
 
     /// When every distinct block named by a bar became empty in the shared
@@ -267,7 +270,7 @@ pub(crate) struct DispatchRun {
     events: usize,
     cap: usize,
     execution: Vec<ExecutionSegment>,
-    truncated: bool,
+    stopped_at_limit: bool,
     finished: bool,
 }
 
@@ -381,28 +384,34 @@ impl DispatchRun {
             events: 0,
             cap,
             execution: Vec::new(),
-            truncated: false,
+            stopped_at_limit: false,
             finished: false,
         })
     }
 
-    /// Simulate at most `budget` events. `None` means there is more to do.
-    pub(crate) fn advance(&mut self, budget: usize) -> Option<Result<DispatchSchedule, Vec<DispatchError>>> {
+    /// Advance without finalizing output, for background runners that measure
+    /// simulation and final sorting/merging as separate phases.
+    pub(crate) fn advance_events(&mut self, budget: usize) -> Result<bool, Vec<DispatchError>> {
         for _ in 0..budget {
             if self.finished {
-                return Some(Ok(self.finish()));
+                return Ok(true);
             }
             self.events += 1;
             if self.events > self.cap {
-                return Some(Err(vec![DispatchError::IterationCap]));
+                return Err(vec![DispatchError::IterationCap]);
             }
             match self.step() {
                 Ok(true) => self.finished = true,
                 Ok(false) => {}
-                Err(error) => return Some(Err(vec![error])),
+                Err(error) => return Err(vec![error]),
             }
         }
-        None
+        Ok(self.finished)
+    }
+
+    pub(crate) fn complete(mut self) -> DispatchSchedule {
+        debug_assert!(self.finished);
+        self.finish()
     }
 
     /// One instant: assign every loader, find the next event, advance every
@@ -493,8 +502,7 @@ impl DispatchRun {
         if let Some(limit) = self.input.horizon_limit_h
             && self.time_h >= limit
         {
-            // Stopped because it was asked to, not because the work ran out.
-            self.truncated = !groups.is_empty() || self.next_window_boundary().is_some();
+            self.stopped_at_limit = true;
             return Ok(true);
         }
         Ok(false)
@@ -546,6 +554,21 @@ impl DispatchRun {
             .min_by(f64::total_cmp)
     }
 
+    fn outcome(&self) -> DispatchOutcome {
+        if self.balances.values().all(|balance| balance.remaining_t <= 0.0) {
+            return DispatchOutcome::Exhausted;
+        }
+        let future_eligible = self.input.bars.iter().any(|bar| {
+            let opens_after_now = bar.window.end_h.is_none_or(|end| end > self.time_h.max(bar.window.start_h));
+            opens_after_now && bar.blocks.iter().any(|block| self.balances[&block.resolved].remaining_t > 0.0)
+        });
+        if self.stopped_at_limit && future_eligible {
+            DispatchOutcome::Limited
+        } else {
+            DispatchOutcome::Stranded
+        }
+    }
+
     /// Merge the interval-by-interval output into bands, derive the idle
     /// spans from what is left, and put everything in one stable order.
     fn finish(&mut self) -> DispatchSchedule {
@@ -577,7 +600,7 @@ impl DispatchRun {
             .iter()
             .map(|segment| segment.end_h)
             .fold(0.0_f64, f64::max)
-            .max(if self.truncated { self.input.horizon_limit_h.unwrap_or(0.0) } else { 0.0 });
+            .max(if self.stopped_at_limit { self.input.horizon_limit_h.unwrap_or(0.0) } else { 0.0 });
 
         // Idle is the complement of a loader's execution over the run, so it
         // is exactly the time it had no available work - never inferred from
@@ -637,13 +660,14 @@ impl DispatchRun {
                 }
             })
             .collect();
+        let outcome = self.outcome();
         DispatchSchedule {
             generation: self.input.generation,
             horizon_h,
             execution: merged,
             idle,
             balances,
-            truncated: self.truncated,
+            outcome,
         }
     }
 }

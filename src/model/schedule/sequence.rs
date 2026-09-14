@@ -55,6 +55,8 @@
 //! and the next readiness report reads the new figures without the schedule
 //! having to be re-authored.
 
+use std::collections::HashMap;
+
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
@@ -251,6 +253,44 @@ pub(crate) struct BlockGround {
     pub(crate) plan_area: f64,
 }
 
+/// Candidate rows for resolving references, grouped by durable solid.
+/// Resolution still performs every provenance and geometry check; this only
+/// avoids rescanning unrelated solids for every authored member.
+pub(crate) struct GroundIndex {
+    by_solid: HashMap<SolidId, Vec<usize>>,
+    by_band: HashMap<(SolidId, i64), Vec<usize>>,
+}
+
+impl GroundIndex {
+    pub(crate) fn build(ground: &[BlockGround]) -> Self {
+        let mut by_solid: HashMap<SolidId, Vec<usize>> = HashMap::new();
+        let mut by_band: HashMap<(SolidId, i64), Vec<usize>> = HashMap::new();
+        for (index, block) in ground.iter().enumerate() {
+            by_solid.entry(block.solid).or_default().push(index);
+            by_band.entry((block.solid, band_bucket(block.flitch_base))).or_default().push(index);
+        }
+        Self { by_solid, by_band }
+    }
+
+    fn band_candidates(&self, solid: SolidId, base: f64) -> Vec<usize> {
+        let bucket = band_bucket(base);
+        let mut candidates = Vec::new();
+        for nearby in bucket.saturating_sub(1)..=bucket.saturating_add(1) {
+            if let Some(indices) = self.by_band.get(&(solid, nearby)) {
+                candidates.extend(indices);
+            }
+        }
+        // Restore snapshot order so diagnostics choose the same first band
+        // top as the unindexed resolver did.
+        candidates.sort_unstable();
+        candidates
+    }
+}
+
+fn band_bucket(base: f64) -> i64 {
+    (base / FLITCH_TOLERANCE).floor() as i64
+}
+
 /// A stored reference to one dig block's ground.
 ///
 /// Every field is durable project data or plain geometry - nothing here is
@@ -424,33 +464,27 @@ impl DigBlockRef {
     /// not report as changed ground, and a re-flitched band does not report
     /// as missing ground.
     pub(crate) fn resolve(&self, ground: &[BlockGround]) -> RefStatus {
+        self.resolve_indexed(ground, &GroundIndex::build(ground))
+    }
+
+    pub(crate) fn resolve_indexed(&self, ground: &[BlockGround], index: &GroundIndex) -> RefStatus {
         // The sources first, before any geometric question: whatever the
         // current run holds for this solid, it was cut from the current
         // sources, and a reference cut from earlier sources stands down even
         // when every number that follows would agree - a slope and its
         // mirror agree on all of them.
-        let mut seen_solid = false;
-        let mut current_source = None;
-        for block in ground {
-            if block.solid == self.solid {
-                seen_solid = true;
-                current_source.get_or_insert(block.source);
-            }
-        }
-        if !seen_solid {
+        let Some(candidates) = index.by_solid.get(&self.solid) else {
             return RefStatus::SolidMissing;
-        }
-        if current_source.is_some_and(|current| current != self.source) {
+        };
+        if candidates.first().is_some_and(|candidate| ground[*candidate].source != self.source) {
             return RefStatus::SourceChanged;
         }
         let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
         let mut seen_base = false;
         let mut band_top = None;
         let mut covering = Vec::new();
-        for (index, block) in ground.iter().enumerate() {
-            if block.solid != self.solid {
-                continue;
-            }
+        for index in index.band_candidates(self.solid, self.flitch_base) {
+            let block = &ground[index];
             if (block.flitch_base - self.flitch_base).abs() > FLITCH_TOLERANCE {
                 continue;
             }

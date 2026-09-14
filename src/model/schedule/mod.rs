@@ -16,7 +16,7 @@ pub(crate) mod animation;
 pub(crate) mod dispatch;
 pub(crate) mod sequence;
 
-pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchSchedule};
+pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchOutcome, DispatchSchedule};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*

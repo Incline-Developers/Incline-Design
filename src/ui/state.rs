@@ -2292,7 +2292,7 @@ pub(crate) struct EditorState {
     /// current. Authored bars remain separate and editable; an edit to any of
     /// them takes this off the page until the schedule is run again, and the
     /// held result itself is kept and labelled rather than destroyed.
-    pub(crate) schedule_dispatch: Option<crate::model::schedule::DispatchSchedule>,
+    pub(crate) schedule_dispatch: Option<std::sync::Arc<crate::model::schedule::DispatchSchedule>>,
     /// What the Gantt's own run controls say: which run is on screen, that it
     /// is out of date, or why one cannot be started.
     pub(crate) schedule_run_status: String,
@@ -2301,6 +2301,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_stale: bool,
     /// Whether a Run Schedule is in flight, so the controls can offer Cancel.
     pub(crate) schedule_run_working: bool,
+    /// A current setup prerequisite blocks Run; used only to offer the
+    /// contextual route to repair it.
+    pub(crate) schedule_run_blocked: bool,
     /// Schedule Animate is session-only: selection and visibility here never
     /// move the Solids View page or alter saved project item visibility.
     pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
@@ -2637,6 +2640,7 @@ impl EditorState {
         self.schedule_run_status.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
+        self.schedule_run_blocked = false;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
         self.new_loader_class_name.clear();
@@ -3209,6 +3213,7 @@ impl EditorState {
             schedule_run_status: String::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
+            schedule_run_blocked: false,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden_solids: HashSet::new(),
             schedule_animation_hidden_rows: Vec::new(),

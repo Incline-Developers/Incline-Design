@@ -95,6 +95,11 @@ pub(crate) enum JobKey {
         run: u64,
         request: u64,
     },
+    /// One explicit schedule calculation, owned by its project and serial.
+    ScheduleRun {
+        runtime: u32,
+        serial: u64,
+    },
     ReserveStats(crate::model::block_model::BlockModelId, u64),
     Project {
         runtime_id: u32,
@@ -234,6 +239,10 @@ impl<'a> App<'a> {
             JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
             JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
             JobKey::ScheduleAnimation { runtime, run, request } => self.schedule_animation.accepts(runtime, run, request),
+            JobKey::ScheduleRun { runtime, serial } => self
+                .pending_schedule_run
+                .as_ref()
+                .is_some_and(|pending| pending.inputs.runtime == runtime && pending.serial == serial),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

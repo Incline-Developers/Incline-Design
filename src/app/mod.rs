@@ -394,11 +394,15 @@ pub(crate) struct App<'a> {
     /// nothing deletes it - so the page can always say what was true when it
     /// was last run. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<crate::app::schedule_run::ScheduleCalculation>,
-    /// A Run Schedule in flight, advanced in bounded steps so it can be
-    /// cancelled. Dropping it publishes nothing.
+    /// A Run Schedule in flight on the bounded worker pool. Dropping it and
+    /// cancelling its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
-    /// Why the last Run produced no schedule, if it produced none.
-    pub(crate) schedule_run_problems: Vec<crate::app::commands::schedule_readiness::ScheduleRunProblem>,
+    /// Why the last Run produced no schedule, owned by the exact project and
+    /// scheduling inputs that produced the refusal.
+    pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleRunDiagnostics>,
+    pub(crate) schedule_report_cache: Option<crate::app::commands::schedule_readiness::ScheduleReportCache>,
+    pub(crate) schedule_plan_revision_cache: std::cell::Cell<Option<(u32, u64, u64)>>,
+    pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
     pub(crate) schedule_run_serial: u64,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
@@ -522,7 +526,10 @@ impl<'a> Default for App<'a> {
             schedule_pipeline: None,
             schedule_calculation: None,
             pending_schedule_run: None,
-            schedule_run_problems: Vec::new(),
+            schedule_run_diagnostics: None,
+            schedule_report_cache: None,
+            schedule_plan_revision_cache: std::cell::Cell::new(None),
+            schedule_report_key_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,

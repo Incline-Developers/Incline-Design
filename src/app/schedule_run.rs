@@ -16,11 +16,14 @@
 //! - **Cancel publishes nothing.** The previously held result stays exactly as
 //!   it was, and a cancelled run leaves no partial schedule behind.
 //!
-//! The run is advanced in bounded steps from the frame loop rather than
-//! computed in one call, which is what gives Cancel something to cancel and
-//! stops a degenerate input from freezing the window.
+//! The evaluator runs on the bounded worker pool and polls cancellation
+//! between event chunks. Preparation and publication stay on the UI thread;
+//! publication repeats the input checks before accepting the result.
 
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use crate::{
     app::{
@@ -28,7 +31,7 @@ use crate::{
         schedule_pipeline::ScheduleRunInputs,
     },
     i18n::tr,
-    model::schedule::{DispatchSchedule, dispatch::DispatchRun},
+    model::schedule::{DispatchOutcome, DispatchSchedule, dispatch::DispatchRun},
 };
 
 /// How much of the schedule one Run Period covers.
@@ -38,12 +41,8 @@ use crate::{
 /// rather than a `24.0` written wherever hours are counted.
 pub(crate) const PERIOD_H: f64 = 24.0;
 
-/// How many events one frame of a run may simulate.
-///
-/// Large enough that any schedule a person authors finishes in the frame they
-/// pressed the button in, small enough that a degenerate one still gives the
-/// window back.
-const EVENT_BUDGET: usize = 4096;
+/// Events between cancellation polls on the background worker.
+const EVENT_BUDGET: usize = 64;
 
 /// What a run was asked to cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,16 +65,24 @@ pub(crate) struct ScheduleCalculation {
     /// Which run it was, so a held result can be named.
     pub(crate) run: u64,
     pub(crate) horizon_limit_h: Option<f64>,
-    pub(crate) schedule: DispatchSchedule,
+    pub(crate) schedule: Arc<DispatchSchedule>,
 }
 
 /// A Run Schedule in flight.
 pub(crate) struct PendingScheduleRun {
-    run: DispatchRun,
-    inputs: ScheduleRunInputs,
+    pub(crate) inputs: ScheduleRunInputs,
     plan_revision: u64,
-    serial: u64,
+    pub(crate) serial: u64,
     horizon_limit_h: Option<f64>,
+}
+
+/// Diagnostics from one refused run attempt, owned by the exact inputs that
+/// produced them. They remain useful while those inputs stand and disappear
+/// as soon as the project or plan changes.
+pub(crate) struct ScheduleRunDiagnostics {
+    pub(crate) inputs: ScheduleRunInputs,
+    pub(crate) plan_revision: u64,
+    pub(crate) problems: Vec<ScheduleRunProblem>,
 }
 
 impl std::fmt::Debug for PendingScheduleRun {
@@ -92,19 +99,27 @@ impl crate::app::App<'_> {
     /// The authored bars, hashed: every field a calculated schedule depends
     /// on, and nothing else.
     ///
-    /// A bar's name is in it because the drawn result names bars; its members
-    /// are in it because they are the ground. Plan-wide fleet and
+    /// Presentation names are deliberately absent: the drawn result resolves
+    /// current labels by stable ids. Members are present because they are the
+    /// ground. Plan-wide fleet and
     /// configuration are deliberately absent - they are already captured by
     /// the Setup run's own inputs, and hashing them twice would only make the
     /// two disagree.
     pub(crate) fn schedule_plan_revision(&self) -> u64 {
-        let Some(document) = self.workspace.active_document() else {
+        let Some(project) = self.workspace.active_project() else {
             return 0;
         };
+        let document = &project.project.document;
+        let document_revision = document.revision();
+        if let Some((runtime, revision, key)) = self.schedule_plan_revision_cache.get()
+            && runtime == project.runtime_id
+            && revision == document_revision
+        {
+            return key;
+        }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for bar in document.schedule().bars() {
             bar.id.0.hash(&mut hasher);
-            bar.order.name.hash(&mut hasher);
             bar.agent.map(|agent| agent.0).hash(&mut hasher);
             bar.priority.hash(&mut hasher);
             bar.window.start_h.to_bits().hash(&mut hasher);
@@ -120,7 +135,9 @@ impl crate::app::App<'_> {
                 member.volume.map(f64::to_bits).hash(&mut hasher);
             }
         }
-        hasher.finish()
+        let key = hasher.finish();
+        self.schedule_plan_revision_cache.set(Some((project.runtime_id, document_revision, key)));
+        key
     }
 
     /// Whether the held result still describes the project as it stands.
@@ -151,6 +168,10 @@ impl crate::app::App<'_> {
     /// is refused in the console with the reason rather than by a dead
     /// button: the button is what the user pressed, and it has to answer.
     pub(crate) fn start_schedule_run(&mut self, mode: ScheduleRunMode) {
+        let preparation_started = std::time::Instant::now();
+        // Validate the lightweight Schedule Setup stages as part of the
+        // normal Run action. Solids remains an explicit prerequisite.
+        self.run_all_schedule_steps();
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => {
@@ -172,100 +193,119 @@ impl crate::app::App<'_> {
         };
         let input = match built {
             Ok(input) => input,
-            Err(problems) => return self.refuse_schedule_run(problems),
-        };
-        let run = match DispatchRun::start(input) {
-            Ok(run) => run,
-            Err(errors) => {
-                let Some(document) = self.workspace.active_document() else {
-                    return;
-                };
-                let plan = document.schedule().clone();
-                return self.refuse_schedule_run(errors.into_iter().map(|error| dispatch_problem(&plan, error)).collect());
-            }
+            Err(problems) => return self.refuse_schedule_run(problems, inputs, plan_revision),
         };
         self.schedule_run_serial += 1;
         let serial = self.schedule_run_serial;
-        self.schedule_run_problems.clear();
+        self.schedule_run_diagnostics = None;
         self.pending_schedule_run = Some(PendingScheduleRun {
-            run,
             inputs,
             plan_revision,
             serial,
             horizon_limit_h,
         });
+        log::debug!("schedule preparation completed in {:?}", preparation_started.elapsed());
+        self.spawn_job_quietly(
+            tr!(literal = "Calculating schedule"),
+            vec![crate::app::jobs::JobKey::ScheduleRun { runtime: inputs.runtime, serial }],
+            move |cancel| {
+                let seed_started = std::time::Instant::now();
+                let mut run = match DispatchRun::start(input) {
+                    Ok(run) => run,
+                    Err(errors) => return Ok(Err(errors)),
+                };
+                let seeded = seed_started.elapsed();
+                let advance_started = std::time::Instant::now();
+                loop {
+                    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                    match run.advance_events(EVENT_BUDGET) {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(errors) => return Ok(Err(errors)),
+                    }
+                }
+                let advanced = advance_started.elapsed();
+                let finish_started = std::time::Instant::now();
+                let schedule = run.complete();
+                let finished = finish_started.elapsed();
+                log::debug!("schedule worker: seed {seeded:?}, advance {advanced:?}, finish {finished:?}");
+                Ok(Ok(schedule))
+            },
+            move |app, result| {
+                let same_request = app
+                    .pending_schedule_run
+                    .as_ref()
+                    .is_some_and(|pending| pending.serial == serial && pending.inputs == inputs);
+                if !same_request {
+                    return;
+                }
+                if app.schedule_run_inputs().ok() != Some(inputs) || app.schedule_plan_revision() != plan_revision {
+                    app.pending_schedule_run = None;
+                    crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+                    app.redraw_requested = true;
+                    return;
+                }
+                app.pending_schedule_run = None;
+                match result {
+                    Ok(Ok(schedule)) => {
+                        crate::userspace_log!("{}", tr!("schedule-run-finished", run = serial.to_string(), horizon = format!("{:.2}", schedule.horizon_h)));
+                        app.schedule_run_diagnostics = None;
+                        app.schedule_calculation = Some(ScheduleCalculation {
+                            inputs,
+                            plan_revision,
+                            run: serial,
+                            horizon_limit_h,
+                            schedule: Arc::new(schedule),
+                        });
+                    }
+                    Ok(Err(errors)) => {
+                        let plan = app.workspace.active_document().map(|document| document.schedule().clone());
+                        let problems = match plan {
+                            Some(plan) => errors.into_iter().map(|error| dispatch_problem(&plan, error)).collect(),
+                            None => Vec::new(),
+                        };
+                        app.refuse_schedule_run(problems, inputs, plan_revision);
+                    }
+                    Err(error) => crate::userspace_error!("{error:#}"),
+                }
+                app.redraw_requested = true;
+            },
+        );
         self.redraw_requested = true;
-        // A schedule a person authored finishes here, in the frame the button
-        // was pressed in. The frame loop is the fallback, not the path.
-        self.advance_schedule_calculation();
     }
 
     /// Publish nothing, keep whatever was held, and say why.
-    fn refuse_schedule_run(&mut self, problems: Vec<ScheduleRunProblem>) {
+    fn refuse_schedule_run(&mut self, problems: Vec<ScheduleRunProblem>, inputs: ScheduleRunInputs, plan_revision: u64) {
         for problem in &problems {
             crate::userspace_warn!("{}", problem.message);
         }
-        self.schedule_run_problems = problems;
+        self.schedule_run_diagnostics = Some(ScheduleRunDiagnostics { inputs, plan_revision, problems });
         self.pending_schedule_run = None;
         self.redraw_requested = true;
     }
 
     /// Stop a run in flight. The held result is untouched.
     pub(crate) fn cancel_schedule_run_calculation(&mut self) {
-        if self.pending_schedule_run.take().is_some() {
+        if let Some(pending) = self.pending_schedule_run.take() {
+            self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { serial, .. } if *serial == pending.serial));
             crate::userspace_warn!("{}", tr!("schedule-run-cancelled"));
             self.redraw_requested = true;
         }
     }
 
-    /// Advance a run in flight by one frame's worth of events.
-    ///
-    /// The inputs are rechecked first: a run whose ground, fleet or bars moved
-    /// while it was working is describing a project that no longer exists, and
-    /// is dropped rather than finished.
+    /// Retire a background run as soon as its captured inputs move.
     pub(crate) fn advance_schedule_calculation(&mut self) {
         let Some(pending) = self.pending_schedule_run.as_ref() else {
             return;
         };
         let expected = (pending.inputs, pending.plan_revision);
         if self.schedule_run_inputs().ok() != Some(expected.0) || self.schedule_plan_revision() != expected.1 {
+            let serial = pending.serial;
             self.pending_schedule_run = None;
+            self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { serial: pending, .. } if *pending == serial));
             crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
             self.redraw_requested = true;
-            return;
         }
-        let pending = self.pending_schedule_run.as_mut().expect("checked above");
-        let Some(outcome) = pending.run.advance(EVENT_BUDGET) else {
-            // More to do: come back next frame rather than holding the UI.
-            self.redraw_requested = true;
-            return;
-        };
-        let pending = self.pending_schedule_run.take().expect("checked above");
-        match outcome {
-            Ok(schedule) => {
-                crate::userspace_log!(
-                    "{}",
-                    tr!("schedule-run-finished", run = pending.serial.to_string(), horizon = format!("{:.2}", schedule.horizon_h))
-                );
-                self.schedule_run_problems.clear();
-                self.schedule_calculation = Some(ScheduleCalculation {
-                    inputs: pending.inputs,
-                    plan_revision: pending.plan_revision,
-                    run: pending.serial,
-                    horizon_limit_h: pending.horizon_limit_h,
-                    schedule,
-                });
-            }
-            Err(errors) => {
-                let plan = self.workspace.active_document().map(|document| document.schedule().clone());
-                let problems = match plan {
-                    Some(plan) => errors.into_iter().map(|error| dispatch_problem(&plan, error)).collect(),
-                    None => Vec::new(),
-                };
-                self.refuse_schedule_run(problems);
-            }
-        }
-        self.redraw_requested = true;
     }
 
     /// Copy the held result into the editor state the Gantt draws from - but
@@ -278,11 +318,7 @@ impl crate::app::App<'_> {
     pub(crate) fn mirror_schedule_calculation(&mut self) {
         let current = self.schedule_calculation_is_current();
         let running = self.pending_schedule_run.is_some();
-        let dispatch = if current {
-            self.schedule_calculation.as_ref().map(|calculation| calculation.schedule.clone())
-        } else {
-            None
-        };
+        let dispatch = current.then(|| self.schedule_calculation.as_ref().expect("current calculation exists").schedule.clone());
         let status = match (running, self.schedule_calculation.as_ref()) {
             (true, _) => tr!("schedule-run-working"),
             (false, None) => match self.schedule_run_inputs() {
@@ -292,23 +328,31 @@ impl crate::app::App<'_> {
             (false, Some(calculation)) if !current => tr!("schedule-run-stale", run = calculation.run.to_string()),
             (false, Some(calculation)) => {
                 let run = calculation.run.to_string();
-                if calculation.schedule.truncated {
-                    tr!("schedule-run-truncated", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h))
-                } else {
-                    tr!("schedule-run-complete", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h))
+                match calculation.schedule.outcome {
+                    DispatchOutcome::Exhausted => tr!("schedule-run-complete", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
+                    DispatchOutcome::Limited => tr!("schedule-run-truncated", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
+                    DispatchOutcome::Stranded => tr!("schedule-run-stranded", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
                 }
             }
         };
         let stale = !current && self.schedule_calculation.is_some();
-        if self.editor.schedule_dispatch != dispatch
+        let blocked = !running && self.schedule_run_inputs().is_err();
+        let same_dispatch = match (&self.editor.schedule_dispatch, &dispatch) {
+            (Some(held), Some(current)) => Arc::ptr_eq(held, current),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_dispatch
             || self.editor.schedule_run_status != status
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running
+            || self.editor.schedule_run_blocked != blocked
         {
             self.editor.schedule_dispatch = dispatch;
             self.editor.schedule_run_status = status;
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running;
+            self.editor.schedule_run_blocked = blocked;
             self.redraw_requested = true;
         }
     }
