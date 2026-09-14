@@ -450,7 +450,7 @@ impl crate::app::App<'_> {
         if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.key == key) {
             return;
         }
-        let rebuild_started = std::time::Instant::now();
+        let rebuild_started = web_time::Instant::now();
         let snapshot = self.planning_snapshot();
         let Some(document) = self.workspace.active_document() else {
             self.schedule_report_cache = Some(ScheduleReportCache {

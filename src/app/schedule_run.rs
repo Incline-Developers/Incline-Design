@@ -168,7 +168,7 @@ impl crate::app::App<'_> {
     /// is refused in the console with the reason rather than by a dead
     /// button: the button is what the user pressed, and it has to answer.
     pub(crate) fn start_schedule_run(&mut self, mode: ScheduleRunMode) {
-        let preparation_started = std::time::Instant::now();
+        let preparation_started = web_time::Instant::now();
         // Validate the lightweight Schedule Setup stages as part of the
         // normal Run action. Solids remains an explicit prerequisite.
         self.run_all_schedule_steps();
@@ -209,13 +209,13 @@ impl crate::app::App<'_> {
             tr!(literal = "Calculating schedule"),
             vec![crate::app::jobs::JobKey::ScheduleRun { runtime: inputs.runtime, serial }],
             move |cancel| {
-                let seed_started = std::time::Instant::now();
+                let seed_started = web_time::Instant::now();
                 let mut run = match DispatchRun::start(input) {
                     Ok(run) => run,
                     Err(errors) => return Ok(Err(errors)),
                 };
                 let seeded = seed_started.elapsed();
-                let advance_started = std::time::Instant::now();
+                let advance_started = web_time::Instant::now();
                 loop {
                     anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
                     match run.advance_events(EVENT_BUDGET) {
@@ -225,7 +225,7 @@ impl crate::app::App<'_> {
                     }
                 }
                 let advanced = advance_started.elapsed();
-                let finish_started = std::time::Instant::now();
+                let finish_started = web_time::Instant::now();
                 let schedule = run.complete();
                 let finished = finish_started.elapsed();
                 log::debug!("schedule worker: seed {seeded:?}, advance {advanced:?}, finish {finished:?}");
@@ -336,7 +336,7 @@ impl crate::app::App<'_> {
             }
         };
         let stale = !current && self.schedule_calculation.is_some();
-        let blocked = !running && self.schedule_run_inputs().is_err();
+        let repair = (!running).then(|| self.schedule_repair_target()).flatten();
         let same_dispatch = match (&self.editor.schedule_dispatch, &dispatch) {
             (Some(held), Some(current)) => Arc::ptr_eq(held, current),
             (None, None) => true,
@@ -346,13 +346,13 @@ impl crate::app::App<'_> {
             || self.editor.schedule_run_status != status
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running
-            || self.editor.schedule_run_blocked != blocked
+            || self.editor.schedule_run_repair != repair
         {
             self.editor.schedule_dispatch = dispatch;
             self.editor.schedule_run_status = status;
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running;
-            self.editor.schedule_run_blocked = blocked;
+            self.editor.schedule_run_repair = repair;
             self.redraw_requested = true;
         }
     }

@@ -38,7 +38,9 @@ use crate::{
     ui::{
         EditorState, UiProjectView, chrome,
         fonts::bold,
-        state::{BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningSubpage, ScheduleBarView, ScheduleEdit, UiCommand},
+        state::{
+            BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningPage, PlanningSubpage, ScheduleBarView, ScheduleEdit, ScheduleRepairTarget, UiCommand,
+        },
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             toolbar::GROUP_CORNER_RADIUS,
@@ -133,7 +135,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let toolbar_height = ui.spacing().interact_size.y + 8.0;
             let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
             let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, &plan, session, commands);
+            draw_toolbar(ui, toolbar, editor, commands);
             if canvas.is_positive() {
                 draw_canvas(ui, canvas, editor, &plan, session, commands);
             }
@@ -425,7 +427,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// same icons: a schedule is run the way everything else in this project is
 /// run, and a control that looked different here would suggest it did
 /// something different.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::ui::{
         elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
         widgets::toolbar::ToolbarButton,
@@ -443,11 +445,7 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                 !working,
                 ToolbarButton::new(
                     egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, !working)),
-                    tr_format!(
-                        literal = "%action%\n%assumptions%",
-                        action = tr!("schedule-run-period-note"),
-                        assumptions = tr!("schedule-run-assumptions")
-                    ),
+                    tr!("schedule-run-period-note"),
                 )
                 .button_side(side)
                 .id_salt("gantt_run_period"),
@@ -461,11 +459,7 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                 !working,
                 ToolbarButton::new(
                     egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, !working)),
-                    tr_format!(
-                        literal = "%action%\n%assumptions%",
-                        action = tr!("schedule-run-whole-note"),
-                        assumptions = tr!("schedule-run-assumptions")
-                    ),
+                    tr!("schedule-run-whole-note"),
                 )
                 .button_side(side)
                 .id_salt("gantt_run_whole"),
@@ -488,23 +482,6 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
         {
             commands.push(UiCommand::CancelScheduleCalculation);
         }
-        if plan.bars().is_empty()
-            && let Some(agent) = plan.agents().first()
-            && ui.add(egui::Button::new(tr!("schedule-add-work")).corner_radius(GROUP_CORNER_RADIUS)).clicked()
-        {
-            commands.push(UiCommand::schedule(
-                session,
-                ScheduleEdit::AddBar {
-                    name: String::new(),
-                    agent: Some(agent.id),
-                    priority: 0,
-                    window: WorkWindow {
-                        start_h: 0.0,
-                        end_h: Some(crate::app::schedule_run::PERIOD_H),
-                    },
-                },
-            ));
-        }
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add_space(8.0);
         let button = |ui: &mut egui::Ui, label: &str, tooltip: String| ui.add(egui::Button::new(label).corner_radius(GROUP_CORNER_RADIUS)).on_hover_text(tooltip);
@@ -517,6 +494,12 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
         if ui.add(egui::Button::new(tr!("gantt-reset-view")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
             editor.gantt.reset();
         }
+        ui.menu_button("?", |ui| {
+            ui.set_max_width(360.0);
+            ui.label(tr!("schedule-run-assumptions"));
+        })
+        .response
+        .on_hover_text(tr!("schedule-assumptions-help"));
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(tr!(
@@ -526,15 +509,30 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
             ))
             .weak(),
         );
-        // Two separate sentences, and they answer different questions: what
-        // the calculated marks on screen belong to, and - when Schedule Setup
-        // is what stands in the way - which prerequisite is unmet. The bars
-        // themselves are untouched by either: this page stays inspectable and
-        // editable whatever they say, and only the calculation waits.
+        // One status names what the calculated marks mean. When it names a
+        // blocker, the adjacent action opens the exact setup step that owns
+        // the repair.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
-            if editor.schedule_run_blocked && ui.button(tr!("schedule-open-setup")).clicked() {
-                commands.push(UiCommand::SetPlanningSubpage(PlanningSubpage::Setup));
+            if let Some(target) = editor.schedule_run_repair {
+                let label = match target {
+                    ScheduleRepairTarget::Schedule(_) => tr!("schedule-open-setup"),
+                    ScheduleRepairTarget::Solids(_) => tr!("schedule-open-solids-setup"),
+                };
+                if ui.button(label).clicked() {
+                    match target {
+                        ScheduleRepairTarget::Schedule(step) => {
+                            editor.planning_page = PlanningPage::Schedule;
+                            editor.schedule_subpage = PlanningSubpage::Setup;
+                            editor.schedule_setup_step = step;
+                        }
+                        ScheduleRepairTarget::Solids(step) => {
+                            editor.planning_page = PlanningPage::Solids;
+                            editor.solids_subpage = PlanningSubpage::Setup;
+                            editor.planning_solids_step = step;
+                        }
+                    }
+                }
             }
             if !editor.schedule_run_status.is_empty() {
                 let text = egui::RichText::new(&editor.schedule_run_status);
@@ -561,11 +559,6 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                         ));
                     }
                 });
-            }
-            if !editor.schedule_calculation_status.is_empty() {
-                ui.add_space(8.0);
-                ui.add(egui::Label::new(egui::RichText::new(&editor.schedule_calculation_status).weak()).truncate())
-                    .on_hover_text(editor.schedule_calculation_status.clone());
             }
         });
     });
@@ -657,32 +650,29 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
 
     if plan.agents().is_empty() && layout.rows.is_empty() {
         centred_note(ui, body, tr!("gantt-empty-fleet"));
-    } else if plan.bars().is_empty() {
-        // Below the rows rather than across them: said plainly, so lanes with
-        // nothing in them are not mistaken for a schedule that came back
-        // empty, but never painted over a row.
-        let used = (rows_height - editor.gantt.row_scroll).max(0.0);
-        let free = egui::Rect::from_min_max(egui::pos2(body.left(), body.top() + used), body.max);
-        if free.height() > 32.0 {
-            let label = tr!("schedule-add-work");
-            let size = egui::vec2(120.0, ui.spacing().interact_size.y);
-            let button_rect = egui::Rect::from_center_size(free.center(), size);
-            if ui.put(button_rect, egui::Button::new(label).corner_radius(GROUP_CORNER_RADIUS)).clicked()
-                && let Some(agent) = plan.agents().first()
-            {
-                commands.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::AddBar {
-                        name: String::new(),
-                        agent: Some(agent.id),
-                        priority: 0,
-                        window: WorkWindow {
-                            start_h: 0.0,
-                            end_h: Some(crate::app::schedule_run::PERIOD_H),
-                        },
+    } else if plan.bars().is_empty()
+        && let Some(agent) = plan.agents().first()
+    {
+        // A single empty-state action remains reachable even when the fleet's
+        // empty rows fill the viewport.
+        let size = egui::vec2(120.0, ui.spacing().interact_size.y);
+        let button_rect = egui::Rect::from_center_size(body.center(), size);
+        if ui
+            .put(button_rect, egui::Button::new(tr!("schedule-add-work")).corner_radius(GROUP_CORNER_RADIUS))
+            .clicked()
+        {
+            commands.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::AddBar {
+                    name: String::new(),
+                    agent: Some(agent.id),
+                    priority: 0,
+                    window: WorkWindow {
+                        start_h: 0.0,
+                        end_h: Some(crate::app::schedule_run::PERIOD_H),
                     },
-                ));
-            }
+                },
+            ));
         }
     }
 }

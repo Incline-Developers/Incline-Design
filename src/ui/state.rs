@@ -2301,9 +2301,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_stale: bool,
     /// Whether a Run Schedule is in flight, so the controls can offer Cancel.
     pub(crate) schedule_run_working: bool,
-    /// A current setup prerequisite blocks Run; used only to offer the
-    /// contextual route to repair it.
-    pub(crate) schedule_run_blocked: bool,
+    /// Where the current Run prerequisite can be repaired, including the
+    /// exact selected step on the Schedule or Solids setup page.
+    pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
     /// Schedule Animate is session-only: selection and visibility here never
     /// move the Solids View page or alter saved project item visibility.
     pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
@@ -2640,7 +2640,7 @@ impl EditorState {
         self.schedule_run_status.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
-        self.schedule_run_blocked = false;
+        self.schedule_run_repair = None;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
         self.new_loader_class_name.clear();
@@ -3213,7 +3213,7 @@ impl EditorState {
             schedule_run_status: String::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
-            schedule_run_blocked: false,
+            schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden_solids: HashSet::new(),
             schedule_animation_hidden_rows: Vec::new(),
@@ -4771,6 +4771,15 @@ impl ScheduleStep {
             Self::Readiness => "schedule_readiness",
         }
     }
+}
+
+/// The setup location that can repair the prerequisite currently blocking a
+/// Gantt run. Carrying the step prevents a generic navigation action from
+/// depositing the user at an unrelated setup screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleRepairTarget {
+    Schedule(ScheduleStep),
+    Solids(SolidsStep),
 }
 
 /// One Schedule Setup stage's status as the step tree reads it.

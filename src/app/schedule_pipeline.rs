@@ -33,10 +33,10 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::{
-    app::planning_pipeline::{StageDiagnostic, StageOutcome, StageState, StageStatus, StageSummary},
+    app::planning_pipeline::{StageDiagnostic, StageNotReady, StageOutcome, StageState, StageStatus, StageSummary},
     i18n::tr,
     model::{ReserveAggregation, ReserveFieldId},
-    ui::state::ScheduleStep,
+    ui::state::{ScheduleRepairTarget, ScheduleStep},
 };
 
 /// Exactly what one Schedule Setup run validated, captured when it started.
@@ -488,6 +488,28 @@ impl crate::app::App<'_> {
         // Taken here rather than read from the frame-synchronised copy: a
         // caller can edit configuration and ask before the next frame runs.
         pipeline.readiness(&self.schedule_fingerprints()).map(|result| result.inputs)
+    }
+
+    /// The exact setup step that can repair the first prerequisite blocking a
+    /// Gantt run. Scheduling Readiness delegates to Solids when that upstream
+    /// pipeline is the actual blocker.
+    pub(crate) fn schedule_repair_target(&self) -> Option<ScheduleRepairTarget> {
+        let reason = self.schedule_run_inputs().err()?;
+        let schedule_step = match reason {
+            ScheduleNotReady::NoProject => return None,
+            ScheduleNotReady::NotRun(step) | ScheduleNotReady::Stale(step) | ScheduleNotReady::Running(step) | ScheduleNotReady::Failed { step, .. } => step,
+        };
+        if schedule_step == ScheduleStep::Readiness
+            && let Some(project) = self.workspace.active_project()
+            && let Some(pipeline) = self.planning_pipeline.as_ref().filter(|pipeline| pipeline.runtime == project.runtime_id)
+            && let Err(reason) = pipeline.readiness(&self.planning_fingerprints())
+        {
+            let step = match reason {
+                StageNotReady::NotRun(step) | StageNotReady::Stale(step) | StageNotReady::Running(step) | StageNotReady::Failed { stage: step, .. } => step,
+            };
+            return Some(ScheduleRepairTarget::Solids(step));
+        }
+        Some(ScheduleRepairTarget::Schedule(schedule_step))
     }
 
     /// Copy the pipeline's status into the editor state the panels read.
