@@ -359,9 +359,15 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         height = raster.source_size[1],
                                         projection = raster.projection
                                     );
+                                    let details = if raster.is_draped {
+                                        format!("{details}\n{}", tr!(literal = "Draped over a surface"))
+                                    } else {
+                                        details
+                                    };
+                                    let raster_handle = SceneEntityId::Raster(raster.id);
                                     let raster_locked = locked_rasters.contains(&raster.id);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
-                                        .selected(raster.is_draped)
+                                        .selected(selected_handles.contains(&raster_handle))
                                         .toggles(EntryToggles {
                                             visible: raster.is_loaded,
                                             locked: raster_locked,
@@ -378,6 +384,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::ToggleRasterLocked(raster.id));
                                     }
                                     let response = row.response.on_hover_text(&details);
+                                    if response.clicked() {
+                                        commands.push(UiCommand::SelectRaster(raster.id));
+                                    }
 
                                     context_menu_popup(&response, raster.name.as_str(), |ui| {
                                         if ContextMenuAction::new(if raster_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })

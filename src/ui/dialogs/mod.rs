@@ -15,6 +15,7 @@ pub(crate) mod import_export;
 pub(crate) mod object_edit;
 pub(crate) mod plot;
 pub(crate) mod products;
+pub(crate) mod survey;
 pub(crate) mod triangulation;
 
 #[derive(Clone, Debug, PartialEq)]

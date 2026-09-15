@@ -1,5 +1,7 @@
 //! Canvas overlay helpers: orbit marker, cursor highlights, and view gizmos.
 
+use egui::emath::GuiRounding as _;
+
 /// Draw the orbit indicator (compass rose) on the canvas.
 ///
 /// The marker is clipped to `clip_rect` so it doesn't bleed over panels.
@@ -55,9 +57,9 @@ pub(crate) fn draw_orientation_gizmo(
             let right = normalize3(cross3(forward, up)).unwrap_or([1.0, 0.0, 0.0]);
             let origin = rect.center();
             let axis_defs = [
-                ([1.0, 0.0, 0.0], "X", egui::Color32::from_rgb(235, 55, 55)),
-                ([0.0, 1.0, 0.0], "Y", egui::Color32::from_rgb(118, 210, 38)),
-                ([0.0, 0.0, 1.0], "Z", egui::Color32::from_rgb(58, 136, 225)),
+                ([1.0, 0.0, 0.0], crate::model::survey::axis_abbreviation(0), egui::Color32::from_rgb(235, 55, 55)),
+                ([0.0, 1.0, 0.0], crate::model::survey::axis_abbreviation(1), egui::Color32::from_rgb(118, 210, 38)),
+                ([0.0, 0.0, 1.0], crate::model::survey::axis_abbreviation(2), egui::Color32::from_rgb(58, 136, 225)),
             ];
 
             let mut nodes: Vec<_> = axis_defs
@@ -65,6 +67,7 @@ pub(crate) fn draw_orientation_gizmo(
                 .filter(|(axis, _, _)| !horizontal_only || axis[2] == 0.0)
                 .flat_map(|(axis, label, color)| {
                     [1.0_f32, -1.0].into_iter().map(move |sign| {
+                        let label = label.clone();
                         let signed_axis = [axis[0] * sign, axis[1] * sign, axis[2] * sign];
                         let screen = egui::vec2(dot3(signed_axis, right), -dot3(signed_axis, up));
                         let depth = dot3(signed_axis, forward);
@@ -111,13 +114,28 @@ pub(crate) fn draw_orientation_gizmo(
 
                 if node.positive {
                     painter.circle_filled(node.pos, 8.0, color);
-                    painter.text(
-                        node.pos,
-                        egui::Align2::CENTER_CENTER,
-                        node.label,
-                        egui::FontId::proportional(12.5),
-                        egui::Color32::from_rgb(25, 32, 40),
-                    );
+                    // The disc is a fixed 16px across however long the name
+                    // is, so the type is sized to the name rather than the
+                    // other way round: a single letter can afford to fill the
+                    // disc, a pair has to give way to fit beside itself.
+                    let size = if node.label.chars().count() > 1 { 10.0 } else { 13.0 };
+                    let ink = egui::Color32::from_rgb(25, 32, 40);
+                    let galley = painter.layout_no_wrap(node.label.clone(), egui::FontId::proportional(size), ink);
+                    // Centred on the glyphs, not on the line box. The line box
+                    // reserves descender room that "RL" and "E" never use, so
+                    // centring on it leaves every label sitting low in its
+                    // disc; `mesh_bounds` is where the ink actually is.
+                    let centre = if galley.mesh_bounds.is_positive() {
+                        galley.mesh_bounds.center().to_vec2()
+                    } else {
+                        galley.rect.center().to_vec2()
+                    };
+                    // Snapped to the pixel grid afterwards. The disc centre is
+                    // wherever the projected axis put it, so without this the
+                    // glyphs rasterise off-grid and read as soft and slightly
+                    // askew however well the centring itself is done.
+                    let text_pos = (node.pos - centre).round_to_pixels(painter.pixels_per_point());
+                    painter.galley(text_pos, galley, ink);
                 } else {
                     painter.circle_stroke(node.pos, 6.0, egui::Stroke::new(1.4, color));
                 }
@@ -376,11 +394,11 @@ fn lerp_u8(from: u8, to: u8, t: f32) -> u8 {
     (from as f32 + (to as f32 - from as f32) * t.clamp(0.0, 1.0)).round() as u8
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AxisGizmoNode {
     axis: [f32; 3],
     positive: bool,
-    label: &'static str,
+    label: String,
     color: egui::Color32,
     depth: f32,
     dir: egui::Vec2,

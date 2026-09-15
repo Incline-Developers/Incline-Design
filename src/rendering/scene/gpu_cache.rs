@@ -37,6 +37,18 @@ enum BlockSurfaceSelection {
 }
 
 pub(crate) struct CachedTriangulationGpu {
+    /// The mesh these buffers were built from, held so the geometry can be
+    /// recognised rather than assumed.
+    ///
+    /// Everything else here is style, and style is all this cache used to have
+    /// to watch: a surface's geometry only ever arrived or left, so an entry
+    /// under a live id was always built from the mesh that id still had. A
+    /// coordinate conversion breaks that - it rewrites a mesh in place, under
+    /// the same id - and without something to compare, the cache would go on
+    /// drawing the vertices it first uploaded. Held by `Arc` rather than
+    /// compared by address alone so the allocation cannot be freed and a new
+    /// mesh land on the same address.
+    mesh: std::sync::Arc<crate::model::formats::mesh_data::Triangulation>,
     pub(crate) surface_chunks: Vec<CachedSurfaceChunk>,
     pub(crate) surface_style_buffer: wgpu::Buffer,
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
@@ -1022,6 +1034,22 @@ fn surface_chunks_key(scene_origin: DVec3, block_model: &OpenBlockModel, force_t
     scene_origin.x.to_bits().hash(&mut hasher);
     scene_origin.y.to_bits().hash(&mut hasher);
     scene_origin.z.to_bits().hash(&mut hasher);
+    // Where the model sits and what it holds. Neither used to be able to
+    // change under a live id - a block model arrived placed and left placed -
+    // so neither was keyed. A coordinate conversion rewrites both in place,
+    // and without them here the chunks would stay where they were first built.
+    // The block source is identified by its allocation and length rather than
+    // hashed through: the point is to notice a different buffer, not to read
+    // several million cells every frame.
+    for value in block_model.model.origin().to_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    for value in block_model.model.rotation().to_cols_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    (std::sync::Arc::as_ptr(&block_model.blocks) as usize).hash(&mut hasher);
+    block_model.blocks.len().hash(&mut hasher);
+
     force_translucent.hash(&mut hasher);
     has_partial_alpha_stops.hash(&mut hasher);
     hidden_fingerprint.hash(&mut hasher);
@@ -1115,6 +1143,11 @@ fn upload_surface_chunks(device: &wgpu::Device, chunks: Vec<SurfaceChunkCpu>) ->
 
 fn volume_asset_key(block_model: &OpenBlockModel) -> u64 {
     let mut hasher = DefaultHasher::new();
+    // The voxels are built in the model's own frame, so a move does not touch
+    // them - but a conversion carrying a scale factor replaces the cells
+    // themselves, and that this asset is built from.
+    (std::sync::Arc::as_ptr(&block_model.blocks) as usize).hash(&mut hasher);
+    block_model.blocks.len().hash(&mut hasher);
     block_model.active_color_variable.hash(&mut hasher);
     block_model.hide_empty_color_values.hash(&mut hasher);
     let ramp = block_model.normalized_ramp();
@@ -1273,13 +1306,22 @@ impl TriangulationGpuCache {
             };
 
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
+                // A different mesh under the same id: the vertices on the GPU
+                // are not this surface's any more and have to be replaced.
+                let geometry_dirty = !std::sync::Arc::ptr_eq(&cached.mesh, &triangulation.mesh);
                 let surface_dirty = cached.color != color || cached.raster_texture != raster_texture || cached.raster_opacity != triangulation.raster_opacity;
                 // Rebuild edge geometry only when edges flip between present and absent.
-                let edge_geom_dirty = (cached.edge_width == 0.0) != (edge_width == 0.0);
+                let edge_geom_dirty = geometry_dirty || (cached.edge_width == 0.0) != (edge_width == 0.0);
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
 
-                if !surface_dirty && !edge_geom_dirty && !edge_style_dirty {
+                if !geometry_dirty && !surface_dirty && !edge_geom_dirty && !edge_style_dirty {
                     continue;
+                }
+
+                if geometry_dirty {
+                    cached.surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                    cached.edge_chunks.clear();
+                    cached.mesh = triangulation.mesh.clone();
                 }
 
                 if surface_dirty {
@@ -1293,7 +1335,7 @@ impl TriangulationGpuCache {
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
 
-                if edge_geom_dirty && edge_width > 0.0 && cached.edge_chunks.is_empty() {
+                if (edge_geom_dirty || geometry_dirty) && edge_width > 0.0 && cached.edge_chunks.is_empty() {
                     cached.edge_chunks = build_edge_chunks(device, scene_origin, triangulation);
                 }
 
@@ -1358,6 +1400,7 @@ impl TriangulationGpuCache {
                 self.meshes.insert(
                     triangulation.id,
                     CachedTriangulationGpu {
+                        mesh: triangulation.mesh.clone(),
                         surface_chunks,
                         surface_style_buffer,
                         surface_style_bind_group,

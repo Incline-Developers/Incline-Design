@@ -669,6 +669,15 @@ pub(crate) fn menu_actions<R>(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut e
     response.inner
 }
 
+/// Whether a field's edit is finished, rather than mid-drag.
+///
+/// Settings that write straight through to the config, and edits that become
+/// undo entries, must land once when a drag ends rather than on every frame it
+/// moves.
+pub(crate) fn committed(response: &egui::Response) -> bool {
+    response.drag_stopped() || (response.changed() && !response.dragged())
+}
+
 /// A heading that groups the rows under it.
 ///
 /// Small, weak, and followed by a hairline across the menu, so a long dialog

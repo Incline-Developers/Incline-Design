@@ -77,6 +77,8 @@ pub(crate) enum MacMenuAction {
     OpenPointCloudTin,
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
+    OpenSurveyDefinitions,
+    OpenSurveyTransform,
     OpenPreferences,
     OpenAbout,
     UndrapeAllRasters,
@@ -97,6 +99,7 @@ pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggl
 const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
+const COORDINATES_MENU_TAG: isize = -6;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -140,6 +143,8 @@ impl MacMenuAction {
         Self::OpenPointCloudTin,
         Self::OpenCreateBlockModel,
         Self::OpenCreateOreTriangulation,
+        Self::OpenSurveyDefinitions,
+        Self::OpenSurveyTransform,
         Self::OpenPreferences,
         Self::OpenAbout,
         Self::UndrapeAllRasters,
@@ -443,18 +448,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&raster_menu, &tr!(literal = "Undrape All"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
 
-    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
-    point_cloud_menu.setAutoenablesItems(false);
-    add_action(
-        &point_cloud_menu,
-        &tr!(literal = "Create Triangulation..."),
-        "",
-        MacMenuAction::OpenPointCloudTin,
-        &target,
-        mtm,
-    );
-    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
-
     let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
     block_model_menu.setAutoenablesItems(false);
     add_action(
@@ -480,6 +473,25 @@ pub(crate) fn install_menu_bar() {
     );
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+
+    let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
+    coordinates_menu.setAutoenablesItems(false);
+    add_action(&coordinates_menu, &tr!("survey-definitions-action"), "", MacMenuAction::OpenSurveyDefinitions, &target, mtm);
+    add_action(&coordinates_menu, &tr!("survey-transform-action"), "", MacMenuAction::OpenSurveyTransform, &target, mtm);
+    let coordinates_item = add_submenu(&root, &tr!("survey-coordinates-menu"), &coordinates_menu, mtm);
+    coordinates_item.setTag(COORDINATES_MENU_TAG);
+
+    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
+    point_cloud_menu.setAutoenablesItems(false);
+    add_action(
+        &point_cloud_menu,
+        &tr!(literal = "Create Triangulation..."),
+        "",
+        MacMenuAction::OpenPointCloudTin,
+        &target,
+        mtm,
+    );
+    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -516,7 +528,15 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// must stay in sync with the ones `install_menu_bar` gives the same root
 /// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
-    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster"), tr!("ws-menubar-point-cloud")] {
+    if let Some(item) = find_item(root, COORDINATES_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Survey);
+    }
+    // Point Cloud sits with Survey, next to Coordinates, rather than with the
+    // Production design menus.
+    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-point-cloud"))) {
+        item.setHidden(workspace != Workspace::Survey);
+    }
+    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster")] {
         if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
             item.setHidden(workspace != Workspace::Production);
         }
@@ -613,6 +633,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
+    set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
     // The Design menu only acts on selected design objects.
     for action in [
         MacMenuAction::OpenInsertPointAtElevation,
