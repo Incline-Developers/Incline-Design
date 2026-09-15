@@ -275,6 +275,8 @@ pub(crate) struct App<'a> {
     web_event_loop_proxy: Option<EventLoopProxy<AppEvent>>,
     #[cfg(target_arch = "wasm32")]
     browser_saves_pending: HashSet<u32>,
+    /// Counts workspace replacements, which is where runtime ids restart.
+    workspace_generation: u64,
     #[cfg(target_arch = "wasm32")]
     browser_deletes_pending: HashSet<crate::model::project::ProjectId>,
     #[cfg(target_arch = "wasm32")]
@@ -416,6 +418,7 @@ impl<'a> Default for App<'a> {
             web_event_loop_proxy: None,
             #[cfg(target_arch = "wasm32")]
             browser_saves_pending: HashSet::new(),
+            workspace_generation: 0,
             #[cfg(target_arch = "wasm32")]
             browser_deletes_pending: HashSet::new(),
             #[cfg(target_arch = "wasm32")]
@@ -1112,6 +1115,12 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // A browser save already holds its own snapshot and still owes the
+        // completion handler a result; cancelling it would strand the pending
+        // flag and lose a save the user asked for.
+        #[cfg(target_arch = "wasm32")]
+        self.cancel_jobs(|key| !matches!(key, jobs::JobKey::BrowserProjectSave { .. }));
+        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_jobs(|_| true);
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
             self.cancel_background_task(ticket);
@@ -1145,6 +1154,10 @@ impl<'a> App<'a> {
         }
 
         self.workspace = ProjectStore::default();
+        // Runtime ids restart at one here; in-flight work must not follow.
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        #[cfg(target_arch = "wasm32")]
+        self.browser_saves_pending.clear();
         self.history = crate::model::History::new();
         self.triangulations.clear();
         self.next_triangulation_id = 0;
@@ -2075,8 +2088,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 snapshot_hash,
                 snapshot_layer_hashes,
                 asset_token,
+                workspace,
                 result,
             } => {
+                if workspace != self.workspace_generation {
+                    // Its project is gone and the id may be someone else's now,
+                    // so nothing here is ours to clear.
+                    if let Err(error) = result {
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
+                    }
+                    return;
+                }
                 self.browser_saves_pending.remove(&runtime_id);
                 match result {
                     Ok(()) => {
@@ -2193,6 +2215,8 @@ pub(crate) enum AppEvent {
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
         asset_token: crate::model::project::SaveToken,
+        /// Which workspace the snapshot came from; runtime ids are recycled.
+        workspace: u64,
         result: std::result::Result<(), String>,
     },
     BrowserProjectDeleted {
