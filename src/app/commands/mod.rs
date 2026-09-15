@@ -308,6 +308,7 @@ impl<'a> App<'a> {
                 self.hide_selected_elements();
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestExit => self.request_exit(),
             UiCommand::SaveAndExit => self.save_and_exit(),
             UiCommand::ExitWithoutSaving => {

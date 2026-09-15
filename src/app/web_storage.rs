@@ -142,8 +142,7 @@ export function inclineDesignInstallDirtyGuard() {
         if (!window.__inclineDesignDirty) return;
         event.preventDefault();
         // Modern browsers deliberately replace this with their own standard
-        // confirmation text. The in-app Exit action provides Incline Design's full
-        // explanation and the Save and Exit action.
+        // confirmation text when the tab is closed or reloaded.
         event.returnValue = "Are you sure you want to quit with unsaved project changes?";
     });
 }
