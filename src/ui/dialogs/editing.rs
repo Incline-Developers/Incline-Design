@@ -422,6 +422,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
                             }
                             // Escape dismisses the splash rather than firing
                             // this row: leaving is a deliberate click only.
+                            #[cfg(not(target_arch = "wasm32"))]
                             if select_project_action_row(
                                 ui,
                                 egui::Image::new(themed_icon!(ui, "close_project.svg")),

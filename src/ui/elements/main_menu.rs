@@ -436,6 +436,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             editor.show_about = true;
             ui.close();
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if ContextMenuAction::new(tr!("menu-file-exit")).show(ui).clicked() {
             commands.push(UiCommand::RequestExit);
             ui.close();

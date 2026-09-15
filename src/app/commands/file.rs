@@ -1743,6 +1743,10 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn request_exit(&mut self) -> Result<()> {
+        // Browser tabs are closed by the browser; shutting down leaves an unusable canvas.
+        if cfg!(target_arch = "wasm32") {
+            return Ok(());
+        }
         self.exit_after_pending_saves = false;
         self.discard_changes_on_deferred_exit = false;
         if self.has_unsaved_changes_for_exit() {
@@ -1762,6 +1766,10 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn save_and_exit(&mut self) -> Result<()> {
+        // Browser tabs are closed by the browser; shutting down leaves an unusable canvas.
+        if cfg!(target_arch = "wasm32") {
+            return Ok(());
+        }
         self.exit_after_pending_saves = true;
         self.discard_changes_on_deferred_exit = false;
         let started = self.save_dirty_project()?;
@@ -1780,6 +1788,10 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn exit_without_saving(&mut self) {
+        // Browser tabs are closed by the browser; shutting down leaves an unusable canvas.
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
         self.editor.exit_confirm_open = false;
         if !self.pending_saves.is_empty() {
             self.exit_after_pending_saves = true;
