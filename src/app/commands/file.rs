@@ -1916,6 +1916,8 @@ impl<'a> App<'a> {
             return Ok(());
         }
         if self.browser_saves_pending.contains(&runtime_id) {
+            // A window a person can hit now the encode is off the UI thread.
+            userspace_warn!("{}", crate::i18n::tr!(literal = "A save of this project is already running; save again when it finishes"));
             return Ok(());
         }
         self.ensure_project_has_no_pending_text_edit(index)?;
@@ -1932,28 +1934,37 @@ impl<'a> App<'a> {
         let name = snapshot.name.clone();
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
         self.browser_saves_pending.insert(runtime_id);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = async {
-                let progress = crate::model::progress::Progress::new();
-                let omf_bytes = formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0)).map_err(|error| format!("{error:#}"))?;
-                let record = crate::app::web_storage::BrowserProjectRecord {
-                    id: project_id,
-                    name,
-                    omf_bytes,
-                    saved_at_ms: js_sys::Date::now() as u64,
-                };
-                crate::app::web_storage::put_project(&record).await
-            }
-            .await;
-            let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectSaved {
-                runtime_id,
-                project_id,
-                snapshot_hash,
-                snapshot_layer_hashes,
-                asset_token,
-                result,
+        let workspace = self.workspace_generation;
+        // Encoding has to run on a worker: writing OMF reads back every item
+        // the eviction pass unloaded, and only a worker may wait on that read.
+        // The IndexedDB write stays here, with the event loop it reports to.
+        let compute = move |_cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0));
+        let apply = move |_app: &mut App, encoded: Result<Vec<u8>>| {
+            let record = encoded.map(|omf_bytes| crate::app::web_storage::BrowserProjectRecord {
+                id: project_id,
+                name,
+                omf_bytes,
+                saved_at_ms: js_sys::Date::now() as u64,
             });
-        });
+            write_browser_project_record(
+                proxy,
+                BrowserSaveResult {
+                    runtime_id,
+                    project_id,
+                    snapshot_hash,
+                    snapshot_layer_hashes,
+                    asset_token,
+                    workspace,
+                },
+                record,
+            );
+        };
+        self.spawn_job_reporting_progress(
+            tr!(literal = "Saving to browser storage…"),
+            vec![crate::app::jobs::JobKey::BrowserProjectSave { runtime_id }],
+            compute,
+            apply,
+        );
         Ok(())
     }
 
@@ -2628,4 +2639,61 @@ fn show_in_file_manager(path: &Path) -> Result<()> {
 
     command.spawn().with_context(|| format!("show {} in the file manager", path.display()))?;
     Ok(())
+}
+
+/// What the completion handler needs, carried across the encode job.
+#[cfg(target_arch = "wasm32")]
+struct BrowserSaveResult {
+    runtime_id: u32,
+    workspace: u64,
+    project_id: crate::model::project::ProjectId,
+    snapshot_hash: u64,
+    snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
+    asset_token: crate::model::project::SaveToken,
+}
+
+/// Hand an encoded project to IndexedDB, a plain promise on the UI thread's
+/// microtask queue. A failed encode takes the same exit, so the bookkeeping
+/// has one.
+#[cfg(target_arch = "wasm32")]
+fn write_browser_project_record(
+    proxy: winit::event_loop::EventLoopProxy<crate::app::AppEvent>,
+    save: BrowserSaveResult,
+    record: Result<crate::app::web_storage::BrowserProjectRecord>,
+) {
+    let BrowserSaveResult {
+        runtime_id,
+        project_id,
+        snapshot_hash,
+        snapshot_layer_hashes,
+        asset_token,
+        workspace,
+    } = save;
+    let record = match record {
+        Ok(record) => record,
+        Err(error) => {
+            let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectSaved {
+                runtime_id,
+                project_id,
+                snapshot_hash,
+                snapshot_layer_hashes,
+                asset_token,
+                workspace,
+                result: Err(format!("{error:#}")),
+            });
+            return;
+        }
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::app::web_storage::put_project(&record).await;
+        let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectSaved {
+            runtime_id,
+            project_id,
+            snapshot_hash,
+            snapshot_layer_hashes,
+            asset_token,
+            workspace,
+            result,
+        });
+    });
 }
