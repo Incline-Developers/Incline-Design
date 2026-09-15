@@ -49,14 +49,13 @@ crs-definitions = "0.5.0"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 robust = "1.2.0"
-rust-embed = { version = "8.12.0", default-features = false }
+rust-embed = { version = "8.12.0", default-features = false, features = ["debug-embed"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 spade = "2.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 thousands = "0.2.0"
 tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
-toml = "1.1.5"
 twox-hash = "2.1.4"
 unic-langid = { version = "0.9.6", features = ["macros"] }
 uuid = { version = "1.26.0", features = ["js", "serde", "v4"] }
@@ -72,6 +71,7 @@ memmap2 = "0.9.11"
 pollster = "1.0.1"
 sys-locale = "0.3.2"
 tempfile = "3.27.0"
+toml = "1.1.5"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-log = "0.2.0"
