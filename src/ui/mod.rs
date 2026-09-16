@@ -581,6 +581,17 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
+    // Down the right edge, claimed after the products panel so it sits inboard
+    // of it. Shown on a stored preference, not on the active workspace.
+    let borehole_inspector_rect = editor
+        .show_borehole_inspector
+        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes));
+    if borehole_inspector_rect.is_none() {
+        // Keep the root auto-id sequence identical when this panel is absent,
+        // or every panel after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
+    }
+
     // The drawing tools are a docked column between the explorer and the
     // scene, so they are claimed before the scene's rect is worked out: what
     // they leave is where it starts. The column is one region the full height
@@ -1092,6 +1103,7 @@ fn draw_ui(
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
     let products_claimed = products_rect.unwrap_or(egui::Rect::NOTHING);
+    let borehole_inspector_claimed = borehole_inspector_rect.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
         [
@@ -1101,6 +1113,7 @@ fn draw_ui(
             bottom_toolbar_rect,
             console_claimed,
             products_claimed,
+            borehole_inspector_claimed,
             scene_claimed,
         ],
     );
@@ -1111,6 +1124,7 @@ fn draw_ui(
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
             chrome::Grip::new(products_claimed, chrome::Edge::Left, elements::products::PANEL_ID),
+            chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
         ],
     );
 

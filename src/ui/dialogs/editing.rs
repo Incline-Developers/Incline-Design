@@ -110,9 +110,21 @@ pub(crate) fn draw_right_click_context(
             _ => None,
         });
 
-        // --- Drill hole colouring ---
-        if let Some(drill_hole_id) = selected_drill_hole {
-            if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
+        // --- Drill holes ---
+        // The inspector row acts on the hole the pick named; colouring acts on
+        // its whole dataset, which is what the selection names.
+        let context_hole = editor.canvas_context_menu_hole;
+        if context_hole.is_some() || selected_drill_hole.is_some() {
+            if let Some(hole) = context_hole
+                && ContextMenuAction::new(tr!(literal = "Borehole Inspector")).show(ui).clicked()
+            {
+                commands.push(UiCommand::InspectDrillHole(hole));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+
+            if let Some(drill_hole_id) = selected_drill_hole
+                && ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked()
+            {
                 commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }

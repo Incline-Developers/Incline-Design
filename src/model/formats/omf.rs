@@ -2046,6 +2046,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 .collect(),
             render_ranges: Vec::new(),
             intervals: Vec::new(),
+            // An imported line set says nothing about the hole's survey.
+            orientation_source: crate::model::drill_hole::OrientationSource::Unknown,
         }))
     }
 

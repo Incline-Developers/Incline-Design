@@ -158,6 +158,28 @@ pub(crate) struct StoredInitiation {
     pub(crate) delay_ms: u32,
 }
 
+/// Where a hole's orientation came from: measured, assumed, or unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum OrientationSource {
+    /// A survey record placed or steered the trace.
+    Measured,
+    /// No survey; the direction was set by hand or by design.
+    Assumed,
+    /// Nothing recorded; the trace is only a projection.
+    #[default]
+    Unknown,
+}
+
+impl OrientationSource {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Measured => tr!(literal = "Measured"),
+            Self::Assumed => tr!(literal = "Assumed"),
+            Self::Unknown => tr!(literal = "Unknown"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
@@ -170,6 +192,9 @@ pub(crate) struct DrillHole {
     /// trace is continuous.
     pub(crate) render_ranges: Vec<(f64, f64)>,
     pub(crate) intervals: Vec<DrillInterval>,
+    /// Defaults to `Unknown` for a project saved before this field existed.
+    #[serde(default)]
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Row arrangement used when filling a blast boundary with collars.
@@ -390,6 +415,7 @@ pub(crate) fn generate_pattern_collars(
 pub(crate) struct HolePlacement {
     pub(crate) collar: DVec3,
     pub(crate) trace: Vec<TraceStation>,
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Where a hole points, in the terms a drill plan is written in: `azimuth`
@@ -504,6 +530,7 @@ impl DrillHole {
         HolePlacement {
             collar: self.collar,
             trace: self.trace.clone(),
+            orientation_source: self.orientation_source,
         }
     }
 
@@ -514,6 +541,7 @@ impl DrillHole {
     pub(crate) fn set_placement(&mut self, placement: &HolePlacement, delta: DVec3) {
         self.collar = placement.collar + delta;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if delta != DVec3::ZERO {
             for station in &mut self.trace {
                 station.position += delta;
@@ -532,6 +560,7 @@ impl DrillHole {
     pub(crate) fn set_rotated_placement(&mut self, placement: &HolePlacement, rotation: CollarRotation) {
         self.collar = placement.collar;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if rotation.is_identity() {
             // The restore path, taken on every rollback: the trace copy above
             // is already the whole of it.
@@ -552,6 +581,7 @@ impl DrillHole {
         for station in &mut self.trace {
             station.position = pivot + quat * (station.position - pivot);
         }
+        self.orientation_source = OrientationSource::Assumed;
     }
 
     /// The physical world radius of the hole. A dataset without diameters uses
@@ -917,10 +947,17 @@ pub(crate) struct SurveyObservation {
     pub(crate) position: Option<DVec3>,
 }
 
-pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> Vec<TraceStation> {
+/// A resolved trace and whether an observation steered it past the collar.
+pub(crate) struct ResolvedTrace {
+    pub(crate) stations: Vec<TraceStation>,
+    pub(crate) steered: bool,
+}
+
+pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> ResolvedTrace {
     observations.sort_by(|a, b| a.depth.total_cmp(&b.depth));
     let mut trace = vec![TraceStation { depth: 0.0, position: collar }];
     let mut last_orientation = observations.iter().find_map(SurveyObservation::orientation);
+    let mut steered = false;
     for observation in observations.iter().copied() {
         if !observation.depth.is_finite() || observation.depth < 0.0 {
             continue;
@@ -930,11 +967,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
             continue;
         }
         let stored_position = observation.position.filter(|position| position.is_finite());
+        steered |= observation.orientation().is_some();
         let position = stored_position.unwrap_or_else(|| {
             let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
             project_tangent(previous.position, observation.depth - previous.depth, azimuth, dip)
         });
         if observation.depth > previous.depth + 1.0e-9 {
+            steered |= stored_position.is_some() || last_orientation.is_some();
             trace.push(TraceStation {
                 depth: observation.depth,
                 position,
@@ -950,12 +989,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
     let previous = *trace.last().expect("collar station exists");
     if target_depth.is_finite() && target_depth > previous.depth + 1.0e-9 {
         let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
+        steered |= last_orientation.is_some();
         trace.push(TraceStation {
             depth: target_depth,
             position: project_tangent(previous.position, target_depth - previous.depth, azimuth, dip),
         });
     }
-    trace
+    ResolvedTrace { stations: trace, steered }
 }
 
 impl SurveyObservation {
@@ -981,21 +1021,32 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
-    let mut numeric: BTreeMap<String, (String, f64, f64)> = BTreeMap::new();
+    let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
     let mut categorical: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for hole in holes {
         for interval in &hole.intervals {
             for (key, value) in &interval.values {
                 let label = key.clone();
                 match value {
+                    // Sentinels stay out of the range; the field still shows.
                     DrillValue::Numeric(value) if value.is_finite() => {
+                        let sentinel = crate::model::block_model::is_no_data_sentinel(*value);
                         numeric
                             .entry(key.clone())
-                            .and_modify(|(_, min, max)| {
-                                *min = min.min(*value);
-                                *max = max.max(*value);
+                            .and_modify(|(_, min, max, has_real)| {
+                                if sentinel {
+                                    return;
+                                }
+                                if *has_real {
+                                    *min = min.min(*value);
+                                    *max = max.max(*value);
+                                } else {
+                                    *min = *value;
+                                    *max = *value;
+                                    *has_real = true;
+                                }
                             })
-                            .or_insert((label, *value, *value));
+                            .or_insert_with(|| if sentinel { (label, 0.0, 0.0, false) } else { (label, *value, *value, true) });
                     }
                     DrillValue::Category(value) if !value.trim().is_empty() => {
                         let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, Vec::new())).1;
@@ -1009,7 +1060,7 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
         }
     }
     let mut fields = Vec::new();
-    fields.extend(numeric.into_iter().map(|(key, (label, min, max))| DrillField {
+    fields.extend(numeric.into_iter().map(|(key, (label, min, max, _))| DrillField {
         key,
         label,
         kind: DrillFieldKind::Numeric { min, max },

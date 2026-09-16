@@ -42,6 +42,8 @@ struct MenuState {
     active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
+    /// Its own field, so a change here still trips `sync_menu_state`'s check.
+    show_borehole_inspector: bool,
     /// The File > Open Recent rows, as name and the project each opens.
     recent: Vec<(String, PathBuf)>,
 }
@@ -83,6 +85,8 @@ pub(crate) enum MacMenuAction {
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
+    /// The Drillholes menu's own switch, mirroring where the egui bar puts it.
+    ToggleBoreholeInspector,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -149,6 +153,7 @@ impl MacMenuAction {
         Self::OpenAbout,
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
+        Self::ToggleBoreholeInspector,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -471,6 +476,16 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_separator(&drill_hole_menu, mtm);
+    // The inspector's own switch, kept in sync by `sync_menu_state`.
+    add_action(
+        &drill_hole_menu,
+        &ViewToggle::BoreholeInspector.label(),
+        "",
+        MacMenuAction::ToggleBoreholeInspector,
+        &target,
+        mtm,
+    );
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 
@@ -607,6 +622,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
+        show_borehole_inspector: ViewToggle::BoreholeInspector.get(editor),
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
@@ -648,4 +664,5 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+    set_checked(&root, MacMenuAction::ToggleBoreholeInspector, state.show_borehole_inspector);
 }

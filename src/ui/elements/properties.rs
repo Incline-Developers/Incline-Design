@@ -303,6 +303,7 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.renderer_background_color = defaults.renderer_background_color;
     draft.dark_mode = defaults.dark_mode;
     draft.show_console = defaults.show_console;
+    draft.show_borehole_inspector = defaults.show_borehole_inspector;
     draft.panel_chrome = defaults.panel_chrome;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
     draft.show_scale_bar = defaults.show_scale_bar;
@@ -366,6 +367,7 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&response);
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Dark mode"), &mut draft.dark_mode).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Borehole inspector"), &mut draft.show_borehole_inspector).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));

@@ -580,6 +580,19 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     ui.close();
                 }
             });
+
+            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+                // A switch onto the same setting the Interface preferences tab
+                // holds, like the View menu's toggles above.
+                if ContextMenuAction::new(ViewToggle::BoreholeInspector.label())
+                    .checked(ViewToggle::BoreholeInspector.get(editor))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
+                    ui.close();
+                }
+            });
             return;
         }
 

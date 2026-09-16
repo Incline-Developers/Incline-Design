@@ -12,7 +12,7 @@ use std::{
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::model::drill_hole::{DrillHole, DrillHoleDataset, DrillInterval, DrillValue, SurveyObservation, TraceStation, resolve_trace};
+use crate::model::drill_hole::{DrillHole, DrillHoleDataset, DrillInterval, DrillValue, OrientationSource, SurveyObservation, TraceStation, resolve_trace};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum CsvDrillFileRole {
@@ -384,20 +384,26 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                 trace,
                 render_ranges,
                 intervals: hole_intervals,
+                // Explicit segments carry file positions, not a projection.
+                orientation_source: OrientationSource::Measured,
             });
         }
     } else {
         for (dhid, collar) in collars {
             let hole_intervals = intervals.remove(&dhid).unwrap_or_default();
             let target_depth = hole_intervals.iter().map(|interval| interval.to).fold(0.0, f64::max);
-            let trace = resolve_trace(collar.position, surveys.entry(dhid.clone()).or_default(), target_depth);
+            let observations = surveys.entry(dhid.clone()).or_default();
+            let resolved = resolve_trace(collar.position, observations, target_depth);
+            // Measured only if an observation steered the trace past collar.
+            let orientation_source = if resolved.steered { OrientationSource::Measured } else { OrientationSource::Unknown };
             holes.push(DrillHole {
                 dhid,
                 collar: collar.position,
                 diameter: collar.diameter,
-                trace,
+                trace: resolved.stations,
                 render_ranges: Vec::new(),
                 intervals: hole_intervals,
+                orientation_source,
             });
         }
     }

@@ -420,9 +420,13 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
         .collect()
 }
 
-fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
+/// The colour the 3D view gives one interval value. Shared with the borehole
+/// log so a hole reads the same in the panel as it does in the scene.
+pub(crate) fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
     match (kind, value) {
-        (DrillFieldKind::Numeric { min, max }, DrillValue::Numeric(value)) if value.is_finite() => {
+        // A no-data sentinel falls through to white, the same as a missing
+        // value: it is not the bottom of the ramp, it is nothing at all.
+        (DrillFieldKind::Numeric { min, max }, DrillValue::Numeric(value)) if value.is_finite() && !crate::model::block_model::is_no_data_sentinel(*value) => {
             let t = if (max - min).abs() <= f64::EPSILON {
                 0.5
             } else {

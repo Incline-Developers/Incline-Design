@@ -508,6 +508,7 @@ impl<'a> App<'a> {
                 self.editor.drill_hole_color_dialog = Some(id);
                 Ok(())
             }
+            UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
             UiCommand::SetDrillHoleColorField { id, field } => {
                 self.set_drill_hole_color_field(id, field);
                 Ok(())

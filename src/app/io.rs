@@ -68,6 +68,10 @@ pub(crate) const fn default_show_console() -> bool {
     true
 }
 
+pub(crate) const fn default_show_borehole_inspector() -> bool {
+    false
+}
+
 pub(crate) const fn default_plan_orbit_sensitivity() -> f64 {
     0.003
 }
@@ -151,6 +155,9 @@ pub(crate) struct Config {
     /// Show the console pannel
     #[serde(default = "default_show_console")]
     pub(crate) show_console: bool,
+    /// Show the Borehole Inspector panel
+    #[serde(default = "default_show_borehole_inspector")]
+    pub(crate) show_borehole_inspector: bool,
     /// Round the panels off and part them with a gap. Off, they sit flush and
     /// square with a separator line between them.
     #[serde(default = "default_panel_chrome")]
@@ -262,6 +269,7 @@ impl Default for Config {
             language: default_language(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
+            show_borehole_inspector: default_show_borehole_inspector(),
             panel_chrome: default_panel_chrome(),
             renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),

@@ -500,7 +500,10 @@ impl<'a> Default for App<'a> {
 impl<'a> App<'a> {
     #[cfg(target_os = "macos")]
     fn handle_mac_menu_action(&mut self, action: crate::mac::MacMenuAction) {
-        use crate::{mac::MacMenuAction, ui::state::UiCommand};
+        use crate::{
+            mac::MacMenuAction,
+            ui::state::{UiCommand, ViewToggle},
+        };
 
         let active_project_id = self.workspace.active_project().map(|project| project.runtime_id);
         let command = match action {
@@ -549,6 +552,9 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
+            // Named rather than indexed: this switch is a Drillholes menu row
+            // of its own, not one of the View menu's.
+            MacMenuAction::ToggleBoreholeInspector => Some(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector)),
         };
 
         if let Some(command) = command {
@@ -618,6 +624,7 @@ impl<'a> App<'a> {
         crate::i18n::select_language(config.language);
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
+        self.editor.show_borehole_inspector = config.show_borehole_inspector;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
         self.editor.show_scale_bar = config.show_scale_bar;
@@ -992,8 +999,8 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| !self.drill_holes.iter().any(|item| item.id == anchor.dataset)) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| self.drill_holes.iter().any(|item| item.id == hole.dataset));
-        self.editor.selected_tie_ins.retain(|tie| self.drill_holes.iter().any(|item| item.id == tie.dataset));
+        let drill_holes = &self.drill_holes;
+        self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
         if self
             .editor
             .initiation_dialog

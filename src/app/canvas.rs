@@ -412,7 +412,8 @@ impl<'a> App<'a> {
                 let handle = pick.entity;
                 // Drill & Blast selects the hole the cursor was over, where
                 // production selects the dataset holding it.
-                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
+                let picked_hole = pick.hole;
+                let hole = picked_hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
@@ -424,7 +425,9 @@ impl<'a> App<'a> {
                 // going for empty space.
                 let already_selected = match hole {
                     Some(hole) => self.editor.selected_drill_holes.contains(&hole),
-                    None => self.editor.selected_handles.contains(&handle),
+                    // Outside Drill & Blast the handle is the whole dataset, so
+                    // clicking another hole in it is a new pick, not a toggle.
+                    None => self.editor.selected_handles.contains(&handle) && (picked_hole.is_none() || self.editor.last_picked_hole == picked_hole),
                 };
                 let selection_mode = if self.modifiers.shift_key() {
                     SelectionMode::Toggle
@@ -438,6 +441,17 @@ impl<'a> App<'a> {
                 match hole {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
+                }
+                // A click that dropped what it hit must not park the panel on
+                // it, and leaves the next click on it a fresh pick.
+                let still_selected = match hole {
+                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
+                    None => self.editor.selected_handles.contains(&handle),
+                };
+                if still_selected {
+                    self.editor.record_picked_hole(picked_hole);
+                } else {
+                    self.editor.last_picked_hole = None;
                 }
                 // A drape has no geometry of its own - it is painted onto the
                 // surface - so the click that lands on the surface lands on

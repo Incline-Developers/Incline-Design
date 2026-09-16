@@ -1132,6 +1132,11 @@ impl<'a> App<'a> {
                         }
                         _ => {}
                     }
+                    // The panel follows a right click, but only a left click
+                    // decides what a repeat click toggles. The menu's hole
+                    // rows act on the hole under the cursor, selected or not.
+                    self.editor.show_picked_hole(pick.hole);
+                    self.editor.canvas_context_menu_hole = pick.hole;
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,

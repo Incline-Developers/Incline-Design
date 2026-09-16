@@ -6,8 +6,8 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
-            OpenDrillHoleDataset, TraceStation, default_category_colors,
+            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, LoadedDrillHoleDataset,
+            OpenDrillHoleDataset, OrientationSource, TraceStation, default_category_colors,
         },
         formats::csv_drill_hole,
     },
@@ -77,6 +77,7 @@ impl<'a> App<'a> {
                 ],
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
+                orientation_source: OrientationSource::Assumed,
             })
             .collect();
         let dataset = std::sync::Arc::new(DrillHoleDataset::new(holes));
@@ -298,8 +299,7 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        self.editor.retain_drill_hole_datasets(|dataset| dataset != id);
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
@@ -321,12 +321,30 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        self.editor.retain_drill_hole_datasets(|dataset| dataset != id);
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
         self.delete_project_item(ItemRef::DrillHole(id));
         self.request_topology_redraw();
+    }
+
+    /// Sends one hole to the borehole inspector, opening the panel if it is
+    /// hidden. Ignores the inspector lock: this is an explicit request.
+    pub(crate) fn inspect_drill_hole(&mut self, hole: DrillHoleRef) -> Result<()> {
+        self.editor.inspected_hole = Some(hole);
+        self.redraw_requested = true;
+        // The one switch, shared with the menu and the Interface tab.
+        if !self.editor.show_borehole_inspector
+            && let Err(error) = self.toggle_view_option(crate::ui::state::ViewToggle::BoreholeInspector)
+        {
+            // A setting that will not save must not hold the panel shut.
+            self.editor.show_borehole_inspector = true;
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Opened the Borehole Inspector, but could not save the setting: %error%", error = error)
+            );
+        }
+        Ok(())
     }
 }
