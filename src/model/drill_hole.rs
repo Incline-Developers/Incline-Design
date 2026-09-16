@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, iter, path::PathBuf, sync::Arc};
 
 use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -1032,18 +1032,11 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
     let mut max = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
     for hole in holes {
-        // A collar without a resolvable measured-depth segment remains part
-        // of the dataset/explorer counts, but it is not rendered and must not
-        // pull camera fitting toward an otherwise empty coordinate.
-        if hole.trace.len() < 2 {
-            continue;
-        }
-        // Conservatively cover both the trace and the world-sized collar. The
-        // trace's pixel floor has no stable world radius to add here.
+        // Every hole draws a collar marker, so the bounds cover it and the trace.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
-        for station in &hole.trace {
-            min = min.min(station.position - DVec3::splat(radius));
-            max = max.max(station.position + DVec3::splat(radius));
+        for position in iter::once(hole.collar_position()).chain(hole.trace.iter().map(|station| station.position)) {
+            min = min.min(position - DVec3::splat(radius));
+            max = max.max(position + DVec3::splat(radius));
             any = true;
         }
     }

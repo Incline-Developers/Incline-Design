@@ -754,9 +754,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
 fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenDrillHoleDataset) -> Result<Option<omf_crate::Element>> {
     let mut holes = Vec::new();
     for hole in &open.dataset.holes {
-        if let Some(element) = write_drill_hole(writer, hole, &open.dataset)? {
-            holes.push(element);
-        }
+        holes.push(write_drill_hole(writer, hole, &open.dataset)?);
     }
     if holes.is_empty() {
         return Ok(None);
@@ -778,9 +776,17 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     Ok(Some(element))
 }
 
-fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole, dataset: &DrillHoleDataset) -> Result<Option<omf_crate::Element>> {
+/// A hole with no drawable trace, written as its collar with the same metadata.
+fn write_drill_hole_collar<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole) -> Result<omf_crate::Element> {
+    let mut element = omf_crate::Element::new(hole.dhid.clone(), omf_crate::PointSet::new(writer.array_vertices([hole.collar_position().to_array()])?));
+    put(&mut element, META_KIND, "drillhole");
+    put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
+    Ok(element)
+}
+
+fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole, dataset: &DrillHoleDataset) -> Result<omf_crate::Element> {
     if hole.trace.len() < 2 {
-        return Ok(None);
+        return write_drill_hole_collar(writer, hole);
     }
     let mut depths = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
     depths.extend(hole.intervals.iter().flat_map(|interval| [interval.from, interval.to]));
@@ -790,7 +796,7 @@ fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer
     depths.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
     let positions = depths.iter().filter_map(|depth| hole.position_at_depth(*depth)).collect::<Vec<_>>();
     if positions.len() != depths.len() || positions.len() < 2 {
-        return Ok(None);
+        return write_drill_hole_collar(writer, hole);
     }
     let mut segments = Vec::new();
     let mut ranges = Vec::new();
@@ -805,7 +811,7 @@ fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer
         }
     }
     if segments.is_empty() {
-        return Ok(None);
+        return write_drill_hole_collar(writer, hole);
     }
     let mut element = omf_crate::Element::new(
         hole.dhid.clone(),
@@ -886,7 +892,7 @@ fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer
     }
     put(&mut element, META_KIND, "drillhole");
     put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
-    Ok(Some(element))
+    Ok(element)
 }
 
 fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, raster: &OpenRasterTexture) -> Result<omf_crate::Element> {
