@@ -4,7 +4,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, hash_map::Entry},
     fmt,
     path::PathBuf,
 };
@@ -36,6 +36,7 @@ pub(crate) enum CsvDrillColumnRole {
     Depth,
     Azimuth,
     Dip,
+    Inclination,
     From,
     To,
     StartEast,
@@ -174,7 +175,8 @@ fn role_alias(role: CsvDrillFileRole, header: &str) -> Option<(CsvDrillColumnRol
             "elevation" | "elev" | "rl" | "z" => Some((CsvDrillColumnRole::Elevation, 0)),
             "height" => Some((CsvDrillColumnRole::Elevation, 1)),
             "azimuth" | "azi" | "bearing" => Some((CsvDrillColumnRole::Azimuth, 0)),
-            "dip" | "inclination" => Some((CsvDrillColumnRole::Dip, 0)),
+            "dip" => Some((CsvDrillColumnRole::Dip, 0)),
+            "inc" | "incl" | "incline" | "inclination" => Some((CsvDrillColumnRole::Inclination, 0)),
             _ => None,
         },
         CsvDrillFileRole::Interval => match header {
@@ -264,7 +266,7 @@ const NUL_SAMPLE_BYTES: usize = 4096;
 const REPAIR_MARK: char = '\u{FFFD}';
 
 pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>) -> Result<DrillHoleDataset, CsvDrillError> {
-    let inputs = inputs.into_iter().collect::<Vec<_>>();
+    let mut inputs = inputs.into_iter().collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(CsvDrillError::Invalid("Select at least one CSV file".into()));
     }
@@ -284,7 +286,13 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
         return Err(CsvDrillError::Invalid("Explicit-segment geometry cannot be combined with collar or survey geometry".into()));
     }
 
+    // Geometry is read before the rows that hang off it, so a row naming a
+    // hole the bundle does not define is known as out of scope when it is read.
+    inputs.sort_by_key(|(mapping, _)| !matches!(mapping.role, CsvDrillFileRole::Collar | CsvDrillFileRole::ExplicitSegments));
+
+    let segment_scoped = segment_files == 1;
     let mut skipped = 0usize;
+    let mut orphaned = 0usize;
     let mut collars: HashMap<String, Collar> = HashMap::new();
     let mut surveys: HashMap<String, Vec<SurveyObservation>> = HashMap::new();
     let mut intervals: HashMap<String, Vec<DrillInterval>> = HashMap::new();
@@ -331,8 +339,20 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
         validate_roles(mapping)?;
         let file = CsvFile { mapping, headers, repaired };
         let stem = mapping.path.file_stem().and_then(|value| value.to_str()).unwrap_or("interval");
-        // Once per row, not per attribute column, and only for FROM/TO files.
-        let gates = matches!(mapping.role, CsvDrillFileRole::Interval | CsvDrillFileRole::ExplicitSegments).then(|| {
+        // Values decide the sign: a column headed inclination is often signed
+        // as dip already, and negating it would stand every hole on its head.
+        let inclination_as_dip = mapping.role == CsvDrillFileRole::Survey && inclination_is_dip_signed(&file, &rows);
+        if inclination_as_dip {
+            userspace_warn!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "%file% inclination values are all at or below zero, so the column was read as dip, negative downward",
+                    file = mapping.path.display().to_string()
+                )
+            );
+        }
+        // Once per row, not per attribute column, and only for interval files.
+        let gates = (mapping.role == CsvDrillFileRole::Interval).then(|| {
             rows.iter()
                 .enumerate()
                 .skip(1)
@@ -350,136 +370,132 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                     .skip(1)
                     // Rows the import will drop must not vote, or one junk
                     // cell would demote a numeric column to text.
-                    .filter(|(row_index, _)| gates.as_ref().is_none_or(|gates| gates[row_index - 1].is_ok()))
+                    .filter(|(row_index, _)| {
+                        gates.as_ref().is_none_or(|gates| gates[row_index - 1].as_ref().is_ok_and(|keys| hole_known(segment_scoped, &collars, &segment_stations, &keys.dhid)))
+                    })
                     .filter_map(|(_, row)| row.get(index).map(|value| value.trim()))
                     .filter(|value| !value.is_empty() && !file.damaged(value))
                     .all(|value| value.parse::<f64>().is_ok_and(f64::is_finite))
             })
             .collect::<std::collections::HashSet<_>>();
-        let mut interval_rows = 0usize;
-        let mut interval_skipped = 0usize;
-        let mut gates = gates.unwrap_or_default().into_iter();
-        for (row_index, row) in rows.iter().enumerate().skip(1) {
-            let gate = gates.next();
+        let mut row_count = 0usize;
+        let skipped_before = skipped;
+        // The reason names its own file and row.
+        let mut report_skip = |error: &CsvDrillError| {
+            skipped += 1;
+            if skipped <= SKIP_REPORT_LIMIT {
+                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Skipped a row: %reason%", reason = error.to_string()));
+            }
+        };
+        // Each gate rides with the row it was read from, so the two cannot
+        // come apart; a file without gates yields None for every row.
+        let gates = gates.into_iter().flatten().map(Some).chain(std::iter::repeat_with(|| None));
+        for ((row_index, row), gate) in rows.iter().enumerate().skip(1).zip(gates) {
             if row.iter().all(|value| value.trim().is_empty()) {
                 continue;
             }
-            // Every malformed interval row is skipped, not only an unreadable
-            // attribute: a blank hole ID or a dropped comma once cost the file.
-            if mapping.role == CsvDrillFileRole::Interval {
-                interval_rows += 1;
-                match gate.expect("an interval file gates every row") {
-                    Ok(keys) => {
-                        let interval = interval_row(&file, row, &keys, stem, &numeric_attributes, &attribute_counts);
-                        intervals.entry(keys.dhid).or_default().push(interval);
+            // A missing segment breaks the trace, so a segment row still
+            // refuses the file rather than being skipped.
+            if mapping.role == CsvDrillFileRole::ExplicitSegments {
+                check_width(&file, row, row_index)?;
+                let dhid = required_text(&file, row, &CsvDrillColumnRole::Dhid, row_index)?;
+                let from = required_number(&file, row, &CsvDrillColumnRole::From, row_index)?;
+                let to = required_number(&file, row, &CsvDrillColumnRole::To, row_index)?;
+                validate_segment(mapping, from, to, &dhid, row_index)?;
+                let start = DVec3::new(
+                    required_number(&file, row, &CsvDrillColumnRole::StartEast, row_index)?,
+                    required_number(&file, row, &CsvDrillColumnRole::StartNorth, row_index)?,
+                    required_number(&file, row, &CsvDrillColumnRole::StartElevation, row_index)?,
+                );
+                let end = DVec3::new(
+                    required_number(&file, row, &CsvDrillColumnRole::EndEast, row_index)?,
+                    required_number(&file, row, &CsvDrillColumnRole::EndNorth, row_index)?,
+                    required_number(&file, row, &CsvDrillColumnRole::EndElevation, row_index)?,
+                );
+                let diameter = optional_number(&file, row, &CsvDrillColumnRole::Diameter, row_index)?;
+                validate_diameter(diameter, &dhid)?;
+                if let Some(existing) = segment_diameters.get(&dhid).copied() {
+                    let consistent = match (existing, diameter) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => (a - b).abs() <= 1.0e-9,
+                        _ => false,
+                    };
+                    if !consistent {
+                        return Err(CsvDrillError::Invalid(format!("inconsistent diameter for DHID '{dhid}'")));
                     }
-                    Err(error) => {
-                        skipped += 1;
-                        interval_skipped += 1;
-                        if skipped <= SKIP_REPORT_LIMIT {
-                            // The reason names its own file and row.
-                            userspace_warn!("{}", crate::i18n::tr_format!(literal = "Skipped a row: %reason%", reason = error.to_string()));
-                        }
-                    }
+                } else {
+                    segment_diameters.insert(dhid.clone(), diameter);
                 }
+                segment_stations
+                    .entry(dhid.clone())
+                    .or_default()
+                    .extend([TraceStation { depth: from, position: start }, TraceStation { depth: to, position: end }]);
+                segment_ranges.entry(dhid.clone()).or_default().push((from, to));
+                let keys = IntervalKeys { dhid, from, to };
+                let interval = interval_row(&file, row, &keys, stem, &numeric_attributes, &attribute_counts);
+                intervals.entry(keys.dhid).or_default().push(interval);
                 continue;
             }
-            if row.len() != headers.len() {
-                return Err(CsvDrillError::Invalid(format!(
-                    "{} row {} has {} columns; expected {}",
-                    mapping.path.display(),
-                    row_index + 1,
-                    row.len(),
-                    headers.len()
-                )));
-            }
-            let dhid = required_text(&file, row, &CsvDrillColumnRole::Dhid, row_index)?;
-            match mapping.role {
-                CsvDrillFileRole::Unassigned => unreachable!("unassigned mappings are rejected before rows are parsed"),
-                CsvDrillFileRole::Interval => unreachable!("interval rows are handled above so one bad row can be skipped"),
-                CsvDrillFileRole::Collar => {
-                    let collar = Collar {
-                        position: DVec3::new(
-                            required_number(&file, row, &CsvDrillColumnRole::East, row_index)?,
-                            required_number(&file, row, &CsvDrillColumnRole::North, row_index)?,
-                            required_number(&file, row, &CsvDrillColumnRole::Elevation, row_index)?,
-                        ),
-                        diameter: optional_number(&file, row, &CsvDrillColumnRole::Diameter, row_index)?,
-                    };
-                    validate_diameter(collar.diameter, &dhid)?;
-                    if collars.insert(dhid.clone(), collar).is_some() {
-                        return Err(CsvDrillError::Invalid(format!("duplicate collar DHID '{dhid}'")));
-                    }
-                }
-                CsvDrillFileRole::Survey => {
-                    let position = optional_xyz(&file, row, row_index, CsvDrillColumnRole::East, CsvDrillColumnRole::North, CsvDrillColumnRole::Elevation)?;
-                    let azimuth = optional_number(&file, row, &CsvDrillColumnRole::Azimuth, row_index)?;
-                    let dip = optional_number(&file, row, &CsvDrillColumnRole::Dip, row_index)?;
-                    if azimuth.is_some() != dip.is_some() {
-                        return Err(CsvDrillError::Invalid(format!(
-                            "{} row {} has a partial azimuth/dip orientation",
-                            mapping.path.display(),
-                            row_index + 1
-                        )));
-                    }
-                    if position.is_none() && azimuth.is_none() {
-                        return Err(CsvDrillError::Invalid(format!(
-                            "{} row {} has no XYZ or azimuth/dip geometry",
-                            mapping.path.display(),
-                            row_index + 1
-                        )));
-                    }
-                    surveys.entry(dhid).or_default().push(SurveyObservation {
-                        depth: required_number(&file, row, &CsvDrillColumnRole::Depth, row_index)?,
-                        azimuth,
-                        dip,
-                        position,
-                    });
-                }
-                CsvDrillFileRole::ExplicitSegments => {
-                    let from = required_number(&file, row, &CsvDrillColumnRole::From, row_index)?;
-                    let to = required_number(&file, row, &CsvDrillColumnRole::To, row_index)?;
-                    validate_segment(mapping, from, to, &dhid, row_index)?;
-                    let start = DVec3::new(
-                        required_number(&file, row, &CsvDrillColumnRole::StartEast, row_index)?,
-                        required_number(&file, row, &CsvDrillColumnRole::StartNorth, row_index)?,
-                        required_number(&file, row, &CsvDrillColumnRole::StartElevation, row_index)?,
-                    );
-                    let end = DVec3::new(
-                        required_number(&file, row, &CsvDrillColumnRole::EndEast, row_index)?,
-                        required_number(&file, row, &CsvDrillColumnRole::EndNorth, row_index)?,
-                        required_number(&file, row, &CsvDrillColumnRole::EndElevation, row_index)?,
-                    );
-                    let diameter = optional_number(&file, row, &CsvDrillColumnRole::Diameter, row_index)?;
-                    validate_diameter(diameter, &dhid)?;
-                    if let Some(existing) = segment_diameters.get(&dhid).copied() {
-                        let consistent = match (existing, diameter) {
-                            (None, None) => true,
-                            (Some(a), Some(b)) => (a - b).abs() <= 1.0e-9,
-                            _ => false,
-                        };
-                        if !consistent {
-                            return Err(CsvDrillError::Invalid(format!("inconsistent diameter for DHID '{dhid}'")));
+            // Every malformed row is skipped, not only an unreadable attribute:
+            // a blank hole ID or a dropped comma once cost the whole file.
+            let parsed = match (gate, mapping.role) {
+                (Some(gate), _) => gate.map(RowValue::Interval),
+                (None, CsvDrillFileRole::Collar) => collar_gate(&file, row, row_index).map(|(dhid, collar)| RowValue::Collar(dhid, collar)),
+                (None, CsvDrillFileRole::Survey) => survey_gate(&file, row, row_index, inclination_as_dip).map(|(dhid, observation)| RowValue::Survey(dhid, observation)),
+                // Segment rows return above; unassigned is refused.
+                (None, _) => continue,
+            };
+            row_count += 1;
+            match parsed {
+                Ok(value) => {
+                    // A row for a hole this bundle never defines is out of
+                    // scope, not unreadable, so it is its own report.
+                    if let Some(dhid) = value.hole_id()
+                        && !hole_known(segment_scoped, &collars, &segment_stations, dhid)
+                    {
+                        orphaned += 1;
+                        if orphaned <= SKIP_REPORT_LIMIT {
+                            userspace_warn!(
+                                "{}",
+                                crate::i18n::tr_format!(
+                                    literal = "%file% row %row% is for DHID '%dhid%', a hole the bundle's geometry does not define",
+                                    file = mapping.path.display().to_string(),
+                                    row = (row_index + 1).to_string(),
+                                    dhid = dhid.clone()
+                                )
+                            );
                         }
-                    } else {
-                        segment_diameters.insert(dhid.clone(), diameter);
+                        continue;
                     }
-                    segment_stations
-                        .entry(dhid.clone())
-                        .or_default()
-                        .extend([TraceStation { depth: from, position: start }, TraceStation { depth: to, position: end }]);
-                    segment_ranges.entry(dhid.clone()).or_default().push((from, to));
-                    let keys = IntervalKeys { dhid, from, to };
-                    let interval = interval_row(&file, row, &keys, stem, &numeric_attributes, &attribute_counts);
-                    intervals.entry(keys.dhid).or_default().push(interval);
+                    match value {
+                        RowValue::Collar(dhid, collar) => match collars.entry(dhid) {
+                            // A second row for one hole is unusable.
+                            Entry::Occupied(entry) => report_skip(&CsvDrillError::Invalid(format!(
+                                "{} row {} repeats DHID '{}'",
+                                mapping.path.display(),
+                                row_index + 1,
+                                entry.key()
+                            ))),
+                            Entry::Vacant(entry) => {
+                                entry.insert(collar);
+                            }
+                        },
+                        RowValue::Survey(dhid, observation) => surveys.entry(dhid).or_default().push(observation),
+                        RowValue::Interval(keys) => {
+                            let interval = interval_row(&file, row, &keys, stem, &numeric_attributes, &attribute_counts);
+                            intervals.entry(keys.dhid).or_default().push(interval);
+                        }
+                    }
                 }
+                Err(error) => report_skip(&error),
             }
         }
         // A few unreadable rows are dirty data; most of a file failing is a
         // mapping mistake; carrying on would report success and draw nothing.
-        if interval_rows > 0 && interval_skipped * 2 > interval_rows {
+        let row_skipped = skipped - skipped_before;
+        if row_count > 0 && row_skipped * 2 > row_count {
             return Err(CsvDrillError::Invalid(format!(
-                "{}: {interval_skipped} of {interval_rows} interval rows could not be read; check the FROM and TO column mapping",
+                "{}: {row_skipped} of {row_count} rows could not be read; the reasons are in the console",
                 mapping.path.display()
             )));
         }
@@ -488,17 +504,13 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
     if skipped > SKIP_REPORT_LIMIT {
         userspace_warn!("{}", crate::i18n::tr_format!(literal = "%count% rows were skipped in total", count = skipped.to_string()));
     }
-
-    let known = if segment_files == 1 {
-        segment_stations.keys().collect::<std::collections::HashSet<_>>()
-    } else {
-        collars.keys().collect()
-    };
-    for dhid in surveys.keys().chain(intervals.keys()) {
-        if !known.contains(dhid) {
-            return Err(CsvDrillError::Invalid(format!("rows reference unknown DHID '{dhid}'")));
-        }
+    if orphaned > SKIP_REPORT_LIMIT {
+        userspace_warn!(
+            "{}",
+            crate::i18n::tr_format!(literal = "%count% rows were for a hole the bundle's geometry does not define", count = orphaned.to_string())
+        );
     }
+
     report_overlaps(&intervals);
 
     let mut holes = Vec::new();
@@ -577,7 +589,13 @@ fn validate_roles(mapping: &CsvDrillFileMapping) -> Result<(), CsvDrillError> {
             require(CsvDrillColumnRole::Dhid, "DHID")?;
             require(CsvDrillColumnRole::Depth, "depth")?;
             let xyz = count(&CsvDrillColumnRole::East) == 1 && count(&CsvDrillColumnRole::North) == 1 && count(&CsvDrillColumnRole::Elevation) == 1;
-            let angles = count(&CsvDrillColumnRole::Azimuth) == 1 && count(&CsvDrillColumnRole::Dip) == 1;
+            // Dip and inclination may both be mapped: a row reads whichever
+            // cell it carries, so either column alone satisfies the file.
+            let tilt = count(&CsvDrillColumnRole::Dip) + count(&CsvDrillColumnRole::Inclination);
+            if count(&CsvDrillColumnRole::Dip) > 1 || count(&CsvDrillColumnRole::Inclination) > 1 {
+                return Err(CsvDrillError::Invalid(format!("{} maps a dip or inclination column twice", mapping.path.display())));
+            }
+            let angles = count(&CsvDrillColumnRole::Azimuth) == 1 && tilt >= 1;
             if !xyz && !angles {
                 return Err(CsvDrillError::Invalid(format!("{} survey requires XYZ or azimuth and dip", mapping.path.display())));
             }
@@ -650,6 +668,108 @@ fn interval_row(
     }
 }
 
+/// What one collar, survey or interval row became once it passed its gate.
+enum RowValue {
+    Collar(String, Collar),
+    Survey(String, SurveyObservation),
+    Interval(IntervalKeys),
+}
+
+impl RowValue {
+    /// The hole this row hangs off; a collar row is the hole itself.
+    fn hole_id(&self) -> Option<&String> {
+        match self {
+            Self::Collar(..) => None,
+            Self::Survey(dhid, _) => Some(dhid),
+            Self::Interval(keys) => Some(&keys.dhid),
+        }
+    }
+}
+
+/// Whether the bundle's geometry defines a hole, so a row may hang off it.
+fn hole_known(segment_scoped: bool, collars: &HashMap<String, Collar>, segments: &HashMap<String, Vec<TraceStation>>, dhid: &str) -> bool {
+    if segment_scoped { segments.contains_key(dhid) } else { collars.contains_key(dhid) }
+}
+
+/// Whether an inclination column is signed as dip already: every value at or
+/// below zero, one of them below it. Exports name the column either way.
+fn inclination_is_dip_signed(file: &CsvFile<'_>, rows: &[Vec<String>]) -> bool {
+    let Some(index) = role_index(file.mapping, &CsvDrillColumnRole::Inclination) else {
+        return false;
+    };
+    let mut any_negative = false;
+    for row in rows.iter().skip(1) {
+        let value = row.get(index).map(|value| value.trim()).unwrap_or("");
+        if value.is_empty() || file.damaged(value) {
+            continue;
+        }
+        let Some(number) = value.parse::<f64>().ok().filter(|number| number.is_finite()) else {
+            continue;
+        };
+        if number > 0.0 {
+            return false;
+        }
+        any_negative |= number < 0.0;
+    }
+    any_negative
+}
+
+/// A collar row's hole and position, or the reason the row is refused.
+fn collar_gate(file: &CsvFile<'_>, row: &[String], row_index: usize) -> Result<(String, Collar), CsvDrillError> {
+    check_width(file, row, row_index)?;
+    let dhid = required_text(file, row, &CsvDrillColumnRole::Dhid, row_index)?;
+    let collar = Collar {
+        position: DVec3::new(
+            required_number(file, row, &CsvDrillColumnRole::East, row_index)?,
+            required_number(file, row, &CsvDrillColumnRole::North, row_index)?,
+            required_number(file, row, &CsvDrillColumnRole::Elevation, row_index)?,
+        ),
+        diameter: optional_number(file, row, &CsvDrillColumnRole::Diameter, row_index)?,
+    };
+    validate_diameter(collar.diameter, &dhid)?;
+    Ok((dhid, collar))
+}
+
+/// A survey row's hole and observation, or the reason the row is refused.
+fn survey_gate(file: &CsvFile<'_>, row: &[String], row_index: usize, inclination_as_dip: bool) -> Result<(String, SurveyObservation), CsvDrillError> {
+    check_width(file, row, row_index)?;
+    let dhid = required_text(file, row, &CsvDrillColumnRole::Dhid, row_index)?;
+    let position = optional_xyz(file, row, row_index, CsvDrillColumnRole::East, CsvDrillColumnRole::North, CsvDrillColumnRole::Elevation)?;
+    let azimuth = optional_number(file, row, &CsvDrillColumnRole::Azimuth, row_index)?;
+    let dip = match optional_number(file, row, &CsvDrillColumnRole::Dip, row_index)? {
+        Some(dip) => Some(dip),
+        // Inclination is read positive downward; dip is negative downward.
+        None => optional_number(file, row, &CsvDrillColumnRole::Inclination, row_index)?.map(|value| if inclination_as_dip { value } else { -value }),
+    };
+    // A complete position stands without angles and a complete pair without a
+    // position; only a row holding neither is refused.
+    let angles = azimuth.zip(dip);
+    if position.is_none() && angles.is_none() {
+        return Err(CsvDrillError::Invalid(format!(
+            "{} row {} has no complete XYZ or azimuth/dip geometry",
+            file.mapping.path.display(),
+            row_index + 1
+        )));
+    }
+    let (azimuth, dip) = angles.unzip();
+    let depth = required_number(file, row, &CsvDrillColumnRole::Depth, row_index)?;
+    Ok((dhid, SurveyObservation { depth, azimuth, dip, position }))
+}
+
+/// A row is read by column index, so it must be as wide as its header.
+fn check_width(file: &CsvFile<'_>, row: &[String], row_index: usize) -> Result<(), CsvDrillError> {
+    if row.len() != file.headers.len() {
+        return Err(CsvDrillError::Invalid(format!(
+            "{} row {} has {} columns; expected {}",
+            file.mapping.path.display(),
+            row_index + 1,
+            row.len(),
+            file.headers.len()
+        )));
+    }
+    Ok(())
+}
+
 /// What an interval row is keyed and placed by, read once per row.
 struct IntervalKeys {
     dhid: String,
@@ -673,15 +793,7 @@ fn validate_interval(mapping: &CsvDrillFileMapping, from: f64, to: f64, dhid: &s
 /// What an interval row must satisfy before its attributes are read, and the
 /// keys it is placed by; separate so the inference can ask it per row.
 fn interval_gate(file: &CsvFile<'_>, row: &[String], row_index: usize) -> Result<IntervalKeys, CsvDrillError> {
-    if row.len() != file.headers.len() {
-        return Err(CsvDrillError::Invalid(format!(
-            "{} row {} has {} columns; expected {}",
-            file.mapping.path.display(),
-            row_index + 1,
-            row.len(),
-            file.headers.len()
-        )));
-    }
+    check_width(file, row, row_index)?;
     let dhid = required_text(file, row, &CsvDrillColumnRole::Dhid, row_index)?;
     let from = required_number(file, row, &CsvDrillColumnRole::From, row_index)?;
     let to = required_number(file, row, &CsvDrillColumnRole::To, row_index)?;
@@ -840,15 +952,10 @@ fn optional_xyz(
         optional_number(file, row, &y_role, row_index)?,
         optional_number(file, row, &z_role, row_index)?,
     ];
-    match values {
-        [Some(x), Some(y), Some(z)] => Ok(Some(DVec3::new(x, y, z))),
-        [None, None, None] => Ok(None),
-        _ => Err(CsvDrillError::Invalid(format!(
-            "{} row {} has a partial XYZ coordinate",
-            file.mapping.path.display(),
-            row_index + 1
-        ))),
-    }
+    Ok(match values {
+        [Some(x), Some(y), Some(z)] => Some(DVec3::new(x, y, z)),
+        _ => None,
+    })
 }
 
 struct ParsedCsv {

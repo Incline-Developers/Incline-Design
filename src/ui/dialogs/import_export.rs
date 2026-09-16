@@ -424,6 +424,7 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::Depth => tr!(literal = "Depth"),
         CsvDrillColumnRole::Azimuth => tr!(literal = "Azimuth"),
         CsvDrillColumnRole::Dip => tr!(literal = "Dip"),
+        CsvDrillColumnRole::Inclination => tr!(literal = "Inclination"),
         CsvDrillColumnRole::From => "FROM".to_owned(),
         CsvDrillColumnRole::To => "TO".to_owned(),
         CsvDrillColumnRole::StartEast => tr!(literal = "Start X"),
@@ -454,6 +455,7 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::Elevation,
             CsvDrillColumnRole::Azimuth,
             CsvDrillColumnRole::Dip,
+            CsvDrillColumnRole::Inclination,
         ]),
         CsvDrillFileRole::Interval => roles.extend([CsvDrillColumnRole::From, CsvDrillColumnRole::To, CsvDrillColumnRole::Attribute(header.to_owned())]),
         CsvDrillFileRole::ExplicitSegments => roles.extend([
