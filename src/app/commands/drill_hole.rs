@@ -7,7 +7,7 @@ use crate::{
         Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
             DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, LoadedDrillHoleDataset,
-            OpenDrillHoleDataset, OrientationSource, TraceStation, default_category_colors,
+            MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT,
         },
         formats::csv_drill_hole,
     },
@@ -202,6 +202,22 @@ impl<'a> App<'a> {
                 fields = loaded.dataset.fields.len()
             )
         );
+        // More distinct strings than any dictionary holds is usually free text:
+        // name the class and its extent, repair nothing.
+        for field in &loaded.dataset.fields {
+            if let DrillFieldKind::Categorical { categories } = &field.kind
+                && categories.len() > WIDE_CATEGORY_FIELD_HINT
+            {
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Drillhole field '%label%' has %count% distinct codes, more than a coded field would typically have; it looks like free text rather than a categorical field, but every code is kept and coloured",
+                        label = field.label.clone(),
+                        count = categories.len()
+                    )
+                );
+            }
+        }
         self.drill_holes.push(OpenDrillHoleDataset {
             id,
             state: crate::model::project::ProjectItemState::dirty(Some(loaded.source.display_name())),
@@ -245,14 +261,11 @@ impl<'a> App<'a> {
             color.preset = DrillColorPreset::Rainbow;
             color.smooth = true;
             color.stops = DrillColorPreset::Rainbow.stops();
-            color.categories = field
-                .as_deref()
-                .and_then(|key| dataset.dataset.field(key))
-                .and_then(|field| match &field.kind {
-                    DrillFieldKind::Categorical { categories } => Some(default_category_colors(categories)),
-                    DrillFieldKind::Numeric { .. } => None,
-                })
-                .unwrap_or_default();
+            // Switching field fills in what the new field adds and keeps every
+            // colour already chosen; the dialog's reset asks for fresh ones.
+            if let Some(field) = field.as_deref().and_then(|key| dataset.dataset.field(key)) {
+                color.reconcile_categories(field);
+            }
         });
     }
 
@@ -270,13 +283,16 @@ impl<'a> App<'a> {
         for stop in &mut stops {
             stop.t = stop.t.clamp(0.0, 1.0);
         }
-        if (2..=12).contains(&stops.len()) {
+        if (2..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
             self.set_drill_hole_color(id, |_, color| color.stops = stops);
         }
     }
 
     pub(crate) fn set_drill_hole_category_colors(&mut self, id: DrillHoleId, categories: Vec<crate::model::drill_hole::DrillCategoryColor>) {
-        self.set_drill_hole_color(id, |_, color| color.categories = categories.into_iter().take(12).collect());
+        // No cap on categories. A non-finite component is dropped, as a ramp
+        // stop's is, so no NaN reaches the shader.
+        let categories = categories.into_iter().filter(|category| category.color.iter().all(|value| value.is_finite())).collect();
+        self.set_drill_hole_color(id, |_, color| color.set_categories(categories));
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {

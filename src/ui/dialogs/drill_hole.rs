@@ -1,6 +1,6 @@
 use crate::{
-    i18n::tr,
-    model::drill_hole::{DrillColorPreset, DrillFieldKind, OpenDrillHoleDataset},
+    i18n::{tr, tr_format},
+    model::drill_hole::{DrillColorPreset, DrillFieldKind, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, default_category_colors},
     ui::{
         state::{EditorState, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo},
@@ -93,7 +93,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                         changed = true;
                     }
                     ui.horizontal(|ui| {
-                        if stops.len() < 12 && ui.add(MenuButton::new(tr!(literal = "Add stop"))).clicked() {
+                        if stops.len() < MAX_DRILL_COLOR_STOPS && ui.add(MenuButton::new(tr!(literal = "Add stop"))).clicked() {
                             let index = stops.len() / 2;
                             let left = stops[index.saturating_sub(1)];
                             let right = stops[index.min(stops.len() - 1)];
@@ -115,18 +115,46 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                         commands.push(UiCommand::SetDrillHoleColorStops { id, stops });
                     }
                 }
-                DrillFieldKind::Categorical { .. } => {
-                    ui.label(egui::RichText::new(tr!(literal = "Categories beyond the first 12 and missing values remain white.")).weak());
+                DrillFieldKind::Categorical { categories } => {
+                    ui.label(
+                        egui::RichText::new(tr_format!(
+                            literal = "%count% codes. An interval with no logged value stays white.",
+                            count = categories.len()
+                        ))
+                        .weak(),
+                    );
                     ui.add_space(2.0);
-                    let mut categories = dataset.color.categories.clone();
-                    let mut changed = false;
-                    for category in &mut categories {
-                        MenuField::new(&category.value).show(ui, |ui, _, _| {
-                            changed |= crate::ui::widgets::color::edit_rgb(ui, &mut category.color).changed();
+                    // Rows follow the field's order, not the table's.
+                    let mut table: Option<Vec<crate::model::drill_hole::DrillCategoryColor>> = None;
+                    let row_height = ui.spacing().interact_size.y;
+                    egui::ScrollArea::vertical()
+                        // About nine rows without leaving the screen.
+                        .max_height(280.0)
+                        .auto_shrink([false, true])
+                        .id_salt(("drill_hole_categories_scroll", id))
+                        .show_rows(ui, row_height, categories.len(), |ui, range| {
+                            for code in &categories[range] {
+                                let mut color = dataset.color.category_color(code).unwrap_or([1.0; 3]);
+                                MenuField::new(code).show(ui, |ui, _, _| {
+                                    if crate::ui::widgets::color::edit_rgb(ui, &mut color).changed() {
+                                        let table = table.get_or_insert_with(|| dataset.color.categories.to_vec());
+                                        match table.iter_mut().find(|entry| &entry.value == code) {
+                                            Some(entry) => entry.color = color,
+                                            None => table.push(crate::model::drill_hole::DrillCategoryColor { value: code.clone(), color }),
+                                        }
+                                    }
+                                });
+                            }
                         });
+                    if let Some(table) = table {
+                        commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: table });
                     }
-                    if changed {
-                        commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories });
+                    ui.add_space(2.0);
+                    if ui.add(MenuButton::new(tr!(literal = "Reset colours"))).clicked() {
+                        let mut reset: Vec<crate::model::drill_hole::DrillCategoryColor> =
+                            dataset.color.categories.iter().filter(|entry| !categories.contains(&entry.value)).cloned().collect();
+                        reset.extend(default_category_colors(categories));
+                        commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: reset });
                     }
                 }
             }

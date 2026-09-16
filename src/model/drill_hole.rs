@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, iter, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
+    iter,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -20,7 +26,12 @@ pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = 3.0;
 pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+/// How many stops a numeric ramp may carry. A limit on the ramp only: a
+/// categorical field colours every code it has.
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// Distinct codes above which a categorical column is named on load as
+/// likely free text. Nothing is dropped at any count.
+pub(crate) const WIDE_CATEGORY_FIELD_HINT: usize = 256;
 /// Upper bound for an interactively generated blast pattern. It keeps a bad
 /// unit/spacing entry from building millions of preview primitives on the UI
 /// thread while remaining comfortably above ordinary production rounds.
@@ -812,6 +823,19 @@ impl DrillHoleDataset {
                 .fold(0usize, usize::saturating_add)
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self
+                .fields
+                .iter()
+                .map(|field| {
+                    size_of::<DrillField>()
+                        + field.key.len()
+                        + field.label.len()
+                        + match &field.kind {
+                            DrillFieldKind::Categorical { categories } => categories.iter().map(|value| size_of::<String>() + value.len()).fold(0usize, usize::saturating_add),
+                            DrillFieldKind::Numeric { .. } => 0,
+                        }
+                })
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
@@ -881,12 +905,63 @@ pub(crate) struct DrillCategoryColor {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Vec<DrillCategoryColor>", into = "Vec<DrillCategoryColor>")]
+pub(crate) struct CategoryTable {
+    entries: Vec<DrillCategoryColor>,
+    hash: u64,
+}
+
+impl CategoryTable {
+    fn new(mut entries: Vec<DrillCategoryColor>) -> Self {
+        entries.sort_by(|a, b| a.value.cmp(&b.value));
+        entries.dedup_by(|a, b| a.value == b.value);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for entry in &entries {
+            entry.value.hash(&mut hasher);
+            for channel in entry.color {
+                channel.to_bits().hash(&mut hasher);
+            }
+        }
+        Self { entries, hash: hasher.finish() }
+    }
+
+    pub(crate) fn content_hash(&self) -> u64 {
+        self.hash
+    }
+}
+
+impl From<Vec<DrillCategoryColor>> for CategoryTable {
+    fn from(entries: Vec<DrillCategoryColor>) -> Self {
+        Self::new(entries)
+    }
+}
+
+impl From<CategoryTable> for Vec<DrillCategoryColor> {
+    fn from(table: CategoryTable) -> Self {
+        table.entries
+    }
+}
+
+impl Default for CategoryTable {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl std::ops::Deref for CategoryTable {
+    type Target = [DrillCategoryColor];
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillColorState {
     pub(crate) active_field: Option<String>,
     pub(crate) preset: DrillColorPreset,
     pub(crate) smooth: bool,
     pub(crate) stops: Vec<DrillColorStop>,
-    pub(crate) categories: Vec<DrillCategoryColor>,
+    pub(crate) categories: CategoryTable,
 }
 
 impl Default for DrillColorState {
@@ -897,8 +972,59 @@ impl Default for DrillColorState {
             preset,
             smooth: preset.smooth(),
             stops: preset.stops(),
-            categories: Vec::new(),
+            categories: CategoryTable::default(),
         }
+    }
+}
+
+impl DrillColorState {
+    /// The colour chosen for one code, by binary search over the sorted table.
+    pub(crate) fn category_color(&self, value: &str) -> Option<[f32; 3]> {
+        self.categories
+            .binary_search_by(|entry| entry.value.as_str().cmp(value))
+            .ok()
+            .map(|index| self.categories[index].color)
+    }
+
+    /// Every write goes through here so the order the lookup searches holds.
+    pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
+        self.categories = CategoryTable::new(categories);
+    }
+
+    /// Give every code in `field` a colour, keeping every colour already
+    /// chosen, and return how many were filled in. Entries for codes absent
+    /// from `field` stay: a shorter extract must not lose the full one's picks.
+    pub(crate) fn reconcile_categories(&mut self, field: &DrillField) -> usize {
+        let DrillFieldKind::Categorical { categories } = &field.kind else {
+            return 0;
+        };
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        let mut used: Vec<[f32; 3]> = Vec::new();
+        for value in categories {
+            if let Ok(index) = table.binary_search_by(|entry| entry.value.as_str().cmp(value)) {
+                used.push(table[index].color);
+            }
+        }
+        let mut filled = Vec::new();
+        for (index, value) in categories.iter().enumerate() {
+            if table.binary_search_by(|entry| entry.value.as_str().cmp(value)).is_err() {
+                let mut color = None;
+                for offset in 0..=used.len() {
+                    let candidate = generated_category_color(index + offset);
+                    if !used.contains(&candidate) {
+                        color = Some(candidate);
+                        break;
+                    }
+                }
+                let color = color.unwrap_or_else(|| generated_category_color(index));
+                used.push(color);
+                filled.push(DrillCategoryColor { value: value.clone(), color });
+            }
+        }
+        let added = filled.len();
+        table.append(&mut filled);
+        self.set_categories(table);
+        added
     }
 }
 
@@ -1022,7 +1148,7 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
     let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
-    let mut categorical: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    let mut categorical: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for hole in holes {
         for interval in &hole.intervals {
             for (key, value) in &interval.values {
@@ -1049,9 +1175,9 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
                             .or_insert_with(|| if sentinel { (label, 0.0, 0.0, false) } else { (label, *value, *value, true) });
                     }
                     DrillValue::Category(value) if !value.trim().is_empty() => {
-                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, Vec::new())).1;
-                        if !values.contains(value) {
-                            values.push(value.clone());
+                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, BTreeSet::new())).1;
+                        if !values.contains(value.as_str()) {
+                            values.insert(value.clone());
                         }
                     }
                     _ => {}
@@ -1065,9 +1191,10 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
         label,
         kind: DrillFieldKind::Numeric { min, max },
     }));
-    fields.extend(categorical.into_iter().map(|(key, (label, mut categories))| {
+    fields.extend(categorical.into_iter().map(|(key, (label, categories))| {
+        // Every distinct code reaches the model; the ramp limit is not theirs.
+        let mut categories = categories.into_iter().collect::<Vec<_>>();
         categories.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
-        categories.truncate(MAX_DRILL_COLOR_STOPS);
         DrillField {
             key,
             label,
@@ -1094,28 +1221,55 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
     any.then_some((min, max))
 }
 
-pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
-    const COLORS: [[f32; 3]; 12] = [
-        [0.12, 0.47, 0.71],
-        [1.00, 0.50, 0.05],
-        [0.17, 0.63, 0.17],
-        [0.84, 0.15, 0.16],
-        [0.58, 0.40, 0.74],
-        [0.55, 0.34, 0.29],
-        [0.89, 0.47, 0.76],
-        [0.50, 0.50, 0.50],
-        [0.74, 0.74, 0.13],
-        [0.09, 0.75, 0.81],
-        [0.30, 0.60, 0.90],
-        [0.90, 0.60, 0.20],
+/// The default colour for the code at `index` in a field's code list,
+/// generated so no code can fall past the end of a palette: hues advance by
+/// the golden angle through nine saturation and lightness bands, so near
+/// hues still differ in tone, and no band reaches white, the no-value colour.
+pub(crate) fn generated_category_color(index: usize) -> [f32; 3] {
+    const GOLDEN_STEP: f64 = 0.618_033_988_749_895;
+    const HUE_ORIGIN: f64 = 0.58;
+    const BANDS: [(f32, f32); 9] = [
+        (0.60, 0.52),
+        (0.90, 0.70),
+        (0.45, 0.32),
+        (0.75, 0.60),
+        (0.98, 0.42),
+        (0.55, 0.46),
+        (0.80, 0.36),
+        (0.70, 0.66),
+        (0.50, 0.40),
     ];
-    categories
+    let hue = (HUE_ORIGIN + index as f64 * GOLDEN_STEP).rem_euclid(1.0) as f32;
+    let (saturation, lightness) = BANDS[index % BANDS.len()];
+    hsl_to_rgb(hue, saturation, lightness)
+}
+
+/// Plain HSL to sRGB, in the component convention the shader takes.
+fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = hue.rem_euclid(1.0) * 6.0;
+    let second = chroma * (1.0 - (sector % 2.0 - 1.0).abs());
+    let (red, green, blue) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = lightness - chroma * 0.5;
+    [red + base, green + base, blue + base]
+}
+
+/// A colour for every code in `categories`, sorted by code for the lookup.
+pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
+    let colors = categories
         .iter()
-        .take(MAX_DRILL_COLOR_STOPS)
         .enumerate()
         .map(|(index, value)| DrillCategoryColor {
             value: value.clone(),
-            color: COLORS[index],
+            color: generated_category_color(index),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    CategoryTable::new(colors).into()
 }

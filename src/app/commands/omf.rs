@@ -29,6 +29,33 @@ pub(crate) enum ViewOnOpen {
     Keep,
 }
 
+/// Reconcile colour state restored from an OMF style blob with the dataset it
+/// now belongs to: every saved colour is kept, every unnamed code gets a
+/// generated one, nothing is marked dirty, and the gap is reported.
+pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole::OpenDrillHoleDataset) {
+    let Some(key) = open.color.active_field.clone() else { return };
+    let dataset = std::sync::Arc::clone(&open.dataset);
+    let Some(field) = dataset.field(&key) else { return };
+    let crate::model::drill_hole::DrillFieldKind::Categorical { categories } = &field.kind else {
+        return;
+    };
+    let total = categories.len();
+    let saved = categories.iter().filter(|code| open.color.category_color(code).is_some()).count();
+    let filled = open.color.reconcile_categories(field);
+    if filled > 0 {
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Dataset '%name%': field '%field%' was saved with %saved% of %total% codes coloured; the rest were given generated colours.",
+                name = open.name.clone(),
+                field = field.label.clone(),
+                saved = saved,
+                total = total
+            )
+        );
+    }
+}
+
 impl<'a> App<'a> {
     pub(super) fn omf_export_snapshot(&mut self) -> Result<ProjectSnapshot> {
         if self.has_pending_move_delta() {
@@ -205,6 +232,7 @@ impl<'a> App<'a> {
                 open.state.set_provenance(imported.source_name, imported.source_format);
                 open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                 open.color = imported.color;
+                reconcile_restored_drill_color(open);
             }
         }
         for imported in point_clouds {
@@ -468,6 +496,7 @@ impl<'a> App<'a> {
                     open.state.set_provenance(imported.source_name, imported.source_format);
                     open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                     open.color = imported.color;
+                    reconcile_restored_drill_color(open);
                 }
             }
             for imported in point_clouds {

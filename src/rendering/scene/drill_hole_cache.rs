@@ -280,12 +280,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
             value.to_bits().hash(&mut hash);
         }
     }
-    for category in &dataset.color.categories {
-        category.value.hash(&mut hash);
-        for value in category.color {
-            value.to_bits().hash(&mut hash);
-        }
-    }
+    dataset.color.categories.content_hash().hash(&mut hash);
     hash.finish()
 }
 
@@ -338,7 +333,7 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
                 [red, green, blue]
             } else {
                 field
-                    .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
+                    .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
                     .unwrap_or([1.0; 3])
             };
             instances.push(DrillSegmentInstance {
@@ -421,8 +416,9 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
 }
 
 /// The colour the 3D view gives one interval value. Shared with the borehole
-/// log so a hole reads the same in the panel as it does in the scene.
-pub(crate) fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
+/// log so a hole reads the same in the panel as it does in the scene. The
+/// kind is borrowed: a categorical kind owns its whole code list.
+pub(crate) fn evaluate_color_for(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
     match (kind, value) {
         // A no-data sentinel falls through to white, the same as a missing
         // value: it is not the bottom of the ramp, it is nothing at all.
@@ -434,11 +430,9 @@ pub(crate) fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &D
             };
             evaluate_stops(t, &state.stops, state.smooth)
         }
-        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state
-            .categories
-            .iter()
-            .find(|category| category.value == *value)
-            .map_or([1.0; 3], |category| category.color),
+        // Binary search: once per interval per rebuild, over a dictionary that
+        // can run past a hundred codes.
+        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(value).unwrap_or([1.0; 3]),
         _ => [1.0; 3],
     }
 }

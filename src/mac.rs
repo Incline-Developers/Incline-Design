@@ -85,7 +85,7 @@ pub(crate) enum MacMenuAction {
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
-    /// The Drillholes menu's own switch, mirroring where the egui bar puts it.
+    /// The Drillholes menu's row; the View menu's copy rides [`VIEW_TOGGLES`].
     ToggleBoreholeInspector,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
@@ -95,8 +95,8 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same two - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
+/// the same three - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::BoreholeInspector, ViewToggle::DarkMode];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.

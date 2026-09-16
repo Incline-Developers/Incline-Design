@@ -101,12 +101,7 @@ pub(super) fn slice_preview_scene_key(
                 value.to_bits().hash(&mut hasher);
             }
         }
-        for category in &dataset.color.categories {
-            category.value.hash(&mut hasher);
-            for value in category.color {
-                value.to_bits().hash(&mut hasher);
-            }
-        }
+        dataset.color.categories.content_hash().hash(&mut hasher);
     }
     for point_cloud in point_clouds {
         point_cloud.id.hash(&mut hasher);

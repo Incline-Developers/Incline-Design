@@ -2392,16 +2392,18 @@ impl<'a> BoreholeLog<'a> {
         runs
     }
 
-    /// Colours for the strat column, matched to the ribbon's own set.
-    fn strat_category_colors(&self, field: &crate::model::drill_hole::DrillField) -> std::borrow::Cow<'_, [crate::model::drill_hole::DrillCategoryColor]> {
+    /// Colour for one strat run, matched to the ribbon's own set.
+    fn strat_run_color(&self, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
         if self.dataset.color.active_field.as_deref() == Some(field.key.as_str()) {
-            return std::borrow::Cow::Borrowed(&self.dataset.color.categories);
+            return self.dataset.color.category_color(code).unwrap_or([1.0, 1.0, 1.0]);
         }
-        let categories = match &field.kind {
-            crate::model::drill_hole::DrillFieldKind::Categorical { categories } => categories.as_slice(),
-            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => &[],
-        };
-        std::borrow::Cow::Owned(crate::model::drill_hole::default_category_colors(categories))
+        match &field.kind {
+            crate::model::drill_hole::DrillFieldKind::Categorical { categories } => categories
+                .iter()
+                .position(|category| category == code)
+                .map_or([1.0, 1.0, 1.0], crate::model::drill_hole::generated_category_color),
+            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => [1.0, 1.0, 1.0],
+        }
     }
 
     fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, top: f64, bottom: f64) {
@@ -2411,8 +2413,6 @@ impl<'a> BoreholeLog<'a> {
             painter.text(strat.center_top(), egui::Align2::CENTER_TOP, tr!(literal = "No lithology"), font, visuals.weak_text_color());
             return;
         };
-        let colors = self.strat_category_colors(field);
-
         for (from, to, value) in self.lithology_runs(field, top, bottom) {
             let block = egui::Rect::from_x_y_ranges(strat.x_range(), Self::y_at(strat, top, bottom, from)..=Self::y_at(strat, top, bottom, to));
             if block.height() <= 0.0 {
@@ -2420,7 +2420,7 @@ impl<'a> BoreholeLog<'a> {
             }
             let (fill, label) = match &value {
                 Some(code) => {
-                    let [red, green, blue] = colors.iter().find(|category| category.value == *code).map_or([1.0, 1.0, 1.0], |category| category.color);
+                    let [red, green, blue] = self.strat_run_color(field, code);
                     (crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]), code.clone())
                 }
                 None => (visuals.extreme_bg_color, tr!(literal = "Not logged")),
@@ -2518,7 +2518,7 @@ impl<'a> BoreholeLog<'a> {
             let color = field
                 .and_then(|field| {
                     interval.values.get(&field.key).map(|value| {
-                        let [red, green, blue] = crate::rendering::scene::drill_hole_cache::evaluate_color(field.kind.clone(), value, &self.dataset.color);
+                        let [red, green, blue] = crate::rendering::scene::drill_hole_cache::evaluate_color_for(&field.kind, value, &self.dataset.color);
                         crate::rendering::color::rgba_to_color32([red, green, blue, 1.0])
                     })
                 })
