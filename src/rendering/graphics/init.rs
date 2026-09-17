@@ -3,7 +3,10 @@ use crate::{i18n::tr_format, userspace_log};
 
 /// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
 /// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
-fn make_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32];
+const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32];
+
+fn make_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -96,9 +99,13 @@ impl<'a> Graphics<'a> {
         userspace_log!(
             "{}",
             tr_format!(
-                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
+                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_storage_buffers_per_shader_stage=%max_storage_buffers_per_shader_stage%, max_uniform_buffer_binding_size=%max_uniform_buffer_binding_size% KiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
                 max_buffer_size = required_limits.max_buffer_size / (1024 * 1024),
                 max_storage_buffer_binding_size = required_limits.max_storage_buffer_binding_size / (1024 * 1024),
+                // The adapter's own two, not what was asked for: a stage that
+                // binds no storage buffer is why the selection is a uniform.
+                max_storage_buffers_per_shader_stage = adapter_limits.max_storage_buffers_per_shader_stage,
+                max_uniform_buffer_binding_size = adapter_limits.max_uniform_buffer_binding_size / 1024,
                 max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d,
                 max_bind_groups = adapter_limits.max_bind_groups
             )
@@ -211,8 +218,13 @@ impl<'a> Graphics<'a> {
         let stroke_shader = make_shader(&device, "../shaders/stroke.wgsl", include_str!("../shaders/stroke.wgsl"));
         let edge_shader = make_shader(&device, "../shaders/edge.wgsl", include_str!("../shaders/edge.wgsl"));
         let point_cloud_shader = make_shader(&device, "../shaders/point_cloud.wgsl", include_str!("../shaders/point_cloud.wgsl"));
-        let drill_hole_shader = make_shader(&device, "../shaders/drill_hole.wgsl", include_str!("../shaders/drill_hole.wgsl"));
-        let drill_collar_shader = make_shader(&device, "../shaders/drill_collar.wgsl", include_str!("../shaders/drill_collar.wgsl"));
+        // The selection block is one file both drill shaders take as a prelude,
+        // the way `make_shader` hands every shader the camera one.
+        let drill_selection = include_str!("../shaders/drill_selection_common.wgsl");
+        let drill_hole_body = format!("{drill_selection}{}", include_str!("../shaders/drill_hole.wgsl"));
+        let drill_hole_shader = make_shader(&device, "../shaders/drill_hole.wgsl", &drill_hole_body);
+        let drill_collar_body = format!("{drill_selection}{}", include_str!("../shaders/drill_collar.wgsl"));
+        let drill_collar_shader = make_shader(&device, "../shaders/drill_collar.wgsl", &drill_collar_body);
         let design_point_shader = make_shader(&device, "../shaders/design_point.wgsl", include_str!("../shaders/design_point.wgsl"));
 
         let camera = Camera::new(DVec3::new(0.0, 0.0, 10.0), (-90.0_f64).to_radians(), 0.0);
@@ -302,6 +314,14 @@ impl<'a> Graphics<'a> {
         let grid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("XY Grid Pipeline Layout"),
             bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&grid_bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        // Built now because the drill pipeline layout borrows its own.
+        let drill_hole_gpu = DrillHoleGpuCache::new(&device);
+        let drill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Drill Hole Pipeline Layout"),
+            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(drill_hole_gpu.selection_layout())],
             immediate_size: 0,
         });
 
@@ -626,12 +646,12 @@ impl<'a> Graphics<'a> {
         let drill_hole_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<DrillSegmentInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+            attributes: &DRILL_SEGMENT_ATTRIBUTES,
         })];
         let drill_collar_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<DrillCollarInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+            attributes: &DRILL_COLLAR_ATTRIBUTES,
         })];
 
         let create_stroke_pipeline = |label, depth_stencil| {
@@ -796,7 +816,7 @@ impl<'a> Graphics<'a> {
         let create_drill_hole_pipeline = |label, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&render_pipeline_layout),
+                layout: Some(&drill_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &drill_hole_shader,
                     entry_point: Some("vs_main"),
@@ -828,14 +848,10 @@ impl<'a> Graphics<'a> {
                 cache: None,
             })
         };
-        let drill_hole_render_pipeline = create_drill_hole_pipeline("Opaque Drillhole Cylinder Pipeline", Self::depth_state(true, 0));
-        let mut xray_drill_hole_depth = Self::depth_state(false, 0);
-        xray_drill_hole_depth.depth_compare = Some(wgpu::CompareFunction::Always);
-        let xray_drill_hole_render_pipeline = create_drill_hole_pipeline("X-Ray Drillhole Cylinder Pipeline", xray_drill_hole_depth);
         let create_drill_collar_pipeline = |label, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&render_pipeline_layout),
+                layout: Some(&drill_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &drill_collar_shader,
                     entry_point: Some("vs_main"),
@@ -878,9 +894,13 @@ impl<'a> Graphics<'a> {
                 cache: None,
             })
         };
-        let drill_collar_render_pipeline = create_drill_collar_pipeline("Opaque Drillhole Collar Pipeline", Self::depth_state(true, 0));
+        let mut xray_drill_hole_depth = Self::depth_state(false, 0);
+        xray_drill_hole_depth.depth_compare = Some(wgpu::CompareFunction::Always);
         let mut xray_drill_collar_depth = Self::depth_state(false, 0);
         xray_drill_collar_depth.depth_compare = Some(wgpu::CompareFunction::Always);
+        let drill_hole_render_pipeline = create_drill_hole_pipeline("Opaque Drillhole Cylinder Pipeline", Self::depth_state(true, 0));
+        let xray_drill_hole_render_pipeline = create_drill_hole_pipeline("X-Ray Drillhole Cylinder Pipeline", xray_drill_hole_depth);
+        let drill_collar_render_pipeline = create_drill_collar_pipeline("Opaque Drillhole Collar Pipeline", Self::depth_state(true, 0));
         let xray_drill_collar_render_pipeline = create_drill_collar_pipeline("X-Ray Drillhole Collar Pipeline", xray_drill_collar_depth);
         let mut overlay_depth = Self::depth_state(false, 0);
         overlay_depth.depth_compare = Some(wgpu::CompareFunction::Always);
@@ -1617,7 +1637,7 @@ impl<'a> Graphics<'a> {
             static_strokes: StaticStrokeCache::default(),
             block_model_gpu: BlockModelGpuCache::default(),
             point_cloud_gpu: PointCloudGpuCache::default(),
-            drill_hole_gpu: DrillHoleGpuCache::default(),
+            drill_hole_gpu,
             design_point_gpu,
             raster_gpu: RasterGpuCache::default(),
             chunk_render_stats: (0, 0),

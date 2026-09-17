@@ -7,6 +7,8 @@ struct CollarInstance {
     // xyz: fill colour. w: the hole's own rendered radius, used to lift the
     // marker clear of the cylinder it caps.
     @location(2) fill_hole_radius: vec4<f32>,
+    // This hole's index into `selection.bits`.
+    @location(3) selection_index: u32,
 };
 
 struct VertexOutput {
@@ -70,11 +72,15 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
     let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
     clip = vec4<f32>(clip.xy + corner * radius_pixels * pixel_to_ndc * clip.w, clip.zw);
 
+    // Selection swaps the disc's two colours rather than drawing a second
+    // marker: the outline becomes the instance's own (unselected) fill so
+    // the ring stays legible, and the fill becomes the selection colour.
+    let selected = selection_active(instance.selection_index);
     var out: VertexOutput;
     out.position = clip;
     out.offset = corner;
-    out.outline = instance.outline_pixels.xyz;
-    out.fill = instance.fill_hole_radius.xyz;
+    out.outline = select(instance.outline_pixels.xyz, instance.fill_hole_radius.xyz, selected);
+    out.fill = select(instance.fill_hole_radius.xyz, selection.selection_color.rgb, selected);
     out.radius_pixels = radius_pixels;
     out.section_offset = section_plane_offset(center);
     return out;

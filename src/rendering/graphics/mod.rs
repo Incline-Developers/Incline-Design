@@ -742,7 +742,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn clear_item_caches(&mut self) {
         self.triangulation_gpu.clear();
         self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
+        self.drill_hole_gpu.clear();
         self.point_cloud_gpu = Default::default();
         self.raster_gpu.clear();
         self.static_strokes = Default::default();

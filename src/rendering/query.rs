@@ -12,7 +12,7 @@ use crate::{
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
-    rendering::{camera::SectionSlab, snap},
+    rendering::{camera::SectionSlab, scene::gpu_cache::ray_aabb_distance, snap},
     ui::state::CursorMode,
 };
 
@@ -111,29 +111,43 @@ impl SceneQuery {
     ) -> Option<(DrillHoleRef, DVec3)> {
         let mut nearest = f64::INFINITY;
         let mut nearest_hole = None;
+        // The pixel floor depends on the view, not on the hole, so its basis
+        // is worked out once here rather than inside the loop.
+        let floor = PixelFloor::new(view_direction, view_projection, screen);
         for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
             }
             for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+                let hole_radius = hole.render_radius();
+                // Reaches at least as far as both tests it gates: the collar
+                // disc's scaled radius plus its 1.5x lift, and the walk's own.
+                let gate_reach = GateReach {
+                    world_reach: hole_radius.max(hole_radius * COLLAR_MARKER_RADIUS_SCALE) + hole_radius * 1.5,
+                    pixel_radius: f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER).max(f64::from(MIN_RENDER_PIXEL_DIAMETER)) * 0.5 + 1.5 * f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5,
+                };
+                if let Some(hole_box) = dataset.dataset.hole_box(index)
+                    && !trace_box_hit(floor.as_ref(), hole_box, gate_reach, ray_origin, ray_direction, threshold_px, nearest)
+                {
+                    continue;
+                }
+
                 // The collar is a camera-facing disc substantially wider than
                 // the trace. Test that visible marker explicitly; otherwise
                 // only the narrow cylinder beneath it can ever be picked.
                 // Keep the same small lift toward the camera as the shader so
                 // depth ordering agrees with what is on screen.
-                let hole_radius = hole.render_radius();
                 let collar = hole.collar_position();
-                let rendered_hole_radius = screen_floored_radius(collar, hole_radius, view_direction, view_projection, screen, f64::from(MIN_RENDER_PIXEL_DIAMETER), 0.0);
-                let collar_radius = screen_floored_radius(
-                    collar,
-                    hole_radius * COLLAR_MARKER_RADIUS_SCALE,
-                    view_direction,
-                    view_projection,
-                    screen,
-                    f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER),
-                    threshold_px,
-                );
+                let rendered_hole_radius = floor
+                    .as_ref()
+                    .and_then(|floor| floor.floored_radius(collar, hole_radius, f64::from(MIN_RENDER_PIXEL_DIAMETER), 0.0))
+                    .unwrap_or(hole_radius);
+                let collar_source_radius = hole_radius * COLLAR_MARKER_RADIUS_SCALE;
+                let collar_radius = floor
+                    .as_ref()
+                    .and_then(|floor| floor.floored_radius(collar, collar_source_radius, f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER), threshold_px))
+                    .unwrap_or(collar_source_radius);
                 let lifted_collar = collar - view_direction * rendered_hole_radius * 1.5;
                 if let Some(distance) = ray_disc_distance(ray_origin, ray_direction, lifted_collar, view_direction, collar_radius)
                     && distance < nearest
@@ -151,14 +165,8 @@ impl SceneQuery {
                     if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint_depth && midpoint_depth < *to) {
                         continue;
                     }
-                    let radius = drill_segment_radius(
-                        start.position,
-                        end.position,
-                        hole.diameter.map(|diameter| diameter * 0.5).unwrap_or(0.0),
-                        view_projection,
-                        screen,
-                        threshold_px,
-                    );
+                    let drawn_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
+                    let radius = segment_pick_radius(floor.as_ref(), start.position, end.position, drawn_radius, hole_radius, threshold_px);
                     if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
                         && distance < nearest
                     {
@@ -223,53 +231,133 @@ impl SceneQuery {
     }
 }
 
-fn screen_floored_radius(center: DVec3, source_radius: f64, view_direction: DVec3, view_projection: &DMat4, screen: Size, minimum_pixel_diameter: f64, threshold_px: f32) -> f64 {
-    let Some(view_direction) = view_direction.try_normalize() else {
-        return source_radius;
-    };
-    let helper = if view_direction.z.abs() > 0.9 { DVec3::Y } else { DVec3::Z };
-    let right = helper.cross(view_direction).normalize();
-    let up = view_direction.cross(right);
-    let viewport = DVec2::new(f64::from(screen.0), f64::from(screen.1));
-    let center_clip = *view_projection * center.extend(1.0);
-    let safe_w = center_clip.w.abs().max(1.0e-6);
-    let pixels_per_world = [right, up]
-        .into_iter()
-        .map(|radial| {
-            let radial_clip = *view_projection * radial.extend(0.0);
-            let ndc_per_world = (radial_clip.truncate().truncate() * center_clip.w - center_clip.truncate().truncate() * radial_clip.w) / (safe_w * safe_w);
-            (ndc_per_world * viewport * 0.5).length()
-        })
-        .fold(0.0_f64, f64::max);
-    let minimum_radius = (minimum_pixel_diameter * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
-    source_radius.max(minimum_radius)
+struct PixelFloor {
+    view_projection: DMat4,
+    radial_clip: [glam::DVec4; 2],
+    half_viewport: DVec2,
+    radial_scale: Option<f64>,
 }
 
-fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_projection: &DMat4, screen: Size, threshold_px: f32) -> f64 {
-    let Some(axis) = (end - start).try_normalize() else {
-        return source_radius;
-    };
-    let helper = if axis.z.abs() > 0.9 { DVec3::Y } else { DVec3::Z };
-    let right = helper.cross(axis).normalize();
-    let up = axis.cross(right);
-    let viewport = DVec2::new(f64::from(screen.0), f64::from(screen.1));
-    let pixels_per_world = [start, end]
-        .into_iter()
-        .map(|center| {
-            let center_clip = *view_projection * center.extend(1.0);
-            let safe_w = center_clip.w.abs().max(1.0e-6);
-            [right, up]
-                .into_iter()
-                .map(|radial| {
-                    let radial_clip = *view_projection * radial.extend(0.0);
-                    let ndc_per_world = (radial_clip.truncate().truncate() * center_clip.w - center_clip.truncate().truncate() * radial_clip.w) / (safe_w * safe_w);
-                    (ndc_per_world * viewport * 0.5).length()
-                })
-                .fold(0.0_f64, f64::max)
+impl PixelFloor {
+    fn new(view_direction: DVec3, view_projection: &DMat4, screen: Size) -> Option<Self> {
+        let view_direction = view_direction.try_normalize()?;
+        let helper = if view_direction.z.abs() > 0.9 { DVec3::Y } else { DVec3::Z };
+        let right = helper.cross(view_direction).try_normalize()?;
+        let up = view_direction.cross(right);
+        let half_viewport = DVec2::new(f64::from(screen.0), f64::from(screen.1)) * 0.5;
+        if !half_viewport.is_finite() || half_viewport.min_element() <= 0.0 {
+            return None;
+        }
+        let radial_clip = [*view_projection * right.extend(0.0), *view_projection * up.extend(0.0)];
+        if !radial_clip.iter().all(|clip| clip.is_finite()) {
+            return None;
+        }
+        // Only when both radials carry w == 0 is pixels_per_world an affine
+        // function of the box (k / |w|); that is the case this scale serves.
+        let radial_scale = radial_clip
+            .iter()
+            .all(|clip| clip.w.abs() <= 1.0e-12)
+            .then(|| radial_clip.iter().map(|clip| (clip.truncate().truncate() * half_viewport).length()).fold(0.0_f64, f64::max))
+            .filter(|k| k.is_finite() && *k > 0.0);
+        Some(Self {
+            view_projection: *view_projection,
+            radial_clip,
+            half_viewport,
+            radial_scale,
         })
-        .fold(f64::INFINITY, f64::min);
-    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
-    source_radius.max(minimum_radius)
+    }
+
+    fn pixels_per_world(&self, point: DVec3) -> Option<f64> {
+        let center_clip = self.view_projection * point.extend(1.0);
+        if !center_clip.is_finite() {
+            return None;
+        }
+        let safe_w = center_clip.w.abs().max(1.0e-6);
+        let pixels = self
+            .radial_clip
+            .iter()
+            .map(|radial_clip| {
+                let ndc_per_world = (radial_clip.truncate().truncate() * center_clip.w - center_clip.truncate().truncate() * radial_clip.w) / (safe_w * safe_w);
+                (ndc_per_world * self.half_viewport).length()
+            })
+            .fold(0.0_f64, f64::max);
+        (pixels.is_finite() && pixels > 0.0).then_some(pixels)
+    }
+
+    fn floored_radius(&self, point: DVec3, source_radius: f64, minimum_pixel_diameter: f64, threshold_px: f32) -> Option<f64> {
+        let pixels_per_world = self.pixels_per_world(point)?;
+        let minimum_radius = (minimum_pixel_diameter * 0.5 + f64::from(threshold_px)) / pixels_per_world;
+        minimum_radius.is_finite().then(|| source_radius.max(minimum_radius))
+    }
+
+    fn clip_w_span(&self, min: DVec3, max: DVec3) -> (f64, f64) {
+        let w_row = self.view_projection.row(3);
+        let row = w_row.truncate();
+        let (low, high) = ((row * min), (row * max));
+        let span_min = w_row.w + low.min(high).element_sum();
+        let span_max = w_row.w + low.max(high).element_sum();
+        (span_min, span_max)
+    }
+}
+
+fn segment_pick_radius(floor: Option<&PixelFloor>, start: DVec3, end: DVec3, source_radius: f64, fallback_radius: f64, threshold_px: f32) -> f64 {
+    let Some(floor) = floor else {
+        return fallback_radius;
+    };
+    // Neither end projects only on a degenerate view, where a diameterless
+    // hole would otherwise be walked at nothing at all.
+    let floored = [start, end]
+        .into_iter()
+        .filter_map(|point| floor.floored_radius(point, source_radius, f64::from(MIN_RENDER_PIXEL_DIAMETER), threshold_px))
+        .fold(f64::NEG_INFINITY, f64::max);
+    if floored.is_finite() { floored } else { fallback_radius }
+}
+
+struct GateReach {
+    world_reach: f64,
+    pixel_radius: f64,
+}
+
+/// Whether a hole's box could still hold the nearest pick along this ray, so
+/// its stations are worth walking. `nearest` is the best distance found so
+/// far this query; a box entered no closer than that can never win, so it is
+/// skipped exactly as the walk it stands in for would be.
+///
+/// The gate is allowed to be generous and say yes to a hole the walk then
+/// rejects. It is never allowed to say no to a hole the walk would have hit,
+/// so every way of not knowing below answers yes and lets the walk decide.
+fn trace_box_hit(
+    floor: Option<&PixelFloor>,
+    hole_box: crate::model::drill_hole::WorldBox,
+    reach: GateReach,
+    ray_origin: DVec3,
+    ray_direction: DVec3,
+    threshold_px: f32,
+    nearest: f64,
+) -> bool {
+    let (min, max) = hole_box;
+    if !min.is_finite() || !max.is_finite() || !ray_origin.is_finite() || !ray_direction.is_finite() || !reach.world_reach.is_finite() {
+        return true;
+    }
+    let Some(floor) = floor else {
+        return true;
+    };
+    let (w_min, w_max) = floor.clip_w_span(min, max);
+    if !(w_min > 1.0e-6 || w_max < -1.0e-6) {
+        return true;
+    }
+    let Some(k) = floor.radial_scale else {
+        return true;
+    };
+    // w is affine over the box, so the farthest-from-zero corner bounds the
+    // floor everywhere in it; add that pixel floor to the world reach.
+    let w_abs = w_min.abs().max(w_max.abs());
+    let inflation = reach.world_reach + (reach.pixel_radius + f64::from(threshold_px)) * w_abs / k;
+    if !inflation.is_finite() {
+        return true;
+    }
+    let pad = DVec3::splat(inflation);
+    ray_aabb_distance(ray_origin, ray_direction, min - pad, max + pad).is_some_and(|distance| distance < nearest)
 }
 
 /// Distance along a normalized ray to a finite cylinder, including its flat

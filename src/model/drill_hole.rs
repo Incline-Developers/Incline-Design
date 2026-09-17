@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
-    iter,
     path::PathBuf,
     sync::Arc,
 };
@@ -615,21 +614,33 @@ impl DrillHole {
         trace_orientation(self.collar_position(), &self.trace)
     }
 
+    /// Where the trace stands at `depth`. Binary search, not a walk from the
+    /// collar, so building a hole stops being quadratic in its station count.
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {
         let first = *self.trace.first()?;
         if depth <= first.depth {
             return Some(first.position);
         }
-        for pair in self.trace.windows(2) {
-            let [a, b] = [pair[0], pair[1]];
-            if depth <= b.depth {
-                let span = b.depth - a.depth;
-                let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
-                return Some(a.position.lerp(b.position, t));
-            }
-        }
-        self.trace.last().map(|station| station.position)
+        let index = self.trace.partition_point(|station| station.depth < depth);
+        // Past the toe there is no bracketing pair, and a depth that is not a
+        // number lands at zero: both fall through to the last station.
+        let Some(&[a, b]) = index.checked_sub(1).and_then(|above| self.trace.get(above..=index)) else {
+            return self.trace.last().map(|station| station.position);
+        };
+        let span = b.depth - a.depth;
+        let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
+        Some(a.position.lerp(b.position, t))
     }
+}
+
+fn trace_box(collar: DVec3, trace: &[TraceStation]) -> WorldBox {
+    let mut min = collar;
+    let mut max = collar;
+    for station in trace {
+        min = min.min(station.position);
+        max = max.max(station.position);
+    }
+    (min, max)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -650,6 +661,9 @@ pub(crate) struct DrillHoleDataset {
     pub(crate) holes: Vec<DrillHole>,
     pub(crate) fields: Vec<DrillField>,
     pub(crate) bounds: Option<(DVec3, DVec3)>,
+    /// One box per hole, in `holes` order, worked out in the same pass as
+    /// `bounds` so a pick can test a hole before walking it. Not saved.
+    pub(crate) hole_boxes: Vec<WorldBox>,
     /// The surface connectors tying the pattern in. Content rather than
     /// styling: they dirty the project and are undone with everything else.
     pub(crate) ties: Vec<TieIn>,
@@ -661,15 +675,29 @@ pub(crate) struct DrillHoleDataset {
 impl DrillHoleDataset {
     pub(crate) fn new(mut holes: Vec<DrillHole>) -> Self {
         holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.dhid, &b.dhid));
+        // position_at_depth binary-searches on depth, so a trace must ascend.
+        for hole in &mut holes {
+            hole.trace.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+        }
         let fields = collect_fields(&holes);
-        let bounds = drill_bounds(&holes);
-        Self {
+        let mut dataset = Self {
             holes,
             fields,
-            bounds,
+            bounds: None,
+            hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
-        }
+        };
+        // The one gate every importer and project load passes through, so the
+        // boxes cannot fall out of step with the traces.
+        dataset.refresh_bounds();
+        dataset
+    }
+
+    /// An absent box is safe: the caller walks the hole. A stale one is not:
+    /// the gate says no, so hole geometry changes must end in `refresh_bounds`.
+    pub(crate) fn hole_box(&self, index: usize) -> Option<WorldBox> {
+        self.hole_boxes.get(index).copied()
     }
 
     /// The connector between two holes, whichever way round it runs.
@@ -821,6 +849,7 @@ impl DrillHoleDataset {
                             .fold(0usize, usize::saturating_add)
                 })
                 .fold(0usize, usize::saturating_add)
+            + self.hole_boxes.len() * size_of::<WorldBox>()
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
             + self
@@ -842,10 +871,11 @@ impl DrillHoleDataset {
         self.fields.iter().find(|field| field.key == key)
     }
 
-    /// Recompute the dataset's extent after its holes have moved. Fields are
-    /// interval values rather than geometry, so only the bounds go stale.
     pub(crate) fn refresh_bounds(&mut self) {
-        self.bounds = drill_bounds(&self.holes);
+        let (bounds, hole_boxes) = drill_extents(&self.holes);
+        self.bounds = bounds;
+        self.hole_boxes = hole_boxes;
+        debug_assert_eq!(self.hole_boxes.len(), self.holes.len());
     }
 }
 
@@ -1205,20 +1235,25 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
     fields
 }
 
-fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
+pub(crate) type WorldBox = (DVec3, DVec3);
+
+/// One walk of the stations, so the dataset bounds and the per-hole boxes
+/// cannot come from different station sets.
+fn drill_extents(holes: &[DrillHole]) -> (Option<WorldBox>, Vec<WorldBox>) {
     let mut min = DVec3::splat(f64::INFINITY);
     let mut max = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
+    let mut boxes = Vec::with_capacity(holes.len());
     for hole in holes {
-        // Every hole draws a collar marker, so the bounds cover it and the trace.
+        let hole_box = trace_box(hole.collar_position(), &hole.trace);
+        boxes.push(hole_box);
+        // The bounds cover the collar marker; the hole's box is geometry alone.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
-        for position in iter::once(hole.collar_position()).chain(hole.trace.iter().map(|station| station.position)) {
-            min = min.min(position - DVec3::splat(radius));
-            max = max.max(position + DVec3::splat(radius));
-            any = true;
-        }
+        min = min.min(hole_box.0 - DVec3::splat(radius));
+        max = max.max(hole_box.1 + DVec3::splat(radius));
+        any = true;
     }
-    any.then_some((min, max))
+    (any.then_some((min, max)), boxes)
 }
 
 /// The default colour for the code at `index` in a field's code list,

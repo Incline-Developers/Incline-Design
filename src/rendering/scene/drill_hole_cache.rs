@@ -6,9 +6,12 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
-    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE,
+use crate::{
+    i18n::tr_format,
+    model::drill_hole::{
+        COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
+        DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieIn,
+    },
 };
 
 #[repr(C)]
@@ -19,7 +22,9 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) end: [f32; 3],
     pub(crate) pixel_diameter: f32,
     pub(crate) color: [f32; 3],
-    pub(crate) _pad1: f32,
+    /// This instance's slot in the dataset's selection bitset - see
+    /// [`selection_bits_for`].
+    pub(crate) selection_index: u32,
 }
 
 /// The disc drawn at the top of a hole so its collar reads at a glance
@@ -33,6 +38,133 @@ pub(crate) struct DrillCollarInstance {
     pub(crate) pixel_diameter: f32,
     pub(crate) fill: [f32; 3],
     pub(crate) hole_radius: f32,
+    pub(crate) selection_index: u32,
+}
+
+/// How many `vec4<u32>` the selection uniform's bitset array holds. WebGPU
+/// guarantees only 64 KiB for one uniform binding, and the header takes 32
+/// bytes of it, so the array is 4094 elements and the whole binding is
+/// exactly 65536 bytes. A uniform array needs a 16-byte stride, hence four
+/// bitset words per element rather than a flat `array<u32>`.
+const SELECTION_VECTORS: usize = 4094;
+const SELECTION_WORDS: usize = SELECTION_VECTORS * 4;
+const SELECTION_CAPACITY: usize = SELECTION_WORDS * 32;
+const SELECTION_BUFFER_BYTES: usize = size_of::<SelectionHeader>() + SELECTION_VECTORS * 16;
+
+const _: () = assert!(SELECTION_BUFFER_BYTES <= 64 * 1024);
+
+/// The 32-byte header of a dataset's selection uniform buffer, matched field
+/// for field by the `Selection` struct in `drill_hole.wgsl` and
+/// `drill_collar.wgsl`. Followed in the buffer by the bitset words - see
+/// [`selection_bits_for`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SelectionHeader {
+    selection_color: [f32; 4],
+    whole: u32,
+    hole_count: u32,
+    word_count: u32,
+    _pad: u32,
+}
+
+/// A dataset's selection bitset, rebuilt only when the dataset key or
+/// [`HoleSelection::key`] changed. Bit layout: holes occupy
+/// `[0, hole_count)`; tie-ins occupy `[hole_count, hole_count + tie_count)`,
+/// indexed by their position in `dataset.dataset.ties` (not the position
+/// among ties that survive [`build_tie_instances`]'s `filter_map`, so a tie
+/// with a dangling hole reference still owns a stable, if unused, bit).
+struct SelectionBits {
+    header: SelectionHeader,
+    words: Vec<u32>,
+    over_capacity: usize,
+}
+
+impl SelectionBits {
+    /// Header plus the live words only: the shader never reads past
+    /// `word_count`, so a write into a live buffer needs nothing more.
+    fn live_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(size_of::<SelectionHeader>() + self.words.len() * 4);
+        bytes.extend_from_slice(bytemuck::bytes_of(&self.header));
+        bytes.extend_from_slice(bytemuck::cast_slice(&self.words));
+        bytes
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        let mut bytes = self.live_bytes();
+        bytes.resize(SELECTION_BUFFER_BYTES, 0);
+        bytes
+    }
+}
+
+fn selection_bits_for(hole_count: usize, ties: &[TieIn], selection: &HoleSelection) -> SelectionBits {
+    let needed = hole_count + ties.len();
+    let [red, green, blue, alpha] = crate::ui::SELECTION_COLOR_F32;
+    let mut header = SelectionHeader {
+        selection_color: [red, green, blue, alpha],
+        whole: u32::from(selection.whole),
+        hole_count: hole_count as u32,
+        word_count: 0,
+        _pad: 0,
+    };
+    if needed > SELECTION_CAPACITY {
+        return SelectionBits {
+            header,
+            words: Vec::new(),
+            over_capacity: needed,
+        };
+    }
+    let word_count = needed.max(1).div_ceil(32);
+    let mut words = vec![0u32; word_count];
+    if !selection.whole {
+        for &hole in &selection.holes {
+            if hole < hole_count {
+                words[hole / 32] |= 1 << (hole % 32);
+            }
+        }
+    }
+    for (index, tie) in ties.iter().enumerate() {
+        if selection.contains_tie(tie.from, tie.to) {
+            let bit = hole_count + index;
+            words[bit / 32] |= 1 << (bit % 32);
+        }
+    }
+    header.word_count = word_count as u32;
+    SelectionBits { header, words, over_capacity: 0 }
+}
+
+fn empty_selection_bytes() -> Vec<u8> {
+    SelectionBits {
+        header: SelectionHeader {
+            selection_color: [0.0; 4],
+            whole: 0,
+            hole_count: 0,
+            word_count: 0,
+            _pad: 0,
+        },
+        words: Vec::new(),
+        over_capacity: 0,
+    }
+    .bytes()
+}
+
+fn create_selection_buffer_and_bind_group(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, bits: &SelectionBits) -> (wgpu::Buffer, wgpu::BindGroup) {
+    // Full uniform size: the binding must match the shader's fixed array.
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Drillhole Selection Bitset"),
+        size: SELECTION_BUFFER_BYTES as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, &bits.live_bytes());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Drillhole Selection Bind Group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+    (buffer, bind_group)
 }
 
 pub(crate) struct CachedDrillHoles {
@@ -42,10 +174,21 @@ pub(crate) struct CachedDrillHoles {
     pub(crate) tie_count: u32,
     pub(crate) collar_buffer: Option<wgpu::Buffer>,
     pub(crate) collar_count: u32,
+    /// The dataset's persistent selection uniform buffer, `None` only for
+    /// the pattern-preview entry. A selection change writes new bytes in
+    /// place instead of reallocating, so a click never touches `buffer`,
+    /// `tie_buffer` or `collar_buffer` above.
+    pub(crate) selection_buffer: Option<wgpu::Buffer>,
+    /// Never optional. A drill draw binds group 1 or it is not a legal draw,
+    /// and an entry that could not offer one used to be skipped silently,
+    /// which is how every drill hole disappeared from a canvas whose GPU had
+    /// no complaint to make. An entry with no bitset of its own binds the
+    /// shared all-clear buffer.
+    pub(crate) selection_bind_group: wgpu::BindGroup,
     key: u64,
+    selection_key: u64,
 }
 
-#[derive(Default)]
 pub(crate) struct DrillHoleGpuCache {
     entries: HashMap<DrillHoleId, CachedDrillHoles>,
     /// Transient pattern-menu geometry, kept outside the id-keyed project
@@ -62,12 +205,90 @@ pub(crate) struct DrillHoleGpuCache {
     /// drawn into, rather than leaving the edit invisible until the camera
     /// next moves.
     content_key: u64,
+    warned_over_capacity: std::collections::HashSet<DrillHoleId>,
+    /// Group 1 layout for every drill pipeline. A uniform because a
+    /// vertex-stage storage buffer is missing on some WebGPU canvases.
+    selection_layout: wgpu::BindGroupLayout,
+    /// Cloned by any entry with no bitset of its own - see
+    /// `CachedDrillHoles::selection_bind_group` - rather than rebuilt.
+    empty_selection_bind_group: wgpu::BindGroup,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SyncAction {
+    Keep,
+    RebuildSelection,
+    RebuildAll,
+}
+
+fn sync_action(existing: Option<(u64, u64)>, key: u64, selection_key: u64) -> SyncAction {
+    match existing {
+        Some((existing_key, existing_selection_key)) if existing_key == key => {
+            if existing_selection_key == selection_key {
+                SyncAction::Keep
+            } else {
+                SyncAction::RebuildSelection
+            }
+        }
+        _ => SyncAction::RebuildAll,
+    }
 }
 
 impl DrillHoleGpuCache {
-    pub(crate) fn sync(&mut self, device: &wgpu::Device, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset], editor: &crate::ui::state::EditorState) {
+    pub(crate) fn new(device: &wgpu::Device) -> Self {
+        let selection_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("drill_selection_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let empty_selection_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Drillhole Empty Selection Bitset"),
+            contents: &empty_selection_bytes(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let empty_selection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Drillhole Empty Selection Bind Group"),
+            layout: &selection_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: empty_selection_buffer.as_entire_binding(),
+            }],
+        });
+        Self {
+            entries: HashMap::new(),
+            preview: None,
+            content_key: 0,
+            warned_over_capacity: std::collections::HashSet::new(),
+            selection_layout,
+            empty_selection_bind_group,
+        }
+    }
+
+    /// Drops the entries and the preview and bumps `content_key`; keeps the
+    /// selection layout, the empty bind group and `warned_over_capacity`,
+    /// whose warning is meant to fire once.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.preview = None;
+        self.content_key = self.content_key.wrapping_add(1);
+    }
+
+    pub(crate) fn selection_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.selection_layout
+    }
+
+    pub(crate) fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset], editor: &crate::ui::state::EditorState) {
         let retained = self.entries.len();
         self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id && dataset.state.loaded));
+        self.warned_over_capacity.retain(|id| datasets.iter().any(|dataset| dataset.id == *id));
         if self.entries.len() != retained {
             self.content_key = self.content_key.wrapping_add(1);
         }
@@ -76,45 +297,95 @@ impl DrillHoleGpuCache {
                 continue;
             }
             let selection = HoleSelection::of(dataset, editor);
-            let key = dataset_key(dataset, scene_origin, &selection);
-            if self.entries.get(&dataset.id).is_some_and(|cached| cached.key == key) {
+            let key = dataset_key(dataset, scene_origin);
+            let selection_key = selection.key();
+            let action = sync_action(self.entries.get(&dataset.id).map(|cached| (cached.key, cached.selection_key)), key, selection_key);
+            if action == SyncAction::Keep {
                 continue;
             }
-            let instances = build_instances(dataset, scene_origin, &selection);
-            let buffer = (!instances.is_empty()).then(|| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Drillhole Segment Instances"),
-                    contents: bytemuck::cast_slice(&instances),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-            });
-            let ties = build_tie_instances(dataset, scene_origin, &selection);
-            let tie_buffer = (!ties.is_empty()).then(|| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Drillhole Tie-In Instances"),
-                    contents: bytemuck::cast_slice(&ties),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-            });
-            let collars = build_collar_instances(dataset, scene_origin, &selection);
-            let collar_buffer = (!collars.is_empty()).then(|| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Drillhole Collar Instances"),
-                    contents: bytemuck::cast_slice(&collars),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-            });
+            let base_changed = action == SyncAction::RebuildAll;
+
+            // Built only now the keys above say the bits would differ.
+            let bits = selection_bits_for(dataset.dataset.holes.len(), &dataset.dataset.ties, &selection);
+            if bits.over_capacity > 0 && self.warned_over_capacity.insert(dataset.id) {
+                crate::userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Drill hole set %name% has %count% holes and tie-ins, past the %capacity% the selection highlight can carry: selecting the set as a whole still highlights it, selecting single holes will not",
+                        name = dataset.name,
+                        count = bits.over_capacity,
+                        capacity = SELECTION_CAPACITY,
+                    )
+                );
+            }
+
+            let (buffer, count, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group) = match self.entries.remove(&dataset.id) {
+                Some(cached) if !base_changed => {
+                    // Only the preview, never inserted here, has no buffer.
+                    let selection_buffer = cached.selection_buffer.unwrap();
+                    queue.write_buffer(&selection_buffer, 0, &bits.live_bytes());
+                    (
+                        cached.buffer,
+                        cached.count,
+                        cached.tie_buffer,
+                        cached.tie_count,
+                        cached.collar_buffer,
+                        cached.collar_count,
+                        selection_buffer,
+                        cached.selection_bind_group,
+                    )
+                }
+                _ => {
+                    let instances = build_segment_instances(dataset, scene_origin);
+                    let buffer = (!instances.is_empty()).then(|| {
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Drillhole Segment Instances"),
+                            contents: bytemuck::cast_slice(&instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        })
+                    });
+                    let count = instances.len().min(u32::MAX as usize) as u32;
+
+                    let ties = build_tie_instances(dataset, scene_origin);
+                    let tie_buffer = (!ties.is_empty()).then(|| {
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Drillhole Tie-In Instances"),
+                            contents: bytemuck::cast_slice(&ties),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        })
+                    });
+                    let tie_count = ties.len().min(u32::MAX as usize) as u32;
+
+                    let collars = build_collar_instances(dataset, scene_origin);
+                    let collar_buffer = (!collars.is_empty()).then(|| {
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Drillhole Collar Instances"),
+                            contents: bytemuck::cast_slice(&collars),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        })
+                    });
+                    let collar_count = collars.len().min(u32::MAX as usize) as u32;
+
+                    let (selection_buffer, selection_bind_group) = create_selection_buffer_and_bind_group(device, queue, &self.selection_layout, &bits);
+
+                    (buffer, count, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group)
+                }
+            };
+
             self.content_key = self.content_key.wrapping_add(1);
             self.entries.insert(
                 dataset.id,
                 CachedDrillHoles {
                     buffer,
-                    count: instances.len().min(u32::MAX as usize) as u32,
+                    count,
                     tie_buffer,
-                    tie_count: ties.len().min(u32::MAX as usize) as u32,
+                    tie_count,
                     collar_buffer,
-                    collar_count: collars.len().min(u32::MAX as usize) as u32,
+                    collar_count,
+                    selection_buffer: Some(selection_buffer),
+                    selection_bind_group,
                     key,
+                    selection_key,
                 },
             );
         }
@@ -159,7 +430,7 @@ impl DrillHoleGpuCache {
                 end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: [1.0; 3],
-                _pad1: 0.0,
+                selection_index: 0,
             })
             .collect();
         let collars: Vec<_> = editor
@@ -172,6 +443,7 @@ impl DrillHoleGpuCache {
                 pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
                 fill: COLLAR_MARKER_FILL_COLOR,
                 hole_radius: preview_radius as f32,
+                selection_index: 0,
             })
             .collect();
         let buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -184,6 +456,9 @@ impl DrillHoleGpuCache {
             contents: bytemuck::cast_slice(&collars),
             usage: wgpu::BufferUsages::VERTEX,
         }));
+
+        let selection_bind_group = self.empty_selection_bind_group.clone();
+
         self.content_key = self.content_key.wrapping_add(1);
         self.preview = Some(CachedDrillHoles {
             buffer,
@@ -192,7 +467,10 @@ impl DrillHoleGpuCache {
             tie_count: 0,
             collar_buffer,
             collar_count: collars.len().min(u32::MAX as usize) as u32,
+            selection_buffer: None,
+            selection_bind_group,
             key,
+            selection_key: 0,
         });
     }
 
@@ -217,7 +495,8 @@ impl DrillHoleGpuCache {
 ///
 /// Production selects a dataset whole; Drill & Blast selects holes one at a
 /// time - see [`crate::ui::state::EditorState::selected_drill_holes`] - so
-/// this carries both and the instance builders ask it per hole.
+/// this carries both and [`selection_bits_for`] turns it into the bitset
+/// the shaders read.
 struct HoleSelection {
     /// The whole dataset is selected: every hole in it is.
     whole: bool,
@@ -241,23 +520,23 @@ impl HoleSelection {
         }
     }
 
-    fn contains(&self, index: usize) -> bool {
-        self.whole || self.holes.binary_search(&index).is_ok()
-    }
-
-    /// Whether anything in the dataset is selected, which is all the collar
-    /// colours need to know before they are worked out hole by hole.
-    fn any(&self) -> bool {
-        self.whole || !self.holes.is_empty()
-    }
-
     fn contains_tie(&self, from: usize, to: usize) -> bool {
         let pair = if from <= to { (from, to) } else { (to, from) };
         self.ties.binary_search(&pair).is_ok()
     }
+
+    /// Cheap stand-in for hashing the built bitset: everything else those
+    /// bits depend on is constant or already inside `dataset_key`.
+    fn key(&self) -> u64 {
+        let mut hash = DefaultHasher::new();
+        self.whole.hash(&mut hash);
+        self.holes.hash(&mut hash);
+        self.ties.hash(&mut hash);
+        hash.finish()
+    }
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.state.loaded.hash(&mut hash);
@@ -265,9 +544,6 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
     // Move Collar tool is the only one so far - bumps the item's revision, and
     // that is what tells the cache the instances it built are stale.
     dataset.state.revision().hash(&mut hash);
-    selection.whole.hash(&mut hash);
-    selection.holes.hash(&mut hash);
-    selection.ties.hash(&mut hash);
     for value in scene_origin.to_array() {
         value.to_bits().hash(&mut hash);
     }
@@ -284,7 +560,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
     hash.finish()
 }
 
-fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillSegmentInstance> {
     if !dataset.state.loaded {
         return Vec::new();
     }
@@ -294,7 +570,6 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
         if hole.trace.len() < 2 {
             continue;
         }
-        let selected = selection.contains(index);
         let min_depth = hole.trace.first().unwrap().depth;
         let max_depth = hole.trace.last().unwrap().depth;
         let mut boundaries = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
@@ -308,11 +583,27 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
         }
         boundaries.sort_by(f64::total_cmp);
         boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+        if boundaries.len() < 2 {
+            continue;
+        }
+
+        // Only the coloured path reads this sweep.
+        let interval_order = field.is_some().then(|| {
+            let mut order: Vec<usize> = (0..hole.intervals.len()).collect();
+            order.sort_by(|&a, &b| hole.intervals[a].from.total_cmp(&hole.intervals[b].from));
+            order
+        });
+        let mut cursor = 0usize;
+
+        let mut previous = hole.position_at_depth(boundaries[0]);
         for pair in boundaries.windows(2) {
+            let start = previous;
+            let end = hole.position_at_depth(pair[1]);
+            previous = end;
             if pair[1] <= pair[0] + 1.0e-9 {
                 continue;
             }
-            let (Some(start), Some(end)) = (hole.position_at_depth(pair[0]), hole.position_at_depth(pair[1])) else {
+            let (Some(start), Some(end)) = (start, end) else {
                 continue;
             };
             if start.distance_squared(end) <= 1.0e-18 {
@@ -323,26 +614,32 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
                 continue;
             }
             let value = field.and_then(|field| {
-                hole.intervals
+                let order = interval_order.as_ref()?;
+                while cursor < order.len() && hole.intervals[order[cursor]].to <= midpoint {
+                    cursor += 1;
+                }
+                // The sweep is ordered by `from`, so picking the first match
+                // in that order would let the sort decide the winner when two
+                // intervals both cover this midpoint. Import order is the
+                // answer, so take the smallest original index among the
+                // candidates, not the smallest `from`; do not simplify this
+                // back to `.find()`.
+                order[cursor..]
                     .iter()
-                    .find(|interval| interval.from <= midpoint && midpoint < interval.to && interval.values.contains_key(&field.key))
-                    .and_then(|interval| interval.values.get(&field.key))
+                    .take_while(|&&i| hole.intervals[i].from <= midpoint)
+                    .filter(|&&i| midpoint < hole.intervals[i].to && hole.intervals[i].values.contains_key(&field.key))
+                    .min_by_key(|&&i| i)
+                    .and_then(|&i| hole.intervals[i].values.get(&field.key))
             });
-            let color = if selected {
-                let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
-                [red, green, blue]
-            } else {
-                field
-                    .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
-                    .unwrap_or([1.0; 3])
-            };
             instances.push(DrillSegmentInstance {
                 start: (start - scene_origin).as_vec3().to_array(),
                 radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32),
                 end: (end - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
-                color,
-                _pad1: 0.0,
+                color: field
+                    .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
+                    .unwrap_or([1.0; 3]),
+                selection_index: index as u32,
             });
         }
     }
@@ -352,14 +649,19 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
 /// The surface connectors, drawn collar to collar through the same instanced
 /// cylinder the traces use. A tie has no thickness of its own, so it takes a
 /// world radius from the holes it joins and scales with them until reaching
-/// the shared two-pixel screen floor.
-fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+/// the shared two-pixel screen floor. `selection_index` stamps the tie's own
+/// slot in the dataset's selection bitset - `hole_count + i`, where `i` is
+/// this tie's position in `dataset.dataset.ties` - matching
+/// [`selection_bits_for`] bit for bit.
+fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillSegmentInstance> {
     let holes = &dataset.dataset.holes;
+    let hole_count = holes.len() as u32;
     dataset
         .dataset
         .ties
         .iter()
-        .filter_map(|tie| {
+        .enumerate()
+        .filter_map(|(tie_index, tie)| {
             let from = holes.get(tie.from)?;
             let to = holes.get(tie.to)?;
             let start = from.collar_position();
@@ -371,45 +673,33 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
                 radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
                 end: (end - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
-                color: if selection.contains_tie(tie.from, tie.to) {
-                    let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
-                    [red, green, blue]
-                } else {
-                    tie.color
-                },
-                _pad1: 0.0,
+                color: tie.color,
+                selection_index: hole_count + tie_index as u32,
             })
         })
         .collect()
 }
 
-fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
+fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillCollarInstance> {
     if !dataset.state.loaded {
         return Vec::new();
     }
-    let selected_colors = selection.any().then(|| {
-        let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
-        (COLLAR_MARKER_FILL_COLOR, [red, green, blue])
-    });
     dataset
         .dataset
         .holes
         .iter()
         .enumerate()
         .map(|(index, hole)| {
-            let (outline, fill) = match selected_colors {
-                Some(colors) if selection.contains(index) => colors,
-                _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
-            };
             let center = hole.collar_position();
             let hole_radius = hole.render_radius();
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),
                 marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
-                outline,
+                outline: COLLAR_MARKER_OUTLINE_COLOR,
                 pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
-                fill,
+                fill: COLLAR_MARKER_FILL_COLOR,
                 hole_radius: hole_radius as f32,
+                selection_index: index as u32,
             }
         })
         .collect()

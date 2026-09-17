@@ -3,8 +3,10 @@ struct SegmentInput {
     @location(0) start_radius: vec4<f32>,
     // xyz: segment end. w: minimum screen diameter in physical pixels.
     @location(1) end_pad: vec4<f32>,
-    // xyz: colour. w: unused alignment padding.
-    @location(2) color_pad: vec4<f32>,
+    @location(2) color: vec3<f32>,
+    // This instance's slot in `selection.bits` - a hole index, or
+    // `hole_count + tie index` for a tie-in.
+    @location(3) selection_index: u32,
 };
 
 struct VertexOutput {
@@ -75,7 +77,7 @@ fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> 
     var out: VertexOutput;
     out.position = camera.view_proj * vec4<f32>(world, 1.0);
     out.normal = normal;
-    out.color = instance.color_pad.xyz;
+    out.color = select(instance.color, selection.selection_color.rgb, selection_active(instance.selection_index));
     out.section_offset = section_plane_offset(world);
     return out;
 }

@@ -1278,7 +1278,7 @@ impl<'a> Graphics<'a> {
         self.scene_origin = center;
         self.triangulation_gpu.clear();
         self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
+        self.drill_hole_gpu.clear();
         self.geometry_dirty = true;
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
@@ -1363,7 +1363,7 @@ impl<'a> Graphics<'a> {
         self.scene_origin = center;
         self.triangulation_gpu.clear();
         self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
+        self.drill_hole_gpu.clear();
         self.geometry_dirty = true;
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);

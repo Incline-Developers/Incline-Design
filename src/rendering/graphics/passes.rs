@@ -199,12 +199,18 @@ impl<'a> Graphics<'a> {
             return;
         }
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        let hole_pipeline = if xray_enabled {
+            &self.xray_drill_hole_render_pipeline
+        } else {
+            &self.drill_hole_render_pipeline
+        };
+        let collar_pipeline = if xray_enabled {
+            &self.xray_drill_collar_render_pipeline
+        } else {
+            &self.drill_collar_render_pipeline
+        };
         if draw_traces {
-            render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
-            } else {
-                &self.drill_hole_render_pipeline
-            });
+            render_pass.set_pipeline(hole_pipeline);
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
@@ -212,16 +218,19 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
                     continue;
                 };
-                let Some(buffer) = cached.buffer.as_ref() else {
-                    continue;
-                };
-                render_pass.set_vertex_buffer(0, buffer.slice(..));
-                render_pass.draw(0..144, 0..cached.count);
+                // A selected hole is picked out by the shader reading group
+                // 1's selection bitset, not by a second draw.
+                if let Some(buffer) = cached.buffer.as_ref() {
+                    render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, buffer.slice(..));
+                    render_pass.draw(0..144, 0..cached.count);
+                }
             }
             if draw_preview
                 && let Some(cached) = self.drill_hole_gpu.preview()
                 && let Some(buffer) = cached.buffer.as_ref()
             {
+                render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..144, 0..cached.count);
             }
@@ -237,11 +246,7 @@ impl<'a> Graphics<'a> {
         // still cached; only the draw is skipped, so switching tab costs
         // nothing to come back from.
         if editor.shows_tie_ins() {
-            render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
-            } else {
-                &self.drill_hole_render_pipeline
-            });
+            render_pass.set_pipeline(hole_pipeline);
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
@@ -252,17 +257,14 @@ impl<'a> Graphics<'a> {
                 let Some(buffer) = cached.tie_buffer.as_ref() else {
                     continue;
                 };
+                render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..144, 0..cached.tie_count);
             }
         }
         // Collar markers go over the traces they cap, in their own pass so the
         // pipeline switch happens once rather than per dataset.
-        render_pass.set_pipeline(if xray_enabled {
-            &self.xray_drill_collar_render_pipeline
-        } else {
-            &self.drill_collar_render_pipeline
-        });
+        render_pass.set_pipeline(collar_pipeline);
         for dataset in drill_holes {
             if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                 continue;
@@ -273,6 +275,7 @@ impl<'a> Graphics<'a> {
             let Some(buffer) = cached.collar_buffer.as_ref() else {
                 continue;
             };
+            render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }
@@ -280,6 +283,7 @@ impl<'a> Graphics<'a> {
             && let Some(cached) = self.drill_hole_gpu.preview()
             && let Some(buffer) = cached.collar_buffer.as_ref()
         {
+            render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }

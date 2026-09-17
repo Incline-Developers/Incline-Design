@@ -2308,7 +2308,7 @@ impl<'a> BoreholeLog<'a> {
 
     /// How far the hole has wandered sideways at `depth`, seen from `azimuth`.
     fn offset_at(&self, depth: f64, azimuth: f32) -> f32 {
-        match self.station_position(depth) {
+        match self.hole.position_at_depth(depth) {
             Some(position) => self.sideways_offset(position, azimuth),
             None => 0.0,
         }
@@ -2323,24 +2323,6 @@ impl<'a> BoreholeLog<'a> {
         let radians = f64::from(azimuth).to_radians();
         // Screen right is the bearing turned a quarter turn clockwise.
         (east * radians.cos() - north * radians.sin()) as f32
-    }
-
-    /// `position_at_depth` bracketed by `partition_point`: O(log n).
-    fn station_position(&self, depth: f64) -> Option<glam::DVec3> {
-        let trace = &self.hole.trace;
-        let first = *trace.first()?;
-        if depth <= first.depth {
-            return Some(first.position);
-        }
-        let last = *trace.last()?;
-        if depth >= last.depth {
-            return Some(last.position);
-        }
-        let index = trace.partition_point(|station| station.depth < depth);
-        let (a, b) = (trace[index - 1], trace[index]);
-        let span = b.depth - a.depth;
-        let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
-        Some(a.position.lerp(b.position, t))
     }
 
     /// The field the strat column reads: an alias list, falling back to
