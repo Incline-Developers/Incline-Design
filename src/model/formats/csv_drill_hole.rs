@@ -341,13 +341,38 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
         let stem = mapping.path.file_stem().and_then(|value| value.to_str()).unwrap_or("interval");
         // Values decide the sign: a column headed inclination is often signed
         // as dip already, and negating it would stand every hole on its head.
-        let inclination_as_dip = mapping.role == CsvDrillFileRole::Survey && inclination_is_dip_signed(&file, &rows);
+        let angles = if mapping.role == CsvDrillFileRole::Survey {
+            scan_survey_angles(&file, &rows)
+        } else {
+            SurveyAngleScan::default()
+        };
+        let inclination_as_dip = angles.inclination_is_dip;
         if inclination_as_dip {
             userspace_warn!(
                 "{}",
                 crate::i18n::tr_format!(
-                    literal = "%file% inclination values are all at or below zero, so the column was read as dip, negative downward",
+                    literal = "%file% inclination values that could be an angle are all at or below zero, so the column was read as dip, negative downward",
                     file = mapping.path.display().to_string()
+                )
+            );
+        }
+        if angles.azimuth_off_compass > 0 {
+            userspace_warn!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "%file% holds %count% rows whose azimuth is not between 0 and 360",
+                    file = mapping.path.display().to_string(),
+                    count = angles.azimuth_off_compass.to_string()
+                )
+            );
+        }
+        if angles.tilt_not_an_angle > 0 {
+            userspace_warn!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "%file% holds %count% rows whose dip is not between -90 and 90; those rows were read without a direction",
+                    file = mapping.path.display().to_string(),
+                    count = angles.tilt_not_an_angle.to_string()
                 )
             );
         }
@@ -691,27 +716,78 @@ fn hole_known(segment_scoped: bool, collars: &HashMap<String, Collar>, segments:
     if segment_scoped { segments.contains_key(dhid) } else { collars.contains_key(dhid) }
 }
 
-/// Whether an inclination column is signed as dip already: every value at or
-/// below zero, one of them below it. Exports name the column either way.
-fn inclination_is_dip_signed(file: &CsvFile<'_>, rows: &[Vec<String>]) -> bool {
-    let Some(index) = role_index(file.mapping, &CsvDrillColumnRole::Inclination) else {
-        return false;
-    };
-    let mut any_negative = false;
-    for row in rows.iter().skip(1) {
-        let value = row.get(index).map(|value| value.trim()).unwrap_or("");
-        if value.is_empty() || file.damaged(value) {
-            continue;
-        }
-        let Some(number) = value.parse::<f64>().ok().filter(|number| number.is_finite()) else {
-            continue;
-        };
-        if number > 0.0 {
-            return false;
-        }
-        any_negative |= number < 0.0;
+/// A dip or inclination is an angle from one vertical to the other. A number
+/// outside that is a column that did not line up, not a steep hole.
+fn is_dip_angle(value: f64) -> bool {
+    (-90.0..=90.0).contains(&value)
+}
+
+fn is_azimuth(value: f64) -> bool {
+    (0.0..=360.0).contains(&value)
+}
+
+fn angle_at(file: &CsvFile<'_>, row: &[String], index: usize) -> Option<f64> {
+    let value = row.get(index).map(|value| value.trim()).unwrap_or("");
+    if value.is_empty() || file.damaged(value) {
+        return None;
     }
-    any_negative
+    value.parse::<f64>().ok().filter(|number| number.is_finite())
+}
+
+/// What one pass over a survey file's angle columns found.
+#[derive(Default)]
+struct SurveyAngleScan {
+    /// An inclination column is signed as dip already: every angle at or
+    /// below zero, one of them below it. Exports name the column either way.
+    /// Only a number that could be an angle votes, so a handful of corrupt
+    /// rows cannot stand a whole file on its head. A hole driven along a seam
+    /// crosses zero honestly, roof to floor and back, so signs on both sides
+    /// are data rather than damage and leave the column read as its role.
+    inclination_is_dip: bool,
+    /// Rows whose azimuth is off the compass. They are counted and kept:
+    /// squaring them away belongs to whatever wrote the file.
+    azimuth_off_compass: usize,
+    /// Rows whose tilt is not an angle at all, and whose direction is left
+    /// out for that reason.
+    tilt_not_an_angle: usize,
+}
+
+fn scan_survey_angles(file: &CsvFile<'_>, rows: &[Vec<String>]) -> SurveyAngleScan {
+    let inclination = role_index(file.mapping, &CsvDrillColumnRole::Inclination);
+    let dip = role_index(file.mapping, &CsvDrillColumnRole::Dip);
+    let azimuth = role_index(file.mapping, &CsvDrillColumnRole::Azimuth);
+    if inclination.is_none() && dip.is_none() && azimuth.is_none() {
+        return SurveyAngleScan::default();
+    }
+    let mut any_negative = false;
+    let mut any_positive = false;
+    let mut azimuth_off_compass = 0usize;
+    let mut tilt_not_an_angle = 0usize;
+    for row in rows.iter().skip(1) {
+        if let Some(number) = inclination.and_then(|index| angle_at(file, row, index)) {
+            if is_dip_angle(number) {
+                any_negative |= number < 0.0;
+                any_positive |= number > 0.0;
+            } else {
+                tilt_not_an_angle += 1;
+            }
+        }
+        if let Some(number) = dip.and_then(|index| angle_at(file, row, index))
+            && !is_dip_angle(number)
+        {
+            tilt_not_an_angle += 1;
+        }
+        if let Some(number) = azimuth.and_then(|index| angle_at(file, row, index))
+            && !is_azimuth(number)
+        {
+            azimuth_off_compass += 1;
+        }
+    }
+    SurveyAngleScan {
+        inclination_is_dip: any_negative && !any_positive,
+        azimuth_off_compass,
+        tilt_not_an_angle,
+    }
 }
 
 /// A collar row's hole and position, or the reason the row is refused.
@@ -741,6 +817,10 @@ fn survey_gate(file: &CsvFile<'_>, row: &[String], row_index: usize, inclination
         // Inclination is read positive downward; dip is negative downward.
         None => optional_number(file, row, &CsvDrillColumnRole::Inclination, row_index)?.map(|value| if inclination_as_dip { value } else { -value }),
     };
+    // A tilt that is not an angle leaves the row without a direction rather
+    // than without a station: a surveyed position on the same row is still a
+    // position, and the count is reported once per file.
+    let dip = dip.filter(|dip| is_dip_angle(*dip));
     // A complete position stands without angles and a complete pair without a
     // position; only a row holding neither is refused.
     let angles = azimuth.zip(dip);
