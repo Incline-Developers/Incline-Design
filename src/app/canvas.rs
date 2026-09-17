@@ -410,10 +410,9 @@ impl<'a> App<'a> {
             if let Some(pick) = pending_selection_click {
                 let world = pick.world;
                 let handle = pick.entity;
-                // Drill & Blast selects the hole the cursor was over, where
-                // production selects the dataset holding it.
-                let picked_hole = pick.hole;
-                let hole = picked_hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
+                // A click takes the one hole the cursor was over, in every
+                // workspace. Selecting a dataset whole is the explorer's job.
+                let hole = pick.hole;
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
@@ -425,9 +424,7 @@ impl<'a> App<'a> {
                 // going for empty space.
                 let already_selected = match hole {
                     Some(hole) => self.editor.selected_drill_holes.contains(&hole),
-                    // Outside Drill & Blast the handle is the whole dataset, so
-                    // clicking another hole in it is a new pick, not a toggle.
-                    None => self.editor.selected_handles.contains(&handle) && (picked_hole.is_none() || self.editor.last_picked_hole == picked_hole),
+                    None => self.editor.selected_handles.contains(&handle),
                 };
                 let selection_mode = if self.modifiers.shift_key() {
                     SelectionMode::Toggle
@@ -442,16 +439,13 @@ impl<'a> App<'a> {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
                 }
-                // A click that dropped what it hit must not park the panel on
-                // it, and leaves the next click on it a fresh pick.
+                // A click that dropped its hit must not park the panel on it.
                 let still_selected = match hole {
                     Some(hole) => self.editor.selected_drill_holes.contains(&hole),
                     None => self.editor.selected_handles.contains(&handle),
                 };
                 if still_selected {
-                    self.editor.record_picked_hole(picked_hole);
-                } else {
-                    self.editor.last_picked_hole = None;
+                    self.editor.show_picked_hole(hole);
                 }
                 // A drape has no geometry of its own - it is painted onto the
                 // surface - so the click that lands on the surface lands on

@@ -105,10 +105,15 @@ pub(crate) fn draw_right_click_context(
     let title = canvas_context_menu_title(editor, document);
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
         crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
-        let selected_drill_hole = editor.selected_handles.iter().find_map(|&h| match h {
-            crate::model::SceneEntityId::DrillHole(id) => Some(id),
-            _ => None,
-        });
+        let selected_drill_hole = editor
+            .selected_handles
+            .iter()
+            .find_map(|&h| match h {
+                crate::model::SceneEntityId::DrillHole(id) => Some(id),
+                _ => None,
+            })
+            .or_else(|| editor.canvas_context_menu_hole.map(|hole| hole.dataset))
+            .or_else(|| editor.selected_drill_holes.iter().map(|hole| hole.dataset).min_by_key(|id| id.0));
 
         // --- Drill holes ---
         // The inspector row acts on the hole the pick named; colouring acts on

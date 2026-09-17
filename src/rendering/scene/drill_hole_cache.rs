@@ -540,8 +540,8 @@ impl DrillHoleGpuCache {
 
 /// Which of a dataset's holes are drawn as selected.
 ///
-/// Production selects a dataset whole; Drill & Blast selects holes one at a
-/// time - see [`crate::ui::state::EditorState::selected_drill_holes`] - so
+/// The explorer selects a dataset whole; a canvas click selects holes one at
+/// a time - see [`crate::ui::state::EditorState::selected_drill_holes`] - so
 /// this carries both and [`selection_bits_for`] turns it into the bitset
 /// the shaders read.
 struct HoleSelection {

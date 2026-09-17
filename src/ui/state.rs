@@ -1001,10 +1001,10 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
-    /// Individually selected drill holes, which the Drill & Blast workspace
-    /// works in place of whole datasets - see [`DrillHoleRef`]. Production
-    /// selects the dataset into [`Self::selected_handles`] and leaves this
-    /// empty; the two are never populated for the same drill hole at once.
+    /// Individually selected drill holes - see [`DrillHoleRef`]. A canvas
+    /// click lands here in every workspace; the explorer selects a dataset
+    /// whole into [`Self::selected_handles`] instead, which draws every hole
+    /// in it as selected whatever this holds.
     pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
     /// Surface connectors selected directly in Drill & Blast. They are not
     /// scene entities in their own right, so their stable dataset/hole pair
@@ -1013,9 +1013,6 @@ pub(crate) struct EditorState {
     /// The hole the inspector reads, held while the panel is locked and kept
     /// out of the selection so inspecting never changes what is selected.
     pub(crate) inspected_hole: Option<DrillHoleRef>,
-    /// What the last pick hit, lock or no lock, so a repeat click on a hole
-    /// can be told from a click on another hole of the same dataset.
-    pub(crate) last_picked_hole: Option<DrillHoleRef>,
     /// Holds the inspector on the hole it has, so the holes around it can be
     /// picked and worked on without the panel following the cursor away.
     pub(crate) borehole_inspector_locked: bool,
@@ -1932,7 +1929,6 @@ impl EditorState {
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
-        self.last_picked_hole = None;
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
         self.frozen_handles.clear();
@@ -2132,7 +2128,6 @@ impl EditorState {
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             inspected_hole: None,
-            last_picked_hole: None,
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
@@ -2575,25 +2570,17 @@ impl EditorState {
         }
     }
 
-    /// A left click's pick: it shows the hole and is what the next click on
-    /// that hole toggles against, so only the left-click path may call it.
-    pub(crate) fn record_picked_hole(&mut self, picked: Option<DrillHoleRef>) {
-        self.last_picked_hole = picked;
-        self.show_picked_hole(picked);
-    }
-
     /// Whether a pick may move the inspector; false while it is locked.
     pub(crate) const fn inspector_follows_selection(&self) -> bool {
         !self.borehole_inspector_locked
     }
 
     /// Forget every hole `keep` no longer vouches for: what is selected,
-    /// what the inspector reads, the last pick, the context menu's hole.
+    /// what the inspector reads, the context menu's hole.
     pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
         self.selected_drill_holes.retain(|hole| keep(hole.dataset));
         self.selected_tie_ins.retain(|tie| keep(tie.dataset));
         self.inspected_hole = self.inspected_hole.filter(|hole| keep(hole.dataset));
-        self.last_picked_hole = self.last_picked_hole.filter(|hole| keep(hole.dataset));
         self.canvas_context_menu_hole = self.canvas_context_menu_hole.filter(|hole| keep(hole.dataset));
     }
 
