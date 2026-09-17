@@ -47,6 +47,7 @@ menu-view = Görünüm
 ws-production = Üretim
 ws-drill-and-blast = Delme & Patlatma
 ws-geology = Jeoloji
+ws-planning = Planlama
 
 ## Menü çubukları
 
@@ -77,6 +78,9 @@ dialog-rename-submit = Yeniden Adlandır
 dialog-delete-title = { $kind } Sil
 dialog-delete-confirm =
     '{ $name }' projeden silinsin mi?
+    Bu işlem geri alınamaz.
+confirm-delete-product =
+    '{ $name }' ürünü paletten silinsin mi?
     Bu işlem geri alınamaz.
 
 
@@ -164,6 +168,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Ekranla senkronize sunar: yırtılma olmaz ve kare hızını ekran belirler. Kapalıyken kareler çizilir çizilmez sunulur ve aşağıdaki sınır uygulanır.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (boş başlık)
 literal-absolute-rl-455fe0d96abfbb7a = Mutlak RL
@@ -224,6 +229,7 @@ literal-click-a-corner-on-a-closed-polyline-e58aa372632bbee1 = Kapalı bir çokl
 literal-click-a-perimeter-point-or-type-a-radius-3377e2b210511869 = Bir çevre noktasına tıklayın veya bir yarıçap girin
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Girilen yarıçapı kullanmak için Enter'a basın
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = veya işaretçi yarıçapını kullanmak için tıklayın
+literal-product-de1f02481331134c = Ürün
 literal-click-a-vertex-to-start-the-replacement-span-b501eed8ebcccc66 = Değiştirilecek aralığı başlatmak için bir köşeye tıklayın.
 literal-click-an-open-or-closed-polyline-to-begin-29e6e0b812f8a809 = Başlamak için açık veya kapalı bir çoklu çizgiye tıklayın.
 literal-click-first-vertex-ffe1ab3e9fc280fd = İlk köşeye tıklayın
@@ -333,6 +339,12 @@ literal-exit-application-206c61fdca9522f7 = Uygulamadan Çık
 literal-exit-incline-design-b11cdc542f0e84ef = Incline Design'dan Çık
 literal-exit-without-saving-1c85d135e24c5e81 = Kaydetmeden Çık
 literal-exit-slice-ec67c9da3a320e5f = Kesitten çık
+literal-set-section-grid-0317412c52213ca8 = Kesit Izgarasını Ayarla
+literal-hide-rl-grid-5777afd90dcfdfef = Kot Izgarasını Gizle
+literal-show-rl-grid-87a5e28c30f9ca36 = Kot Izgarasını Göster
+literal-e-08faea07b5959400 = D
+literal-n-09208c07b5b5c383 = K
+literal-set-section-grid-enabled-4477cb755937abe4 = Kesit ızgarası etkin = %enabled%
 literal-export-293aa6a6446fb153 = Dışa Aktar
 literal-export-block-model-csv-3755a5af2dbb71af = Blok Model CSV Dışa Aktar
 literal-export-csv-block-model-5c2ba2182ac51797 = CSV Blok Model Dışa Aktar
@@ -406,6 +418,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Yükle
 literal-load-block-model-9e1eebcd6fc9e399 = Blok Model Yükle
 literal-load-drillholes-0e0c59498b0a629f = Sondaj Deliklerini Yükle
+literal-load-layer-c8261cf60e655064 = Katman Yükle
 literal-load-point-cloud-348b63ef7b0faa4a = Nokta Bulutu Yükle
 literal-load-project-645e82ec5117c718 = Proje Yükle
 literal-load-raster-5393aaf7183657c2 = Raster Yükle
@@ -451,8 +464,11 @@ literal-near-clip-limit-25931ba2c7873778 = Yakın kırpma sınırı
 literal-new-product-6c2124d5d6badd3a = Yeni Ürün
 literal-new-project-cd084c5e5d3ea300 = Yeni Proje
 literal-new-layer-name-e4ea5292efa5d03f = Yeni katman adı
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Bağlanacak gecikme ürünü yok
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = eklemek için Gecikme Paleti başlığına sağ tıklayın
 literal-no-matches-28d7266643f5992f = Eşleşme yok
 literal-no-object-selected-d42da7912e4d01b6 = Nesne seçilmedi
+literal-no-products-483f3f49aae9b3c2 = Ürün yok
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Kullanılabilir konumsal kapsam yok
 literal-none-669b18c6d2d9c95b = Yok
 literal-north-arrow-0a1293ff4a52606d = Kuzey oku
@@ -631,6 +647,9 @@ literal-undrape-raster-19a3cb862f76d539 = Raster Örtüsünü Kaldır
 literal-undrape-rasters-08281f02a6ec6cbe = Raster Örtülerini Kaldır
 literal-unload-5d3714bc882df1b2 = Kaldır
 literal-unload-block-model-c14323e196f7603e = Blok Modeli Kaldır
+literal-unload-drillholes-b63232aa559b051e = Sondaj Deliklerini Kaldır
+literal-unload-layer-e19afae5689edebb = Katmanı Kaldır
+literal-unload-point-cloud-2d0ee38fa0391df9 = Nokta Bulutunu Kaldır
 literal-unload-raster-19854bae2aea221f = Rasteri Kaldır
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Üçgenlemeyi Kaldır
 literal-unlock-5d303fbc88281c15 = Kilidi Aç
@@ -641,6 +660,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Yüzeyin tam kot
 literal-vertex-count-48fab462ae06a454 = Köşe sayısı
 literal-vertical-exaggeration-3572327bb13435e7 = Dikey Abartma
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Bir sonraki berm oluşturulmadan önce her basamağın dikey yükselişi veya alçalışı.
+literal-vertical-sync-85fd0e942adbf2be = Dikey eşitleme
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Frustum ayıklamada kullanılan Morton konumsal yığınlamayı görselleştirir.
 literal-website-82665b2ffabc9c0a = Web Sitesi
 literal-weld-retry-b6c826b7541e89f1 = Kaynakla ve Yeniden Dene
@@ -801,6 +821,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = %count% �
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Bu öğe artık etkin projeye ait değil
 literal-renamed-before-to-name-88160afa8287cd38 = '%before%' adı '%name%' olarak değiştirildi
 literal-exited-slice-view-0d1f935a85f65cd3 = Kesit görünümünden çıkıldı
+literal-reset-the-section-view-a90255a33a618651 = Kesit görünümünü sıfırla
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = %object_id% nesnesindeki metin güncellendi
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = %object_id% nesnesi için metin düzenleme tamamlandı
 literal-contour-generation-failed-error-60e87eda1ee29afa = Kontur oluşturma başarısız oldu: %error%
@@ -1125,6 +1146,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Uçuş Modunu Devre Dışı Bıra
 literal-enable-flying-mode-5be056d1b9bdd218 = Uçuş Modunu Etkinleştir
 literal-exit-slice-view-8f48e630d38a6390 = Kesit Görünümünden Çık
 literal-vertical-slice-view-a721497b5e8007fa = Dikey Kesit Görünümü
+literal-reset-section-view-569ba01ea5ad8448 = Kesit Görünümünü Sıfırla
+literal-camera-square-to-the-section-095beff203b315a6 = Kamera kesite dik
 literal-hide-wireframes-a0bb1a91dde72948 = Tel Kafesleri Gizle
 literal-show-wireframes-7e8dc68f7023441b = Tel Kafesleri Göster
 literal-hide-points-6ec095fdf7ed73f4 = Noktaları Gizle
@@ -1136,6 +1159,9 @@ literal-value-dip-1a0edf99f1cb897b = %value%° eğim
 literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° doğrultu · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (yatay, doğrultu yok)
 literal-slice-view-531d1a0f0f256066 = Kesit görünümü
+slice-viewport-gestures = orta tuşla sürükle: kaydır · sağ tuşla sürükle: döndür · Shift+tekerlek: yürü · W/S: dilimi taşı · Q/E: döndür · Esc: çık
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - kesit görünümünde kullanılamaz
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Bu araç kesit görünümünde kullanılamaz
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = orta düğmeyle sürükle kaydır · W/S dilimi taşı · Q/E döndür · Esc çık
 literal-north-ca6a42d80c5dd964 = Kuzey
 literal-south-25b5d0c70a3936da = Güney
@@ -1571,6 +1597,46 @@ literal-update-8b0432eecbd8b034 = Güncelle
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Her ağzın altındaki dikey derinlik.
 literal-x-offset-cf30a60198d81e4a = X ofseti
 literal-y-offset-ffb673aa94de0fa7 = Y ofseti
+literal-appearance-f0e261e04eda82ff = Görünüm
+literal-arc-circle-69e83efed2ce9d47 = Yay ve Daire
+literal-arc-segments-f2c50c445ff0606b = Yay segmentleri
+literal-bulge-5911694918e2fe44 = Bombe
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Bombeli yaylar veri modeline göre yataydır: yay planda döner ve kot bir köşeden diğerine düz bir çizgide değişir.
+literal-centre-x-39ad69e3af6db6be = Merkez X
+literal-centre-y-39ad6ae3af6db871 = Merkez Y
+literal-centre-z-39ad67e3af6db358 = Merkez Z
+literal-chord-ebed35dc77f41c35 = Kiriş
+literal-circle-14c54ca33d0f3ea9 = Daire
+literal-colour-by-layer-01a922874fe4bebb = Katmana göre renk
+literal-edit-6caa725f12d7e915 = Düzenle...
+literal-edit-object-03fd9f47ed01e398 = Nesneyi Düzenle
+literal-edit-object-142afa7681e533de = Nesneyi Düzenle...
+literal-edited-kind-017b9d5669af9d78 = %kind% düzenlendi
+literal-edited-kind-count-vertices-4e063a8127567887 = %kind% düzenlendi (%count% köşe)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Bir sayı girin
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Bu nesneye sabitlenmiş bir renk yerine sahip katmanın rengini kullan.
+literal-identity-94d63573d312fe9b = Özdeşlik
+literal-insert-after-3b715eafd7214722 = Sonrasına ekle
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Son köşeyi tekrar ilk köşeye bağlar.
+literal-length-length-m-7002054fb5f4218e = Uzunluk %length% m
+literal-move-down-b233557012dcb328 = Aşağı taşı
+literal-move-up-4ea0f21fc2a338a1 = Yukarı taşı
+literal-no-changes-to-apply-dfa74d34ff069444 = Uygulanacak değişiklik yok
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Düzenlenen nesne değişti; düzenleme atlandı
+literal-ok-091d3d07b5b3076f = Tamam
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Bir veya daha fazla özellik geçerli bir sayı değil
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Çevre %length% m, alan %area% m²
+literal-reverse-3ffcdc5db5e7d0c5 = Ters çevir
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Satır %row%: konum veya bombe geçerli bir sayı değil
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Düzenlemek için tek bir tasarım nesnesi seçin
+literal-sweep-84b7af08cf834f43 = Süpürme
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%" bir sayı değil
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Bu nesne artık belgede yok
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Bu nesne düzenleyici açıldıktan sonra değişti; mevcut sürümü düzenlemek için yeniden açın
+literal-this-object-has-a-single-position-134add52252a573e = Bu nesnenin tek bir konumu var.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Bu nesnenin yay segmenti yok.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Bu nesne en az %required% köşe gerektirir
+literal-unassigned-8a49b21a2c9c0022 = Atanmamış
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1580,3 +1646,135 @@ color-opacity = Saydamlık
 color-edit = Rengi düzenlemek için tıklayın
 color-saturation-value = Doygunluk ve parlaklık
 color-hue = Ton
+asset-loading = Varlık verisi yükleniyor
+asset-unloading = Varlık verisi kaldırılıyor
+asset-load-failed = Varlık verisi yüklenemedi
+asset-unload-failed = Varlık verisi kaldırılamadı
+preferences-title = Tercihler
+context-text-colour = Metin rengi
+context-polylines = Çoklu çizgiler
+context-points = Noktalar
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Dönüş merkezi serbest bırakıldı
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = İmlecin altında dönüş merkezinin sabitleneceği bir nokta yok
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Dönüş merkezi %x%, %y%, %z% noktasına sabitlendi
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Dönüş merkezi uçuş modunda kullanılamaz
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Dönüş Merkezini Serbest Bırak
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Dönüş merkezini sabitlemek için bir noktaya tıklayın
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Dönüş Merkezini Sabitle
+literal-centre-of-rotation-5c1f34327183860b = Dönüş Merkezi
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Her iki görünümün de etrafında döndüğü merkezi sabitler veya serbest bırakır
+literal-rl-grid-options-2329c7b8001bc333 = Kot Izgarası Seçenekleri
+literal-automatic-colour-23347fe2c6749180 = Otomatik renk
+literal-thickness-289be54832e4be75 = Kalınlık
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Otomatik kot aralığı
+literal-rl-spacing-88a1992aa9332272 = Kot aralığı
+literal-hide-xy-grid-85952898e2cff804 = XY Izgarasını Gizle
+literal-show-xy-grid-d22a739bae102bb1 = XY Izgarasını Göster
+literal-set-grid-63bc48801d739665 = Izgarayı Ayarla
+literal-xy-grid-options-04861f560f92a08c = XY Izgara Seçenekleri
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Kesit görünümünü sıfırla (sınırlara sığdır)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = XY ızgarası etkin = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Küresel %axis% eksenine göre desenin saat yönünün tersine döndürülmesi.
+literal-axis-offset-d064a568a65d9a1f = %axis% ofseti
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Patlatma şekline kırpılmış halde kalırken desen ızgarasını küresel %axis% ekseni boyunca kaydırır.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Dünya %axis% ekseni boyunca öteleme mesafesi.
+literal-axis-scale-ratio-851b3aab8b582f09 = %axis% ölçek oranı
+literal-axis-range-5455776ed8bd0a89 = %axis% aralığı
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Bir yüzey üzerine örtülü
+crs-unknown-ellipsoid = Bu koordinat sistemi tanımında tanınmayan yeryüzü modeli "{ $name }".
+crs-no-ellipsoid = Bu koordinat sistemi tanımı hangi yeryüzü modelini kullandığını belirtmiyor.
+crs-unknown-code = EPSG:{ $code } koordinat sistemi kayıt defterinde yok.
+crs-transform-failed = Bir koordinat dönüştürülemedi; sonuç sonlu bir konum değildi.
+crs-no-datum-path = { $from } ve { $to } referans çerçeveleri arasında (EPSG datumları { $source } ve { $target }) yayımlanmış bir dönüşüm yok. Yine de dönüştürmek bilinmeyen bir miktarda hatalı olurdu, bu yüzden hiçbir şey değiştirilmedi.
+crs-unknown-datum = { $from } veya { $to } referans çerçevesi tanımlanamıyor ve ikisi farklı yeryüzü modelleri kullanıyor. Aralarında dönüştürme bilinmeyen bir miktarda hatalı olurdu.
+ws-survey = Ölçüm
+survey-count-designs = { $count } { $count ->
+    [one] tasarım
+   *[other] tasarım
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] üçgenleme
+   *[other] üçgenleme
+  }
+survey-count-models = { $count } { $count ->
+    [one] blok model
+   *[other] blok model
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] nokta bulutu
+   *[other] nokta bulutu
+  }
+survey-count-holes = { $count } { $count ->
+    [one] sondaj veri kümesi
+   *[other] sondaj veri kümesi
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] raster
+   *[other] raster
+  }
+survey-unsupported = Rasterlar bu dönüşümle dönüştürülemez. Görüntü alanında seçilemedikleri için bir seçimdeki hiçbir şeyi etkilemez.
+survey-angle = Z etrafında döndürme (saat yönünün tersine)
+survey-scale = Tekdüze XYZ ölçek faktörü
+survey-invalid-transform = Başlangıç noktaları, açı ve sonuçtaki koordinatlar sonlu olmalıdır.
+survey-invalid-scale = Ölçek, sonlu tersi olan sonlu bir pozitif sayı olmalıdır.
+survey-empty-selection = Dönüştürmek için en az bir desteklenen öge seçin.
+survey-unavailable = Seçilen bir öge eksik veya yüklenmemiş. Dönüştürmeden önce yükleyin.
+survey-wrong-project = Yalnızca etkin projeden tasarım seçin.
+survey-name-required = Bir koordinat sistemi adı girin.
+survey-working = Seçilen veriler dönüştürülüyor…
+survey-completed = { $items } yerinde dönüştürüldü. Geri alma bunları eski haline getirir.
+survey-failed = Dönüşüm başarısız oldu: { $error }
+survey-stale = Etkin proje veya kaynak veriler değiştiği için dönüşüm iptal edildi. Kaynak verileri seçip yeniden deneyin.
+survey-coordinates-menu = Koordinatlar
+survey-definitions-action = Tanımlar…
+survey-transform-action = Dönüştür…
+survey-definitions-title = Koordinat Tanımları
+survey-transform-title = Koordinatları Dönüştür
+survey-new-system = Yeni Koordinat Sistemi
+survey-new-system-name = Koordinat sistemi
+survey-set-local = Maden Koordinat Sistemi Olarak Ayarla
+survey-delete-system = Koordinat Sistemini Sil
+survey-systems-empty = Koordinat sistemi yok
+survey-system-section = Maden ızgarası tanımı
+survey-reference-note = Her tanımın referans aldığı çerçeve: verilerinizin içe aktarıldığında zaten taşıdığı koordinatlar. Kendine ait parametreleri yoktur. Bir sistemi maden koordinat sistemi yapmak için üzerine sağ tıklayın, ya da yeni bir tane tanımlamak için aşağıdaki boş alana sağ tıklayın.
+survey-system-name = Ad
+survey-reference-system = Referans sistemi
+survey-reference-origin = Bilinen nokta — referans koordinatları
+survey-system-origin = Aynı nokta — sistem koordinatları
+survey-angle-help = Yukarıdan bakıldığında referans X'ten referans Y'ye doğru saat yönünün tersine.
+survey-scale-help = Referans çerçeveden bu sisteme tekdüze XYZ ölçeği. Boyutları korumak için 1 kullanın.
+survey-close = Kapat
+survey-from = Kimden
+survey-to = Kime
+survey-transform-button = Dönüştür
+survey-swap = Değiştir
+survey-drape-note = Örtülü görüntüler dönüştürülen yüzeylerden kaldırılır ve yeniden örtülmelidir.
+survey-needs-grid-block-model = Blok model, düzenli bir hücre ızgarasıdır ve projeksiyon veya referans çerçevesi değişikliği bu düzenliliği korumaz. Dönüştürmek, her hücreyi yeni bir ızgaraya yeniden örneklemek ve taşıdığı değerleri kaybetmek anlamına gelir, bu yüzden değiştirilmeden bırakıldı.
+survey-needs-grid-raster = Bir raster, dünyaya afin bir eşleme ile yerleştirilir ve bunu projeksiyon veya referans çerçevesi değişikliği koruyamaz. Dönüştürmek, görüntüyü yeniden örneklemek anlamına gelir, bu yüzden değiştirilmeden bırakıldı.
+survey-conversion-exact = Kesin: yalnızca ızgara değişikliği, yeniden projeksiyon yok.
+survey-conversion-accuracy = Belirtilen doğruluk { $accuracy } m.
+survey-kind = Tür
+survey-axis-names = Eksen adları
+survey-axis-help = X, Y ve Z değilse bu sistemin eksenlerine ne dediği — maden ızgarası için "D", "K", "RL". Koordinatların gösterildiği her yerde kullanılır, ancak yalnızca bu maden koordinat sistemi olduğu sürece. Üçünü de adlandırın ya da hiçbirini adlandırmayın.
+survey-kind-registry-short = Kayıt defteri sistemi
+survey-kind-grid-short = Başka bir sistem üzerindeki ızgara
+survey-registry-search = Ara
+survey-registry-hint = Ad veya EPSG kodu, örn. "mga zone 56"
+survey-registry-none = Kayıt defterinde tüm kelimelerle eşleşen bir şey yok.
+survey-parent = Şuna göre tanımlı
+survey-parent-origin = Bilinen nokta — üst sistem koordinatları
+survey-pick-registry = Sistemi arayın ve sonuçlardan seçin.
+survey-pick-parent = Bu ızgaranın tanımlandığı sistemi seçin.
+survey-pick-system = Bir sistem seçin
+survey-pick-systems = Dönüştürülecek kaynak ve hedef sistemi seçin.
+survey-no-selection = Solda bir koordinat sistemi seçin, ya da eklemek için sağ tıklayın.
+survey-kind-grid = { $parent } üzerinde ızgara
+survey-system-in-use = "{ $name }" silinemez: buna göre { $dependants } { $dependants ->
+    [one] sistem
+   *[other] sistem
+  } tanımlı. Önce bunları başka bir yere yönlendirin.
+survey-system-cycle = "{ $name }", doğrudan ya da üst sistemleri aracılığıyla kendisine göre tanımlanmış.
+survey-system-missing = Bu koordinat sistemi artık yok. Başka bir tanım seçin.
+survey-same-system = Farklı kaynak ve hedef sistemler seçin.
+survey-name-exists = Bu adla bir koordinat sistemi zaten var. Düzenlemek için onu seçin ya da başka bir ad seçin.

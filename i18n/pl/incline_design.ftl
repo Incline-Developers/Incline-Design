@@ -44,6 +44,7 @@ menu-view = Widok
 ws-production = Produkcja
 ws-drill-and-blast = Wiercenie i strzelanie
 ws-geology = Geologia
+ws-planning = Planowanie
 
 ## Paski menu
 
@@ -73,6 +74,9 @@ dialog-rename-submit = Zmień nazwę
 dialog-delete-title = Usuń: { $kind }
 dialog-delete-confirm =
     Usunąć „{ $name }” z projektu?
+    Tej operacji nie można cofnąć.
+confirm-delete-product =
+    Usunąć produkt „{ $name }” z palety?
     Tej operacji nie można cofnąć.
 
 
@@ -168,6 +172,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Wyświetla w synchronizacji z ekranem: bez rozrywania obrazu, a częstotliwość odświeżania ustala ekran. Po wyłączeniu klatki są wyświetlane zaraz po narysowaniu i stosowany jest limit poniżej.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (pusty nagłówek)
 literal-absolute-rl-455fe0d96abfbb7a = Bezwzględna RL
@@ -335,6 +340,12 @@ literal-exit-application-206c61fdca9522f7 = Zakończ działanie aplikacji
 literal-exit-incline-design-b11cdc542f0e84ef = Zamknij Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Zakończ bez zapisywania
 literal-exit-slice-ec67c9da3a320e5f = Wyjdź z przekroju
+literal-set-section-grid-0317412c52213ca8 = Ustaw siatkę przekroju
+literal-hide-rl-grid-5777afd90dcfdfef = Ukryj siatkę rzędnych
+literal-show-rl-grid-87a5e28c30f9ca36 = Pokaż siatkę rzędnych
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Siatka przekroju włączona = %enabled%
 literal-export-293aa6a6446fb153 = Eksportuj
 literal-export-block-model-csv-3755a5af2dbb71af = Eksportuj model blokowy do CSV
 literal-export-csv-block-model-5c2ba2182ac51797 = Eksportuj model blokowy CSV
@@ -408,6 +419,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Wczytaj
 literal-load-block-model-9e1eebcd6fc9e399 = Wczytaj model blokowy
 literal-load-drillholes-0e0c59498b0a629f = Wczytaj otwory wiertnicze
+literal-load-layer-c8261cf60e655064 = Wczytaj warstwę
 literal-load-point-cloud-348b63ef7b0faa4a = Wczytaj chmurę punktów
 literal-load-project-645e82ec5117c718 = Wczytaj projekt
 literal-load-raster-5393aaf7183657c2 = Wczytaj raster
@@ -453,8 +465,11 @@ literal-near-clip-limit-25931ba2c7873778 = Granica bliskiego przycięcia
 literal-new-product-6c2124d5d6badd3a = Nowy produkt
 literal-new-project-cd084c5e5d3ea300 = Nowy projekt
 literal-new-layer-name-e4ea5292efa5d03f = Nazwa nowej warstwy
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Brak środka opóźniającego do połączenia
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = kliknij prawym przyciskiem nagłówek palety opóźnień, aby dodać
 literal-no-matches-28d7266643f5992f = Brak dopasowań
 literal-no-object-selected-d42da7912e4d01b6 = Nie wybrano obiektu
+literal-no-products-483f3f49aae9b3c2 = Brak produktów
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Brak dostępnego zasięgu przestrzennego
 literal-none-669b18c6d2d9c95b = Brak
 literal-north-arrow-0a1293ff4a52606d = Strzałka północy
@@ -484,6 +499,7 @@ literal-point-cloud-ef650548cfd32358 = Chmura punktów
 literal-point-clouds-9bcb25b923c4c211 = Chmury punktów
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Naciśnij Enter, aby użyć wpisanego promienia
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = lub kliknij, aby użyć promienia wskaźnika
+literal-product-de1f02481331134c = Produkt
 literal-project-282049f502eac1de = Projekt
 literal-project-name-446c46bc623ccce1 = Nazwa projektu
 literal-quit-app-fa0a388754b23d8b = Zamknij %app%
@@ -635,6 +651,9 @@ literal-undrape-raster-19a3cb862f76d539 = Zdejmij raster
 literal-undrape-rasters-08281f02a6ec6cbe = Zdejmij rastry
 literal-unload-5d3714bc882df1b2 = Wyładuj
 literal-unload-block-model-c14323e196f7603e = Wyładuj model blokowy
+literal-unload-drillholes-b63232aa559b051e = Wyładuj otwory wiertnicze
+literal-unload-layer-e19afae5689edebb = Wyładuj warstwę
+literal-unload-point-cloud-2d0ee38fa0391df9 = Wyładuj chmurę punktów
 literal-unload-raster-19854bae2aea221f = Wyładuj raster
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Wyładuj triangulację
 literal-unlock-5d303fbc88281c15 = Odblokuj
@@ -645,6 +664,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Użyj pełnego z
 literal-vertex-count-48fab462ae06a454 = Liczba wierzchołków
 literal-vertical-exaggeration-3572327bb13435e7 = Przewyższenie pionowe
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Pionowy wznios lub spadek każdego piętra przed utworzeniem kolejnej bermy.
+literal-vertical-sync-85fd0e942adbf2be = Synchronizacja pionowa
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Wizualizuje przestrzenny podział Mortona używany do odrzucania obiektów poza bryłą widzenia.
 literal-website-82665b2ffabc9c0a = Strona internetowa
 literal-weld-retry-b6c826b7541e89f1 = Zespól i spróbuj ponownie
@@ -805,6 +825,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Zdjęto r
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Ten element nie należy już do aktywnego projektu
 literal-renamed-before-to-name-88160afa8287cd38 = Zmieniono nazwę „%before%” na „%name%”
 literal-exited-slice-view-0d1f935a85f65cd3 = Zakończono widok przekroju
+literal-reset-the-section-view-a90255a33a618651 = Zresetuj widok przekroju
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Zaktualizowano tekst obiektu %object_id%
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Zakończono edycję tekstu obiektu %object_id%
 literal-contour-generation-failed-error-60e87eda1ee29afa = Generowanie poziomic nie powiodło się: %error%
@@ -1129,6 +1150,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Wyłącz tryb lotu
 literal-enable-flying-mode-5be056d1b9bdd218 = Włącz tryb lotu
 literal-exit-slice-view-8f48e630d38a6390 = Wyjdź z widoku przekroju
 literal-vertical-slice-view-a721497b5e8007fa = Pionowy widok przekroju
+literal-reset-section-view-569ba01ea5ad8448 = Resetuj widok przekroju
+literal-camera-square-to-the-section-095beff203b315a6 = Kamera prostopadle do przekroju
 literal-hide-wireframes-a0bb1a91dde72948 = Ukryj siatki krawędziowe
 literal-show-wireframes-7e8dc68f7023441b = Pokaż siatki krawędziowe
 literal-hide-points-6ec095fdf7ed73f4 = Ukryj punkty
@@ -1140,6 +1163,9 @@ literal-value-dip-1a0edf99f1cb897b = upad %value%°
 literal-strike-strike-dip-3cbc18ac238a6a85 = kierunek %strike%° · upad %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (poziomo, brak kierunku)
 literal-slice-view-531d1a0f0f256066 = Widok przekroju
+slice-viewport-gestures = przeciąganie środkowym przyciskiem: przesuwanie · przeciąganie prawym przyciskiem: orbita · Shift+kółko: chodzenie · W/S: przesuń warstwę · Q/E: obrót · Esc: wyjście
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - niedostępne w widoku przekroju
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = To narzędzie jest niedostępne w widoku przekroju
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = przeciągnij środkowym, aby przesunąć · W/S przesuwa warstwę · Q/E obraca · Esc wychodzi
 literal-north-ca6a42d80c5dd964 = Północ
 literal-south-25b5d0c70a3936da = Południe
@@ -1575,6 +1601,46 @@ literal-update-8b0432eecbd8b034 = Aktualizuj
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Głębokość pionowa pod każdym wylotem.
 literal-x-offset-cf30a60198d81e4a = Przesunięcie X
 literal-y-offset-ffb673aa94de0fa7 = Przesunięcie Y
+literal-appearance-f0e261e04eda82ff = Wygląd
+literal-arc-circle-69e83efed2ce9d47 = Łuk i okrąg
+literal-arc-segments-f2c50c445ff0606b = Segmenty łuku
+literal-bulge-5911694918e2fe44 = Strzałka wybrzuszenia
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Zgodnie z modelem danych łuki z wybrzuszeniem są poziome: łuk skręca w rzucie, a rzędna zmienia się liniowo od jednego wierzchołka do następnego.
+literal-centre-x-39ad69e3af6db6be = Środek X
+literal-centre-y-39ad6ae3af6db871 = Środek Y
+literal-centre-z-39ad67e3af6db358 = Środek Z
+literal-chord-ebed35dc77f41c35 = Cięciwa
+literal-circle-14c54ca33d0f3ea9 = Okrąg
+literal-colour-by-layer-01a922874fe4bebb = Kolor według warstwy
+literal-edit-6caa725f12d7e915 = Edytuj...
+literal-edit-object-03fd9f47ed01e398 = Edytuj obiekt
+literal-edit-object-142afa7681e533de = Edytuj obiekt...
+literal-edited-kind-017b9d5669af9d78 = Edytowano %kind%
+literal-edited-kind-count-vertices-4e063a8127567887 = Edytowano %kind% (wierzchołków: %count%)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Wprowadź liczbę
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Użyj koloru warstwy właściciela zamiast koloru przypisanego do tego obiektu.
+literal-identity-94d63573d312fe9b = Tożsamość
+literal-insert-after-3b715eafd7214722 = Wstaw po
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Łączy ostatni wierzchołek ponownie z pierwszym.
+literal-length-length-m-7002054fb5f4218e = Długość %length% m
+literal-move-down-b233557012dcb328 = Przesuń w dół
+literal-move-up-4ea0f21fc2a338a1 = Przesuń w górę
+literal-no-changes-to-apply-dfa74d34ff069444 = Brak zmian do zastosowania
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Edytowany obiekt uległ zmianie; edycja odrzucona
+literal-ok-091d3d07b5b3076f = OK
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Co najmniej jedna właściwość nie jest prawidłową liczbą
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Obwód %length% m, pole %area% m²
+literal-reverse-3ffcdc5db5e7d0c5 = Odwróć
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Wiersz %row%: pozycja lub strzałka wybrzuszenia nie jest prawidłową liczbą
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Wybierz jeden obiekt projektu do edycji
+literal-sweep-84b7af08cf834f43 = Kąt zamiatania
+literal-text-is-not-a-number-edf6a2881b62a6bb = „%text%” nie jest liczbą
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Ten obiekt już nie istnieje w dokumencie
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Ten obiekt zmienił się od otwarcia edytora; otwórz go ponownie, aby edytować bieżącą wersję
+literal-this-object-has-a-single-position-134add52252a573e = Ten obiekt ma jedną pozycję.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Ten obiekt nie ma segmentów łuku.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Ten obiekt wymaga co najmniej %required% wierzchołków
+literal-unassigned-8a49b21a2c9c0022 = Nieprzypisane
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1584,3 +1650,149 @@ color-opacity = Nieprzezroczystość
 color-edit = Kliknij, aby edytować kolor
 color-saturation-value = Nasycenie i jasność
 color-hue = Odcień
+asset-loading = Wczytywanie danych zasobu
+asset-unloading = Wyładowywanie danych zasobu
+asset-load-failed = Nie udało się wczytać danych zasobu
+asset-unload-failed = Nie udało się wyładować danych zasobu
+preferences-title = Preferencje
+context-text-colour = Kolor tekstu
+context-polylines = Polilinie
+context-points = Punkty
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Zwolniono środek obrotu
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Pod kursorem nie ma punktu, na którym można ustawić środek obrotu
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Ustawiono środek obrotu w punkcie %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Środek obrotu jest niedostępny w trybie lotu
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Zwolnij środek obrotu
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Kliknij punkt, aby ustawić na nim środek obrotu
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Ustaw środek obrotu
+literal-centre-of-rotation-5c1f34327183860b = Środek obrotu
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Ustawia lub zwalnia środek, wokół którego obracają się oba widoki
+literal-rl-grid-options-2329c7b8001bc333 = Opcje siatki rzędnych
+literal-automatic-colour-23347fe2c6749180 = Kolor automatyczny
+literal-thickness-289be54832e4be75 = Grubość
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Automatyczny odstęp rzędnych
+literal-rl-spacing-88a1992aa9332272 = Odstęp rzędnych
+literal-hide-xy-grid-85952898e2cff804 = Ukryj siatkę XY
+literal-show-xy-grid-d22a739bae102bb1 = Pokaż siatkę XY
+literal-set-grid-63bc48801d739665 = Ustaw siatkę
+literal-xy-grid-options-04861f560f92a08c = Opcje siatki XY
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Zresetuj widok przekroju (dopasuj do zasięgu)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Siatka XY włączona = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Obrót wzoru w kierunku przeciwnym do ruchu wskazówek zegara od globalnej osi %axis%.
+literal-axis-offset-d064a568a65d9a1f = Przesunięcie %axis%
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Przesuwa siatkę wzoru wzdłuż globalnej osi %axis%, zachowując jej przycięcie do kształtu strzału.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Odległość przesunięcia wzdłuż globalnej osi %axis%.
+literal-axis-scale-ratio-851b3aab8b582f09 = Współczynnik skali %axis%
+literal-axis-range-5455776ed8bd0a89 = Zakres %axis%
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Nałożone na powierzchnię
+crs-unknown-ellipsoid = Nierozpoznany model Ziemi „{ $name }” w tej definicji układu współrzędnych.
+crs-no-ellipsoid = Ta definicja układu współrzędnych nie określa używanego modelu Ziemi.
+crs-unknown-code = EPSG:{ $code } nie znajduje się w rejestrze układów współrzędnych.
+crs-transform-failed = Nie udało się przekonwertować współrzędnej; wynik nie był pozycją skończoną.
+crs-no-datum-path = Brak opublikowanej transformacji między układami odniesienia { $from } i { $to } (datum EPSG { $source } i { $target }). Konwersja mimo to byłaby błędna o nieznaną wartość, więc nic nie zostało zmienione.
+crs-unknown-datum = Nie można zidentyfikować układu odniesienia { $from } lub { $to }, a oba używają różnych modeli Ziemi. Konwersja między nimi byłaby błędna o nieznaną wartość.
+ws-survey = Geodezja
+survey-count-designs = { $count } { $count ->
+    [one] projekt
+    [few] projekty
+    [many] projektów
+   *[other] projektów
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] triangulacja
+    [few] triangulacje
+    [many] triangulacji
+   *[other] triangulacji
+  }
+survey-count-models = { $count } { $count ->
+    [one] model blokowy
+    [few] modele blokowe
+    [many] modeli blokowych
+   *[other] modeli blokowych
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] chmura punktów
+    [few] chmury punktów
+    [many] chmur punktów
+   *[other] chmur punktów
+  }
+survey-count-holes = { $count } { $count ->
+    [one] zbiór otworów wiertniczych
+    [few] zbiory otworów wiertniczych
+    [many] zbiorów otworów wiertniczych
+   *[other] zbiorów otworów wiertniczych
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] raster
+    [few] rastry
+    [many] rastrów
+   *[other] rastrów
+  }
+survey-unsupported = Rastry nie mogą być konwertowane przez tę transformację. Nie da się ich wybrać w widoku, więc nic z zaznaczenia nie jest dotknięte.
+survey-angle = Obrót wokół Z (przeciwnie do ruchu wskazówek zegara)
+survey-scale = Jednolity współczynnik skali XYZ
+survey-invalid-transform = Początki, kąt i wynikowe współrzędne muszą być skończone.
+survey-invalid-scale = Skala musi być skończoną liczbą dodatnią o skończonej odwrotności.
+survey-empty-selection = Wybierz co najmniej jeden obsługiwany element do przekształcenia.
+survey-unavailable = Wybrany element brakuje lub nie jest wczytany. Wczytaj go przed przekształceniem.
+survey-wrong-project = Wybieraj projekty tylko z aktywnego projektu.
+survey-name-required = Wprowadź nazwę układu współrzędnych.
+survey-working = Przekształcanie wybranych danych…
+survey-completed = Przekonwertowano na miejscu: { $items }. Cofnięcie je przywróci.
+survey-failed = Przekształcenie nie powiodło się: { $error }
+survey-stale = Przekształcenie odrzucone, ponieważ aktywny projekt lub dane źródłowe uległy zmianie. Wybierz dane źródłowe i spróbuj ponownie.
+survey-coordinates-menu = Współrzędne
+survey-definitions-action = Definicje…
+survey-transform-action = Przekształć…
+survey-definitions-title = Definicje współrzędnych
+survey-transform-title = Przekształć współrzędne
+survey-new-system = Nowy układ współrzędnych
+survey-new-system-name = Układ współrzędnych
+survey-set-local = Ustaw jako układ współrzędnych kopalni
+survey-delete-system = Usuń układ współrzędnych
+survey-systems-empty = Brak układów współrzędnych
+survey-system-section = Definicja siatki kopalni
+survey-reference-note = Układ odniesienia, względem którego zapisana jest każda definicja: współrzędne, które twoje dane niosą już przy imporcie. Nie ma własnych parametrów. Kliknij prawym przyciskiem na układzie, aby uczynić go układem współrzędnych kopalni, lub na pustym miejscu poniżej, aby zdefiniować nowy.
+survey-system-name = Nazwa
+survey-reference-system = Układ odniesienia
+survey-reference-origin = Znany punkt — współrzędne odniesienia
+survey-system-origin = Ten sam punkt — współrzędne układu
+survey-angle-help = Przeciwnie do ruchu wskazówek zegara od osi X odniesienia do osi Y odniesienia, patrząc z góry.
+survey-scale-help = Jednolita skala XYZ z układu odniesienia do tego układu. Użyj 1, aby zachować wymiary.
+survey-close = Zamknij
+survey-from = Z
+survey-to = Do
+survey-transform-button = Przekształć
+survey-swap = Zamień
+survey-drape-note = Nałożone obrazy są usuwane z przekonwertowanych powierzchni i muszą zostać nałożone ponownie.
+survey-needs-grid-block-model = Model blokowy to regularna siatka komórek, a zmiana odwzorowania lub układu odniesienia nie zachowuje tej regularności. Konwersja oznaczałaby ponowne próbkowanie każdej komórki do nowej siatki i utratę zawartych w niej wartości, więc pozostawiono go bez zmian.
+survey-needs-grid-raster = Raster jest umieszczany w świecie za pomocą mapowania afinicznego, czego zmiana odwzorowania lub układu odniesienia nie może zachować. Konwersja oznaczałaby ponowne próbkowanie obrazu, więc pozostawiono go bez zmian.
+survey-conversion-exact = Dokładna: tylko zmiana siatki, bez reprojekcji.
+survey-conversion-accuracy = Podana dokładność { $accuracy } m.
+survey-kind = Rodzaj
+survey-axis-names = Nazwy osi
+survey-axis-help = Jak ten układ nazywa swoje osie, jeśli nie X, Y i Z — „E”, „N”, „RL” dla siatki kopalni. Używane wszędzie tam, gdzie pokazywane są współrzędne, ale tylko dopóki jest to układ współrzędnych kopalni. Nazwij wszystkie trzy albo żadnej.
+survey-kind-registry-short = Układ z rejestru
+survey-kind-grid-short = Siatka nad innym układem
+survey-registry-search = Szukaj
+survey-registry-hint = Nazwa lub kod EPSG, np. „mga zone 56”
+survey-registry-none = Nic w rejestrze nie pasuje do wszystkich słów.
+survey-parent = Zdefiniowany względem
+survey-parent-origin = Znany punkt — współrzędne układu nadrzędnego
+survey-pick-registry = Wyszukaj układ i wybierz go z wyników.
+survey-pick-parent = Wybierz układ, względem którego zdefiniowana jest ta siatka.
+survey-pick-system = Wybierz układ
+survey-pick-systems = Wybierz układ źródłowy i docelowy konwersji.
+survey-no-selection = Wybierz układ współrzędnych po lewej lub kliknij prawym przyciskiem, aby dodać nowy.
+survey-kind-grid = Siatka nad { $parent }
+survey-system-in-use = „{ $name }” nie można usunąć: względem niego zdefiniowano { $dependants } { $dependants ->
+    [one] układ
+    [few] układy
+    [many] układów
+   *[other] układów
+  }. Najpierw przekieruj je na inny układ.
+survey-system-cycle = „{ $name }” jest zdefiniowany względem samego siebie, bezpośrednio lub poprzez swoje układy nadrzędne.
+survey-system-missing = Ten układ współrzędnych już nie istnieje. Wybierz inną definicję.
+survey-same-system = Wybierz różne układy źródłowy i docelowy.
+survey-name-exists = Układ współrzędnych o tej nazwie już istnieje. Wybierz go, aby edytować, lub wybierz inną nazwę.

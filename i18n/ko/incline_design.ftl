@@ -45,6 +45,7 @@ menu-view = 보기
 ws-production = 생산
 ws-drill-and-blast = 천공 및 발파
 ws-geology = 지질
+ws-planning = 계획
 
 ## Menubars
 
@@ -75,6 +76,9 @@ dialog-rename-submit = 이름 바꾸기
 dialog-delete-title = { $kind } 삭제
 dialog-delete-confirm =
     프로젝트에서 '{ $name }'을(를) 삭제하시겠습니까?
+    이 작업은 되돌릴 수 없습니다.
+confirm-delete-product =
+    팔레트에서 제품 '{ $name }'을(를) 삭제하시겠습니까?
     이 작업은 되돌릴 수 없습니다.
 
 
@@ -158,6 +162,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = 디스플레이 주사와 동기화되어 표시됩니다. 화면 찢김이 없으며 디스플레이가 프레임 속도를 결정합니다. 끄면 프레임이 그려지는 즉시 표시되며 아래의 상한이 적용됩니다.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (빈 헤더)
 literal-absolute-rl-455fe0d96abfbb7a = 절대 표고(RL)
@@ -325,6 +330,12 @@ literal-exit-application-206c61fdca9522f7 = 애플리케이션 종료
 literal-exit-incline-design-b11cdc542f0e84ef = Incline Design 종료
 literal-exit-without-saving-1c85d135e24c5e81 = 저장하지 않고 종료
 literal-exit-slice-ec67c9da3a320e5f = 슬라이스 종료
+literal-set-section-grid-0317412c52213ca8 = 슬라이스 그리드 설정
+literal-hide-rl-grid-5777afd90dcfdfef = RL 그리드 숨기기
+literal-show-rl-grid-87a5e28c30f9ca36 = RL 그리드 표시
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = 슬라이스 그리드 설정 = %enabled%
 literal-export-293aa6a6446fb153 = 내보내기
 literal-export-block-model-csv-3755a5af2dbb71af = 블록 모델 CSV 내보내기
 literal-export-csv-block-model-5c2ba2182ac51797 = CSV 블록 모델 내보내기
@@ -398,6 +409,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = 불러오기
 literal-load-block-model-9e1eebcd6fc9e399 = 블록 모델 불러오기
 literal-load-drillholes-0e0c59498b0a629f = 시추공 불러오기
+literal-load-layer-c8261cf60e655064 = 레이어 불러오기
 literal-load-point-cloud-348b63ef7b0faa4a = 포인트 클라우드 불러오기
 literal-load-project-645e82ec5117c718 = 프로젝트 불러오기
 literal-load-raster-5393aaf7183657c2 = 래스터 불러오기
@@ -443,8 +455,11 @@ literal-near-clip-limit-25931ba2c7873778 = 근접 클립 한계
 literal-new-product-6c2124d5d6badd3a = 새 제품
 literal-new-project-cd084c5e5d3ea300 = 새 프로젝트
 literal-new-layer-name-e4ea5292efa5d03f = 새 레이어 이름
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = 연결할 지연 제품이 없습니다
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = 지연 팔레트 제목을 우클릭하여 추가하세요
 literal-no-matches-28d7266643f5992f = 일치하는 항목 없음
 literal-no-object-selected-d42da7912e4d01b6 = 선택된 객체 없음
+literal-no-products-483f3f49aae9b3c2 = 제품 없음
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = 사용 가능한 공간 범위 없음
 literal-none-669b18c6d2d9c95b = 없음
 literal-north-arrow-0a1293ff4a52606d = 방위 표시(북쪽 화살표)
@@ -474,6 +489,7 @@ literal-point-cloud-ef650548cfd32358 = 포인트 클라우드
 literal-point-clouds-9bcb25b923c4c211 = 포인트 클라우드
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Enter 키를 눌러 입력한 반지름을 사용하거나
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = 클릭하여 포인터 반지름을 사용하세요
+literal-product-de1f02481331134c = 제품
 literal-project-282049f502eac1de = 프로젝트
 literal-project-name-446c46bc623ccce1 = 프로젝트 이름
 literal-quit-app-fa0a388754b23d8b = %app% 종료
@@ -625,6 +641,9 @@ literal-undrape-raster-19a3cb862f76d539 = 래스터 투영 해제
 literal-undrape-rasters-08281f02a6ec6cbe = 래스터 투영 해제
 literal-unload-5d3714bc882df1b2 = 언로드
 literal-unload-block-model-c14323e196f7603e = 블록 모델 언로드
+literal-unload-drillholes-b63232aa559b051e = 시추공 언로드
+literal-unload-layer-e19afae5689edebb = 레이어 언로드
+literal-unload-point-cloud-2d0ee38fa0391df9 = 포인트 클라우드 언로드
 literal-unload-raster-19854bae2aea221f = 래스터 언로드
 literal-unload-triangulation-a6ecfc8d6ca4e72d = 삼각망 언로드
 literal-unlock-5d303fbc88281c15 = 잠금 해제
@@ -635,6 +654,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = 전체 표면 �
 literal-vertex-count-48fab462ae06a454 = 정점 수
 literal-vertical-exaggeration-3572327bb13435e7 = 수직 과장
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = 다음 소단이 생성되기 전 각 벤치의 수직 상승 또는 하강 높이입니다.
+literal-vertical-sync-85fd0e942adbf2be = 수직 동기화
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = 절두체 컬링에 사용되는 Morton 공간 분할을 시각화합니다.
 literal-website-82665b2ffabc9c0a = 웹사이트
 literal-weld-retry-b6c826b7541e89f1 = 결합 후 재시도
@@ -795,6 +815,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = 삼각망
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = 해당 항목은 더 이상 활성 프로젝트에 속하지 않습니다
 literal-renamed-before-to-name-88160afa8287cd38 = '%before%'을(를) '%name%'(으)로 이름을 변경했습니다
 literal-exited-slice-view-0d1f935a85f65cd3 = 슬라이스 뷰를 종료했습니다
+literal-reset-the-section-view-a90255a33a618651 = 슬라이스 뷰를 재설정합니다
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = 객체 %object_id%의 텍스트를 업데이트했습니다
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = 객체 %object_id%의 텍스트 편집을 완료했습니다
 literal-contour-generation-failed-error-60e87eda1ee29afa = 등고선 생성 실패: %error%
@@ -1119,6 +1140,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = 비행 모드 비활성화
 literal-enable-flying-mode-5be056d1b9bdd218 = 비행 모드 활성화
 literal-exit-slice-view-8f48e630d38a6390 = 슬라이스 뷰 종료
 literal-vertical-slice-view-a721497b5e8007fa = 수직 슬라이스 뷰
+literal-reset-section-view-569ba01ea5ad8448 = 슬라이스 뷰 재설정
+literal-camera-square-to-the-section-095beff203b315a6 = 카메라를 슬라이스에 수직으로 정렬
 literal-hide-wireframes-a0bb1a91dde72948 = 와이어프레임 숨기기
 literal-show-wireframes-7e8dc68f7023441b = 와이어프레임 표시
 literal-hide-points-6ec095fdf7ed73f4 = 점 숨기기
@@ -1130,6 +1153,9 @@ literal-value-dip-1a0edf99f1cb897b = 경사각 %value%°
 literal-strike-strike-dip-3cbc18ac238a6a85 = 주향 %strike%° · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip%(수평, 주향 없음)
 literal-slice-view-531d1a0f0f256066 = 슬라이스 뷰
+slice-viewport-gestures = 가운데 버튼 드래그로 이동 · 오른쪽 버튼 드래그로 궤도 회전 · Shift+휠로 걷기 · W/S로 슬래브 이동 · Q/E로 회전 · Esc로 종료
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - 슬라이스 뷰에서 사용할 수 없음
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = 이 도구는 슬라이스 뷰에서 사용할 수 없습니다
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = 가운데 버튼 드래그로 이동 · W/S로 슬래브 이동 · Q/E로 회전 · Esc로 종료
 literal-north-ca6a42d80c5dd964 = 북
 literal-south-25b5d0c70a3936da = 남
@@ -1565,6 +1591,46 @@ literal-update-8b0432eecbd8b034 = 업데이트
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = 각 공구 아래의 수직 깊이입니다.
 literal-x-offset-cf30a60198d81e4a = X 오프셋
 literal-y-offset-ffb673aa94de0fa7 = Y 오프셋
+literal-appearance-f0e261e04eda82ff = 외관
+literal-arc-circle-69e83efed2ce9d47 = 호 및 원
+literal-arc-segments-f2c50c445ff0606b = 호 세그먼트
+literal-bulge-5911694918e2fe44 = 벌지
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = 벌지 호는 데이터 모델상 수평입니다. 호는 평면상에서 돌지만, 표고는 한 정점에서 다음 정점까지 직선으로 이어집니다.
+literal-centre-x-39ad69e3af6db6be = 중심 X
+literal-centre-y-39ad6ae3af6db871 = 중심 Y
+literal-centre-z-39ad67e3af6db358 = 중심 Z
+literal-chord-ebed35dc77f41c35 = 현
+literal-circle-14c54ca33d0f3ea9 = 원
+literal-colour-by-layer-01a922874fe4bebb = 레이어별 색상
+literal-edit-6caa725f12d7e915 = 편집...
+literal-edit-object-03fd9f47ed01e398 = 객체 편집
+literal-edit-object-142afa7681e533de = 객체 편집...
+literal-edited-kind-017b9d5669af9d78 = 편집된 %kind%
+literal-edited-kind-count-vertices-4e063a8127567887 = 편집된 %kind%(정점 %count%개)
+literal-enter-a-number-d9eabfa7b5e91cb3 = 숫자를 입력하세요
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = 이 객체에 고정된 색상 대신 소속 레이어의 색상을 따릅니다.
+literal-identity-94d63573d312fe9b = 식별 정보
+literal-insert-after-3b715eafd7214722 = 뒤에 삽입
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = 마지막 정점을 첫 번째 정점에 다시 연결합니다.
+literal-length-length-m-7002054fb5f4218e = 길이 %length%m
+literal-move-down-b233557012dcb328 = 아래로 이동
+literal-move-up-4ea0f21fc2a338a1 = 위로 이동
+literal-no-changes-to-apply-dfa74d34ff069444 = 적용할 변경 사항이 없습니다
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = 편집 대상 객체가 변경되어 편집 내용을 버립니다
+literal-ok-091d3d07b5b3076f = 확인
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = 속성 중 하나 이상이 올바른 숫자가 아닙니다
+literal-perimeter-length-m-area-area-m-27144223224437a6 = 둘레 %length%m, 면적 %area%m²
+literal-reverse-3ffcdc5db5e7d0c5 = 반전
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = 행 %row%: 위치 또는 벌지가 올바른 숫자가 아닙니다
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = 편집할 설계 객체를 하나만 선택하세요
+literal-sweep-84b7af08cf834f43 = 스윕
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%"은(는) 숫자가 아닙니다
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = 해당 객체가 문서에 더 이상 존재하지 않습니다
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = 편집기를 연 이후 이 객체가 변경되었습니다. 최신 버전을 편집하려면 다시 여세요
+literal-this-object-has-a-single-position-134add52252a573e = 이 객체는 위치가 하나뿐입니다.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = 이 객체에는 호 세그먼트가 없습니다.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = 이 객체는 최소 %required%개의 정점이 필요합니다
+literal-unassigned-8a49b21a2c9c0022 = 미지정
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1574,3 +1640,135 @@ color-opacity = 불투명도
 color-edit = 클릭하여 색상 편집
 color-saturation-value = 채도 및 명도
 color-hue = 색조
+asset-loading = 애셋 데이터 불러오는 중
+asset-unloading = 애셋 데이터 언로드하는 중
+asset-load-failed = 애셋 데이터를 불러올 수 없습니다
+asset-unload-failed = 애셋 데이터를 언로드할 수 없습니다
+preferences-title = 환경설정
+context-text-colour = 텍스트 색상
+context-polylines = 폴리라인
+context-points = 점
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = 회전 중심을 해제했습니다
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = 커서 아래에 회전 중심을 고정할 점이 없습니다
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = 회전 중심을 %x%, %y%, %z%에 고정했습니다
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = 회전 중심은 비행 모드에서 사용할 수 없습니다
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = 회전 중심 해제
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = 점을 클릭하여 회전 중심을 고정하세요
+literal-fix-centre-of-rotation-1aa51a75d030db2a = 회전 중심 고정
+literal-centre-of-rotation-5c1f34327183860b = 회전 중심
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = 두 뷰가 궤도 회전하는 중심을 고정하거나 해제합니다
+literal-rl-grid-options-2329c7b8001bc333 = RL 그리드 옵션
+literal-automatic-colour-23347fe2c6749180 = 자동 색상
+literal-thickness-289be54832e4be75 = 두께
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = 자동 RL 간격
+literal-rl-spacing-88a1992aa9332272 = RL 간격
+literal-hide-xy-grid-85952898e2cff804 = XY 그리드 숨기기
+literal-show-xy-grid-d22a739bae102bb1 = XY 그리드 표시
+literal-set-grid-63bc48801d739665 = 그리드 설정
+literal-xy-grid-options-04861f560f92a08c = XY 그리드 옵션
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = 슬라이스 뷰 재설정(전체 범위에 맞춤)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = XY 그리드 설정 = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = 전역 %axis% 축을 기준으로 한 반시계 방향 패턴 회전입니다.
+literal-axis-offset-d064a568a65d9a1f = %axis% 오프셋
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = 패턴 그리드를 발파 형상에 맞춰 자른 상태로 유지하면서 전역 %axis% 축을 따라 이동합니다.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = 월드 %axis% 축을 따른 이동 거리입니다.
+literal-axis-scale-ratio-851b3aab8b582f09 = %axis% 축척 비율
+literal-axis-range-5455776ed8bd0a89 = %axis% 범위
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = 표면에 투영됨
+crs-unknown-ellipsoid = 이 좌표계 정의에서 인식할 수 없는 지구 모델 "{ $name }"입니다.
+crs-no-ellipsoid = 이 좌표계 정의에는 사용하는 지구 모델이 지정되어 있지 않습니다.
+crs-unknown-code = EPSG:{ $code }는 좌표계 등록부에 없습니다.
+crs-transform-failed = 좌표를 변환하지 못했습니다. 결과가 유한한 위치 값이 아닙니다.
+crs-no-datum-path = { $from }와(과) { $to }의 기준계 사이에는 공개된 변환 경로가 없습니다(EPSG 데이텀 { $source }, { $target }). 그대로 변환하면 알 수 없는 만큼 오차가 발생하므로 아무것도 변경하지 않았습니다.
+crs-unknown-datum = { $from } 또는 { $to }의 기준계를 식별할 수 없으며, 두 좌표계는 서로 다른 지구 모델을 사용합니다. 이 둘 사이를 변환하면 알 수 없는 만큼 오차가 발생합니다.
+ws-survey = 측량
+survey-count-designs =
+    { $count ->
+       *[other] 설계 { $count }개
+    }
+survey-count-meshes =
+    { $count ->
+       *[other] 삼각망 { $count }개
+    }
+survey-count-models =
+    { $count ->
+       *[other] 블록 모델 { $count }개
+    }
+survey-count-clouds =
+    { $count ->
+       *[other] 포인트 클라우드 { $count }개
+    }
+survey-count-holes =
+    { $count ->
+       *[other] 시추공 데이터셋 { $count }개
+    }
+survey-count-rasters =
+    { $count ->
+       *[other] 래스터 { $count }개
+    }
+survey-unsupported = 래스터는 이 변환으로 변환할 수 없습니다. 뷰포트에서 선택할 수 없으므로 선택 항목에 포함되지 않습니다.
+survey-angle = Z축 기준 회전(반시계 방향)
+survey-scale = 균일 XYZ 축척 비율
+survey-invalid-transform = 원점, 각도 및 결과 좌표는 모두 유한한 값이어야 합니다.
+survey-invalid-scale = 축척은 유한한 양수여야 하며, 그 역수도 유한해야 합니다.
+survey-empty-selection = 변환하려면 지원되는 항목을 하나 이상 선택하세요.
+survey-unavailable = 선택한 항목이 없거나 언로드되었습니다. 변환하기 전에 불러오세요.
+survey-wrong-project = 활성 프로젝트의 설계만 선택하세요.
+survey-name-required = 좌표계 이름을 입력하세요.
+survey-working = 선택한 데이터를 변환하는 중…
+survey-completed = { $items }을(를) 제자리에서 변환했습니다. 실행 취소로 되돌릴 수 있습니다.
+survey-failed = 변환에 실패했습니다: { $error }
+survey-stale = 활성 프로젝트나 원본 데이터가 변경되어 변환이 취소되었습니다. 원본 데이터를 다시 선택한 후 시도하세요.
+survey-coordinates-menu = 좌표
+survey-definitions-action = 정의…
+survey-transform-action = 변환…
+survey-definitions-title = 좌표 정의
+survey-transform-title = 좌표 변환
+survey-new-system = 새 좌표계
+survey-new-system-name = 좌표계
+survey-set-local = 광산 좌표계로 설정
+survey-delete-system = 좌표계 삭제
+survey-systems-empty = 좌표계 없음
+survey-system-section = 광산 그리드 정의
+survey-reference-note = 모든 정의의 기준이 되는 기준계로, 데이터를 가져올 때 이미 가지고 있는 좌표입니다. 그 자체는 매개변수를 가지지 않습니다. 좌표계를 우클릭하여 광산 좌표계로 지정하거나, 아래 빈 공간을 우클릭하여 새 좌표계를 정의하세요.
+survey-system-name = 이름
+survey-reference-system = 기준 좌표계
+survey-reference-origin = 알려진 점 — 기준 좌표
+survey-system-origin = 동일한 점 — 이 좌표계 좌표
+survey-angle-help = 위에서 내려다볼 때 기준 X축에서 기준 Y축 방향으로의 반시계 방향 각도입니다.
+survey-scale-help = 기준계에서 이 좌표계로의 균일한 XYZ 축척입니다. 치수를 그대로 유지하려면 1을 사용하세요.
+survey-close = 닫기
+survey-from = 원본
+survey-to = 대상
+survey-transform-button = 변환
+survey-swap = 바꾸기
+survey-drape-note = 투영된 이미지는 변환된 표면에서 제거되며 다시 투영해야 합니다.
+survey-needs-grid-block-model = 블록 모델은 규칙적인 셀 그리드이며, 투영법이나 기준계를 변경하면 이 규칙성이 유지되지 않습니다. 변환하려면 모든 셀을 새 그리드로 리샘플링해야 하고 그 과정에서 값이 손실되므로 변경하지 않았습니다.
+survey-needs-grid-raster = 래스터는 아핀 변환으로 세계 좌표에 배치되며, 투영법이나 기준계를 변경하면 이를 유지할 수 없습니다. 변환하려면 이미지를 리샘플링해야 하므로 변경하지 않았습니다.
+survey-conversion-exact = 정확함: 그리드만 변경되며 재투영은 하지 않습니다.
+survey-conversion-accuracy = 명시된 정확도 { $accuracy }m입니다.
+survey-kind = 종류
+survey-axis-names = 축 이름
+survey-axis-help = 이 좌표계가 X, Y, Z가 아닌 다른 이름으로 축을 부르는 경우의 이름입니다. 예를 들어 광산 그리드에서는 "E", "N", "RL"을 사용합니다. 좌표가 표시되는 모든 곳에 사용되지만, 이 좌표계가 광산 좌표계로 설정되어 있을 때만 적용됩니다. 세 축의 이름을 모두 지정하거나 아무것도 지정하지 마세요.
+survey-kind-registry-short = 등록부 좌표계
+survey-kind-grid-short = 다른 좌표계 위의 그리드
+survey-registry-search = 검색
+survey-registry-hint = 이름 또는 EPSG 코드(예: "mga zone 56")
+survey-registry-none = 모든 단어와 일치하는 항목이 등록부에 없습니다.
+survey-parent = 정의 기준
+survey-parent-origin = 알려진 점 — 상위 좌표계 좌표
+survey-pick-registry = 좌표계를 검색하여 결과에서 선택하세요.
+survey-pick-parent = 이 그리드의 정의 기준이 되는 좌표계를 선택하세요.
+survey-pick-system = 좌표계 선택
+survey-pick-systems = 변환할 원본 좌표계와 대상 좌표계를 선택하세요.
+survey-no-selection = 왼쪽에서 좌표계를 선택하거나 우클릭하여 추가하세요.
+survey-kind-grid = { $parent } 위의 그리드
+survey-system-in-use =
+    "{ $name }"을(를) 삭제할 수 없습니다: 이를 기준으로 정의된 항목 { $dependants }개가 { $dependants ->
+       *[other] 있습니다
+    }. 먼저 다른 곳을 참조하도록 변경하세요.
+survey-system-cycle = "{ $name }"이(가) 직접 또는 상위 좌표계를 통해 자기 자신을 기준으로 정의되어 있습니다.
+survey-system-missing = 해당 좌표계가 더 이상 존재하지 않습니다. 다른 정의를 선택하세요.
+survey-same-system = 서로 다른 원본 좌표계와 대상 좌표계를 선택하세요.
+survey-name-exists = 해당 이름의 좌표계가 이미 있습니다. 편집하려면 선택하거나 다른 이름을 사용하세요.
