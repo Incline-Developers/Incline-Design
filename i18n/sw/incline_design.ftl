@@ -39,6 +39,7 @@ menu-view = Mwonekano
 ws-production = Uzalishaji
 ws-drill-and-blast = Uchimbaji na Ulipuaji
 ws-geology = Jiolojia
+ws-planning = Upangaji
 
 ## Menubars
 
@@ -69,6 +70,9 @@ dialog-rename-submit = Badilisha Jina
 dialog-delete-title = Futa { $kind }
 dialog-delete-confirm =
     Futa '{ $name }' kutoka kwenye mradi?
+    Hatua hii haiwezi kutenduliwa.
+confirm-delete-product =
+    Futa bidhaa '{ $name }' kutoka kwenye pala?
     Hatua hii haiwezi kutenduliwa.
 
 
@@ -156,6 +160,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Huonyesha kwa mpangilio wa skrini: hakuna uraruaji, na skrini huweka kasi ya fremu. Ikizimwa, fremu huonyeshwa mara zinapochorwa na kikomo hapa chini kinatumika.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (kichwa tupu)
 literal-absolute-rl-455fe0d96abfbb7a = RL Kamili
@@ -323,6 +328,12 @@ literal-exit-application-206c61fdca9522f7 = Toka Programu
 literal-exit-incline-design-b11cdc542f0e84ef = Toka Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Toka Bila Kuhifadhi
 literal-exit-slice-ec67c9da3a320e5f = Toka kwenye Ukataji
+literal-set-section-grid-0317412c52213ca8 = Weka Gridi ya Sehemu
+literal-hide-rl-grid-5777afd90dcfdfef = Ficha Gridi ya RL
+literal-show-rl-grid-87a5e28c30f9ca36 = Onyesha Gridi ya RL
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Weka gridi ya sehemu = %enabled%
 literal-export-293aa6a6446fb153 = Hamisha
 literal-export-block-model-csv-3755a5af2dbb71af = Hamisha CSV ya Mfano wa Vitalu
 literal-export-csv-block-model-5c2ba2182ac51797 = Hamisha CSV Mfano wa Vitalu
@@ -396,6 +407,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Pakia
 literal-load-block-model-9e1eebcd6fc9e399 = Pakia Mfano wa Vitalu
 literal-load-drillholes-0e0c59498b0a629f = Pakia Mashimo ya Uchimbaji
+literal-load-layer-c8261cf60e655064 = Pakia Tabaka
 literal-load-point-cloud-348b63ef7b0faa4a = Pakia Wingu la Vidokezo
 literal-load-project-645e82ec5117c718 = Pakia Mradi
 literal-load-raster-5393aaf7183657c2 = Pakia Rasta
@@ -441,8 +453,11 @@ literal-near-clip-limit-25931ba2c7873778 = Kikomo cha kukata karibu
 literal-new-product-6c2124d5d6badd3a = Bidhaa Mpya
 literal-new-project-cd084c5e5d3ea300 = Mradi Mpya
 literal-new-layer-name-e4ea5292efa5d03f = Jina jipya la tabaka
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Hakuna bidhaa ya muda wa kuchelewesha ya kuunganisha nayo
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = bofya kulia kichwa cha Pala ya Muda wa Kuchelewesha ili kuongeza moja
 literal-no-matches-28d7266643f5992f = Hakuna vinavyolingana
 literal-no-object-selected-d42da7912e4d01b6 = Hakuna kitu kilichochaguliwa
+literal-no-products-483f3f49aae9b3c2 = Hakuna bidhaa
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Hakuna wigo wa anga unaopatikana
 literal-none-669b18c6d2d9c95b = Hakuna
 literal-north-arrow-0a1293ff4a52606d = Mshale wa kaskazini
@@ -472,6 +487,7 @@ literal-point-cloud-ef650548cfd32358 = Wingu la Vidokezo
 literal-point-clouds-9bcb25b923c4c211 = Mawingu ya Vidokezo
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Bonyeza Enter kutumia radiasi iliyoandikwa
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = au bofya kutumia radiasi ya kishale
+literal-product-de1f02481331134c = Bidhaa
 literal-project-282049f502eac1de = Mradi
 literal-project-name-446c46bc623ccce1 = Jina la mradi
 literal-quit-app-fa0a388754b23d8b = Toka %app%
@@ -623,6 +639,9 @@ literal-undrape-raster-19a3cb862f76d539 = Ondoa Ufunikaji wa Rasta
 literal-undrape-rasters-08281f02a6ec6cbe = Ondoa Ufunikaji wa Rasta Zote
 literal-unload-5d3714bc882df1b2 = Ondoa
 literal-unload-block-model-c14323e196f7603e = Ondoa Mfano wa Vitalu
+literal-unload-drillholes-b63232aa559b051e = Ondoa Mashimo ya Uchimbaji
+literal-unload-layer-e19afae5689edebb = Ondoa Tabaka
+literal-unload-point-cloud-2d0ee38fa0391df9 = Ondoa Wingu la Vidokezo
 literal-unload-raster-19854bae2aea221f = Ondoa Rasta
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Ondoa Utatuzi
 literal-unlock-5d303fbc88281c15 = Fungua
@@ -633,6 +652,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Tumia wigo kamil
 literal-vertex-count-48fab462ae06a454 = Idadi ya vipeo
 literal-vertical-exaggeration-3572327bb13435e7 = Kuzidisha Wima
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Kupanda au kushuka wima kwa kila ngazi kabla lundo linalofuata halijaundwa.
+literal-vertical-sync-85fd0e942adbf2be = Usawazishaji wima
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Huonyesha ugawaji wa anga wa Morton unaotumika kwa uondoaji wa fremu.
 literal-website-82665b2ffabc9c0a = Tovuti
 literal-weld-retry-b6c826b7541e89f1 = Unga na Ujaribu Tena
@@ -793,6 +813,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Umeondoa 
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Kipengele hicho hakihusiani tena na mradi hai
 literal-renamed-before-to-name-88160afa8287cd38 = '%before%' imebadilishwa jina kuwa '%name%'
 literal-exited-slice-view-0d1f935a85f65cd3 = Umetoka kwenye mwonekano wa ukataji
+literal-reset-the-section-view-a90255a33a618651 = Rejesha mwonekano wa sehemu
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Umesasisha maandishi kwenye kitu %object_id%
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Umemaliza kuhariri maandishi ya kitu %object_id%
 literal-contour-generation-failed-error-60e87eda1ee29afa = Uzalishaji wa mistari ya mwinuko umeshindwa: %error%
@@ -1117,6 +1138,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Zima Hali ya Kuruka
 literal-enable-flying-mode-5be056d1b9bdd218 = Washa Hali ya Kuruka
 literal-exit-slice-view-8f48e630d38a6390 = Toka kwenye Mwonekano wa Ukataji
 literal-vertical-slice-view-a721497b5e8007fa = Mwonekano wa Ukataji Wima
+literal-reset-section-view-569ba01ea5ad8448 = Rejesha Mwonekano wa Sehemu
+literal-camera-square-to-the-section-095beff203b315a6 = Weka kamera sawasawa na sehemu
 literal-hide-wireframes-a0bb1a91dde72948 = Ficha Nyaya
 literal-show-wireframes-7e8dc68f7023441b = Onyesha Nyaya
 literal-hide-points-6ec095fdf7ed73f4 = Ficha Vidokezo
@@ -1128,6 +1151,9 @@ literal-value-dip-1a0edf99f1cb897b = mteremko %value%°
 literal-strike-strike-dip-3cbc18ac238a6a85 = mwelekeo %strike%° · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (mlalo, hakuna mwelekeo)
 literal-slice-view-531d1a0f0f256066 = Mwonekano wa ukataji
+slice-viewport-gestures = buruta-katikati sogeza · buruta-kulia zunguka · Shift+gurudumu tembea · W/S hamisha bamba · Q/E zungusha · Esc toka
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - hakipatikani kwenye mwonekano wa sehemu
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Chombo hicho hakipatikani kwenye mwonekano wa sehemu
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = buruta kwa kitufe cha kati kusogeza · W/S hamisha bamba · Q/E zungusha · Esc toka
 literal-north-ca6a42d80c5dd964 = Kaskazini
 literal-south-25b5d0c70a3936da = Kusini
@@ -1563,6 +1589,46 @@ literal-update-8b0432eecbd8b034 = Sasisha
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Kina wima chini ya kila kola.
 literal-x-offset-cf30a60198d81e4a = Mkabala wa X
 literal-y-offset-ffb673aa94de0fa7 = Mkabala wa Y
+literal-appearance-f0e261e04eda82ff = Muonekano
+literal-arc-circle-69e83efed2ce9d47 = Mviringo na Duara
+literal-arc-segments-f2c50c445ff0606b = Sehemu za mviringo
+literal-bulge-5911694918e2fe44 = Uvimbe
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Mviringo wa uvimbe ni mlalo kwa muundo wa data: mviringo hugeuka kwenye ramani-ardhi wakati kimo kinaenda moja kwa moja kutoka kipeo kimoja hadi kingine.
+literal-centre-x-39ad69e3af6db6be = Kitovu X
+literal-centre-y-39ad6ae3af6db871 = Kitovu Y
+literal-centre-z-39ad67e3af6db358 = Kitovu Z
+literal-chord-ebed35dc77f41c35 = Kigunda
+literal-circle-14c54ca33d0f3ea9 = Duara
+literal-colour-by-layer-01a922874fe4bebb = Rangi kwa tabaka
+literal-edit-6caa725f12d7e915 = Hariri...
+literal-edit-object-03fd9f47ed01e398 = Hariri Kitu
+literal-edit-object-142afa7681e533de = Hariri Kitu...
+literal-edited-kind-017b9d5669af9d78 = %kind% imehaririwa
+literal-edited-kind-count-vertices-4e063a8127567887 = %kind% imehaririwa (vipeo %count%)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Weka nambari
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Fuata rangi ya tabaka linalomiliki badala ya rangi iliyobandikwa kwenye kitu hiki.
+literal-identity-94d63573d312fe9b = Utambulisho
+literal-insert-after-3b715eafd7214722 = Ingiza baada
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Unganisha kipeo cha mwisho kurudi kwa cha kwanza.
+literal-length-length-m-7002054fb5f4218e = Urefu m%length%
+literal-move-down-b233557012dcb328 = Hamisha chini
+literal-move-up-4ea0f21fc2a338a1 = Hamisha juu
+literal-no-changes-to-apply-dfa74d34ff069444 = Hakuna mabadiliko ya kutumia
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Lengo la uhariri wa kitu limebadilika; uhariri unaondolewa
+literal-ok-091d3d07b5b3076f = Sawa
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Sifa moja au zaidi si nambari sahihi
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Mzingo m%length%, eneo m²%area%
+literal-reverse-3ffcdc5db5e7d0c5 = Geuza
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Safu %row%: nafasi au uvimbe si nambari sahihi
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Chagua kitu kimoja cha muundo ili kukihariri
+literal-sweep-84b7af08cf834f43 = Mfagio
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%" si nambari
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Kitu hicho hakipo tena kwenye hati
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Kitu hiki kimebadilika tangu kihariri kufunguliwa; kifungue tena ili kuhariri toleo la sasa
+literal-this-object-has-a-single-position-134add52252a573e = Kitu hiki kina nafasi moja.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Kitu hiki hakina sehemu za mviringo.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Kitu hiki kinahitaji angalau vipeo %required%
+literal-unassigned-8a49b21a2c9c0022 = Haijawekwa
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1572,3 +1638,135 @@ color-opacity = Uwazi
 color-edit = Bofya kuhariri rangi
 color-saturation-value = Ukolezi na mng'ao
 color-hue = Rangi msingi
+asset-loading = Inapakia data ya rasilimali
+asset-unloading = Inaondoa data ya rasilimali
+asset-load-failed = Imeshindwa kupakia data ya rasilimali
+asset-unload-failed = Imeshindwa kuondoa data ya rasilimali
+preferences-title = Mapendeleo
+context-text-colour = Rangi ya maandishi
+context-polylines = Mistari ya Pointi Nyingi
+context-points = Vidokezo
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Kitovu cha mzunguko kimeachiliwa
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Hakuna kidokezo chini ya kishale cha kufungia kitovu cha mzunguko
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Kitovu cha mzunguko kimefungwa kwenye %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Kitovu cha mzunguko hakipatikani katika Hali ya Kuruka
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Achilia Kitovu cha Mzunguko
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Bofya kidokezo ili kufunga kitovu cha mzunguko
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Funga Kitovu cha Mzunguko
+literal-centre-of-rotation-5c1f34327183860b = Kitovu cha Mzunguko
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Funga au achilia kitovu ambacho mionekano yote miwili inazunguka
+literal-rl-grid-options-2329c7b8001bc333 = Chaguzi za Gridi ya RL
+literal-automatic-colour-23347fe2c6749180 = Rangi kiotomatiki
+literal-thickness-289be54832e4be75 = Unene
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Nafasi ya RL kiotomatiki
+literal-rl-spacing-88a1992aa9332272 = Nafasi ya RL
+literal-hide-xy-grid-85952898e2cff804 = Ficha Gridi ya XY
+literal-show-xy-grid-d22a739bae102bb1 = Onyesha Gridi ya XY
+literal-set-grid-63bc48801d739665 = Weka Gridi
+literal-xy-grid-options-04861f560f92a08c = Chaguzi za Gridi ya XY
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Rejesha mwonekano wa sehemu (oanisha na wigo)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Weka gridi ya XY = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Mzunguko wa mfumo kinyume cha saa kutoka mhimili wa %axis% wa dunia.
+literal-axis-offset-d064a568a65d9a1f = Mkabala wa %axis%
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Hamisha gridi ya mfumo kando ya mhimili wa %axis% wa dunia huku ukiiweka ndani ya umbo la ulipuaji.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Umbali wa mhamisho kando ya mhimili wa %axis% wa dunia.
+literal-axis-scale-ratio-851b3aab8b582f09 = Uwiano wa kipimo wa %axis%
+literal-axis-range-5455776ed8bd0a89 = Wigo wa %axis%
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Umefunikwa juu ya uso
+crs-unknown-ellipsoid = Umbo la dunia "{ $name }" halijulikani katika ufafanuzi huu wa mfumo wa kuratibu.
+crs-no-ellipsoid = Ufafanuzi huu wa mfumo wa kuratibu haueleze umbo la dunia linalotumika.
+crs-unknown-code = EPSG:{ $code } haipo kwenye orodha ya mifumo ya kuratibu.
+crs-transform-failed = Kuratibu haikuweza kubadilishwa; matokeo hayakuwa nafasi kamili.
+crs-no-datum-path = Hakuna mabadiliko yaliyochapishwa kati ya fremu za marejeo za { $from } na { $to } (mifumo ya EPSG { $source } na { $target }). Kubadilisha hata hivyo kungekuwa na kosa la kiasi kisichojulikana, kwa hivyo hakuna kilichobadilishwa.
+crs-unknown-datum = Fremu ya marejeo ya { $from } au { $to } haiwezi kutambuliwa, na hizo mbili zinatumia miundo tofauti ya dunia. Kubadilisha kati yao kungekuwa na kosa la kiasi kisichojulikana.
+ws-survey = Upimaji
+survey-count-designs = { $count } { $count ->
+    [one] muundo
+   *[other] miundo
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] utatuzi
+   *[other] utatuzi
+  }
+survey-count-models = { $count } { $count ->
+    [one] mfano wa vitalu
+   *[other] mifano ya vitalu
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] wingu la vidokezo
+   *[other] mawingu ya vidokezo
+  }
+survey-count-holes = { $count } { $count ->
+    [one] seti ya data ya shimo la uchimbaji
+   *[other] seti za data za mashimo ya uchimbaji
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] rasta
+   *[other] rasta
+  }
+survey-unsupported = Rasta haziwezi kubadilishwa na chombo hiki. Hazichaguliki kwenye mwonekano, kwa hivyo hakuna chochote kwenye uteuzi kinachofikia hapa.
+survey-angle = Mzunguko kuzunguka Z (kinyume cha saa)
+survey-scale = Kigezo cha kipimo sawia cha XYZ
+survey-invalid-transform = Vitovu, pembe na kuratibu zinazotokana lazima ziwe kamili.
+survey-invalid-scale = Kipimo lazima kiwe nambari chanya kamili yenye kigezo tishio kamili.
+survey-empty-selection = Chagua angalau kitu kimoja kinachotumika ili kubadilisha.
+survey-unavailable = Kitu kilichochaguliwa hakipo au hakijapakiwa. Kipakie kabla ya kubadilisha.
+survey-wrong-project = Chagua miundo kutoka mradi hai tu.
+survey-name-required = Weka jina la mfumo wa kuratibu.
+survey-working = Inabadilisha data iliyochaguliwa…
+survey-completed = { $items } imebadilishwa mahali pale pale. Kutendua kunairejesha.
+survey-failed = Ubadilishaji umeshindwa: { $error }
+survey-stale = Ubadilishaji umeondolewa kwa sababu mradi hai au data ya chanzo imebadilika. Chagua data ya chanzo na ujaribu tena.
+survey-coordinates-menu = Kuratibu
+survey-definitions-action = Fasili…
+survey-transform-action = Badilisha…
+survey-definitions-title = Fasili za Kuratibu
+survey-transform-title = Badilisha Kuratibu
+survey-new-system = Mfumo Mpya wa Kuratibu
+survey-new-system-name = Mfumo wa kuratibu
+survey-set-local = Weka kama Mfumo wa Kuratibu wa Mgodi
+survey-delete-system = Futa Mfumo wa Kuratibu
+survey-systems-empty = Hakuna mifumo ya kuratibu
+survey-system-section = Fasili ya gridi ya mgodi
+survey-reference-note = Fremu ambayo kila fasili imeandikwa dhidi yake: kuratibu ambazo data yako tayari inazo data inapoingizwa. Haina vigezo vyake vyenyewe. Bofya kulia mfumo ili kuufanya mfumo wa kuratibu wa mgodi, au eneo tupu hapa chini ili kufasili mmoja.
+survey-system-name = Jina
+survey-reference-system = Mfumo wa marejeo
+survey-reference-origin = Kidokezo kinachojulikana — kuratibu za marejeo
+survey-system-origin = Kidokezo hicho hicho — kuratibu za mfumo
+survey-angle-help = Kinyume cha saa kutoka X ya marejeo kuelekea Y ya marejeo, ukitazama kutoka juu.
+survey-scale-help = Kipimo sawia cha XYZ kutoka fremu ya marejeo hadi mfumo huu. Tumia 1 ili kudumisha vipimo.
+survey-close = Funga
+survey-from = Kutoka
+survey-to = Kwenda
+survey-transform-button = Badilisha
+survey-swap = Badilishana
+survey-drape-note = Picha zilizofunikwa huondolewa kwenye nyuso zilizobadilishwa na lazima zifunikwe upya.
+survey-needs-grid-block-model = Mfano wa vitalu ni gridi ya kawaida ya seli, na mabadiliko ya makadirio au fremu ya marejeo hayaidumishi ikiwa ya kawaida. Kuibadilisha kungemaanisha kuchukua sampuli upya ya kila seli kwenye gridi mpya na kupoteza thamani inazobeba, kwa hivyo iliachwa bila kubadilishwa.
+survey-needs-grid-raster = Rasta huwekwa kwenye dunia kwa ramani ya affine, ambayo mabadiliko ya makadirio au fremu ya marejeo hayawezi kudumisha. Kuibadilisha kungemaanisha kuchukua sampuli upya ya picha, kwa hivyo iliachwa bila kubadilishwa.
+survey-conversion-exact = Halisi: mabadiliko ya gridi tu, hakuna uwekaji makadirio upya.
+survey-conversion-accuracy = Usahihi uliotajwa m { $accuracy }.
+survey-kind = Aina
+survey-axis-names = Majina ya mihimili
+survey-axis-help = Majina ambayo mfumo huu huita mihimili yake, kama si X, Y na Z — "E", "N", "RL" kwa gridi ya mgodi. Hutumika kila mahali kuratibu zinapoonyeshwa, lakini tu wakati huu ndio mfumo wa kuratibu wa mgodi. Taja mihimili yote mitatu au isitaje hata mmoja.
+survey-kind-registry-short = Mfumo wa orodha
+survey-kind-grid-short = Gridi juu ya mfumo mwingine
+survey-registry-search = Tafuta
+survey-registry-hint = Jina au msimbo wa EPSG, mfano "mga zone 56"
+survey-registry-none = Hakuna kitu kwenye orodha kinacholingana na kila neno.
+survey-parent = Umefasiliwa dhidi ya
+survey-parent-origin = Kidokezo kinachojulikana — kuratibu za mzazi
+survey-pick-registry = Tafuta mfumo na uuchague kutoka kwenye matokeo.
+survey-pick-parent = Chagua mfumo ambao gridi hii imefasiliwa dhidi yake.
+survey-pick-system = Chagua mfumo
+survey-pick-systems = Chagua mfumo wa kubadilisha kutoka na ule wa kubadilisha kwenda.
+survey-no-selection = Chagua mfumo wa kuratibu upande wa kushoto, au bofya kulia ili kuongeza mmoja.
+survey-kind-grid = Gridi juu ya { $parent }
+survey-system-in-use = "{ $name }" haiwezi kufutwa: { $dependants } { $dependants ->
+    [one] imefasiliwa
+   *[other] zimefasiliwa
+  } dhidi yake. Zielekeze mahali pengine kwanza.
+survey-system-cycle = "{ $name }" imefasiliwa dhidi yake yenyewe, moja kwa moja au kupitia wazazi wake.
+survey-system-missing = Mfumo huo wa kuratibu haupo tena. Chagua fasili nyingine.
+survey-same-system = Chagua mifumo tofauti ya chanzo na lengo.
+survey-name-exists = Mfumo wa kuratibu wenye jina hilo tayari upo. Kichague ili kukihariri, au chagua jina lingine.
