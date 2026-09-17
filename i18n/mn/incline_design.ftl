@@ -46,6 +46,7 @@ menu-view = Харагдац
 ws-production = Үйлдвэрлэл
 ws-drill-and-blast = Өрөмдлөг ба тэсэлгээ
 ws-geology = Геологи
+ws-planning = Төлөвлөлт
 
 ## Цэсний мөрүүд
 
@@ -76,6 +77,9 @@ dialog-rename-submit = Нэр өөрчлөх
 dialog-delete-title = { $kind }-ийг устгах
 dialog-delete-confirm =
     «{ $name }»-ийг төслөөс устгах уу?
+    Энэ үйлдлийг буцаах боломжгүй.
+confirm-delete-product =
+    «{ $name }» бүтээгдэхүүнийг палитраас устгах уу?
     Энэ үйлдлийг буцаах боломжгүй.
 
 
@@ -165,6 +169,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  м
 literal-mm-c2aba917cdd54d81 =  мм
 literal-ms-c2ab9317cdd5281f =  мс
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Дэлгэцтэй нийцүүлэн үзүүлнэ: хагарал үгүй бөгөөд дэлгэц фрэймийн хурдыг тогтооно. Унтраасан үед фрэймүүд зурагдмагцаа шууд харагдах бөгөөд доорх хязгаарлалт хэрэгжинэ.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (гарчиггүй)
 literal-absolute-rl-455fe0d96abfbb7a = Үнэмлэхүй RL
@@ -332,6 +337,12 @@ literal-exit-application-206c61fdca9522f7 = Программаас гарах
 literal-exit-incline-design-b11cdc542f0e84ef = Incline Design-аас гарах
 literal-exit-without-saving-1c85d135e24c5e81 = Хадгалахгүйгээр гарах
 literal-exit-slice-ec67c9da3a320e5f = Огтлолоос гарах
+literal-set-section-grid-0317412c52213ca8 = Огтлолын тор тохируулах
+literal-hide-rl-grid-5777afd90dcfdfef = RL торыг нуух
+literal-show-rl-grid-87a5e28c30f9ca36 = RL торыг харуулах
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Огтлолын торыг тохируулав = %enabled%
 literal-export-293aa6a6446fb153 = Экспортлох
 literal-export-block-model-csv-3755a5af2dbb71af = Блокийн загварыг CSV болгон экспортлох
 literal-export-csv-block-model-5c2ba2182ac51797 = CSV блокийн загвар экспортлох
@@ -405,6 +416,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Ачаалах
 literal-load-block-model-9e1eebcd6fc9e399 = Блокийн загвар ачаалах
 literal-load-drillholes-0e0c59498b0a629f = Цооног ачаалах
+literal-load-layer-c8261cf60e655064 = Давхарга ачаалах
 literal-load-point-cloud-348b63ef7b0faa4a = Цэгэн үүл ачаалах
 literal-load-project-645e82ec5117c718 = Төсөл ачаалах
 literal-load-raster-5393aaf7183657c2 = Растер ачаалах
@@ -450,8 +462,11 @@ literal-near-clip-limit-25931ba2c7873778 = Ойрын огтлолын хязг�
 literal-new-product-6c2124d5d6badd3a = Шинэ бүтээгдэхүүн
 literal-new-project-cd084c5e5d3ea300 = Шинэ төсөл
 literal-new-layer-name-e4ea5292efa5d03f = Давхаргын шинэ нэр
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Холбох саатлын бүтээгдэхүүн алга
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = саатлын палитрын гарчиг дээр хулганы баруун товчоор товшиж нэмнэ үү
 literal-no-matches-28d7266643f5992f = Тохирол алга
 literal-no-object-selected-d42da7912e4d01b6 = Объект сонгогдоогүй
+literal-no-products-483f3f49aae9b3c2 = Бүтээгдэхүүн алга
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Орон зайн хэмжээ алга
 literal-none-669b18c6d2d9c95b = Байхгүй
 literal-north-arrow-0a1293ff4a52606d = Хойд зүг заагч
@@ -481,6 +496,7 @@ literal-point-cloud-ef650548cfd32358 = Цэгэн үүл
 literal-point-clouds-9bcb25b923c4c211 = Цэгэн үүлүүд
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Бичсэн радиусыг ашиглахын тулд Enter дарах
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = эсвэл заагчийн радиусыг ашиглахын тулд товшино уу
+literal-product-de1f02481331134c = Бүтээгдэхүүн
 literal-project-282049f502eac1de = Төсөл
 literal-project-name-446c46bc623ccce1 = Төслийн нэр
 literal-quit-app-fa0a388754b23d8b = %app%-аас гарах
@@ -632,6 +648,9 @@ literal-undrape-raster-19a3cb862f76d539 = Растерыг дараахаас ц
 literal-undrape-rasters-08281f02a6ec6cbe = Растеруудыг дараахаас цуцлах
 literal-unload-5d3714bc882df1b2 = Буулгах
 literal-unload-block-model-c14323e196f7603e = Блокийн загварыг буулгах
+literal-unload-drillholes-b63232aa559b051e = Цооногуудыг буулгах
+literal-unload-layer-e19afae5689edebb = Давхаргыг буулгах
+literal-unload-point-cloud-2d0ee38fa0391df9 = Цэгэн үүлийг буулгах
 literal-unload-raster-19854bae2aea221f = Растерыг буулгах
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Триангуляцыг буулгах
 literal-unlock-5d303fbc88281c15 = Түгжээг тайлах
@@ -642,6 +661,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Гадаргуу
 literal-vertex-count-48fab462ae06a454 = Орой цэгийн тоо
 literal-vertical-exaggeration-3572327bb13435e7 = Босоо хэтрүүлэлт
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Дараагийн берм үүсэхээс өмнөх уступ бүрийн босоо өсөлт эсвэл уналт.
+literal-vertical-sync-85fd0e942adbf2be = Босоо синхрончлол
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Frustumculling-д ашиглагдах Morton орон зайн хэсэглэлтийг дүрсэлнэ.
 literal-website-82665b2ffabc9c0a = Вэбсайт
 literal-weld-retry-b6c826b7541e89f1 = Гагнаад дахин оролдох
@@ -802,6 +822,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = %count% �
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Тэр зүйл цаашид идэвхтэй төсөлд харьяалагдахгүй байна
 literal-renamed-before-to-name-88160afa8287cd38 = '%before%'-г '%name%' болгож нэрлэв
 literal-exited-slice-view-0d1f935a85f65cd3 = Огтлолын харагдацаас гарлаа
+literal-reset-the-section-view-a90255a33a618651 = Огтлолын харагдацыг сэргээх
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = %object_id% объект дээрх текстийг шинэчиллээ
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = %object_id% объектын текст засварыг дуусгалаа
 literal-contour-generation-failed-error-60e87eda1ee29afa = Изолиниа үүсгэлт амжилтгүй боллоо: %error%
@@ -1126,6 +1147,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Нисэх горимыг унт�
 literal-enable-flying-mode-5be056d1b9bdd218 = Нисэх горимыг асаах
 literal-exit-slice-view-8f48e630d38a6390 = Огтлолын харагдацаас гарах
 literal-vertical-slice-view-a721497b5e8007fa = Босоо огтлолын харагдац
+literal-reset-section-view-569ba01ea5ad8448 = Огтлолын харагдацыг сэргээх
+literal-camera-square-to-the-section-095beff203b315a6 = Камерыг огтлолтой перпендикуляр байрлуулах
 literal-hide-wireframes-a0bb1a91dde72948 = Торон дүрсийг нуух
 literal-show-wireframes-7e8dc68f7023441b = Торон дүрсийг харуулах
 literal-hide-points-6ec095fdf7ed73f4 = Цэгүүдийг нуух
@@ -1137,6 +1160,9 @@ literal-value-dip-1a0edf99f1cb897b = %value%° уналт
 literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° чиг · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (хэвтээ, чиггүй)
 literal-slice-view-531d1a0f0f256066 = Огтлолын харагдац
+slice-viewport-gestures = дунд товч чирж зөөх · баруун товч чирж тойрох · Shift+хулганы дугуй алхах · W/S давхарга зөөх · Q/E эргүүлэх · Esc гарах
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - огтлолын харагдацад боломжгүй
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Энэ хэрэгсэл огтлолын харагдацад боломжгүй байна
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = дунд товч чирж зөөх · W/S давхарга зөөх · Q/E эргүүлэх · Esc гарах
 literal-north-ca6a42d80c5dd964 = Хойд
 literal-south-25b5d0c70a3936da = Өмнөд
@@ -1572,6 +1598,46 @@ literal-update-8b0432eecbd8b034 = Шинэчлэх
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Амсар бүрийн доорхи босоо гүн.
 literal-x-offset-cf30a60198d81e4a = X шилжилт
 literal-y-offset-ffb673aa94de0fa7 = Y шилжилт
+literal-appearance-f0e261e04eda82ff = Дүр төрх
+literal-arc-circle-69e83efed2ce9d47 = Нум ба тойрог
+literal-arc-segments-f2c50c445ff0606b = Нумын хэсгүүд
+literal-bulge-5911694918e2fe44 = Гүдгэр
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Өгөгдлийн загварын дагуу гүдгэр нум нь хэвтээ байна: нум нь хэвтээ хавтгайд эргэдэг бөгөөд өндөрлөг нь орой цэг бүрээс дараагийнх руу шулуунаар өөрчлөгддөг.
+literal-centre-x-39ad69e3af6db6be = Төв X
+literal-centre-y-39ad6ae3af6db871 = Төв Y
+literal-centre-z-39ad67e3af6db358 = Төв Z
+literal-chord-ebed35dc77f41c35 = Хорд
+literal-circle-14c54ca33d0f3ea9 = Тойрог
+literal-colour-by-layer-01a922874fe4bebb = Давхаргын өнгө
+literal-edit-6caa725f12d7e915 = Засах...
+literal-edit-object-03fd9f47ed01e398 = Объект засах
+literal-edit-object-142afa7681e533de = Объект засах...
+literal-edited-kind-017b9d5669af9d78 = %kind% засварлалаа
+literal-edited-kind-count-vertices-4e063a8127567887 = %kind% засварлалаа (%count% орой цэг)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Тоо оруулна уу
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Энэ объектод бэхлэгдсэн өнгөний оронд эзэмшигч давхаргын өнгийг дагах.
+literal-identity-94d63573d312fe9b = Ижилт
+literal-insert-after-3b715eafd7214722 = Дараа нь оруулах
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Сүүлийн орой цэгийг эхнийхтэй нь дахин холбоно.
+literal-length-length-m-7002054fb5f4218e = Урт %length% м
+literal-move-down-b233557012dcb328 = Доош шилжүүлэх
+literal-move-up-4ea0f21fc2a338a1 = Дээш шилжүүлэх
+literal-no-changes-to-apply-dfa74d34ff069444 = Хэрэглэх өөрчлөлт алга
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Заслын объект өөрчлөгдсөн тул заслыг хаялаа
+literal-ok-091d3d07b5b3076f = OK
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Нэг буюу түүнээс олон шинж чанар хүчинтэй тоо биш байна
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Периметр %length% м, талбай %area% м²
+literal-reverse-3ffcdc5db5e7d0c5 = Урвуулах
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = %row% мөр: байрлал эсвэл гүдгэр хүчинтэй тоо биш байна
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Засварлах ганц зураг төслийн объект сонгоно уу
+literal-sweep-84b7af08cf834f43 = Хамрах өнцөг
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%" тоо биш байна
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Тэр объект баримт бичигт цаашид байхгүй байна
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Энэ объект засварлагч нээгдсэнээс хойш өөрчлөгдсөн байна; одоогийн хувилбарыг засварлахын тулд дахин нээнэ үү
+literal-this-object-has-a-single-position-134add52252a573e = Энэ объект ганц байрлалтай.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Энэ объект нумын хэсэггүй байна.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Энэ объектод дор хаяж %required% орой цэг шаардлагатай
+literal-unassigned-8a49b21a2c9c0022 = Оноогдоогүй
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1581,3 +1647,135 @@ color-opacity = Тунгалагжилт
 color-edit = Товшиж өнгийг засах
 color-saturation-value = Ханалт ба гэрэлтэлт
 color-hue = Өнгөлөг
+asset-loading = Хөрөнгийн өгөгдлийг ачаалж байна
+asset-unloading = Хөрөнгийн өгөгдлийг буулгаж байна
+asset-load-failed = Хөрөнгийн өгөгдлийг ачаалж чадсангүй
+asset-unload-failed = Хөрөнгийн өгөгдлийг буулгаж чадсангүй
+preferences-title = Тохиргоо
+context-text-colour = Текстийн өнгө
+context-polylines = Полилиниа
+context-points = Цэгүүд
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Эргэлтийн төвийг суллалаа
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Заагчийн доор эргэлтийн төвийг тогтоох цэг алга
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Эргэлтийн төвийг %x%, %y%, %z%-д тогтоов
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Нисэх горимд эргэлтийн төв боломжгүй байна
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Эргэлтийн төвийг суллах
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Эргэлтийн төвийг тогтооход цэг дээр товшино уу
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Эргэлтийн төвийг тогтоох
+literal-centre-of-rotation-5c1f34327183860b = Эргэлтийн төв
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Хоёр харагдац эргэдэг төвийг тогтоох эсвэл суллах
+literal-rl-grid-options-2329c7b8001bc333 = RL торны сонголтууд
+literal-automatic-colour-23347fe2c6749180 = Автомат өнгө
+literal-thickness-289be54832e4be75 = Зузаан
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Автомат RL зай
+literal-rl-spacing-88a1992aa9332272 = RL зай
+literal-hide-xy-grid-85952898e2cff804 = XY торыг нуух
+literal-show-xy-grid-d22a739bae102bb1 = XY торыг харуулах
+literal-set-grid-63bc48801d739665 = Тор тохируулах
+literal-xy-grid-options-04861f560f92a08c = XY торны сонголтууд
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Огтлолын харагдацыг сэргээх (хэмжээнд тааруулах)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = XY торыг тохируулав = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Глобал %axis% тэнхлэгээс цагийн зүүний эсрэг сүлжээний эргэлт.
+literal-axis-offset-d064a568a65d9a1f = %axis% шилжилт
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Сүлжээний торыг тэсэлгээний хэлбэрт огтлогдсон хэвээр глобал %axis% тэнхлэгийн дагуу шилжүүлэх.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Дэлхийн %axis% тэнхлэгийн дагуух шилжилтийн зай.
+literal-axis-scale-ratio-851b3aab8b582f09 = %axis% масштабын харьцаа
+literal-axis-range-5455776ed8bd0a89 = %axis% хязгаар
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Гадаргуу дээр дараасан
+crs-unknown-ellipsoid = Энэ координатын системийн тодорхойлолт дахь "{ $name }" дэлхийн загварыг таньсангүй.
+crs-no-ellipsoid = Энэ координатын системийн тодорхойлолт ямар дэлхийн загвар ашиглаж байгааг заагаагүй байна.
+crs-unknown-code = EPSG:{ $code } нь координатын системийн бүртгэлд алга.
+crs-transform-failed = Координатыг хувиргаж чадсангүй; үр дүн төгсгөлөг байрлал болсонгүй.
+crs-no-datum-path = { $from } болон { $to }-ийн лавлагаа системүүдийн (EPSG датум { $source } ба { $target }) хооронд нийтлэгдсэн хувиргалт олдсонгүй. Ямар ч байсан хувиргах нь тодорхойгүй хэмжээгээр буруу байх тул юу ч өөрчлөгдсөнгүй.
+crs-unknown-datum = { $from } эсвэл { $to }-ийн лавлагаа системийг тодорхойлж чадахгүй байна, мөн энэ хоёр өөр дэлхийн загвар ашигладаг тул тэдгээрийн хооронд хувиргах нь тодорхойгүй хэмжээгээр буруу байх болно.
+ws-survey = Геодези
+survey-count-designs = { $count } { $count ->
+    [one] зураг төсөл
+   *[other] зураг төсөл
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] триангуляц
+   *[other] триангуляц
+  }
+survey-count-models = { $count } { $count ->
+    [one] блокийн загвар
+   *[other] блокийн загвар
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] цэгэн үүл
+   *[other] цэгэн үүл
+  }
+survey-count-holes = { $count } { $count ->
+    [one] цооногийн өгөгдлийн сан
+   *[other] цооногийн өгөгдлийн сан
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] растер
+   *[other] растер
+  }
+survey-unsupported = Растерыг энэ хувиргалтаар хувиргах боломжгүй. Тэдгээрийг харагдацад сонгох боломжгүй тул сонголтод юу ч нөлөөлөхгүй.
+survey-angle = Z тэнхлэгийг тойрсон эргэлт (цагийн зүүний эсрэг)
+survey-scale = Нэгдсэн XYZ масштабын коэффициент
+survey-invalid-transform = Эх цэг, өнцөг болон гарсан координатууд төгсгөлөг байх ёстой.
+survey-invalid-scale = Масштаб нь төгсгөлөг эерэг тоо байх ёстой бөгөөд түүний урвуу тоо ч төгсгөлөг байх ёстой.
+survey-empty-selection = Хувиргах дор хаяж нэг дэмжигдсэн зүйлийг сонгоно уу.
+survey-unavailable = Сонгосон зүйл алга байна эсвэл ачаалагдаагүй байна. Хувиргахаас өмнө ачаална уу.
+survey-wrong-project = Зөвхөн идэвхтэй төслөөс зураг төсөл сонгоно уу.
+survey-name-required = Координатын системийн нэрийг оруулна уу.
+survey-working = Сонгосон өгөгдлийг хувиргаж байна…
+survey-completed = { $items }-г байгаа газарт нь хувиргалаа. Буцаах нь тэдгээрийг сэргээнэ.
+survey-failed = Хувиргалт амжилтгүй боллоо: { $error }
+survey-stale = Идэвхтэй төсөл эсвэл эх өгөгдөл өөрчлөгдсөн тул хувиргалтыг хаялаа. Эх өгөгдлийг сонгоод дахин оролдоно уу.
+survey-coordinates-menu = Координат
+survey-definitions-action = Тодорхойлолтууд…
+survey-transform-action = Хувиргах…
+survey-definitions-title = Координатын тодорхойлолтууд
+survey-transform-title = Координат хувиргах
+survey-new-system = Шинэ координатын систем
+survey-new-system-name = Координатын систем
+survey-set-local = Уурхайн координатын систем болгож тохируулах
+survey-delete-system = Координатын системийг устгах
+survey-systems-empty = Координатын систем алга
+survey-system-section = Уурхайн торны тодорхойлолт
+survey-reference-note = Тодорхойлолт бүрийг эсрэг нь бичдэг систем: таны өгөгдлийг импортлох үед аль хэдийн зөөж яваа координат. Түүнд өөрийн параметр байдаггүй. Системийг уурхайн координатын систем болгохын тулд хулганы баруун товчоор товшино уу, эсвэл доорх хоосон орон зай дээр товшиж шинэ систем тодорхойлно уу.
+survey-system-name = Нэр
+survey-reference-system = Лавлагаа систем
+survey-reference-origin = Мэдэгдэж буй цэг — лавлагаа системийн координат
+survey-system-origin = Ижил цэг — системийн координат
+survey-angle-help = Дээрээс харахад лавлагаа X тэнхлэгээс лавлагаа Y тэнхлэг рүү цагийн зүүний эсрэг чиглэлээр.
+survey-scale-help = Лавлагаа системээс энэ систем рүү шилжих нэгдсэн XYZ масштаб. Хэмжээг хадгалахын тулд 1 ашиглана уу.
+survey-close = Хаах
+survey-from = Эх
+survey-to = Хүрэх
+survey-transform-button = Хувиргах
+survey-swap = Сэлгэх
+survey-drape-note = Дараасан зураг хувиргасан гадаргуугаас хасагдах бөгөөд дахин дараах шаардлагатай.
+survey-needs-grid-block-model = Блокийн загвар бол эсийн тогтмол тор бөгөөд проекц эсвэл лавлагаа системийн өөрчлөлт энэ тогтмол байдлыг хадгалдаггүй. Үүнийг хувиргах гэдэг нь эс бүрийг шинэ тор руу дахин дээж авч, агуулж буй утгуудаа алдана гэсэн үг тул өөрчлөлгүй орхилоо.
+survey-needs-grid-raster = Растер нь дэлхий дээр аффин зураглалаар байрладаг бөгөөд үүнийг проекц эсвэл лавлагаа системийн өөрчлөлт хадгалж чадахгүй. Үүнийг хувиргах гэдэг нь зургийг дахин дээж авна гэсэн үг тул өөрчлөлгүй орхилоо.
+survey-conversion-exact = Яг таг: зөвхөн торны өөрчлөлт, дахин проекцлолгүй.
+survey-conversion-accuracy = Заасан нарийвчлал { $accuracy } м.
+survey-kind = Төрөл
+survey-axis-names = Тэнхлэгийн нэрс
+survey-axis-help = Хэрэв X, Y, Z биш бол энэ систем өөрийн тэнхлэгүүдийг юу гэж нэрлэдэг вэ — уурхайн торны хувьд "E", "N", "RL" гэх мэт. Энэ нь координат харуулах бүх газарт хэрэглэгддэг ч зөвхөн энэ нь уурхайн координатын систем байх үед л хэрэгжинэ. Гурвыг нь бүгдийг нь эсвэл алийг нь ч бүү нэрлэ.
+survey-kind-registry-short = Бүртгэлийн систем
+survey-kind-grid-short = Өөр систем дээрх тор
+survey-registry-search = Хайх
+survey-registry-hint = Нэр эсвэл EPSG код, ж: "mga zone 56"
+survey-registry-none = Бүх үгтэй тохирох зүйл бүртгэлд алга.
+survey-parent = Тодорхойлогдсон эсрэг
+survey-parent-origin = Мэдэгдэж буй цэг — эцэг системийн координат
+survey-pick-registry = Системийг хайж, үр дүнгээс сонгоно уу.
+survey-pick-parent = Энэ торыг ямар системийн эсрэг тодорхойлохыг сонгоно уу.
+survey-pick-system = Систем сонгоно уу
+survey-pick-systems = Хувиргах эх системийг болон хүрэх системийг сонгоно уу.
+survey-no-selection = Зүүн талаас координатын систем сонгох эсвэл нэмэхийн тулд доорх хоосон орон зайг хулганы баруун товчоор товшино уу.
+survey-kind-grid = { $parent } дээрх тор
+survey-system-in-use = "{ $name }"-г устгах боломжгүй: үүний эсрэг { $dependants } { $dependants ->
+    [one] систем тодорхойлогдсон байна
+   *[other] систем тодорхойлогдсон байна
+  }. Эхлээд тэдгээрийг өөр газар руу чиглүүлнэ үү.
+survey-system-cycle = "{ $name }" нь өөрийнхөө эсрэг, шууд эсвэл эцэг системүүдээрээ дамжуулан тодорхойлогдсон байна.
+survey-system-missing = Тэр координатын систем цаашид байхгүй байна. Өөр тодорхойлолт сонгоно уу.
+survey-same-system = Өөр өөр эх ба хүрэх систем сонгоно уу.
+survey-name-exists = Ийм нэртэй координатын систем аль хэдийн байна. Засварлахын тулд түүнийг сонгох эсвэл өөр нэр сонгоно уу.
