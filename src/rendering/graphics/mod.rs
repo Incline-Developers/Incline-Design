@@ -26,8 +26,8 @@ use crate::{
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
-            BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
-            RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
+            BlockModelGpuCache, DesignPointGpuCache, DrillCell, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance,
+            PointPosition, RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
         },

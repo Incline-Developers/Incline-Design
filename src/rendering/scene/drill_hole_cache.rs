@@ -27,6 +27,18 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) selection_index: u32,
 }
 
+/// One spatial bucket of a dataset's segment instances: a contiguous range
+/// and the scene-relative box bounding every cylinder in it. Boxes overlap
+/// where a merged run crosses a cell edge; a culled cell can at most lose a
+/// sub-pixel sliver the shader's two-pixel floor would have drawn.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DrillCell {
+    pub(crate) min: glam::Vec3,
+    pub(crate) max: glam::Vec3,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+}
+
 /// The disc drawn at the top of a hole so its collar reads at a glance
 /// instead of being the indistinguishable end of a cylinder.
 #[repr(C)]
@@ -170,6 +182,9 @@ fn create_selection_buffer_and_bind_group(device: &wgpu::Device, queue: &wgpu::Q
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
+    /// Cells over `buffer` for frustum culling; empty means draw the whole
+    /// buffer (the pattern preview, never worth bucketing).
+    pub(crate) cells: Vec<DrillCell>,
     pub(crate) tie_buffer: Option<wgpu::Buffer>,
     pub(crate) tie_count: u32,
     pub(crate) collar_buffer: Option<wgpu::Buffer>,
@@ -206,6 +221,9 @@ pub(crate) struct DrillHoleGpuCache {
     /// next moves.
     content_key: u64,
     warned_over_capacity: std::collections::HashSet<DrillHoleId>,
+    /// Sets whose merge report has been logged: once per set, not once per
+    /// rebuild, since a colour stop drag rebuilds every frame.
+    reported_build: std::collections::HashSet<DrillHoleId>,
     /// Group 1 layout for every drill pipeline. A uniform because a
     /// vertex-stage storage buffer is missing on some WebGPU canvases.
     selection_layout: wgpu::BindGroupLayout,
@@ -267,14 +285,15 @@ impl DrillHoleGpuCache {
             preview: None,
             content_key: 0,
             warned_over_capacity: std::collections::HashSet::new(),
+            reported_build: std::collections::HashSet::new(),
             selection_layout,
             empty_selection_bind_group,
         }
     }
 
     /// Drops the entries and the preview and bumps `content_key`; keeps the
-    /// selection layout, the empty bind group and `warned_over_capacity`,
-    /// whose warning is meant to fire once.
+    /// selection layout, the empty bind group, and the two once-per-set
+    /// sets `warned_over_capacity` and `reported_build`.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.preview = None;
@@ -289,6 +308,7 @@ impl DrillHoleGpuCache {
         let retained = self.entries.len();
         self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id && dataset.state.loaded));
         self.warned_over_capacity.retain(|id| datasets.iter().any(|dataset| dataset.id == *id));
+        self.reported_build.retain(|id| datasets.iter().any(|dataset| dataset.id == *id));
         if self.entries.len() != retained {
             self.content_key = self.content_key.wrapping_add(1);
         }
@@ -319,7 +339,7 @@ impl DrillHoleGpuCache {
                 );
             }
 
-            let (buffer, count, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group) = match self.entries.remove(&dataset.id) {
+            let (buffer, count, cells, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group) = match self.entries.remove(&dataset.id) {
                 Some(cached) if !base_changed => {
                     // Only the preview, never inserted here, has no buffer.
                     let selection_buffer = cached.selection_buffer.unwrap();
@@ -327,6 +347,7 @@ impl DrillHoleGpuCache {
                     (
                         cached.buffer,
                         cached.count,
+                        cached.cells,
                         cached.tie_buffer,
                         cached.tie_count,
                         cached.collar_buffer,
@@ -336,15 +357,29 @@ impl DrillHoleGpuCache {
                     )
                 }
                 _ => {
-                    let instances = build_segment_instances(dataset, scene_origin);
-                    let buffer = (!instances.is_empty()).then(|| {
+                    let built = build_segment_instances(dataset, scene_origin);
+                    let buffer = (!built.instances.is_empty()).then(|| {
                         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("Drillhole Segment Instances"),
-                            contents: bytemuck::cast_slice(&instances),
+                            contents: bytemuck::cast_slice(&built.instances),
                             usage: wgpu::BufferUsages::VERTEX,
                         })
                     });
-                    let count = instances.len().min(u32::MAX as usize) as u32;
+                    let count = built.instances.len().min(u32::MAX as usize) as u32;
+                    let cells = built.cells;
+                    if self.reported_build.insert(dataset.id) {
+                        crate::userspace_log!(
+                            "{}",
+                            tr_format!(
+                                literal = "Drill hole set %name%: %stations% stations, %before% segments merged to %after%, %cells% cells",
+                                name = dataset.name,
+                                stations = built.stations,
+                                before = built.before_merge,
+                                after = built.instances.len(),
+                                cells = cells.len(),
+                            )
+                        );
+                    }
 
                     let ties = build_tie_instances(dataset, scene_origin);
                     let tie_buffer = (!ties.is_empty()).then(|| {
@@ -368,7 +403,17 @@ impl DrillHoleGpuCache {
 
                     let (selection_buffer, selection_bind_group) = create_selection_buffer_and_bind_group(device, queue, &self.selection_layout, &bits);
 
-                    (buffer, count, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group)
+                    (
+                        buffer,
+                        count,
+                        cells,
+                        tie_buffer,
+                        tie_count,
+                        collar_buffer,
+                        collar_count,
+                        selection_buffer,
+                        selection_bind_group,
+                    )
                 }
             };
 
@@ -378,6 +423,7 @@ impl DrillHoleGpuCache {
                 CachedDrillHoles {
                     buffer,
                     count,
+                    cells,
                     tie_buffer,
                     tie_count,
                     collar_buffer,
@@ -463,6 +509,7 @@ impl DrillHoleGpuCache {
         self.preview = Some(CachedDrillHoles {
             buffer,
             count: instances.len().min(u32::MAX as usize) as u32,
+            cells: Vec::new(),
             tie_buffer: None,
             tie_count: 0,
             collar_buffer,
@@ -560,13 +607,102 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
     hash.finish()
 }
 
-fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillSegmentInstance> {
+/// What `sync` logs once per full segment rebuild.
+struct SegmentBuild {
+    instances: Vec<DrillSegmentInstance>,
+    cells: Vec<DrillCell>,
+    stations: usize,
+    before_merge: usize,
+}
+
+/// An emitted segment before merging, in f64 world positions so the merge
+/// tests run before the f32 cast the instance takes.
+#[derive(Clone, Copy)]
+struct RawSegment {
+    start: DVec3,
+    end: DVec3,
+    radius: f32,
+    color: [f32; 3],
+    selection_index: u32,
+}
+
+/// Largest direction change, in degrees, between a run's chord and a
+/// segment joining it: the cheap first gate that rejects a dogleg before
+/// the offset arithmetic; [`MERGE_MAX_OFFSET`] is what bounds the drift.
+const MERGE_MAX_DEVIATION_DEGREES: f64 = 1.0;
+
+/// Largest perpendicular distance, in metres, a swallowed station may sit
+/// from its run's chord: below the zoom at which a hole reads wider than a
+/// pixel, above downhole survey scatter. An angle alone cannot say this:
+/// one degree over three hundred metres is a metre off the trace, a wrong
+/// line for a mine design tool, not a nearly straight one.
+const MERGE_MAX_OFFSET: f64 = 0.1;
+
+/// Distance from `station` to the line through `start` along unit `direction`.
+fn offset_from_chord(station: DVec3, start: DVec3, direction: DVec3) -> f64 {
+    (station - start).cross(direction).length()
+}
+
+/// Most stations one run may swallow; every extension rechecks them all, so
+/// this cap keeps the merge one pass over the hole.
+const MERGE_MAX_STATIONS: usize = 64;
+
+/// Merges consecutive same-hole segments that share a colour, start where the
+/// last ended, bend under [`MERGE_MAX_DEVIATION_DEGREES`] from the run's chord
+/// and leave every swallowed station within [`MERGE_MAX_OFFSET`] of it; any
+/// break starts a new run. `cos_threshold` is the angle's cosine, taken once.
+/// The offset is rechecked exactly per extension: a carried bound must assume
+/// the worst of each move and splits runs on survey scatter alone.
+fn merge_raw_segments(segments: Vec<RawSegment>, cos_threshold: f64) -> Vec<RawSegment> {
+    let mut merged: Vec<RawSegment> = Vec::with_capacity(segments.len());
+    let mut swallowed: Vec<DVec3> = Vec::new();
+    for segment in segments {
+        if let Some(run) = merged.last_mut()
+            && run.color == segment.color
+            && run.end == segment.start
+            && swallowed.len() < MERGE_MAX_STATIONS
+        {
+            let run_direction = run.end - run.start;
+            let segment_direction = segment.end - run.end;
+            let run_length = run_direction.length();
+            let segment_length = segment_direction.length();
+            let within_angle = run_length > 0.0 && segment_length > 0.0 && run_direction.dot(segment_direction) / (run_length * segment_length) >= cos_threshold;
+            let chord = segment.end - run.start;
+            let chord_length = chord.length();
+            if within_angle && chord_length > 0.0 {
+                let direction = chord / chord_length;
+                // The newly swallowed station is the likeliest to fail.
+                let stations_near = offset_from_chord(run.end, run.start, direction) <= MERGE_MAX_OFFSET
+                    && swallowed.iter().all(|&station| offset_from_chord(station, run.start, direction) <= MERGE_MAX_OFFSET);
+                if stations_near {
+                    swallowed.push(run.end);
+                    run.end = segment.end;
+                    continue;
+                }
+            }
+        }
+        swallowed.clear();
+        merged.push(segment);
+    }
+    merged
+}
+
+fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> SegmentBuild {
     if !dataset.state.loaded {
-        return Vec::new();
+        return SegmentBuild {
+            instances: Vec::new(),
+            cells: Vec::new(),
+            stations: 0,
+            before_merge: 0,
+        };
     }
     let mut instances = Vec::new();
+    let mut stations = 0usize;
+    let mut before_merge = 0usize;
+    let cos_threshold = MERGE_MAX_DEVIATION_DEGREES.to_radians().cos();
     let field = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key));
     for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+        stations += hole.trace.len();
         if hole.trace.len() < 2 {
             continue;
         }
@@ -594,6 +730,7 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
             order
         });
         let mut cursor = 0usize;
+        let mut raw_segments: Vec<RawSegment> = Vec::new();
 
         let mut previous = hole.position_at_depth(boundaries[0]);
         for pair in boundaries.windows(2) {
@@ -631,19 +768,119 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
                     .min_by_key(|&&i| i)
                     .and_then(|&i| hole.intervals[i].values.get(&field.key))
             });
-            instances.push(DrillSegmentInstance {
-                start: (start - scene_origin).as_vec3().to_array(),
+            raw_segments.push(RawSegment {
+                start,
+                end,
                 radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32),
-                end: (end - scene_origin).as_vec3().to_array(),
-                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: field
                     .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
                     .unwrap_or([1.0; 3]),
                 selection_index: index as u32,
             });
         }
+
+        before_merge += raw_segments.len();
+        instances.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
+            start: (segment.start - scene_origin).as_vec3().to_array(),
+            radius: segment.radius,
+            end: (segment.end - scene_origin).as_vec3().to_array(),
+            pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
+            color: segment.color,
+            selection_index: segment.selection_index,
+        }));
     }
-    instances
+    let (instances, cells) = bucket_instances(instances);
+    SegmentBuild {
+        instances,
+        cells,
+        stations,
+        before_merge,
+    }
+}
+
+/// Instances one cell should hold on average when sizing the grid.
+const TARGET_INSTANCES_PER_CELL: usize = 512;
+/// Cap on cell count so an odd aspect ratio cannot bloat the grid.
+const MAX_CELLS: usize = 4096;
+
+/// The scene-relative box an instance occupies, padded by its radius.
+fn instance_box(instance: &DrillSegmentInstance) -> (glam::Vec3, glam::Vec3) {
+    let start = glam::Vec3::from_array(instance.start);
+    let end = glam::Vec3::from_array(instance.end);
+    let radius = glam::Vec3::splat(instance.radius);
+    (start.min(end) - radius, start.max(end) + radius)
+}
+
+/// Buckets merged instances into a uniform grid over their bounds and
+/// reorders `instances` so each cell owns one contiguous range; cells come
+/// out sorted by `start` and cover the whole Vec, a permutation of the input.
+fn bucket_instances(instances: Vec<DrillSegmentInstance>) -> (Vec<DrillSegmentInstance>, Vec<DrillCell>) {
+    if instances.is_empty() {
+        return (instances, Vec::new());
+    }
+
+    let mut bounds_min = glam::Vec3::splat(f32::INFINITY);
+    let mut bounds_max = glam::Vec3::splat(f32::NEG_INFINITY);
+    for instance in &instances {
+        let (min, max) = instance_box(instance);
+        bounds_min = bounds_min.min(min);
+        bounds_max = bounds_max.max(max);
+    }
+    // A single hole or a flat dataset has a zero extent on some axis.
+    let extent = (bounds_max - bounds_min).max(glam::Vec3::splat(1.0e-6));
+
+    let target = (instances.len() / TARGET_INSTANCES_PER_CELL).clamp(1, MAX_CELLS);
+    let volume = extent.x as f64 * extent.y as f64 * extent.z as f64;
+    let mut side = (volume / target as f64).cbrt().max(1.0e-6);
+    let (divisions_x, divisions_y, divisions_z) = loop {
+        let x = ((extent.x as f64 / side).ceil() as usize).max(1);
+        let y = ((extent.y as f64 / side).ceil() as usize).max(1);
+        let z = ((extent.z as f64 / side).ceil() as usize).max(1);
+        if x.saturating_mul(y).saturating_mul(z) <= MAX_CELLS {
+            break (x, y, z);
+        }
+        side *= 1.3;
+    };
+
+    let cell_of = |midpoint: glam::Vec3| -> (usize, usize, usize) {
+        let relative = (midpoint - bounds_min) / extent;
+        (
+            ((relative.x * divisions_x as f32) as usize).min(divisions_x - 1),
+            ((relative.y * divisions_y as f32) as usize).min(divisions_y - 1),
+            ((relative.z * divisions_z as f32) as usize).min(divisions_z - 1),
+        )
+    };
+
+    let mut buckets: HashMap<(usize, usize, usize), Vec<usize>> = HashMap::new();
+    for (index, instance) in instances.iter().enumerate() {
+        let start = glam::Vec3::from_array(instance.start);
+        let end = glam::Vec3::from_array(instance.end);
+        buckets.entry(cell_of((start + end) * 0.5)).or_default().push(index);
+    }
+
+    let mut keys: Vec<(usize, usize, usize)> = buckets.keys().copied().collect();
+    keys.sort_unstable();
+
+    let mut reordered = Vec::with_capacity(instances.len());
+    let mut cells = Vec::with_capacity(keys.len());
+    for key in keys {
+        let start = reordered.len() as u32;
+        let mut cell_min = glam::Vec3::splat(f32::INFINITY);
+        let mut cell_max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for &member in &buckets[&key] {
+            let (min, max) = instance_box(&instances[member]);
+            cell_min = cell_min.min(min);
+            cell_max = cell_max.max(max);
+            reordered.push(instances[member]);
+        }
+        cells.push(DrillCell {
+            min: cell_min,
+            max: cell_max,
+            start,
+            end: reordered.len() as u32,
+        });
+    }
+    (reordered, cells)
 }
 
 /// The surface connectors, drawn collar to collar through the same instanced
