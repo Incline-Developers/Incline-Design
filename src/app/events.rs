@@ -1115,9 +1115,9 @@ impl<'a> App<'a> {
                 });
                 if let Some(pick) = picked {
                     let handle = pick.entity;
-                    // Same rule the left-click path follows: Drill & Blast
-                    // acts on the hole under the cursor, not its dataset.
-                    let hole = pick.hole.filter(|_| self.editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast);
+                    // Same rule the left-click path follows: a click acts on
+                    // the hole under the cursor, not its dataset.
+                    let hole = pick.hole;
                     if let crate::model::SceneEntityId::Object(id) = handle {
                         self.activate_project_for_object(id);
                     }
