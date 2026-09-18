@@ -7,13 +7,23 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::model::project::ProjectId;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Built field by field from the store, never deserialised whole.
+#[derive(Clone, Debug)]
 pub(crate) struct BrowserProjectRecord {
     pub(crate) id: ProjectId,
     pub(crate) name: String,
     pub(crate) omf_bytes: Vec<u8>,
     pub(crate) saved_at_ms: u64,
+}
+
+/// A record without its payload. The bytes travel beside this rather than
+/// inside it: JSON carries a byte array as one decimal number per byte.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserProjectMeta {
+    id: ProjectId,
+    name: String,
+    saved_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,11 +102,21 @@ function transactionDone(transaction) {
     });
 }
 
-export async function inclineDesignPutProject(recordJson) {
+// A record's payload arrives as bytes beside its details rather than spelled
+// out inside them. The copy is taken before the first await: the argument is a
+// view into wasm memory, which any later await may have grown and detached.
+export async function inclineDesignPutProject(metaJson, omfBytes) {
+    const record = JSON.parse(metaJson);
+    record.omf_bytes = omfBytes.slice();
     const db = await openInclineDesignDb();
     const tx = db.transaction("projects", "readwrite");
-    tx.objectStore("projects").put(JSON.parse(recordJson));
+    tx.objectStore("projects").put(record);
     await transactionDone(tx);
+}
+
+// Records saved before the payload left JSON hold a plain array of numbers.
+function inclineDesignHasPayload(record) {
+    return !!record && (Array.isArray(record.omf_bytes) || ArrayBuffer.isView(record.omf_bytes));
 }
 
 export async function inclineDesignDeleteProject(projectId) {
@@ -119,7 +139,7 @@ export async function inclineDesignLoadSessionProjects() {
     const records = await requestValue(projectTx.objectStore("projects").getAll());
     // Old JSON-design records intentionally remain in IndexedDB but are not
     // treated as native projects after the OMF-first migration.
-    const omfProjects = records.filter(record => Array.isArray(record.omf_bytes));
+    const omfProjects = records.filter(inclineDesignHasPayload);
     // Only the catalog is returned: startup opens no project, so the session's
     // current project is never decoded here.
     return JSON.stringify({
@@ -131,7 +151,11 @@ export async function inclineDesignGetProject(projectId) {
     const db = await openInclineDesignDb();
     const tx = db.transaction("projects", "readonly");
     const record = await requestValue(tx.objectStore("projects").get(projectId));
-    return JSON.stringify(record && Array.isArray(record.omf_bytes) ? record : null);
+    if (!inclineDesignHasPayload(record)) return null;
+    return {
+        metaJson: JSON.stringify({ id: record.id, name: record.name, saved_at_ms: record.saved_at_ms }),
+        bytes: record.omf_bytes,
+    };
 }
 
 export function inclineDesignInstallDirtyGuard() {
@@ -183,7 +207,7 @@ export function inclineDesignInstallPasteListener(callback) {
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = inclineDesignPutProject)]
-    fn js_put_project(record_json: &str) -> js_sys::Promise;
+    fn js_put_project(meta_json: &str, omf_bytes: &[u8]) -> js_sys::Promise;
     #[wasm_bindgen(js_name = inclineDesignDeleteProject)]
     fn js_delete_project(project_id: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = inclineDesignSaveSession)]
@@ -223,8 +247,13 @@ fn js_error(error: JsValue) -> String {
 }
 
 pub(crate) async fn put_project(record: &BrowserProjectRecord) -> Result<(), String> {
-    let json = serde_json::to_string(record).map_err(|error| error.to_string())?;
-    JsFuture::from(js_put_project(&json)).await.map_err(js_error)?;
+    let meta = BrowserProjectMeta {
+        id: record.id,
+        name: record.name.clone(),
+        saved_at_ms: record.saved_at_ms,
+    };
+    let json = serde_json::to_string(&meta).map_err(|error| error.to_string())?;
+    JsFuture::from(js_put_project(&json, &record.omf_bytes)).await.map_err(js_error)?;
     Ok(())
 }
 
@@ -254,5 +283,22 @@ pub(crate) async fn load_session_projects() -> Result<BrowserSessionProjects, St
 }
 
 pub(crate) async fn load_project(project_id: ProjectId) -> Result<Option<BrowserProjectRecord>, String> {
-    json_from_promise(js_get_project(&project_id.to_string())).await
+    let value = JsFuture::from(js_get_project(&project_id.to_string())).await.map_err(js_error)?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let meta = js_sys::Reflect::get(&value, &JsValue::from_str("metaJson"))
+        .map_err(js_error)?
+        .as_string()
+        .ok_or_else(|| "IndexedDB returned a project without its details".to_owned())?;
+    let meta: BrowserProjectMeta = serde_json::from_str(&meta).map_err(|error| format!("invalid browser project record: {error}"))?;
+    let bytes = js_sys::Reflect::get(&value, &JsValue::from_str("bytes")).map_err(js_error)?;
+    // `new Uint8Array(x)` takes both shapes: the typed array written since,
+    // and the plain array of numbers older records still hold.
+    Ok(Some(BrowserProjectRecord {
+        id: meta.id,
+        name: meta.name,
+        omf_bytes: js_sys::Uint8Array::new(&bytes).to_vec(),
+        saved_at_ms: meta.saved_at_ms,
+    }))
 }
