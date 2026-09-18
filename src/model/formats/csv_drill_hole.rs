@@ -13,7 +13,9 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::drill_hole::{DrillHole, DrillHoleDataset, DrillInterval, DrillValue, OrientationSource, SurveyObservation, TraceStation, resolve_trace},
+    model::drill_hole::{
+        DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation, TraceStation, direction_orientation, resolve_trace,
+    },
     userspace_warn,
 };
 
@@ -1162,4 +1164,99 @@ fn parse_csv(bytes: &[u8]) -> Result<ParsedCsv, CsvDrillError> {
         repaired_bytes,
         repaired_cells,
     })
+}
+
+/// The three tables one dataset is written back out as, in the shape this
+/// module reads: every column naming a role is one the mapper matches
+/// outright, and an interval's own fields arrive as attributes, so an export
+/// re-imports with no mapping asked for.
+pub(crate) struct CsvDrillBundle {
+    pub(crate) collars: String,
+    pub(crate) survey: String,
+    pub(crate) intervals: String,
+}
+
+/// One cell, quoted only where a comma, quote or newline would otherwise end
+/// it early.
+fn csv_cell(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+fn csv_row(cells: impl IntoIterator<Item = String>) -> String {
+    let mut row = cells.into_iter().map(|cell| csv_cell(&cell)).collect::<Vec<_>>().join(",");
+    row.push('\n');
+    row
+}
+
+/// One dataset as collar, survey and interval tables.
+///
+/// Intervals carry the interpreted values, which is what every other reader
+/// of a hole sees, and numbers are written at full precision because a
+/// database reads this back rather than a person. A hole with no trace still
+/// writes its collar and one vertical survey row, so a set round-trips
+/// without losing the holes that are only a collar.
+pub(crate) fn write_bundle(dataset: &DrillHoleDataset) -> CsvDrillBundle {
+    // No depth column: the collar mapper has no role for one, so writing it
+    // would be a column this module reads back as nothing.
+    let mut collars = csv_row(["HOLEID", "EAST", "NORTH", "RL", "DIAMETER"].map(str::to_owned));
+    let mut survey = csv_row(["HOLEID", "DEPTH", "AZIMUTH", "DIP"].map(str::to_owned));
+    let mut interval_header = vec!["HOLEID".to_owned(), "FROM".to_owned(), "TO".to_owned()];
+    interval_header.extend(dataset.fields.iter().map(|field| field.label.clone()));
+    let mut intervals = csv_row(interval_header);
+
+    for hole in &dataset.holes {
+        let collar = hole.collar_position();
+        // Diameter is a column the reader takes, so a hole that has one keeps
+        // it; a hole without leaves the cell empty rather than inventing a size.
+        let diameter = hole.diameter.map(|value| value.to_string()).unwrap_or_default();
+        collars.push_str(&csv_row([hole.dhid.clone(), collar.x.to_string(), collar.y.to_string(), collar.z.to_string(), diameter]));
+
+        // The reader steers each segment by the row above it, so a station
+        // writes the bearing of the segment leaving it and the toe repeats the
+        // one it arrived on. A hole with no downhole survey runs straight
+        // down, and writes the one row that says so.
+        let collar_only = [TraceStation { depth: 0.0, position: collar }];
+        let trace = if hole.trace.is_empty() { &collar_only[..] } else { &hole.trace[..] };
+        for (index, station) in trace.iter().enumerate() {
+            let orientation = segment_orientation(trace, index).unwrap_or(STRAIGHT_DOWN);
+            survey.push_str(&csv_row([
+                hole.dhid.clone(),
+                station.depth.to_string(),
+                orientation.azimuth.to_string(),
+                orientation.dip.to_string(),
+            ]));
+        }
+
+        for interval in &hole.intervals {
+            let mut row = vec![hole.dhid.clone(), interval.from.to_string(), interval.to.to_string()];
+            row.extend(dataset.fields.iter().map(|field| match interval.values.get(&field.key) {
+                Some(DrillValue::Numeric(number)) => number.to_string(),
+                Some(DrillValue::Category(code)) => code.clone(),
+                None => String::new(),
+            }));
+            intervals.push_str(&csv_row(row));
+        }
+    }
+
+    CsvDrillBundle { collars, survey, intervals }
+}
+
+/// What a hole with no downhole survey is taken to do.
+const STRAIGHT_DOWN: HoleOrientation = HoleOrientation { azimuth: 0.0, dip: -90.0 };
+
+/// The bearing the survey row at `index` carries: the segment leaving the
+/// station, or for the toe the one arriving. `None` where neither has a
+/// length to take a bearing from.
+fn segment_orientation(trace: &[TraceStation], index: usize) -> Option<HoleOrientation> {
+    let leaving = trace.get(index + 1).map(|next| next.position - trace[index].position);
+    let arriving = index.checked_sub(1).map(|above| trace[index].position - trace[above].position);
+    leaving
+        .into_iter()
+        .chain(arriving)
+        .find(|delta| delta.length_squared() > 1.0e-18)
+        .map(direction_orientation)
 }

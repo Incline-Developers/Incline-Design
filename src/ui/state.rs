@@ -1753,6 +1753,7 @@ pub(crate) struct EditorState {
     pub(crate) export_layer: Option<LayerId>,
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
+    pub(crate) export_drill_hole: Option<DrillHoleId>,
 }
 
 impl EditorState {
@@ -2517,6 +2518,7 @@ impl EditorState {
             export_layer: None,
             export_triangulation: None,
             export_block_model: None,
+            export_drill_hole: None,
         }
     }
 
@@ -2955,6 +2957,8 @@ pub(crate) enum UiCommand {
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    /// One drillhole dataset out as the three tables it was read from.
+    ExportDrillHoleCsv(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -3451,6 +3455,7 @@ impl UiCommand {
             Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
+            Self::ExportDrillHoleCsv(id) => report(tr!(literal = "Export Drillhole CSV"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),

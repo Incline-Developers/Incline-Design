@@ -5,6 +5,7 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
+        drill_hole::DrillHoleId,
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
@@ -181,19 +182,22 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
     ui.set_width(EXPLORER_WIDTH);
     egui::ScrollArea::new([false, true]).auto_shrink([false, false]).show(ui, |ui| {
         ui.vertical(|ui| {
-            egui::CollapsingHeader::new(tr!(literal = "Interchange")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Interchange")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Open Mining Format (.omf)"), DataMenu::Omf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "CAD")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "CAD")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
                 draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
                 draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Block Models")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Block Models")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
+            });
+            egui::CollapsingHeader::new(tr!(literal = "Drill Holes")).show(ui, |ui| {
+                draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
             });
         });
     });
@@ -232,6 +236,7 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         DataMenu::Stl => draw_export_mesh(ui, editor, project, &tr!(literal = "Export STL")),
         DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!(literal = "Export PLY")),
         DataMenu::CsvBlockModel => draw_export_csv_block_model(ui, editor, project),
+        DataMenu::CsvDrillHole => draw_export_csv_drill_holes(ui, editor, project),
         _ => {}
     });
 }
@@ -499,6 +504,15 @@ fn draw_export_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.small(tr!(literal = "Exports block centroids as x/y/z, block sizes as dx/dy/dz, followed by resource columns."));
 }
 
+fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    ui.heading(tr!(literal = "Export CSV Drillholes"));
+    ensure_export_drill_hole(editor, project);
+    drill_hole_combo(ui, "csv_export_drill_hole", &tr!(literal = "Dataset:"), project, &mut editor.export_drill_hole);
+    ui.small(tr!(
+        literal = "Writes three files beside the name you choose: collars, survey and intervals, in the columns this dialog imports."
+    ));
+}
+
 /// Imports that merge into an existing project target the active project.
 fn active_project_label(ui: &mut egui::Ui, field_label: &str, project: &UiProjectView) {
     let name = project
@@ -613,6 +627,9 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::CsvBlockModel => {
             editor.export_block_model = first_loaded_block_model(project);
         }
+        DataMenu::CsvDrillHole => {
+            editor.export_drill_hole = first_loaded_drill_hole(project);
+        }
         _ => {}
     }
 }
@@ -633,6 +650,32 @@ fn ensure_export_triangulation(editor: &mut EditorState, project: &UiProjectView
     if !has_loaded_triangulation(project, editor.export_triangulation) {
         editor.export_triangulation = first_loaded_triangulation(project);
     }
+}
+
+fn ensure_export_drill_hole(editor: &mut EditorState, project: &UiProjectView) {
+    if !has_loaded_drill_hole(project, editor.export_drill_hole) {
+        editor.export_drill_hole = first_loaded_drill_hole(project);
+    }
+}
+
+fn drill_hole_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<DrillHoleId>) {
+    let label = selected
+        .and_then(|id| project.drill_holes.iter().find(|entry| entry.id == id && entry.is_loaded))
+        .map(|entry| entry.name.clone())
+        .unwrap_or_else(|| tr!(literal = "Choose a loaded dataset"));
+    MenuFieldCombo::new(
+        id,
+        field_label,
+        selected,
+        label,
+        project
+            .drill_holes
+            .iter()
+            .filter(|entry| entry.is_loaded)
+            .map(|entry| (Some(entry.id), entry.name.clone().into())),
+    )
+    .width(FIELD_WIDTH)
+    .show(ui);
 }
 
 fn ensure_export_block_model(editor: &mut EditorState, project: &UiProjectView) {
@@ -696,6 +739,7 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
             editor.export_triangulation.map(|id| UiCommand::ExportTriangulationAs(id, format))
         }
         DataMenu::CsvBlockModel => editor.export_block_model.map(UiCommand::ExportBlockModelCsv),
+        DataMenu::CsvDrillHole => editor.export_drill_hole.map(UiCommand::ExportDrillHoleCsv),
         _ => None,
     }
 }
@@ -729,7 +773,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole
     )
 }
 
@@ -747,6 +791,10 @@ fn active_project(project: &UiProjectView) -> Option<u32> {
 
 fn first_loaded_triangulation(project: &UiProjectView) -> Option<TriangulationId> {
     project.triangulations.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
+}
+
+fn first_loaded_drill_hole(project: &UiProjectView) -> Option<DrillHoleId> {
+    project.drill_holes.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
 }
 
 fn first_loaded_block_model(project: &UiProjectView) -> Option<BlockModelId> {
@@ -768,6 +816,10 @@ fn has_project(project: &UiProjectView, selected: Option<u32>) -> bool {
 
 fn has_loaded_triangulation(project: &UiProjectView, selected: Option<TriangulationId>) -> bool {
     selected.is_some_and(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == id))
+}
+
+fn has_loaded_drill_hole(project: &UiProjectView, selected: Option<DrillHoleId>) -> bool {
+    selected.is_some_and(|id| project.drill_holes.iter().any(|entry| entry.is_loaded && entry.id == id))
 }
 
 fn has_loaded_block_model(project: &UiProjectView, selected: Option<BlockModelId>) -> bool {

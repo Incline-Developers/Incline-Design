@@ -304,6 +304,10 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
+            UiCommand::ExportDrillHoleCsv(id) => {
+                self.choose_export_drill_hole_csv(id);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
                 Ok(())
