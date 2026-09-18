@@ -147,29 +147,29 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
     ui.set_width(EXPLORER_WIDTH);
     egui::ScrollArea::new([false, true]).auto_shrink([false, false]).show(ui, |ui| {
         ui.vertical(|ui| {
-            egui::CollapsingHeader::new(tr!(literal = "Interchange")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Interchange")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Open Mining Format (.omf)"), DataMenu::Omf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "CAD")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "CAD")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
                 draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
                 draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Point Clouds")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Point Clouds")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "LAS / LAZ (.las, .laz)"), DataMenu::Las);
                 draw_entry(ui, editor, &tr!(literal = "ASCII Points (.xyz, .pts)"), DataMenu::Xyz);
                 draw_entry(ui, editor, &tr!(literal = "Point Cloud Data (.pcd)"), DataMenu::Pcd);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Block Models")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Block Models")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Drill Holes")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Drill Holes")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Textures")).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(literal = "Textures")).show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "GeoTIFF (.tif, .tiff)"), DataMenu::Geotiff);
             });
         });
