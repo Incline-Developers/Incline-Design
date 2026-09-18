@@ -7,7 +7,12 @@
 use crate::{
     i18n::tr,
     model::{SceneEntityId, drill_hole::OpenDrillHoleDataset},
-    ui::{EditorState, state::BoreholeInspectorTab, unthemed_icon, widgets::viewport::DrillHoleProperties},
+    ui::{
+        EditorState,
+        state::{BoreholeInspectorTab, UiCommand, ViewToggle},
+        themed_icon, unthemed_icon,
+        widgets::viewport::DrillHoleProperties,
+    },
 };
 
 /// Id of the borehole inspector panel; `crate::ui::chrome` reads its resize
@@ -22,7 +27,7 @@ const MIN_WIDTH: f32 = 200.0;
 const MAX_WIDTH: f32 = 520.0;
 
 /// Draw the borehole inspector panel and return what it claimed.
-pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset]) -> egui::Rect {
+pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) -> egui::Rect {
     // Reuse the explorer's row colours so the two panels share a palette.
     let (surface, _stripe) = crate::ui::widgets::tree_row_colors(ui);
     egui::Panel::right(PANEL_ID)
@@ -45,7 +50,7 @@ pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorStat
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             body_ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            draw_body(&mut body_ui, editor, datasets);
+            draw_body(&mut body_ui, editor, datasets, commands);
         })
         .response
         .rect
@@ -55,7 +60,7 @@ pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorStat
 ///
 /// The tab strip and dataset name sit outside the Data tab's scroll area,
 /// so neither scrolls out of view.
-fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset]) {
+fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
@@ -63,6 +68,16 @@ fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillH
         ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Log, tr!(literal = "Log"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
+            // Rightmost, where a panel's close belongs; the lock sits inboard.
+            // The same switch the View and Geology menus throw, so the stored
+            // preference and the macOS check mark stay in step.
+            if ui
+                .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
+                .on_hover_text(tr!(literal = "Close the inspector"))
+                .clicked()
+            {
+                commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
+            }
             let locked = editor.borehole_inspector_locked;
             // unthemed_icon! embeds the image at compile time, so each icon
             // is named per branch rather than passed in as a value.

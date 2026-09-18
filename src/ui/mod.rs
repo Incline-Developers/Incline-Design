@@ -585,7 +585,7 @@ fn draw_ui(
     // of it. Shown on a stored preference, not on the active workspace.
     let borehole_inspector_rect = editor
         .show_borehole_inspector
-        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes));
+        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes, commands));
     if borehole_inspector_rect.is_none() {
         // Keep the root auto-id sequence identical when this panel is absent,
         // or every panel after it receives a different unique id.
