@@ -1367,16 +1367,15 @@ fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<St
 
 /// One interval as text, one cell per header column, `raw` for full
 /// precision instead of display rounding. An unrecorded field is an empty cell.
+///
+/// A corrected cell shows the interpreted value with the logged one in
+/// brackets; raw text, which a copy carries, is the interpreted value alone.
 fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
-    let mut row = Vec::with_capacity(fields.len() + 2);
-    if raw {
-        row.push(interval.from.to_string());
-        row.push(interval.to.to_string());
-    } else {
-        row.push(format!("{:.2}", interval.from));
-        row.push(format!("{:.2}", interval.to));
-    }
-    row.extend(fields.iter().map(|field| match interval.values.get(&field.key) {
+    let (logged_from, logged_to, logged_values) = interval.logged();
+    let corrected = !raw && interval.is_corrected();
+    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
+    let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
         Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
             if raw {
                 number.to_string()
@@ -1386,7 +1385,15 @@ fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &
         }
         Some(crate::model::drill_hole::DrillValue::Category(category)) => category.clone(),
         None => String::new(),
-    }));
+    };
+    let mut row = Vec::with_capacity(fields.len() + 2);
+    row.push(beside(depth(interval.from), depth(logged_from)));
+    row.push(beside(depth(interval.to), depth(logged_to)));
+    row.extend(
+        fields
+            .iter()
+            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
+    );
     row
 }
 

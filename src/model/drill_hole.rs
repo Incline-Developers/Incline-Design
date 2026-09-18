@@ -88,11 +88,38 @@ pub(crate) enum DrillValue {
     Category(String),
 }
 
+/// One interval as the site logged it, and its identity within its hole.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LoggedInterval {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) values: BTreeMap<String, DrillValue>,
+}
+
+/// One interval as interpreted: what every reader, colour and section sees.
+/// `logged` is what the site sent, or `None` when nothing has parted them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillInterval {
     pub(crate) from: f64,
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) logged: Option<LoggedInterval>,
+}
+
+impl DrillInterval {
+    pub(crate) fn logged(&self) -> (f64, f64, &BTreeMap<String, DrillValue>) {
+        match &self.logged {
+            Some(logged) => (logged.from, logged.to, &logged.values),
+            None => (self.from, self.to, &self.values),
+        }
+    }
+
+    pub(crate) fn is_corrected(&self) -> bool {
+        self.logged
+            .as_ref()
+            .is_some_and(|logged| logged.from != self.from || logged.to != self.to || logged.values != self.values)
+    }
 }
 
 /// One surface connector: the delay laid between two holes, and which way the
@@ -845,6 +872,20 @@ impl DrillHoleDataset {
                                                 }
                                         })
                                         .fold(0usize, usize::saturating_add)
+                                    + interval.logged.as_ref().map_or(0, |logged| {
+                                        logged
+                                            .values
+                                            .iter()
+                                            .map(|(key, value)| {
+                                                key.len()
+                                                    + size_of::<DrillValue>()
+                                                    + match value {
+                                                        DrillValue::Category(text) => text.len(),
+                                                        DrillValue::Numeric(_) => 0,
+                                                    }
+                                            })
+                                            .fold(0usize, usize::saturating_add)
+                                    })
                             })
                             .fold(0usize, usize::saturating_add)
                 })

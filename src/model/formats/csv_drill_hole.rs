@@ -686,10 +686,12 @@ fn interval_row(
         };
         values.insert(key, value);
     }
+    // Nothing is copied: `logged` stays empty until a correction parts them.
     DrillInterval {
         from: keys.from,
         to: keys.to,
         values,
+        logged: None,
     }
 }
 
