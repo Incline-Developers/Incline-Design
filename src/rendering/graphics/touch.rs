@@ -6,6 +6,8 @@ use super::Graphics;
 #[derive(Default)]
 pub(super) struct TouchGesture {
     pub(super) contacts: Vec<(DeviceId, u64, DVec2)>,
+    pending_anchor: Option<DVec2>,
+    multi_touch: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -22,13 +24,22 @@ impl TouchGesture {
         self.contacts.iter().any(|(device, id, _)| *device == touch.device_id && *id == touch.id) || (touch.phase == TouchPhase::Started && allow_start)
     }
 
-    fn update(&mut self, touch: &Touch, allow_start: bool) -> Gesture {
+    fn update(&mut self, touch: &Touch, allow_start: bool, orbit_threshold: f64) -> Gesture {
         let position = DVec2::new(touch.location.x, touch.location.y);
         let index = self.contacts.iter().position(|(device, id, _)| *device == touch.device_id && *id == touch.id);
         match touch.phase {
             TouchPhase::Started if allow_start && index.is_none() => {
                 self.contacts.push((touch.device_id, touch.id, position));
-                if self.contacts.len() == 1 { Gesture::Anchor(position) } else { Gesture::None }
+                if self.contacts.len() == 1 {
+                    // A touch-down may be the first half of a pan/pinch.
+                    self.pending_anchor = Some(position);
+                    Gesture::None
+                } else {
+                    self.pending_anchor = None;
+                    self.multi_touch = true;
+                    // Clear any one-finger orbit pivot and its marker immediately.
+                    Gesture::End
+                }
             }
             TouchPhase::Moved => {
                 let Some(index) = index else { return Gesture::None };
@@ -44,8 +55,16 @@ impl TouchGesture {
                         delta: (c + d - a - b) * 0.5,
                         scale: if old_distance >= 1.0 && new_distance >= 1.0 { old_distance / new_distance } else { 1.0 },
                     }
-                } else if self.contacts.len() == 1 {
-                    Gesture::Orbit(position - previous)
+                } else if self.contacts.len() == 1 && !self.multi_touch {
+                    if let Some(anchor) = self.pending_anchor {
+                        if position.distance(anchor) < orbit_threshold {
+                            return Gesture::None;
+                        }
+                        self.pending_anchor = None;
+                        Gesture::Anchor(anchor)
+                    } else {
+                        Gesture::Orbit(position - previous)
+                    }
                 } else {
                     Gesture::None
                 }
@@ -53,10 +72,13 @@ impl TouchGesture {
             TouchPhase::Ended | TouchPhase::Cancelled => {
                 let Some(index) = index else { return Gesture::None };
                 self.contacts.remove(index);
-                match self.contacts.as_slice() {
-                    [] => Gesture::End,
-                    [(_, _, position)] => Gesture::Anchor(*position),
-                    _ => Gesture::None,
+                if self.contacts.is_empty() {
+                    self.pending_anchor = None;
+                    self.multi_touch = false;
+                    Gesture::End
+                } else {
+                    // Keep a pan/pinch gesture latched until all fingers lift.
+                    Gesture::None
                 }
             }
             _ => Gesture::None,
@@ -77,7 +99,7 @@ impl Graphics<'_> {
         if !self.touch_gesture.owns(touch, allow_start) {
             return None;
         }
-        let gesture = self.touch_gesture.update(touch, allow_start);
+        let gesture = self.touch_gesture.update(touch, allow_start, 6.0 * self.window.scale_factor());
         // Apply each move before accepting another contact transition: a queued
         // orbit delta must never be applied around a subsequently picked pivot.
         match gesture {
