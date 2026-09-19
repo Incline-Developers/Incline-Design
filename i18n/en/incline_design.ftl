@@ -1784,4 +1784,6 @@ survey-same-system = Choose different source and destination systems.
 survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
 
 preferences-ui-size = UI size
-preferences-ui-size-help = Scales text and controls relative to the monitor resolution, using 2560 × 1440 as the reference. Resizing the window keeps their size unchanged.
+preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+
+browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }

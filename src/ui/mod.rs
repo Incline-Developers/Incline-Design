@@ -64,12 +64,22 @@ pub(crate) struct Gui {
     pending_pastes: Vec<String>,
 }
 
+/// The layout rect covering `screen_size` physical pixels, expressed in the
+/// point space `window_rect` implies. `None` when there is nothing to scale
+/// from, in which case egui's own window-sized rect stands.
+fn surface_screen_rect(window_rect: egui::Rect, window_width: u32, screen_size: [u32; 2]) -> Option<egui::Rect> {
+    (window_rect.width() > 0.0 && window_width > 0).then(|| {
+        let points_per_pixel = window_rect.width() / window_width as f32;
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(screen_size[0] as f32, screen_size[1] as f32) * points_per_pixel)
+    })
+}
+
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
         ctx.options_mut(|options| {
             options.zoom_with_keyboard = false;
-            options.zoom_factor = scaling::zoom_for_window(window, 100.0);
+            options.zoom_factor = scaling::zoom_factor(100.0);
         });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
@@ -106,7 +116,7 @@ impl Gui {
     }
 
     fn update_scale(&mut self, window: &Window, size_percent: f64) {
-        let zoom = scaling::zoom_for_window(window, size_percent);
+        let zoom = scaling::zoom_factor(size_percent);
         let old_zoom = self.ctx.zoom_factor();
         if zoom == old_zoom {
             return;
@@ -176,10 +186,19 @@ impl Gui {
         if visuals.dark_mode != editor.dark_mode || visuals.selection.stroke.color != selection_color {
             self.ctx.set_visuals(theme_visuals(editor.dark_mode, selection_color));
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let raw_input = self.state.take_egui_input(window);
-        #[cfg(target_arch = "wasm32")]
         let mut raw_input = self.state.take_egui_input(window);
+        // egui-winit lays the UI out for the window, but these shapes are
+        // rendered into the surface texture, which a browser drag-resize
+        // leaves rounded up past the window (see `App::take_resize_to_apply`).
+        // Lay out for the surface instead, so the UI fills the buffer the
+        // browser then scales onto the canvas; sized to the window it would
+        // stop short of the edge and show a strip of bare scene past the
+        // panels. Outside a drag the two agree and this changes nothing.
+        if let Some(window_rect) = raw_input.screen_rect
+            && let Some(surface_rect) = surface_screen_rect(window_rect, window.inner_size().width, screen_size)
+        {
+            raw_input.screen_rect = Some(surface_rect);
+        }
         #[cfg(target_arch = "wasm32")]
         {
             // egui-winit's WASM build has only an in-process clipboard. Drop

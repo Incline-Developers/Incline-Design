@@ -130,6 +130,14 @@ impl<'a> Graphics<'a> {
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
             crate::userspace_error!("{}", tr_format!(literal = "wgpu error (continuing): %error%", error = error));
         }));
+        #[cfg(target_arch = "wasm32")]
+        device.set_device_lost_callback(|reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                let message = crate::i18n::tr!("browser-graphics-device-lost", message = message);
+                crate::userspace_error!("{message}");
+                crate::show_web_startup_error(&message);
+            }
+        });
 
         let surface_caps = surface.get_capabilities(&adapter);
         // Browser WebGPU surfaces expose only the base `*Unorm` canvas
@@ -1595,6 +1603,7 @@ impl<'a> Graphics<'a> {
             text_index_capacity: 1,
             text_draw_batches: Vec::new(),
             frame_index: 0,
+            retired_attachments: Vec::new(),
             last_text_cache_trim_frame: 0,
             last_interaction: None,
             geometry_dirty: true,
@@ -1639,25 +1648,46 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
+        if new_size.width > 0 && new_size.height > 0 && new_size != self.size {
             self.mark_interaction();
+            // Free what previous resizes replaced before allocating this
+            // resize's attachments, so a drag holds one extra set rather than
+            // one per event.
+            self.release_retired_attachments();
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
             let (msaa_color, msaa_view) = Self::create_msaa_target(&self.device, &self.config, self.sample_count);
-            self.msaa_color = msaa_color;
             self.msaa_view = msaa_view;
-            self.scene_cache = Self::create_scene_cache_target(&self.device, &self.config, &self.scene_cache_blit_layout);
-            self.scene_cache_key = None;
             let (depth_texture, depth_view) = Self::create_depth_target(&self.device, &self.config, self.sample_count);
-            self.depth_texture = depth_texture;
             self.depth_view = depth_view;
-            // Any lazily-created attachments refer to the old size/depth
-            // view. Drop them now and recreate only if the resized viewport
-            // actually renders a block model.
-            self.block_model_transparency_targets = None;
-            self.block_model_volume_target = None;
+            let scene_cache = Self::create_scene_cache_target(&self.device, &self.config, &self.scene_cache_blit_layout);
+            self.scene_cache_key = None;
+            // Hand the attachments this resize replaced to the retirement queue
+            // rather than dropping them for the browser's collector to find.
+            // `release_retired_attachments` destroys them once the frames that
+            // drew into them have been presented.
+            let mut retired = RetiredAttachments {
+                retired_at_frame: self.frame_index,
+                retired_at: Instant::now(),
+                textures: Vec::new(),
+                buffers: Vec::new(),
+            };
+            retired.textures.push(std::mem::replace(&mut self.msaa_color, msaa_color));
+            retired.textures.push(std::mem::replace(&mut self.depth_texture, depth_texture));
+            retired.textures.push(std::mem::replace(&mut self.scene_cache, scene_cache).texture);
+            // Lazily-created block-model attachments are recreated only if
+            // the resized viewport actually renders a block model.
+            if let Some(targets) = self.block_model_transparency_targets.take() {
+                retired.textures.extend(targets._accum_textures);
+            }
+            if let Some(target) = self.block_model_volume_target.take() {
+                retired.textures.push(target._texture);
+                retired.textures.push(target._beam_texture);
+                retired.buffers.push(target.params_buffer);
+            }
+            self.retired_attachments.push(retired);
             // Document geometry is stored in world space and screen-space stroke
             // sizing is handled by the viewport uniform. Resizing therefore only
             // requires new surface-sized attachments; rebuilding and re-uploading

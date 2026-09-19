@@ -111,7 +111,6 @@ web-sys = { version = "0.3.103", features = [
     "MediaQueryList",
     "Navigator",
     "Node",
-    "Screen",
     "Storage",
     "Url",
     "Window",

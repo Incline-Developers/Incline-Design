@@ -159,7 +159,7 @@ pub(crate) struct Config {
     /// square with a separator line between them.
     #[serde(default = "default_panel_chrome")]
     pub(crate) panel_chrome: bool,
-    /// User multiplier on the monitor-relative 2560 × 1440 UI scale.
+    /// User multiplier on native OS/browser UI scaling.
     #[serde(default = "default_ui_size_percent")]
     pub(crate) ui_size_percent: f64,
     /// Linear RGBA clear colour used behind the rendered scene.
