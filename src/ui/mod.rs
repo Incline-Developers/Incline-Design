@@ -561,7 +561,10 @@ fn draw_ui(
         let planning_page = editor.planning_page;
         let mut planning_layout = elements::planning_setup::PlanningLayout::default();
         let details = if editor.is_solids_view() {
-            elements::solids_view::draw_details(root_ui, editor, project, document, commands)
+            // The View page arranges a column of its own beside its inspector,
+            // so it hands back the same layout the Setup steps do.
+            planning_layout = elements::solids_view::draw_details(root_ui, editor, project, document, commands);
+            planning_layout.rect
         } else if editor.is_schedule_gantt() {
             // The Gantt owns the whole pane rather than arranging islands in
             // it, so - like the Solids View - it hands its own rect back to be
@@ -606,7 +609,13 @@ fn draw_ui(
                 .chain(planning_layout.regions),
         );
         chrome::paint_grips(ctx, planning_layout.grips);
-        chrome::paint_grips(ctx, [explorer.grip, chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID)]);
+        chrome::paint_grips(
+            ctx,
+            explorer
+                .grips
+                .into_iter()
+                .chain([chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID)]),
+        );
         return geometry_dirty;
     }
 
@@ -1200,11 +1209,10 @@ fn draw_ui(
     // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(
         &ctx,
-        [
-            explorer.grip,
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-        ]
-        .into_iter()
+        explorer
+            .grips
+            .into_iter()
+            .chain([chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID)])
         // The island names its own seam, so the grip lights up for whichever
         // of the four right-edge panels the workspace drew.
         .chain(products_island.map(|island| island.grip)),

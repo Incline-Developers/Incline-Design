@@ -506,15 +506,6 @@ impl crate::app::App<'_> {
         // styles and frames it differently. Neither *starts* anything: the
         // artifacts are built when a stage is run, and these pages show what
         // that run committed. Opening a page is not a calculation.
-        // Which sheets the inspector suppresses is a property of the solid
-        // selected right now, so it is recomputed before anything can return.
-        // Left until after the branch below it kept whatever the last Setup
-        // step wrote, and a selection changed while a cut step was open then
-        // suppressed the wrong solid's surfaces on the way back.
-        self.editor.solid_preview_sources.clear();
-        if let Some(solid) = self.editor.planning_selected_solid.and_then(|id| self.workspace.active_document()?.solid(id)) {
-            self.editor.solid_preview_sources.extend([solid.surface, solid.topography].into_iter().flatten());
-        }
         let displaying = super::solids_view::displaying_solid_artifacts(&self.editor);
         let running = self.planning_pipeline.as_ref().and_then(crate::app::planning_pipeline::PlanningPipeline::demand).is_some();
         if displaying || running {
@@ -571,6 +562,27 @@ impl crate::app::App<'_> {
             return;
         };
         let available = self.usable_solid_inputs(key);
+        // Loading one of a solid's two surfaces must not cost the solid.
+        //
+        // A sheet arriving is an improvement over not having it, so it used to
+        // trigger a rebuild - and with the other sheet still unloaded, the
+        // rebuild could only produce that lone sheet, which replaced the built
+        // volume on screen with a bare surface and the caption to match.
+        // Having less than before is not an improvement, so it is refused
+        // here: a solid built from both sheets is never traded for one of
+        // them, and the surface that just arrived is drawn beside it as the
+        // project item it is.
+        let names_both = key.surface.is_some() && key.topography.is_some();
+        let could_build = available.surface.is_some() && available.topography.is_some();
+        if names_both
+            && !could_build
+            && self
+                .solid_preview
+                .as_ref()
+                .is_some_and(|preview| preview.key == key && !preview.is_partial() && preview.whole_mesh().is_some())
+        {
+            return;
+        }
         // A preview already built for these surfaces is kept unless the
         // geometry now on hand would build a better one - so unloading a
         // surface leaves the solid it produced on screen.

@@ -704,12 +704,15 @@ pub(crate) fn menu_actions<R>(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut e
 
 /// A heading that groups the rows under it.
 ///
-/// Small, weak, and followed by a hairline across the menu, so a long dialog
-/// reads as a few short lists rather than one run of fields.
+/// Weak, and followed by a hairline across the menu, so a long dialog reads as
+/// a few short lists rather than one run of fields. Body sized like everything
+/// else: a heading shrunk below the rows it heads is harder to read than the
+/// rows themselves.
 pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
     ui.add_space(4.0);
     let color = ui.visuals().weak_text_color();
-    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), color);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(heading.into(), font, color);
     record_intrinsic_content_width(ui, galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y.max(14.0)), egui::Sense::hover());
     let text_end = rect.left() + galley.size().x;

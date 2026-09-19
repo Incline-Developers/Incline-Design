@@ -1739,9 +1739,6 @@ schedule-calendar-availability = Availability (%)
 schedule-calendar-utilisation = Utilisation (%)
 schedule-calendar-rate = Rate (t/h)
 schedule-calendar-tonnes = Scheduled tonnes (t)
-schedule-calendar-extend = +14 days
-schedule-calendar-jump = Jump to day
-schedule-calendar-help = Blank cells use defaults. Production rate = rate × availability × utilisation. Percentages apply across the whole day.
 schedule-calendar-empty = Add a loader to author its production calendar.
 schedule-calendar-add-loader = Add loader
 schedule-calendar-loader-default = loader default
@@ -1828,7 +1825,6 @@ schedule-bar-height = Dig sequence bar height (px)
 schedule-tonnage-field = Tonnage field
 schedule-tonnage-field-none = Not chosen
 schedule-tonnage-field-no-fields = This project has no reserve fields yet. Add them in Solids → Setup → Field List
-schedule-tonnage-field-note = The chosen field's summed value is read as tonnes. Incline Design does not convert units: the field must already be in tonnes.
 
 schedule-sequence-move-up = Move Up
 schedule-sequence-move-down = Move Down
@@ -1844,8 +1840,6 @@ schedule-run-period = Run Period
 schedule-run-period-note = Calculate one more day of the schedule
 schedule-run-whole = Run Schedule
 schedule-run-whole-note = Calculate the whole schedule, to completion
-schedule-assumptions-help = Scheduling assumptions
-schedule-run-assumptions = Uses constant loader rates and priority preemption. Loaders may share a block; availability calendars, access constraints, and travel/setup time are not modelled.
 schedule-run-cancel = Cancel
 schedule-run-cancel-note = Stop the run. What was last calculated stays as it is.
 schedule-run-never = Not run. Press Run Period or Run Schedule.
@@ -1947,6 +1941,7 @@ gantt-agent = Agent
 gantt-day = Day { $day }
 gantt-day-time = Day { $day }, { $time }
 gantt-range = { $from } → { $to }
+gantt-playhead = Animation cursor · { $at }
 
 planning-stat-sum = Sum
 planning-stat-avg = Avg

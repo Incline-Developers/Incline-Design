@@ -271,15 +271,6 @@ pub(crate) fn draw_configuration(
             rows.readonly("", &tr!("schedule-tonnage-field-no-fields"), None, None);
         }
     });
-    // The unit assumption the tonnage choice rests on, stated on screen where
-    // the choice is made rather than in a readiness problem later.
-    let note_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
-    if note_rect.is_positive() {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(note_rect), |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(note_rect));
-            ui.add(egui::Label::new(egui::RichText::new(tr!("schedule-tonnage-field-note")).weak().small()).wrap());
-        });
-    }
     commands.extend(edits);
 }
 

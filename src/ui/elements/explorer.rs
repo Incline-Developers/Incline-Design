@@ -65,19 +65,51 @@ const PANEL_ID: &str = "explorer_panel";
 /// Id of the step-list pane the cut steps put above the bench tree.
 const CUT_STEPS_PANEL_ID: &str = "planning_cut_steps";
 
+/// Id of the pane a Solids Setup step's own list takes under the step list.
+const STEP_LIST_PANEL_ID: &str = "planning_step_list";
+
+/// Least height a pane in the column may be dragged to. Two rows and a title
+/// strip: below that a list says nothing.
+const MIN_COLUMN_PANE: f32 = 96.0;
+
+/// What the column stacks under its tree, when it stacks anything.
+#[derive(Clone, Copy)]
+enum LowerPane {
+    StepList(super::planning_setup::StepList),
+    Objects,
+}
+
+impl LowerPane {
+    fn of(editor: &EditorState) -> Option<Self> {
+        if editor.is_solids_view() {
+            return Some(Self::Objects);
+        }
+        super::planning_setup::step_list(editor).map(Self::StepList)
+    }
+}
+
+/// A pane's own heading, so the column says what each of its lists is.
+fn heading(ui: &mut egui::Ui, label: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(ui.spacing().indent);
+        ui.label(crate::ui::fonts::bold(label));
+    });
+}
+
 /// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
     /// The regions to round off: the run controls, the step list and the tree.
     pub(crate) regions: Vec<egui::Rect>,
-    /// The seam down the column's side, which drags it narrower.
-    pub(crate) grip: crate::ui::chrome::Grip,
+    /// The seam down the column's side, which drags it narrower, and the seam
+    /// above each pane inside it that can be resized.
+    pub(crate) grips: Vec<crate::ui::chrome::Grip>,
 }
 
 impl ExplorerLayout {
     pub(crate) fn empty() -> Self {
         Self {
             regions: Vec::new(),
-            grip: crate::ui::chrome::Grip::new(egui::Rect::NOTHING, crate::ui::chrome::Edge::Right, PANEL_ID),
+            grips: Vec::new(),
         }
     }
 }
@@ -135,9 +167,10 @@ pub(crate) fn draw_explorer(
             // left.
             let steps = if editor.is_planning_cut_step() {
                 egui::Panel::top(CUT_STEPS_PANEL_ID)
-                    .resizable(false)
+                    .resizable(true)
+                    .default_size(ui.available_height() * 0.5)
+                    .min_size(MIN_COLUMN_PANE)
                     .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-                    .exact_size(ui.available_height() * 0.5)
                     .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
                     .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
                     .response
@@ -161,6 +194,47 @@ pub(crate) fn draw_explorer(
                     .rect
             } else {
                 egui::Rect::NOTHING
+            };
+
+            // A pane under the tree above it: the list the selected step
+            // reads, or - on the View page, which has no step list - the
+            // project's own objects, so the surfaces the inspector draws can
+            // be loaded and hidden without leaving the page.
+            //
+            // These live in the column rather than taking one of their own:
+            // they are navigation, the same as the tree above them, and a
+            // column each left the workspace they drive with a third of the
+            // window.
+            let lower = LowerPane::of(editor);
+            let list = match lower {
+                Some(lower) => {
+                    egui::Panel::bottom(STEP_LIST_PANEL_ID)
+                        .resizable(true)
+                        .default_size((ui.available_height() * 0.55).max(MIN_COLUMN_PANE))
+                        .min_size(MIN_COLUMN_PANE)
+                        .max_size((ui.available_height() - MIN_COLUMN_PANE).max(MIN_COLUMN_PANE))
+                        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                        .show(ui, |ui| {
+                            let rect = ui.available_rect_before_wrap();
+                            ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                            match lower {
+                                LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project, document, commands),
+                                LowerPane::Objects => {
+                                    heading(ui, &crate::i18n::tr!(literal = "Objects"));
+                                    draw_object_tree(ui, editor, project, commands);
+                                }
+                            }
+                        })
+                        .response
+                        .rect
+                }
+                None => {
+                    // `Panel::show` creates one direct child, so the column's
+                    // auto-id sequence has to be the same with and without it.
+                    ui.skip_ahead_auto_ids(1);
+                    egui::Rect::NOTHING
+                }
             };
 
             let tree = crate::ui::chrome::region_frame(ui)
@@ -195,13 +269,28 @@ pub(crate) fn draw_explorer(
                 })
                 .response
                 .rect;
-            vec![run_controls, steps, animation_solids, tree]
+            (vec![run_controls, steps, animation_solids, list, tree], [steps, animation_solids, list])
         });
 
-    // The panes are the regions; the column itself carries no frame.
+    // The panes are the regions; the column itself carries no frame. Every
+    // pane that can be dragged taller says so with a seam of its own, so no
+    // resizable edge in the column is left unmarked.
+    let (panes, seams) = column.inner;
+    let grips = std::iter::once(column.grip)
+        .chain(
+            [
+                (seams[0], CUT_STEPS_PANEL_ID, crate::ui::chrome::Edge::Bottom),
+                (seams[1], "schedule_animation_solids_navigation", crate::ui::chrome::Edge::Bottom),
+                (seams[2], STEP_LIST_PANEL_ID, crate::ui::chrome::Edge::Top),
+            ]
+            .into_iter()
+            .filter(|(rect, _, _)| rect.is_positive())
+            .map(|(rect, id, edge)| crate::ui::chrome::Grip::new(rect, edge, id)),
+        )
+        .collect();
     ExplorerLayout {
-        regions: column.inner.into_iter().chain(column.regions).collect(),
-        grip: column.grip,
+        regions: panes.into_iter().chain(column.regions).collect(),
+        grips,
     }
 }
 

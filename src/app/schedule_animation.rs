@@ -245,6 +245,12 @@ impl Visibility {
 #[derive(Default)]
 pub(crate) struct ScheduleAnimation {
     identity: Option<Identity>,
+    /// The run the time cursor was last rewound for.
+    ///
+    /// Tracked apart from `identity` because it is maintained whether or not
+    /// the Animate page is open: the Gantt sets the same cursor, so arriving
+    /// here must not rewind what was set there. Only a new result does that.
+    cursor_identity: Option<Identity>,
     index: Option<AnimationIndex>,
     source: Vec<SourceBlock>,
     /// Fingerprint of the calculated solids `source` was taken from, so it is
@@ -331,15 +337,6 @@ impl crate::app::App<'_> {
             self.abandon_animation_geometry();
             self.schedule_animation = ScheduleAnimation::default();
         }
-        if !animate {
-            // Geometry for a page nobody is looking at, which would publish
-            // into the scene and invalidate every cache in it when it landed.
-            if self.schedule_animation.pending {
-                self.abandon_animation_geometry();
-            }
-            return;
-        }
-
         // Read from the held calculation rather than copying it. It owns the
         // execution log, the idle log and the ledger; cloning all three once a
         // frame to look at a run number is the largest allocation on this path
@@ -351,11 +348,29 @@ impl crate::app::App<'_> {
             solids_generation: calculation.schedule.generation,
         });
 
+        // Ahead of the page gate, because the cursor is not this page's: the
+        // Gantt's playhead is the same instant, and it is set there while this
+        // page is closed. A new result rewinds it; opening the page does not.
+        if current && self.schedule_animation.cursor_identity != identity {
+            self.schedule_animation.cursor_identity = identity;
+            self.editor.schedule_animation_time_h = 0.0;
+        }
+
+        if !animate {
+            // Geometry for a page nobody is looking at, which would publish
+            // into the scene and invalidate every cache in it when it landed.
+            if self.schedule_animation.pending {
+                self.abandon_animation_geometry();
+            }
+            return;
+        }
+
         if current && self.schedule_animation.identity != identity {
+            let cursor_identity = self.schedule_animation.cursor_identity;
             self.abandon_animation_geometry();
             self.schedule_animation = ScheduleAnimation::default();
             self.schedule_animation.identity = identity;
-            self.editor.schedule_animation_time_h = 0.0;
+            self.schedule_animation.cursor_identity = cursor_identity;
             // Built before the result is stored, so the borrow of the held
             // calculation ends before the animation state is written.
             let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(&calculation.schedule));

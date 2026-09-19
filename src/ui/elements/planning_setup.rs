@@ -12,6 +12,8 @@
 //! wired up, but item rows and property fields render their empty grids and
 //! fill in with the feature. The grids themselves are the reusable
 //! [`data_grid`](crate::ui::widgets::data_grid) widgets.
+use thousands::Separable;
+
 use crate::{
     i18n::{tr, tr_format},
     model::{
@@ -465,8 +467,10 @@ fn draw_block_model_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edito
                 crate::ui::widgets::explorer::explorer_note(ui, tr!(literal = "No block models in this project"));
             }
             for entry in &project.block_models {
-                let name = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                let label = tr_format!(literal = "%name% · %count% blocks", name = name, count = entry.block_count);
+                // Name only: the block count is a property of the model, and
+                // it is listed as one beside the others rather than being
+                // spliced into every row of the list.
+                let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
                 let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_block_model == Some(entry.id))).on_hover_text(tr_format!(
                     literal = "Extents: %lower% → %upper%",
                     lower = format!("{:.1}, {:.1}, {:.1}", entry.lower.x, entry.lower.y, entry.lower.z),
@@ -509,8 +513,8 @@ impl MappingChoice {
 /// The Block Models step's right column: the selected model's mapping of the
 /// project's Field List onto its own columns/constants, and the computed
 /// totals that follow from it.
-fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Document, model: &OpenBlockModel, commands: &mut Vec<UiCommand>) {
-    let header_height = property_table_height(ui, 3).min(rect.height());
+fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Document, model: &OpenBlockModel, blocks: usize, commands: &mut Vec<UiCommand>) {
+    let header_height = property_table_height(ui, 4).min(rect.height());
     let header_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_height));
     let fields_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), header_rect.bottom() + 6.0), rect.max);
 
@@ -531,6 +535,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
             None,
             None,
         );
+        rows.readonly(&tr!(literal = "Blocks"), &blocks.separate_with_commas(), None, None);
         rows.checkbox(&tr!(literal = "Used for reserving"), &mut included);
     });
     if included != model.included_in_reserves {
@@ -652,6 +657,44 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
 
 /// The Solids step's left column: the project's solids, each with the kind of
 /// volume it is. Selecting one drives the property table beside it.
+/// Which list a Solids Setup step reads beside its workspace, and so which
+/// pane the explorer column stacks under the step list.
+///
+/// The lists live down there rather than taking a column of their own: they
+/// are navigation, the same as the steps above them, and a column each left
+/// the workspace they drive with a third of the window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepList {
+    Solids,
+    BlockModels,
+}
+
+pub(crate) fn step_list(editor: &EditorState) -> Option<StepList> {
+    if !editor.is_planning_setup() || editor.planning_page != PlanningPage::Solids || editor.solids_subpage != crate::ui::state::PlanningSubpage::Setup {
+        return None;
+    }
+    match editor.planning_solids_step {
+        SolidsStep::Solids | SolidsStep::Benching => Some(StepList::Solids),
+        SolidsStep::BlockModels => Some(StepList::BlockModels),
+        SolidsStep::FieldList | SolidsStep::Blasting | SolidsStep::DigStrips => None,
+    }
+}
+
+pub(crate) fn draw_step_list(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    list: StepList,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &Document,
+    commands: &mut Vec<UiCommand>,
+) {
+    match list {
+        StepList::Solids => draw_solid_list(ui, rect, editor, document, commands),
+        StepList::BlockModels => draw_block_model_list(ui, rect, editor, project),
+    }
+}
+
 fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
     DataGrid::new("planning_solid_list", rect, &tr!("planning-solids"))
         .column_header(&tr!("planning-name"))
@@ -1058,59 +1101,98 @@ fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rec
         .rect
 }
 
+/// A right-hand column of two stacked panes, each a region with the seam
+/// between them marked. Used where a page reads two tables side by side down
+/// one edge rather than across the workspace.
+pub(crate) fn stacked_column(
+    ui: &mut egui::Ui,
+    layout: &mut PlanningLayout,
+    id: &'static str,
+    lower_id: &'static str,
+    upper: impl FnOnce(&mut egui::Ui, egui::Rect),
+    lower: impl FnOnce(&mut egui::Ui, egui::Rect),
+) {
+    let column = Island::new(id, Side::Right).default_width(360.0).min_width(200.0).bare().show(ui, |ui, _| {
+        let (lower_rect, seam) = stacked_lower(ui, lower_id, lower);
+        let upper_rect = central_pane(ui, upper);
+        ([upper_rect, lower_rect], seam)
+    });
+    layout.regions.extend(column.inner.0);
+    layout.grips.push(column.grip);
+    layout.grips.push(column.inner.1);
+}
+
+/// [`central_pane`], for a caller in another module.
+pub(crate) fn central_pane_of(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
+    central_pane(ui, content)
+}
+
 fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
     let rect = central_pane(ui, content);
     layout.regions.push(rect);
 }
 
-/// The object tree, down the far side of every Solids step.
-fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+/// The object tree with a second pane stacked under it.
+///
+/// The step's own figures - a solid's properties, a bench run's results - are
+/// read against the objects they describe, so they share that column and the
+/// seam between them is the user's, like every other seam here.
+fn objects_column(
+    ui: &mut egui::Ui,
+    layout: &mut PlanningLayout,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    commands: &mut Vec<UiCommand>,
+    lower_id: &'static str,
+    lower: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &mut Vec<UiCommand>),
+) {
     let title = tr!(literal = "Objects");
-    let response = Island::new("planning_objects_island", Side::Right)
-        .default_width(280.0)
-        .min_width(140.0)
-        .flush()
-        .show(ui, |ui, rect| {
-            framed_render_pane(ui, rect, &title, |ui, body| {
-                ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
-                    ui.set_clip_rect(ui.clip_rect().intersect(body));
-                    ui.set_min_size(body.size());
-                    ui.painter().rect_filled(body, 0.0, crate::ui::widgets::tree_row_colors(ui).0);
-                    crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
-                });
-            });
-        });
-    layout.regions.extend(response.regions);
-    layout.grips.push(response.grip);
-}
-
-fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    let session = project.active_session;
-    objects_island(ui, layout, editor, project, commands);
-    // The solid list and the properties of the one picked stack rather than
-    // taking a column each: they are read together, and two columns of chrome
-    // for them costs the preview beside them most of its width.
-    let column = Island::new("planning_solids_column", Side::Left)
-        .default_width(320.0)
+    let column = Island::new("planning_objects_island", Side::Right)
+        .default_width(300.0)
         .min_width(160.0)
         .bare()
         .show(ui, |ui, _| {
-            let (properties, seam) = stacked_lower(ui, "planning_solids_properties_island", |ui, rect| {
-                match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
-                    Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
-                    None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
-                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-                    }),
-                }
+            // The pane below is handed the editor and the command queue rather
+            // than capturing them: the tree above needs both as well, and one
+            // closure holding them would shut the other out.
+            let (lower_rect, seam) = stacked_lower(ui, lower_id, |ui, rect| lower(ui, rect, editor, commands));
+            let tree = central_pane(ui, |ui, rect| {
+                framed_render_pane(ui, rect, &title, |ui, body| {
+                    ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
+                        ui.set_clip_rect(ui.clip_rect().intersect(body));
+                        ui.set_min_size(body.size());
+                        ui.painter().rect_filled(body, 0.0, crate::ui::widgets::tree_row_colors(ui).0);
+                        crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
+                    });
+                });
             });
-            let list = central_pane(ui, |ui, rect| {
-                draw_solid_list(ui, rect, editor, document, commands);
-            });
-            ([list, properties], seam)
+            ([tree, lower_rect], seam)
         });
     layout.regions.extend(column.inner.0);
     layout.grips.push(column.grip);
     layout.grips.push(column.inner.1);
+}
+
+fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    let session = project.active_session;
+    // The solid list is in the explorer column under the step list; what is
+    // read *about* the solid picked there belongs beside the objects it
+    // describes, so it stacks under the object tree.
+    let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
+    objects_column(
+        ui,
+        layout,
+        editor,
+        project,
+        commands,
+        "planning_solids_properties_island",
+        |ui, rect, _editor, commands| match selected {
+            Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
+            None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
+                rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            }),
+        },
+    );
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
@@ -1384,15 +1466,24 @@ const BAND_EPSILON: f64 = 1e-3;
 const DEFAULT_RANGE_DEPTH: f64 = 120.0;
 
 fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_bench_solids_island", 240.0, |ui, rect| {
-        draw_solid_list(ui, rect, editor, document, commands)
-    });
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
     let solid_id = selected.map(|solid| solid.id);
     let solid_color = selected.map_or([1.0; 4], |solid| solid.color);
     let mut plan = selected.map(|solid| solid.benching.clone()).unwrap_or_default();
     let mut changed = false;
+    // Results read against the objects they were measured from, so they take
+    // the pane under the object tree; the solid list is in the explorer
+    // column under the step list.
+    let results = plan.clone();
+    objects_column(ui, layout, editor, project, commands, "planning_bench_results_island", |ui, rect, editor, _commands| {
+        if solid_id.is_some() {
+            draw_bench_results(ui, rect, &results, editor);
+        } else {
+            PropertyTable::new("planning_bench_results_empty", rect, &tr!(literal = "Results")).show(ui, |rows| {
+                rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            });
+        }
+    });
 
     // This column arranges two panes rather than being one, so it carries no
     // frame of its own and they halve its height between them. It still closes
@@ -1428,15 +1519,6 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     layout.regions.extend(settings.inner.0);
     layout.grips.push(settings.grip);
     layout.grips.push(settings.inner.1);
-    island(ui, layout, "planning_bench_results_island", 240.0, |ui, rect| {
-        if solid_id.is_some() {
-            draw_bench_results(ui, rect, &plan, editor);
-        } else {
-            PropertyTable::new("planning_bench_results_empty", rect, &tr!(literal = "Results")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            });
-        }
-    });
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, project.active_session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
@@ -1466,11 +1548,15 @@ fn draw_solids_details(
         SolidsStep::FieldList => central_island(ui, layout, |ui, rect| draw_field_list(ui, rect, editor, document, commands)),
         SolidsStep::Solids => draw_solids_step(ui, layout, editor, project, document, commands),
         SolidsStep::Benching => draw_benching_step(ui, layout, editor, project, document, commands),
+        // The model list is in the explorer column under the step list, so the
+        // mapping has the workspace to itself.
         SolidsStep::BlockModels => {
-            island(ui, layout, "planning_models_island", 280.0, |ui, rect| draw_block_model_list(ui, rect, editor, project));
             central_island(ui, layout, |ui, rect| {
                 if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
-                    draw_block_model_mapping(ui, rect, document, model, commands);
+                    // The count is the project view's own, the same figure the
+                    // list used to splice into the model's name.
+                    let blocks = project.block_models.iter().find(|entry| entry.id == model.id).map_or(0, |entry| entry.block_count);
+                    draw_block_model_mapping(ui, rect, document, model, blocks, commands);
                 } else {
                     PropertyTable::new("reserve_block_model_mapping_empty", rect, &tr!("planning-block-models")).show(ui, |rows| {
                         rows.header(&tr!("planning-property"), &tr!("planning-value"));

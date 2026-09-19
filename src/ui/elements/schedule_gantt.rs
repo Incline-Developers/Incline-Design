@@ -135,7 +135,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let toolbar_height = ui.spacing().interact_size.y + 8.0;
             let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
             let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, commands);
+            draw_toolbar(ui, toolbar, editor, &plan, commands);
             if canvas.is_positive() {
                 draw_canvas(ui, canvas, editor, &plan, session, commands);
             }
@@ -427,61 +427,90 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// same icons: a schedule is run the way everything else in this project is
 /// run, and a control that looked different here would suggest it did
 /// something different.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+/// Run Period, Run Whole Schedule and Cancel, as the Gantt and the Calendar
+/// both show them.
+///
+/// One control in two places rather than two that drift: `salt` keeps their
+/// widget ids apart, because both pages can be laid out in the same frame.
+pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
     use crate::ui::{
         elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
         widgets::toolbar::ToolbarButton,
     };
 
+    let working = editor.schedule_run_working;
+    let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
+    let side = ui.available_height();
+    let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
+    if ui
+        .add_enabled(
+            !working,
+            ToolbarButton::new(
+                egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, !working)),
+                tr!("schedule-run-period-note"),
+            )
+            .button_side(side)
+            .id_salt(format!("{salt}_run_period")),
+        )
+        .clicked()
+    {
+        commands.push(UiCommand::RunSchedulePeriod);
+    }
+    if ui
+        .add_enabled(
+            !working,
+            ToolbarButton::new(
+                egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, !working)),
+                tr!("schedule-run-whole-note"),
+            )
+            .button_side(side)
+            .id_salt(format!("{salt}_run_whole")),
+        )
+        .clicked()
+    {
+        commands.push(UiCommand::RunWholeSchedule);
+    }
+    if ui
+        .add_enabled(
+            working,
+            ToolbarButton::new(
+                egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, working)),
+                tr!("schedule-run-cancel-note"),
+            )
+            .button_side(side)
+            .id_salt(format!("{salt}_run_cancel")),
+        )
+        .clicked()
+    {
+        commands.push(UiCommand::CancelScheduleCalculation);
+    }
+    ui.spacing_mut().item_spacing.x = spacing;
+}
+
+/// How far the work on the timeline reaches, in elapsed seconds, or `None`
+/// when there is none to frame.
+///
+/// Both what was authored and what was calculated: a bar left open-ended has
+/// no end of its own, and the run is the only thing that knows where its work
+/// actually finished.
+fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::SchedulePlan) -> Option<f64> {
+    let mut end = 0.0_f64;
+    for bar in plan.bars() {
+        end = end.max(bar.window.end_h.unwrap_or(bar.window.start_h) * GanttView::HOUR);
+    }
+    if let Some(schedule) = &editor.schedule_dispatch {
+        for segment in &schedule.execution {
+            end = end.max(segment.end_h * GanttView::HOUR);
+        }
+    }
+    (end > 0.0).then_some(end)
+}
+
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &crate::model::schedule::SchedulePlan, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
-        let working = editor.schedule_run_working;
-        let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
-        let side = ui.available_height();
-        ui.spacing_mut().item_spacing.x = 0.0;
-        if ui
-            .add_enabled(
-                !working,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, !working)),
-                    tr!("schedule-run-period-note"),
-                )
-                .button_side(side)
-                .id_salt("gantt_run_period"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::RunSchedulePeriod);
-        }
-        if ui
-            .add_enabled(
-                !working,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, !working)),
-                    tr!("schedule-run-whole-note"),
-                )
-                .button_side(side)
-                .id_salt("gantt_run_whole"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::RunWholeSchedule);
-        }
-        if ui
-            .add_enabled(
-                working,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, working)),
-                    tr!("schedule-run-cancel-note"),
-                )
-                .button_side(side)
-                .id_salt("gantt_run_cancel"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::CancelScheduleCalculation);
-        }
+        draw_calculation_controls(ui, editor, "gantt", commands);
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add_space(8.0);
         let button = |ui: &mut egui::Ui, label: &str, tooltip: String| ui.add(egui::Button::new(label).corner_radius(GROUP_CORNER_RADIUS)).on_hover_text(tooltip);
@@ -492,14 +521,11 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
             editor.gantt.zoom_at(ZOOM_STEP, 0.5);
         }
         if ui.add(egui::Button::new(tr!("gantt-reset-view")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
-            editor.gantt.reset();
+            // Reset to what is there, not to a fixed week: a sequence running
+            // to day 45 is reset to day 45.
+            let extent = scheduled_extent(editor, plan);
+            editor.gantt.reset_to(extent);
         }
-        ui.menu_button("?", |ui| {
-            ui.set_max_width(360.0);
-            ui.label(tr!("schedule-run-assumptions"));
-        })
-        .response
-        .on_hover_text(tr!("schedule-assumptions-help"));
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(tr!(
@@ -646,7 +672,11 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // authored bar that has no executable material, so paint it over the bar
     // foot rather than letting the bar cover most of a four-pixel strip.
     draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows);
+    // Over everything, because it marks an instant across all of it, and last
+    // so its handle takes the pointer from the bars it crosses.
+    let horizon_h = schedule.as_deref().map_or(0.0, |schedule| schedule.horizon_h);
     editor.schedule_dispatch = schedule;
+    draw_playhead(ui, ruler, body, editor, horizon_h);
 
     if plan.agents().is_empty() && layout.rows.is_empty() {
         centred_note(ui, body, tr!("gantt-empty-fleet"));
@@ -675,6 +705,55 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
             ));
         }
     }
+}
+
+/// Width of the playhead's grab strip, and the side of the tab that heads it.
+const PLAYHEAD_GRAB_W: f32 = 9.0;
+const PLAYHEAD_TAB: f32 = 12.0;
+
+/// The animation playhead: one instant, marked across the whole timeline and
+/// dragged along it.
+///
+/// It is the Animate page's scrubber, seen from here - the two read and write
+/// the same elapsed time, so dragging it here is what moving that slider does.
+/// It appears only while there is a current result to scrub, which is exactly
+/// when that slider is live; with nothing calculated there is no instant for it
+/// to name.
+fn draw_playhead(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, editor: &mut EditorState, horizon_h: f64) {
+    if horizon_h <= 0.0 || !body.is_positive() {
+        return;
+    }
+    let time_h = editor.schedule_animation_time_h.clamp(0.0, horizon_h);
+    editor.schedule_animation_time_h = time_h;
+    let x = editor.gantt.x_of(time_h * GanttView::HOUR, body.left(), body.width());
+    // Scrolled out of the window: nothing is drawn, and nothing is grabbable
+    // either, rather than a handle pinned to the edge that names an instant
+    // that is not under it.
+    if !(body.left()..=body.right()).contains(&x) {
+        return;
+    }
+    let grab = egui::Rect::from_min_max(egui::pos2(x - PLAYHEAD_GRAB_W / 2.0, ruler.top()), egui::pos2(x + PLAYHEAD_GRAB_W / 2.0, body.bottom()));
+    let response = ui
+        .interact(grab, ui.id().with("gantt_playhead"), egui::Sense::drag())
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    if response.dragged()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let seconds = editor.gantt.seconds_at(pointer.x, body.left(), body.width());
+        editor.schedule_animation_time_h = (seconds / GanttView::HOUR).clamp(0.0, horizon_h);
+    }
+    let color = if response.dragged() || response.hovered() {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().selection.stroke.color.gamma_multiply(0.8)
+    };
+    let painter = ui.painter();
+    painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, body.bottom())], egui::Stroke::new(1.5, color));
+    // A tab in the ruler rather than on the bars: the handle has to be
+    // grabbable at any zoom, and the rows are where the work is read.
+    let tab = egui::Rect::from_min_size(egui::pos2(x - PLAYHEAD_TAB / 2.0, ruler.top()), egui::vec2(PLAYHEAD_TAB, PLAYHEAD_TAB * 0.8));
+    painter.rect_filled(tab, 2.0, color);
+    response.on_hover_text(tr!("gantt-playhead", at = instant_label(time_h * GanttView::HOUR)));
 }
 
 /// The time ruler: minor ticks with their labels, and - while the minor ticks

@@ -512,18 +512,10 @@ fn draw_order_list(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         let unresolved = editor.sequence_members.iter().filter(|member| member.unresolved.is_some() && !member.stale_pick).count();
         let stale = editor.sequence_members.iter().filter(|member| member.stale_pick).count();
         if unresolved > 0 {
-            ui.label(
-                egui::RichText::new(tr!("sequence-editor-unresolved-kept", count = unresolved.to_string()))
-                    .small()
-                    .color(ui.visuals().warn_fg_color),
-            );
+            ui.label(egui::RichText::new(tr!("sequence-editor-unresolved-kept", count = unresolved.to_string())).color(ui.visuals().warn_fg_color));
         }
         if stale > 0 {
-            ui.label(
-                egui::RichText::new(tr!("sequence-editor-stale-picks", count = stale.to_string()))
-                    .small()
-                    .color(ui.visuals().error_fg_color),
-            );
+            ui.label(egui::RichText::new(tr!("sequence-editor-stale-picks", count = stale.to_string())).color(ui.visuals().error_fg_color));
         }
         if draft.members.is_empty() {
             editor.sequence_list_drag = None;

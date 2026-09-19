@@ -285,10 +285,7 @@ pub(crate) fn grid_separator_row(ui: &mut egui::Ui, label: &str, depth: usize) {
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);
     let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0 + SUB_INDENT * depth as f32, rect.top()), rect.max);
     if text_rect.is_positive() {
-        ui.put(
-            text_rect,
-            egui::Label::new(egui::RichText::new(label).color(color).small()).truncate().halign(egui::Align::Min),
-        );
+        ui.put(text_rect, egui::Label::new(egui::RichText::new(label).color(color)).truncate().halign(egui::Align::Min));
     }
 }
 

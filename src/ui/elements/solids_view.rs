@@ -9,13 +9,13 @@ use crate::{
     i18n::tr,
     model::{Document, SolidKind},
     ui::{
-        EditorState, UiProjectView, chrome,
+        EditorState, UiProjectView,
         dialogs::solids::{block_model_label, kind_label},
         fonts::bold,
         state::{BenchSelection, BlastShapeRef, SolidsViewRow, UiCommand},
         unthemed_icon,
         widgets::{
-            data_grid::{PropertyTable, property_table_height},
+            data_grid::PropertyTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
         },
     },
@@ -541,6 +541,13 @@ fn read_across<T: PartialEq>(values: Vec<T>, describe: impl Fn(&T) -> String) ->
 }
 
 /// The properties of whatever is selected, and what it holds.
+/// What the selection names: its type, the solid it belongs to, the bench and
+/// flitch it sits in.
+///
+/// Paired with [`draw_contents`] below it, in a pane of its own: the two are
+/// read together but they grow at different rates - this one is a fixed set of
+/// rows, and the figures below grow with the Field List - so the split between
+/// them is a seam the user sets rather than a height computed here.
 pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, project: &UiProjectView, document: &Document) {
     let rows: Vec<_> = editor
         .solids_view_selection
@@ -556,14 +563,7 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
         return;
     }
 
-    // The identity half of the panel is fixed height; the figures below it
-    // grow with the Field List, so they get their own scrolling table.
-    let identity_rows = 6 + if editor.selected_blast.is_some() { 2 } else { 0 } + if editor.selected_dig_block_info.is_some() { 6 } else { 0 };
-    let split = property_table_height(ui, identity_rows).min(rect.height());
-    let identity_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), split));
-    let figures_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), identity_rect.bottom() + 6.0), rect.max);
-
-    PropertyTable::new("solids_view_properties", identity_rect, &title).show(ui, |table| {
+    PropertyTable::new("solids_view_properties", rect, &title).show(ui, |table| {
         table.header(&tr!("planning-property"), &tr!("planning-value"));
         table.readonly(
             &tr!(literal = "Type"),
@@ -632,8 +632,12 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
             None,
         );
     });
+}
 
-    PropertyTable::new("solids_view_figures", figures_rect, &tr!(literal = "Contents")).show(ui, |table| {
+/// The figures for whatever is selected: volume, block-model coverage, and one
+/// row per reserve field.
+pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, document: &Document) {
+    PropertyTable::new("solids_view_figures", rect, &tr!(literal = "Contents")).show(ui, |table| {
         table.header(&tr!(literal = "Field"), &tr!("planning-value"));
         let volume = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => format!("{volume:.1}"),
@@ -746,20 +750,38 @@ fn bench_base_for(solid: &crate::model::Solid, band: BenchSelection) -> f64 {
 
 /// The View subpage's own layout: the tree is drawn into the explorer column,
 /// and this fills the rest of the window with the properties beside it.
-pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    egui::CentralPanel::default()
-        .frame(chrome::region_frame(ui))
+/// The View page: what the selection is and what it holds, down the right, and
+/// the inspector taking the rest.
+///
+/// The two tables are a column of their own rather than a slice cut out of the
+/// pane, so the seam between them and the seam beside them both belong to the
+/// user - and the inspector gets the width the column is not using.
+pub(crate) fn draw_details(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &Document,
+    commands: &mut Vec<UiCommand>,
+) -> super::planning_setup::PlanningLayout {
+    let mut layout = super::planning_setup::PlanningLayout::default();
+    let rect = egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| {
-            let available = ui.available_rect_before_wrap();
-            let area = available.shrink2(egui::vec2(0.0, 10.0_f32.min(available.height() * 0.5)));
-            let properties = egui::Rect::from_min_size(area.min, egui::vec2((area.width() * 0.35).min(460.0), area.height()));
-            draw_properties(ui, properties, editor, project, document);
-            let inspector = egui::Rect::from_min_max(egui::pos2(properties.right() + 12.0, area.top()), area.max);
-            super::planning_setup::draw_solid_render(ui, inspector, editor, project.active_session, commands);
-            ui.allocate_rect(area, egui::Sense::hover());
+            super::planning_setup::stacked_column(
+                ui,
+                &mut layout,
+                "solids_view_column",
+                "solids_view_contents_island",
+                |ui, rect| draw_properties(ui, rect, editor, project, document),
+                |ui, rect| draw_contents(ui, rect, editor, document),
+            );
+            super::planning_setup::central_pane_of(ui, |ui, rect| {
+                super::planning_setup::draw_solid_render(ui, rect, editor, project.active_session, commands);
+            })
         })
-        .response
-        .rect
+        .inner;
+    layout.rect = rect;
+    layout
 }
 
 /// Heading shown above the tree, so the column says what it is listing.

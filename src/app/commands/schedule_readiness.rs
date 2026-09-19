@@ -258,14 +258,21 @@ pub(crate) fn dispatch_input(
     horizon_limit_h: Option<f64>,
 ) -> Result<DispatchInput, Vec<ScheduleRunProblem>> {
     let mut problems = Vec::new();
-    if plan.bars().is_empty() {
+    // A bar holding no blocks is not work, so it is not a fault either: it
+    // describes nothing to dig, contributes nothing to the schedule, and the
+    // loader carrying it moves on to its next bar or idles. It is left out of
+    // every check below - an empty bar names no loader and measures no
+    // tonnes, and demanding either of it would block a run over a sequence
+    // the user has not filled in yet.
+    let scheduled = || plan.bars().iter().zip(reports).filter(|(bar, _)| !bar.members().is_empty());
+    if scheduled().next().is_none() {
         problems.push(ScheduleRunProblem {
             bars: Vec::new(),
             message: tr!("schedule-run-no-bars"),
         });
         return Err(problems);
     }
-    for bar in plan.bars() {
+    for (bar, _) in scheduled() {
         if bar.agent.is_none() {
             problems.push(ScheduleRunProblem {
                 bars: vec![bar.id],
@@ -273,7 +280,7 @@ pub(crate) fn dispatch_input(
             });
         }
     }
-    for (bar, report) in plan.bars().iter().zip(reports) {
+    for (bar, report) in scheduled() {
         if !report.is_ready() {
             problems.push(ScheduleRunProblem {
                 bars: vec![bar.id],
@@ -281,10 +288,9 @@ pub(crate) fn dispatch_input(
             });
         }
     }
-    let generations = reports
-        .iter()
-        .filter(|report| report.is_ready())
-        .filter_map(|report| report.generation)
+    let generations = scheduled()
+        .filter(|(_, report)| report.is_ready())
+        .filter_map(|(_, report)| report.generation)
         .collect::<std::collections::HashSet<_>>();
     if reports.len() != plan.bars().len() || generations.len() > 1 || generations.iter().any(|generation| *generation != expected) {
         problems.push(ScheduleRunProblem {
@@ -320,10 +326,7 @@ pub(crate) fn dispatch_input(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let bars = plan
-        .bars()
-        .iter()
-        .zip(reports)
+    let bars = scheduled()
         .map(|(bar, report)| DispatchBar {
             bar: bar.id,
             agent: bar.agent.expect("checked above"),

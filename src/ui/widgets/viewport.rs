@@ -87,9 +87,7 @@ fn reset_section_button(ui: &mut egui::Ui, tooltip: impl Into<String>) -> bool {
     ui.scope(|ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
-        ui.add(egui::Button::new(egui::RichText::new(tr!(literal = "Reset")).small()))
-            .on_hover_text(tooltip)
-            .clicked()
+        ui.add(egui::Button::new(tr!(literal = "Reset"))).on_hover_text(tooltip).clicked()
     })
     .inner
 }

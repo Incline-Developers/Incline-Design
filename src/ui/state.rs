@@ -1805,7 +1805,6 @@ pub(crate) struct EditorState {
     /// 0..1. A partly covered solid must not read as fully measured.
     pub(crate) solid_view_coverage: Option<f64>,
     pub(crate) solid_view_bands: std::collections::HashMap<crate::model::SolidId, Vec<BenchSelection>>,
-    pub(crate) solid_preview_sources: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) solid_preview_z_range: Option<(f64, f64)>,
     /// The bench or flitch picked out in the Benching step's results, and so
     /// highlighted in the preview.
@@ -2958,7 +2957,6 @@ impl EditorState {
             solid_view_coverage: None,
             solid_view_reserve_status: None,
             solid_view_bands: Default::default(),
-            solid_preview_sources: Default::default(),
             solid_preview_z_range: None,
             planning_selected_bench: None,
             slice_preview_size_px: [440, 440],
@@ -5374,7 +5372,6 @@ pub(crate) struct ScheduleCalendarView {
     pub(crate) selection: Option<CalendarSelection>,
     pub(crate) draft: Option<CalendarCellDraft>,
     pub(crate) error: Option<String>,
-    pub(crate) jump_day: String,
 }
 
 impl Default for ScheduleCalendarView {
@@ -5388,7 +5385,6 @@ impl Default for ScheduleCalendarView {
             selection: None,
             draft: None,
             error: None,
-            jump_day: String::new(),
         }
     }
 }
@@ -5448,11 +5444,21 @@ impl GanttView {
         14.0 * Self::DAY,
     ];
 
-    pub(crate) fn reset(&mut self) {
-        *self = Self {
-            row_scroll: self.row_scroll,
-            ..Self::default()
+    /// Frame the timeline on the work it holds: from the start of the project
+    /// through `extent_seconds`, rounded up to a whole day so the ruler lands
+    /// on one. With nothing scheduled there is nothing to frame, so it falls
+    /// back to the default week.
+    pub(crate) fn reset_to(&mut self, extent_seconds: Option<f64>) {
+        let span = match extent_seconds.filter(|end| end.is_finite() && *end > 0.0) {
+            Some(end) => (end / Self::DAY).ceil() * Self::DAY,
+            None => Self::DEFAULT_SPAN_SECONDS,
         };
+        *self = Self {
+            start_seconds: 0.0,
+            span_seconds: span,
+            row_scroll: self.row_scroll,
+        };
+        self.clamp();
     }
 
     /// Hold the window inside its limits: a span between an hour and a year,

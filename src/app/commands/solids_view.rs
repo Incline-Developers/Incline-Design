@@ -1461,7 +1461,6 @@ impl crate::app::App<'_> {
         self.editor.solid_view_reserve_issues.clear();
         self.editor.solid_view_coverage = None;
         self.editor.selected_dig_block_info = None;
-        self.editor.solid_preview_sources.clear();
 
         // Ramp across what is actually on screen rather than the whole pit,
         // so one bench is not a single flat shade of its solid's colour.
@@ -1549,7 +1548,6 @@ impl crate::app::App<'_> {
                     self.editor.solid_view_reserve_status = Some(crate::i18n::tr!("planning-reserve-capacity-only"));
                 }
             }
-            self.editor.solid_preview_sources.extend([solid.surface, solid.topography].into_iter().flatten());
             let reserves = (demand == GeometryDemand::Partition)
                 .then(|| cache.reserves.product().map(|product| &product.totals))
                 .flatten();

@@ -17,6 +17,12 @@ const PERIOD_W: f32 = 112.0;
 const HEADER_H: f32 = 30.0;
 const TOOLBAR_H: f32 = 34.0;
 const OVERSCAN: i32 = 1;
+/// Height of the day scroll bar along the bottom of the period columns.
+const SCROLLBAR_H: f32 = 12.0;
+/// How far each level of the row hierarchy is indented from the one above.
+/// The gutter it leaves is shaded in the parent's own colour, so a loader's
+/// rows read as sitting inside it rather than merely beside it.
+const NEST_INDENT: f32 = 16.0;
 
 #[derive(Clone, Copy)]
 enum Row {
@@ -42,7 +48,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let rect = ui.available_rect_before_wrap();
             let toolbar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TOOLBAR_H.min(rect.height())));
             let grid = egui::Rect::from_min_max(egui::pos2(rect.left(), toolbar.bottom()), rect.max);
-            draw_toolbar(ui, toolbar, editor);
+            draw_toolbar(ui, toolbar, editor, commands);
             if plan.agents().is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
@@ -54,28 +60,19 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
         .rect
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
+/// The Calendar's own toolbar: the schedule run controls, and whatever the
+/// held result or the last edit has to say.
+///
+/// Days are reached by scrolling rather than by asking for them: the extent
+/// already covers the authored overrides, the sequenced bars and the
+/// calculated interval, so a button that added a fortnight of empty columns
+/// and a box that jumped to one were two ways of saying the same thing the
+/// scroll bar says.
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("schedule_calendar_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
-        if ui.button(tr!("schedule-calendar-extend")).clicked() {
-            editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.saturating_add(14);
-        }
-        ui.add_space(8.0);
-        ui.label(tr!("schedule-calendar-jump"));
-        let response = ui.add_sized([64.0, ui.spacing().interact_size.y], egui::TextEdit::singleline(&mut editor.schedule_calendar.jump_day));
-        if response.lost_focus()
-            && ui.input(|input| input.key_pressed(egui::Key::Enter))
-            && let Ok(day) = editor.schedule_calendar.jump_day.trim().parse::<u32>()
-            && day > 0
-        {
-            editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(day);
-            editor.schedule_calendar.scroll_x = day.saturating_sub(1) as f32 * PERIOD_W;
-        }
-        ui.menu_button("?", |ui| {
-            ui.set_max_width(360.0);
-            ui.label(tr!("schedule-calendar-help"));
-        });
+        super::schedule_gantt::draw_calculation_controls(ui, editor, "calendar", commands);
         if editor.schedule_run_stale {
             // Said once, here: the alternative is repeating it in every
             // calculated row of every loader.
@@ -152,9 +149,10 @@ fn draw_grid(
     commands: &mut Vec<UiCommand>,
 ) {
     let row_h = crate::ui::widgets::explorer::row_height(ui);
-    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + HEADER_H), rect.max);
+    let scrollbar_top = (rect.bottom() - SCROLLBAR_H).max(rect.top() + HEADER_H);
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + HEADER_H), egui::pos2(rect.right(), scrollbar_top));
     let period_left = rect.left() + HIERARCHY_W + DEFAULT_W;
-    let period_view = egui::Rect::from_min_max(egui::pos2(period_left, rect.top()), rect.max);
+    let period_view = egui::Rect::from_min_max(egui::pos2(period_left, rect.top()), egui::pos2(rect.right(), scrollbar_top));
     let rows = rows(plan, editor);
     let max_y = (rows.len() as f32 * row_h - body.height()).max(0.0);
     let max_x = (editor.schedule_calendar.visible_days as f32 * PERIOD_W - period_view.width()).max(0.0);
@@ -205,11 +203,64 @@ fn draw_grid(
     }
     ui.painter().rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
     ui.painter()
-        .line_segment([egui::pos2(hierarchy_head.right(), rect.top()), egui::pos2(hierarchy_head.right(), rect.bottom())], stroke);
+        .line_segment([egui::pos2(hierarchy_head.right(), rect.top()), egui::pos2(hierarchy_head.right(), body.bottom())], stroke);
     ui.painter()
-        .line_segment([egui::pos2(default_head.right(), rect.top()), egui::pos2(default_head.right(), rect.bottom())], stroke);
+        .line_segment([egui::pos2(default_head.right(), rect.top()), egui::pos2(default_head.right(), body.bottom())], stroke);
     ui.painter()
         .line_segment([egui::pos2(rect.left(), body.top()), egui::pos2(rect.right(), body.top())], stroke);
+    draw_day_scrollbar(
+        ui,
+        egui::Rect::from_min_max(egui::pos2(period_left, scrollbar_top), rect.max),
+        editor,
+        period_view.width(),
+        max_x,
+    );
+}
+
+/// The day scroll bar: how the grid is moved across the horizon now that no
+/// button extends it and no box jumps to a day.
+///
+/// Hand-painted like the grid above it, and for the same reason - the columns
+/// are virtualized, so there is no laid-out content for a `ScrollArea` to
+/// measure.
+fn draw_day_scrollbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, view_width: f32, max_x: f32) {
+    if !rect.is_positive() {
+        return;
+    }
+    let total = max_x + view_width;
+    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    if max_x <= 0.0 || total <= 0.0 || view_width <= 0.0 {
+        return;
+    }
+    let track = rect.shrink2(egui::vec2(1.0, 3.0));
+    let response = ui.interact(rect, ui.id().with("schedule_calendar_day_scroll"), egui::Sense::click_and_drag());
+    // A thumb narrower than this cannot be grabbed, so a long horizon stops
+    // shrinking it and gives up proportionality instead.
+    const MIN_THUMB: f32 = 24.0;
+    let thumb_w = (track.width() * view_width / total).clamp(MIN_THUMB.min(track.width()), track.width());
+    let travel = track.width() - thumb_w;
+    if let Some(pointer) = response.interact_pointer_pos()
+        && travel > 0.0
+    {
+        // Dragged from wherever it was grabbed, so the thumb does not jump
+        // its own half-width under the pointer on the first press.
+        let grab = ui.id().with("schedule_calendar_day_scroll_grab");
+        let offset = if response.drag_started() || response.clicked() {
+            let thumb_x = track.left() + travel * (editor.schedule_calendar.scroll_x / max_x);
+            let inside = pointer.x - thumb_x;
+            let inside = if (0.0..=thumb_w).contains(&inside) { inside } else { thumb_w / 2.0 };
+            ui.data_mut(|data| data.insert_temp(grab, inside));
+            inside
+        } else {
+            ui.data(|data| data.get_temp::<f32>(grab)).unwrap_or(thumb_w / 2.0)
+        };
+        let fraction = ((pointer.x - offset - track.left()) / travel).clamp(0.0, 1.0);
+        editor.schedule_calendar.scroll_x = fraction * max_x;
+    }
+    let thumb_x = track.left() + travel * (editor.schedule_calendar.scroll_x / max_x);
+    let thumb = egui::Rect::from_min_size(egui::pos2(thumb_x, track.top()), egui::vec2(thumb_w, track.height()));
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect_filled(thumb, track.height() / 2.0, visuals.bg_fill);
 }
 
 fn paint_header(ui: &mut egui::Ui, rect: egui::Rect, text: String, hover: Option<String>) {
@@ -242,18 +293,40 @@ fn draw_row(
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
     let hierarchy = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + HIERARCHY_W, rect.bottom()));
+    // The gutter every level above this row leaves to its left, each shaded
+    // in that level's own colour. Unbroken down the column, so a loader's
+    // three settings read as being inside the loader, which is inside Loaders.
+    let depth = match row {
+        Row::Loaders => 0,
+        Row::Agent(_) => 1,
+        Row::Field(..) => 2,
+    };
+    for level in 0..depth {
+        let band = egui::Rect::from_min_max(
+            egui::pos2(hierarchy.left() + level as f32 * NEST_INDENT, rect.top()),
+            egui::pos2(hierarchy.left() + (level + 1) as f32 * NEST_INDENT, rect.bottom()),
+        );
+        ui.painter().rect_filled(band, 0.0, nest_fill(ui, level));
+    }
+    let indent = depth as f32 * NEST_INDENT;
+    let label_start = hierarchy.left() + indent;
     match row {
         Row::Loaders => {
-            ui.put(
-                hierarchy.shrink2(egui::vec2(8.0, 2.0)),
-                egui::Label::new(crate::ui::fonts::bold(&tr!("schedule-calendar-loaders"))),
-            );
+            ui.painter().rect_filled(hierarchy, 0.0, nest_fill(ui, 0));
+            paint_label(ui, hierarchy, label_start + 8.0, &tr!("schedule-calendar-loaders"), LabelStyle::Heading);
         }
         Row::Agent(id) => {
             let Some(agent) = plan.agent(id) else { return };
+            let row_rect = egui::Rect::from_min_max(egui::pos2(label_start, rect.top()), egui::pos2(hierarchy.right(), rect.bottom()));
+            ui.painter().rect_filled(row_rect, 0.0, nest_fill(ui, 1));
             let collapsed = editor.schedule_calendar.collapsed.contains(&id);
             let label = format!("{}  {}", if collapsed { "▸" } else { "▾" }, agent.name);
-            if ui.put(hierarchy.shrink2(egui::vec2(8.0, 2.0)), egui::Button::new(label).frame(false)).clicked() {
+            // Interacted with rather than laid out as a button: a widget put
+            // over the row would centre its text, and the indent is the whole
+            // point of the row.
+            let response = ui.interact(row_rect, ui.id().with(("schedule_calendar_agent", id)), egui::Sense::click());
+            paint_label(ui, row_rect, label_start + 8.0, &label, LabelStyle::Heading);
+            if response.clicked() {
                 if collapsed {
                     editor.schedule_calendar.collapsed.remove(&id);
                 } else {
@@ -263,7 +336,7 @@ fn draw_row(
         }
         Row::Field(agent_id, kind) => {
             let Some(agent) = plan.agent(agent_id) else { return };
-            let label_rect = hierarchy.shrink2(egui::vec2(26.0, 2.0));
+            let text_left = label_start + 18.0;
             match kind {
                 CalendarRow::Input(field) => {
                     let label = match field {
@@ -271,20 +344,14 @@ fn draw_row(
                         CalendarField::Utilisation => tr!("schedule-calendar-utilisation"),
                         CalendarField::Rate => tr!("schedule-calendar-rate"),
                     };
-                    ui.put(label_rect, egui::Label::new(label).truncate().halign(egui::Align::Min));
+                    paint_label(ui, hierarchy, text_left, &label, LabelStyle::Field);
                 }
                 CalendarRow::Tonnes => {
-                    // A lock beside a quieter, italic label: the tint alone
-                    // would be the only thing saying this row cannot be typed
-                    // into, and colour alone is not enough to say it.
-                    let color = ui.visuals().weak_text_color();
-                    paint_lock(ui, egui::pos2(label_rect.left() - 10.0, label_rect.center().y), color);
-                    ui.put(
-                        label_rect,
-                        egui::Label::new(egui::RichText::new(tr!("schedule-calendar-tonnes")).italics().color(color))
-                            .truncate()
-                            .halign(egui::Align::Min),
-                    );
+                    // A lock beside a quieter label: the tint alone would be
+                    // the only thing saying this row cannot be typed into, and
+                    // colour alone is not enough to say it.
+                    paint_lock(ui, egui::pos2(text_left - 10.0, rect.center().y), ui.visuals().weak_text_color());
+                    paint_label(ui, hierarchy, text_left, &tr!("schedule-calendar-tonnes"), LabelStyle::Calculated);
                 }
             }
             let default_rect = egui::Rect::from_min_max(egui::pos2(hierarchy.right(), rect.top()), egui::pos2(hierarchy.right() + DEFAULT_W, rect.bottom()));
@@ -325,6 +392,58 @@ fn draw_row(
             }
         }
     }
+}
+
+/// How a row label is drawn: the two hierarchy levels are headings, a
+/// setting's name is ordinary text, and a calculated row's is quieter.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LabelStyle {
+    Heading,
+    Field,
+    Calculated,
+}
+
+/// One row label, left-aligned at its own indent and clipped to the hierarchy
+/// column.
+///
+/// Painted rather than laid out: a widget put into the row would centre its
+/// text, and centred text says nothing about which level it sits at.
+fn paint_label(ui: &egui::Ui, row: egui::Rect, left: f32, text: &str, style: LabelStyle) {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    let (font, color) = match style {
+        LabelStyle::Heading => (crate::ui::fonts::bold_font(size), ui.visuals().strong_text_color()),
+        LabelStyle::Field => (egui::FontId::proportional(size), ui.visuals().text_color()),
+        LabelStyle::Calculated => (egui::FontId::proportional(size), ui.visuals().weak_text_color()),
+    };
+    let available = (row.right() - 8.0 - left).max(0.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap.max_width = available;
+    job.wrap.max_rows = 1;
+    let galley = ui.painter().layout_job(job);
+    ui.painter()
+        .with_clip_rect(row)
+        .galley(egui::pos2(left, row.center().y - galley.size().y / 2.0), galley, color);
+}
+
+/// The shade one level of the row hierarchy is drawn in.
+///
+/// Level 0 is the header fill the column titles use, and each level below it
+/// steps back towards the row background, so the gutters read as nested bands
+/// without a second palette to keep in step with the theme.
+fn nest_fill(ui: &egui::Ui, level: usize) -> egui::Color32 {
+    let header = ui.visuals().widgets.noninteractive.bg_fill;
+    let background = crate::ui::widgets::tree_row_colors(ui).1;
+    match level {
+        0 => header,
+        _ => blend(header, background, 0.5),
+    }
+}
+
+/// Mix two colours, so a nesting band can be derived from the theme's own
+/// fills rather than from constants that only suit one theme.
+fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round().clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgb(mix(from.r(), to.r()), mix(from.g(), to.g()), mix(from.b(), to.b()))
 }
 
 /// A padlock a few pixels across: the shackle first, then the body over its

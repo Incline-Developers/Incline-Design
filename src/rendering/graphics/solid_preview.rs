@@ -436,10 +436,13 @@ impl Graphics<'_> {
         // surfaces here rather than in the list the explorer and the main
         // viewport read. Built once per re-render, not once per frame.
         //
-        // Source sheets coincide with the generated floor/roof. Suppress
-        // them only in this inspector; project visibility stays unchanged.
+        // Every loaded surface is drawn, the solid's own two included. Those
+        // coincide with its generated floor and roof, so the two can fight for
+        // pixels where they meet - but loading the pit surface you are
+        // inspecting and not seeing it is the worse surprise, and what is
+        // shown here is the project's own answer about visibility.
         let mut surfaces = Vec::with_capacity(scene.triangulations.len() + preview.len());
-        surfaces.extend(scene.triangulations.iter().filter(|mesh| !editor.solid_preview_sources.contains(&mesh.id)).cloned());
+        surfaces.extend(scene.triangulations.iter().cloned());
         surfaces.extend(preview.iter().cloned());
         self.render_scene_pass(
             &mut encoder,
