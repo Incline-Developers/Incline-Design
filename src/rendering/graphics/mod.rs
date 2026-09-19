@@ -1119,6 +1119,29 @@ impl<'a> Graphics<'a> {
     /// egui hid or showed would be skipped as a no-op.
     fn sync_cursor_grab(&self) {
         let fly_active = self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right);
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+
+            let Some(canvas) = self.window.canvas() else { return };
+            let Some(document) = canvas.owner_document() else { return };
+            let has_method = |object: &wasm_bindgen::JsValue, name: &str| js_sys::Reflect::get(object, &name.into()).is_ok_and(|value| value.is_function());
+            // winit 0.30 calls these APIs without feature detection or exception
+            // handling. Mobile browsers can omit them, so even releasing an
+            // unused grab on focus loss (e.g. a file picker) would throw into JS.
+            if !has_method(document.as_ref(), "exitPointerLock") {
+                return;
+            }
+            let canvas_element: &web_sys::Element = canvas.as_ref();
+            let owns_lock = document.pointer_lock_element().as_ref() == Some(canvas_element);
+            if fly_active {
+                if owns_lock || !has_method(canvas.as_ref(), "requestPointerLock") {
+                    return;
+                }
+            } else if !owns_lock {
+                return;
+            }
+        }
         if fly_active {
             if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);
