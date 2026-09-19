@@ -135,6 +135,7 @@ impl<'a> App<'a> {
     pub(crate) fn apply_preferences(&mut self, mut preferences: crate::ui::state::PreferencesDraft) -> anyhow::Result<()> {
         // Clamp once, up front, so the saved config, the applied editor state
         // and the retained draft cannot diverge.
+        preferences.ui_size_percent = crate::app::io::finite_clamped(preferences.ui_size_percent, 50.0, 200.0, crate::app::io::default_ui_size_percent());
         preferences.snap_poll_rate = preferences.snap_poll_rate.clamp(5, 1000);
         preferences.frame_rate_cap = preferences.frame_rate_cap.clamp(20, 1000);
         preferences.resize_frame_rate_cap = preferences.resize_frame_rate_cap.clamp(20, 1000);
@@ -160,6 +161,7 @@ impl<'a> App<'a> {
         self.editor.show_console = preferences.show_console;
         self.editor.show_borehole_inspector = preferences.show_borehole_inspector;
         self.editor.panel_chrome = preferences.panel_chrome;
+        self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
         self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
@@ -314,6 +316,7 @@ pub(crate) fn config_from(
         show_console: preferences.show_console,
         show_borehole_inspector: preferences.show_borehole_inspector,
         panel_chrome: preferences.panel_chrome,
+        ui_size_percent: preferences.ui_size_percent,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,
         show_scale_bar: preferences.show_scale_bar,
         renderer_background_color: preferences.renderer_background_color,

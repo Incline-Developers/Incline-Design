@@ -47,6 +47,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_console: bool,
     pub(crate) show_borehole_inspector: bool,
     pub(crate) panel_chrome: bool,
+    pub(crate) ui_size_percent: f64,
     pub(crate) show_world_axis_gizmo: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
@@ -88,6 +89,7 @@ impl Default for PreferencesDraft {
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
             panel_chrome: crate::app::io::default_panel_chrome(),
+            ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
@@ -1062,6 +1064,7 @@ pub(crate) struct EditorState {
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
+    pub(crate) ui_size_percent: f64,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
     /// Show the construction grid on the world XY plane at Z=0. Per-session
@@ -2096,6 +2099,7 @@ impl EditorState {
             show_console: self.show_console,
             show_borehole_inspector: self.show_borehole_inspector,
             panel_chrome: self.panel_chrome,
+            ui_size_percent: self.ui_size_percent,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
@@ -2150,6 +2154,7 @@ impl EditorState {
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             panel_chrome: crate::app::io::default_panel_chrome(),
+            ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: true,
             show_scale_bar: crate::app::io::default_show_scale_bar(),

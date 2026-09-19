@@ -56,6 +56,10 @@ pub(crate) const fn default_show_scale_bar() -> bool {
     true
 }
 
+pub(crate) const fn default_ui_size_percent() -> f64 {
+    100.0
+}
+
 pub(crate) const fn default_panel_chrome() -> bool {
     true
 }
@@ -162,6 +166,9 @@ pub(crate) struct Config {
     /// square with a separator line between them.
     #[serde(default = "default_panel_chrome")]
     pub(crate) panel_chrome: bool,
+    /// User multiplier on the monitor-relative 2560 × 1440 UI scale.
+    #[serde(default = "default_ui_size_percent")]
+    pub(crate) ui_size_percent: f64,
     /// Linear RGBA clear colour used behind the rendered scene.
     #[serde(default = "default_renderer_background_color")]
     pub(crate) renderer_background_color: [f32; 4],
@@ -271,6 +278,7 @@ impl Default for Config {
             show_console: default_show_console(),
             show_borehole_inspector: default_show_borehole_inspector(),
             panel_chrome: default_panel_chrome(),
+            ui_size_percent: default_ui_size_percent(),
             renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),
             vsync_enabled: default_vsync_enabled(),

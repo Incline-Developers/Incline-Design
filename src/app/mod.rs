@@ -626,6 +626,7 @@ impl<'a> App<'a> {
         self.editor.show_console = config.show_console;
         self.editor.show_borehole_inspector = config.show_borehole_inspector;
         self.editor.panel_chrome = config.panel_chrome;
+        self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
