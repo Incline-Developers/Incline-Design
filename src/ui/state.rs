@@ -1636,6 +1636,11 @@ pub(crate) struct EditorState {
     pub(crate) batter_berm_direction_up: bool,
     /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
     pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
+    /// Centre and radius per ring, parallel to [`Self::batter_berm_rings_world`],
+    /// when the source is a circle. Benching a circle yields concentric
+    /// circles, so the commit writes those rather than the flattened rings the
+    /// preview draws. `None` for every other source.
+    pub(crate) batter_berm_ring_circles: Option<Vec<(DVec3, f64)>>,
     pub(crate) batter_berm_source_world: Vec<DVec3>,
     /// Screen projections preserve one entry per world vertex. `None` means
     /// that vertex is outside the camera depth range, so adjacent vertices
@@ -2034,6 +2039,7 @@ impl EditorState {
         self.batter_berm_dialog_open = false;
         self.batter_berm_target_id = None;
         self.batter_berm_rings_world.clear();
+        self.batter_berm_ring_circles = None;
         self.batter_berm_source_world.clear();
         self.batter_berm_rings_screen_px.clear();
         self.batter_berm_source_screen_px.clear();
@@ -2443,6 +2449,7 @@ impl EditorState {
             // Down keeps the historical default (Pit + Down = inward + down).
             batter_berm_direction_up: false,
             batter_berm_rings_world: Vec::new(),
+            batter_berm_ring_circles: None,
             batter_berm_source_world: Vec::new(),
             batter_berm_rings_screen_px: Vec::new(),
             batter_berm_source_screen_px: Vec::new(),

@@ -18,7 +18,7 @@ impl<'a> App<'a> {
                     .workspace
                     .active_document()
                     .and_then(|document| document.get_object(*id))
-                    .is_some_and(|object| matches!(object, Object::Polyline { .. })) =>
+                    .is_some_and(|object| matches!(object, Object::Polyline { .. } | Object::Circle { .. })) =>
             {
                 Some(*id)
             }
@@ -32,7 +32,7 @@ impl<'a> App<'a> {
             self.editor.batter_berm_dialog_open = true;
             self.editor.batter_berm_preview_key = None;
             self.editor.tool_highlight_id = Some(id);
-            let closed = matches!(self.active_document().get_object(id), Some(Object::Polyline { closed: true, .. }));
+            let closed = self.active_document().get_object(id).and_then(Object::string_geometry).is_some_and(|(_, closed)| closed);
             self.editor.batter_berm_preview_closed = closed;
             self.invalidate_geometry();
         }
@@ -46,13 +46,13 @@ impl<'a> App<'a> {
             .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
         if let Some((SceneEntityId::Object(id), _)) = picked
             && self.activate_project_for_object(id)
-            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. }))
+            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. } | Object::Circle { .. }))
         {
             self.editor.batter_berm_target_id = Some(id);
             self.editor.batter_berm_dialog_open = true;
             self.editor.batter_berm_preview_key = None;
             self.editor.tool_highlight_id = Some(id);
-            let closed = matches!(self.active_document().get_object(id), Some(Object::Polyline { closed: true, .. }));
+            let closed = self.active_document().get_object(id).and_then(Object::string_geometry).is_some_and(|(_, closed)| closed);
             self.editor.batter_berm_preview_closed = closed;
             self.invalidate_geometry();
         }
@@ -91,35 +91,58 @@ impl<'a> App<'a> {
             return;
         }
 
-        let (src_verts, closed) = match self.active_document().get_object(object_id) {
-            Some(Object::Polyline { verts, closed, .. }) => (crate::model::geometry::tessellate_polyline_bulges(verts, *closed), *closed),
-            _ => return,
+        let Some(object) = self.active_document().get_object(object_id) else {
+            return;
+        };
+        let source_circle = object.circle();
+        let Some((src_verts, closed)) = object.tessellated_path() else {
+            return;
         };
 
         self.editor.batter_berm_source_world = src_verts.clone();
         if !berm_width.is_finite() || berm_width <= 0.0 || !angle_deg.is_finite() || angle_deg <= 0.0 || angle_deg >= 90.0 || !bench_height.is_finite() || bench_height <= 0.0 {
             self.editor.batter_berm_max_benches = 0;
             self.editor.batter_berm_rings_world.clear();
+            self.editor.batter_berm_ring_circles = None;
             self.editor.batter_berm_preview_key = Some(preview_key);
             return;
         }
 
         let (side, delta_height, outward) = mode_to_side_and_dz(&src_verts, closed, mode, direction_up, bench_height);
         let batter_horiz = batter_horizontal_dist(angle_deg, bench_height);
-        let generation = compute_batter_berm_rings(
-            &src_verts,
-            BatterBermGenerationParams {
-                closed,
-                side,
-                outward,
-                batter_horiz,
-                berm_width,
-                delta_height,
-                requested_benches: None,
-                hard_limit: BATTER_BERM_SEARCH_LIMIT,
-            },
-            || false,
-        );
+        // Benching a circle is concentric circles, so the rings are computed
+        // from the radius rather than offset off a flattened polygon - the
+        // source of the polylines this tool used to hand back for a circle.
+        let generation = match source_circle {
+            Some((center, radius)) => compute_batter_berm_circles(
+                center,
+                radius,
+                BatterBermGenerationParams {
+                    closed,
+                    side,
+                    outward,
+                    batter_horiz,
+                    berm_width,
+                    delta_height,
+                    requested_benches: None,
+                    hard_limit: BATTER_BERM_SEARCH_LIMIT,
+                },
+            ),
+            None => compute_batter_berm_rings(
+                &src_verts,
+                BatterBermGenerationParams {
+                    closed,
+                    side,
+                    outward,
+                    batter_horiz,
+                    berm_width,
+                    delta_height,
+                    requested_benches: None,
+                    hard_limit: BATTER_BERM_SEARCH_LIMIT,
+                },
+                || false,
+            ),
+        };
         self.editor.batter_berm_max_benches = generation.completed_benches;
         self.editor.batter_berm_benches = if generation.completed_benches == 0 {
             0
@@ -127,6 +150,7 @@ impl<'a> App<'a> {
             benches.clamp(1, generation.completed_benches)
         };
         let preview_ring_count = usize::try_from(self.editor.batter_berm_benches).unwrap_or(usize::MAX / 2).saturating_mul(2);
+        self.editor.batter_berm_ring_circles = generation.circles.map(|circles| circles.into_iter().take(preview_ring_count).collect());
         self.editor.batter_berm_rings_world = generation.rings.into_iter().take(preview_ring_count).collect();
         self.editor.batter_berm_preview_closed = closed;
         self.editor.batter_berm_preview_key = Some(BatterBermPreviewKey {
@@ -148,38 +172,55 @@ impl<'a> App<'a> {
             return;
         }
 
-        let (layer, color, fill, line_weight, closed) = match self.active_document().get_object(object_id) {
-            Some(Object::Polyline {
-                layer,
-                color,
-                fill,
-                line_weight,
-                closed,
-                ..
-            }) => (*layer, *color, *fill, *line_weight, *closed),
-            _ => return,
+        let Some(object) = self.active_document().get_object(object_id) else {
+            return;
         };
+        let (layer, color) = (object.layer(), object.color());
+        let (Some(fill), Some(line_weight)) = (object.fill(), object.line_weight()) else {
+            return;
+        };
+        let closed = object.string_geometry().is_some_and(|(_, closed)| closed);
 
         let rings = self.editor.batter_berm_rings_world.clone();
+        let ring_circles = self.editor.batter_berm_ring_circles.clone();
 
         if let Some(project) = self.workspace.active_project_mut() {
             let doc = &mut project.project.document;
-            let commands = rings
-                .into_iter()
-                .map(|ring_verts| {
-                    let new_verts: Vec<PolyVertex> = ring_verts.into_iter().map(PolyVertex::straight).collect();
-                    let id = doc.allocate_object_id();
-                    Command::AddObject(Object::Polyline {
-                        id,
-                        layer,
-                        verts: new_verts,
-                        closed,
-                        color,
-                        fill,
-                        line_weight,
+            // Benching a circle produced concentric circles, so write them as
+            // circles; every other source writes the flattened rings.
+            let commands = match ring_circles {
+                Some(circles) => circles
+                    .into_iter()
+                    .map(|(center, radius)| {
+                        let id = doc.allocate_object_id();
+                        Command::AddObject(Object::Circle {
+                            id,
+                            layer,
+                            center,
+                            radius,
+                            color,
+                            fill,
+                            line_weight,
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
+                    .collect::<Vec<_>>(),
+                None => rings
+                    .into_iter()
+                    .map(|ring_verts| {
+                        let new_verts: Vec<PolyVertex> = ring_verts.into_iter().map(PolyVertex::straight).collect();
+                        let id = doc.allocate_object_id();
+                        Command::AddObject(Object::Polyline {
+                            id,
+                            layer,
+                            verts: new_verts,
+                            closed,
+                            color,
+                            fill,
+                            line_weight,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            };
             if !commands.is_empty() {
                 self.execute_edit(Command::Batch(commands));
             }
@@ -197,6 +238,7 @@ impl<'a> App<'a> {
         self.editor.batter_berm_dialog_open = false;
         self.editor.batter_berm_target_id = None;
         self.editor.batter_berm_rings_world.clear();
+        self.editor.batter_berm_ring_circles = None;
         self.editor.batter_berm_source_world.clear();
         self.editor.batter_berm_rings_screen_px.clear();
         self.editor.batter_berm_source_screen_px.clear();
@@ -259,8 +301,65 @@ enum BatterBermStopReason {
 struct BatterBermGeneration {
     /// Complete pairs: toe_0, berm_0, toe_1, berm_1, …
     rings: Vec<Vec<glam::DVec3>>,
+    /// Centre and radius per ring when the source is a circle, parallel to
+    /// `rings`. `None` for every other source, whose rings are the result.
+    circles: Option<Vec<(glam::DVec3, f64)>>,
     completed_benches: u32,
     _stop_reason: BatterBermStopReason,
+}
+
+/// Produce batter-and-berm pairs for a circular source.
+///
+/// Each ring is concentric with the source at the same cumulative design
+/// distances the polyline path uses, so a circle benches to circles instead of
+/// the many-sided polygons a flattened offset produces. Shrinking rings stop
+/// when the radius reaches zero, which is the circular equivalent of the
+/// collapse test `valid_offset` performs on a polyline.
+fn compute_batter_berm_circles(center: glam::DVec3, radius: f64, params: BatterBermGenerationParams) -> BatterBermGeneration {
+    let target = params.requested_benches.unwrap_or(params.hard_limit).min(params.hard_limit);
+    let mut rings = Vec::new();
+    let mut circles = Vec::new();
+    let mut completed_benches = 0;
+
+    while completed_benches < target {
+        let level = f64::from(completed_benches + 1);
+        let toe_distance = level * params.batter_horiz + f64::from(completed_benches) * params.berm_width;
+        let berm_distance = level * (params.batter_horiz + params.berm_width);
+        let level_delta_z = level * params.delta_height;
+        let ring_center = glam::DVec3::new(center.x, center.y, center.z + level_delta_z);
+
+        let signed = |distance: f64| if params.outward { radius + distance } else { radius - distance };
+        let (toe_radius, berm_radius) = (signed(toe_distance), signed(berm_distance));
+        if toe_radius <= 1.0e-9 {
+            return BatterBermGeneration {
+                rings,
+                circles: Some(circles),
+                completed_benches,
+                _stop_reason: BatterBermStopReason::NoValidBatter,
+            };
+        }
+        if berm_radius <= 1.0e-9 {
+            return BatterBermGeneration {
+                rings,
+                circles: Some(circles),
+                completed_benches,
+                _stop_reason: BatterBermStopReason::NoValidBerm,
+            };
+        }
+
+        for (ring_radius, _) in [(toe_radius, 0), (berm_radius, 1)] {
+            rings.push(crate::model::geometry::tessellate_circle(ring_center, ring_radius));
+            circles.push((ring_center, ring_radius));
+        }
+        completed_benches += 1;
+    }
+
+    BatterBermGeneration {
+        rings,
+        circles: Some(circles),
+        completed_benches,
+        _stop_reason: BatterBermStopReason::RequestedCount,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -294,6 +393,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         if is_cancelled() {
             return BatterBermGeneration {
                 rings,
+                circles: None,
                 completed_benches,
                 _stop_reason: BatterBermStopReason::Cancelled,
             };
@@ -313,6 +413,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         if !valid_offset(&previous, &toe, params.closed, params.outward) {
             return BatterBermGeneration {
                 rings,
+                circles: None,
                 completed_benches,
                 _stop_reason: BatterBermStopReason::NoValidBatter,
             };
@@ -320,6 +421,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         if is_cancelled() {
             return BatterBermGeneration {
                 rings,
+                circles: None,
                 completed_benches,
                 _stop_reason: BatterBermStopReason::Cancelled,
             };
@@ -328,6 +430,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         if !valid_offset(&toe, &berm, params.closed, params.outward) {
             return BatterBermGeneration {
                 rings,
+                circles: None,
                 completed_benches,
                 _stop_reason: BatterBermStopReason::NoValidBerm,
             };
@@ -336,6 +439,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         if output_vertices.saturating_add(pair_vertices) > MAX_OUTPUT_VERTICES {
             return BatterBermGeneration {
                 rings,
+                circles: None,
                 completed_benches,
                 _stop_reason: BatterBermStopReason::SafetyLimit,
             };
@@ -354,6 +458,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
     };
     BatterBermGeneration {
         rings,
+        circles: None,
         completed_benches,
         _stop_reason: stop_reason,
     }

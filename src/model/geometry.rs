@@ -23,6 +23,12 @@ pub(crate) fn circle_polyline_vertices(center: DVec3, radius: f64, bearing: DVec
     Some([PolyVertex { pos: center + offset, bulge: 1.0 }, PolyVertex { pos: center - offset, bulge: 1.0 }])
 }
 
+/// Flatten a circle into points, for the callers that need a ring rather than
+/// a shape: previews, boundary clipping and formats without an arc primitive.
+pub(crate) fn tessellate_circle(center: DVec3, radius: f64) -> Vec<DVec3> {
+    circle_polyline_vertices(center, radius, DVec2::X).map_or_else(Vec::new, |verts| tessellate_polyline_bulges(&verts, true))
+}
+
 /// Return the centre of the compact two-semicircle representation of a circle.
 ///
 /// The persisted geometry remains a standard bulged polyline for format

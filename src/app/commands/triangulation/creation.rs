@@ -249,15 +249,9 @@ impl<'a> App<'a> {
             let Some(obj) = self.scene_document.get_object(*id) else {
                 continue;
             };
-            match obj {
-                Object::Polyline { verts, closed, .. } => {
-                    let points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
-                    let minimum = if *closed { 3 } else { 2 };
-                    if points.len() >= minimum {
-                        paths.push(BreaklinePath { points, closed: *closed });
-                    } else {
-                        rejected += 1;
-                    }
+            match obj.tessellated_path() {
+                Some((points, closed)) if points.len() >= if closed { 3 } else { 2 } => {
+                    paths.push(BreaklinePath { points, closed });
                 }
                 _ => {
                     rejected += 1;

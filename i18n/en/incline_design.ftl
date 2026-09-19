@@ -116,6 +116,11 @@ tri-count-strings =
         [one] { $count } string
        *[other] { $count } strings
     }
+tri-count-circles =
+    { $count ->
+        [one] { $count } circle
+       *[other] { $count } circles
+    }
 tri-count-points =
     { $count ->
         [one] { $count } point

@@ -52,6 +52,7 @@ fn object_kind_label(object: &crate::model::Object) -> String {
         crate::model::Object::Point { .. } => tr!(literal = "Point"),
         crate::model::Object::Polyline { verts, .. } if verts.len() == 2 => tr!(literal = "Line"),
         crate::model::Object::Polyline { .. } => tr!(literal = "Polyline"),
+        crate::model::Object::Circle { .. } => tr!(literal = "Circle"),
         crate::model::Object::Text { .. } => tr!(literal = "Text"),
     }
 }

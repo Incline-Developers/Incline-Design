@@ -605,11 +605,9 @@ impl<'a> Graphics<'a> {
                                 count += 1;
                             }
                         }
-                        (Object::Polyline { verts, closed, .. }, crate::model::ObjectPoint::Center) => {
-                            if let Some(center) = crate::model::geometry::compact_circle_center(verts, *closed) {
-                                sum += center;
-                                count += 1;
-                            }
+                        (Object::Circle { center, .. }, crate::model::ObjectPoint::Center) => {
+                            sum += *center;
+                            count += 1;
                         }
                         (Object::Point { pos, .. }, crate::model::ObjectPoint::Vertex(0)) => {
                             sum += *pos;
@@ -632,6 +630,10 @@ impl<'a> Graphics<'a> {
                             }
                             Object::Point { pos, .. } | Object::Text { pos, .. } => {
                                 sum += *pos;
+                                count += 1;
+                            }
+                            Object::Circle { center, .. } => {
+                                sum += *center;
                                 count += 1;
                             }
                         }

@@ -14,7 +14,6 @@ use crate::{
     Size,
     model::{
         Document, Object, ObjectId, ObjectPoint, SceneEntityId,
-        geometry::compact_circle_center,
         spatial::{ObjectSnapIndex, projected_box_overlaps},
     },
     rendering::{StrokeVertex, Vertex, camera::SectionSlab},
@@ -519,13 +518,14 @@ fn pick_nearest_vertex_from_indices(
             continue;
         }
         match object {
-            Object::Polyline { verts, closed, .. } if filter == VertexPickFilter::AnyEditable && compact_circle_center(verts, *closed).is_some() => {
-                let center = compact_circle_center(verts, *closed).expect("circle checked above");
-                if let Some(sp) = slab_screen_point(slab, view_proj, screen, center) {
+            // A circle's one handle is its centre, for every filter: it has no
+            // vertices, so there is nothing a deletable-vertex pick could take.
+            Object::Circle { center, .. } if filter == VertexPickFilter::AnyEditable => {
+                if let Some(sp) = slab_screen_point(slab, view_proj, screen, *center) {
                     let d = sp.distance(cursor);
                     if d < best_dist {
                         best_dist = d;
-                        best = Some((object.id(), ObjectPoint::Center, center));
+                        best = Some((object.id(), ObjectPoint::Center, *center));
                     }
                 }
             }
