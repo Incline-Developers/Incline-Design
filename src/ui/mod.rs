@@ -7,6 +7,7 @@ pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
+mod scaling;
 pub(crate) mod state;
 pub(crate) mod widgets;
 
@@ -58,6 +59,7 @@ pub(crate) struct Gui {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    last_cursor_event: Option<WindowEvent>,
     #[cfg(target_arch = "wasm32")]
     pending_pastes: Vec<String>,
 }
@@ -65,6 +67,10 @@ pub(crate) struct Gui {
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = false;
+            options.zoom_factor = scaling::zoom_for_window(window, 100.0);
+        });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
         ctx.global_style_mut(|style| {
@@ -84,13 +90,37 @@ impl Gui {
             ctx,
             state,
             renderer,
+            last_cursor_event: None,
             #[cfg(target_arch = "wasm32")]
             pending_pastes: Vec::new(),
         }
     }
 
     pub(crate) fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> egui_winit::EventResponse {
+        match event {
+            WindowEvent::CursorMoved { .. } => self.last_cursor_event = Some(event.clone()),
+            WindowEvent::CursorLeft { .. } => self.last_cursor_event = None,
+            _ => {}
+        }
         self.state.on_window_event(window, event)
+    }
+
+    fn update_scale(&mut self, window: &Window, size_percent: f64) {
+        let zoom = scaling::zoom_for_window(window, size_percent);
+        let old_zoom = self.ctx.zoom_factor();
+        if zoom == old_zoom {
+            return;
+        }
+        // Apply before take_egui_input so it computes the current screen rect.
+        // set_zoom_factor defers the change and replaces that rect with the
+        // previous frame's dimensions, which causes a lag during live resizing.
+        self.ctx.options_mut(|options| options.zoom_factor = zoom);
+        scaling::rescale_events(&mut self.state.egui_input_mut().events, old_zoom / zoom);
+        // Refresh egui-winit's cached pointer too: a click can follow a resize
+        // without a physical mouse move. This also updates egui's hover position.
+        if let Some(event) = &self.last_cursor_event {
+            let _ = self.state.on_window_event(window, event);
+        }
     }
 
     pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
@@ -140,6 +170,7 @@ impl Gui {
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
     ) -> UiFrameOutput {
+        self.update_scale(window, editor.ui_size_percent);
         let selection_color = SELECTION_COLOR;
         let visuals = &self.ctx.global_style().visuals;
         if visuals.dark_mode != editor.dark_mode || visuals.selection.stroke.color != selection_color {

@@ -1782,3 +1782,6 @@ survey-system-cycle = "{ $name }" is defined against itself, directly or through
 survey-system-missing = That coordinate system no longer exists. Select another definition.
 survey-same-system = Choose different source and destination systems.
 survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
+
+preferences-ui-size = UI size
+preferences-ui-size-help = Scales text and controls relative to the monitor resolution, using 2560 × 1440 as the reference. Resizing the window keeps their size unchanged.
