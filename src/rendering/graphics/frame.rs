@@ -516,6 +516,7 @@ impl<'a> Graphics<'a> {
             self.finish_screenshot_capture(capture);
         }
         self.frame_index = self.frame_index.wrapping_add(1);
+        self.release_retired_attachments();
 
         Ok(ui_output)
     }
