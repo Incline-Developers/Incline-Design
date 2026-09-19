@@ -49,6 +49,7 @@ impl crate::app::App<'_> {
             ScheduleEdit::RenameAgent { agent, name } => self.rename_loader_agent(agent, name),
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
+            ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetBarHeight(height) => self.set_bar_height(height),
             ScheduleEdit::AddBar { name, agent, priority, window } => self.add_bar(name, agent, priority, window),
@@ -158,6 +159,10 @@ impl crate::app::App<'_> {
             self.editor.schedule_selected_agent = None;
             self.editor.schedule_agent_draft = None;
         }
+    }
+
+    fn set_calendar_cells(&mut self, edits: Vec<crate::model::schedule::CalendarCellEdit>) {
+        self.edit_schedule(|plan| plan.set_calendar_cells(&edits));
     }
 
     /// Nominate the field read as tonnes.

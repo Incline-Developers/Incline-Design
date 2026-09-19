@@ -1655,6 +1655,7 @@ planning-page-haulage = Haulage
 planning-subpage-view = View
 planning-subpage-layout = Layout
 planning-subpage-animate = Animate
+planning-subpage-calendar = Calendar
 
 ## Solids Reserves setup
 
@@ -1716,7 +1717,41 @@ schedule-loader-agent-default = Loader
 
 schedule-error-empty-name = Enter a name
 schedule-error-duplicate-name = ⁨{ $name }⁩ is already in use
-schedule-error-invalid-rate = The dig rate must be a number greater than zero
+schedule-error-invalid-rate = The dig rate must be a finite number greater than zero
+schedule-calendar-invalid-percentage = Availability and utilisation must be between 0 and 100%
+schedule-calendar-empty-override = Empty calendar overrides must not be stored
+schedule-calendar-read-only = The class default rate is edited in Schedule Setup
+schedule-calendar-duplicate-cell = A calendar edit contains the same cell more than once
+schedule-calendar-period-overflow = The calendar period is too large
+schedule-calendar-effective-rate = The effective production rate is too small or large to represent
+schedule-calendar-edit = Edit loader calendar
+schedule-calendar-cells-updated =
+    { $count ->
+        [one] 1 cell updated
+       *[other] { $count } cells updated
+    }
+schedule-calendar-setting = Setting
+schedule-calendar-default = Default
+schedule-calendar-day = Day { $day }
+schedule-calendar-hours = { $start }–{ $end } h
+schedule-calendar-loaders = Loaders
+schedule-calendar-availability = Availability (%)
+schedule-calendar-utilisation = Utilisation (%)
+schedule-calendar-rate = Rate (t/h)
+schedule-calendar-extend = +14 days
+schedule-calendar-jump = Jump to day
+schedule-calendar-help = Blank cells use defaults. Production rate = rate × availability × utilisation. Percentages apply across the whole day.
+schedule-calendar-empty = Add a loader to author its production calendar.
+schedule-calendar-add-loader = Add loader
+schedule-calendar-loader-default = loader default
+schedule-calendar-class-source = class default
+schedule-calendar-explicit = explicit override
+schedule-calendar-class-default = { $value } · class { $class }; edited in Setup
+schedule-calendar-resolved = { $value } · { $source }
+schedule-calendar-invalid = This loader calendar is invalid
+schedule-calendar-invalid-number = Enter a number
+schedule-calendar-paste-outside = The pasted rectangle extends outside the loader grid
+schedule-calendar-paste-read-only = The pasted rectangle includes a read-only class rate
 schedule-error-unknown-class = That loader class is no longer in this project
 schedule-error-unknown-agent = That loader agent is no longer in this project
 schedule-error-class-in-use = Still assigned to ⁨{ $agents }⁩. Reassign or delete those agents first

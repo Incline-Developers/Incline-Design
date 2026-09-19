@@ -176,7 +176,10 @@ impl EditorState {
 
     pub(crate) fn is_planning_viewport(&self) -> bool {
         self.active_workspace == Workspace::Planning
-            && (!matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Gantt) || self.is_planning_cut_step())
+            && (!matches!(
+                self.planning_subpage(),
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt
+            ) || self.is_planning_cut_step())
     }
 
     /// Whether a Planning page that owns the whole window - rather than
@@ -184,13 +187,20 @@ impl EditorState {
     /// view of what it produced are laid out that way.
     pub(crate) fn is_planning_setup(&self) -> bool {
         self.active_workspace == Workspace::Planning
-            && matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Gantt)
+            && matches!(
+                self.planning_subpage(),
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt
+            )
             && !self.is_planning_cut_step()
     }
 
     /// Whether the Schedule page is showing its Gantt subpage.
     pub(crate) fn is_schedule_gantt(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
+    }
+
+    pub(crate) fn is_schedule_calendar(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
     }
 
     pub(crate) fn is_schedule_animation(&self) -> bool {
@@ -2350,6 +2360,7 @@ pub(crate) struct EditorState {
     pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
+    pub(crate) schedule_calendar: ScheduleCalendarView,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2649,6 +2660,7 @@ impl EditorState {
         self.new_loader_agent_class = None;
         self.new_loader_agent_name.clear();
         self.gantt = GanttView::default();
+        self.schedule_calendar = ScheduleCalendarView::default();
 
         self.offset_dialog_open = false;
         self.offset_target_id = None;
@@ -3238,6 +3250,7 @@ impl EditorState {
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
             gantt: GanttView::default(),
+            schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -4219,6 +4232,7 @@ impl UiCommand {
                 ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
+                ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
                 ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
                 ScheduleEdit::DeleteBar(id) => report(tr!("schedule-delete-bar"), format!("{id:?}")),
@@ -4697,7 +4711,7 @@ impl PlanningPage {
         match self {
             Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
             Self::Haulage => &[PlanningSubpage::Layout],
-            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Gantt, PlanningSubpage::Animate],
+            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Calendar, PlanningSubpage::Gantt, PlanningSubpage::Animate],
         }
     }
 }
@@ -4710,6 +4724,7 @@ pub(crate) enum PlanningSubpage {
     /// to configure.
     View,
     Layout,
+    Calendar,
     /// Schedule: one timeline row per loader agent, along elapsed project
     /// time. Stage 1 draws the rows and the ruler; the bars follow.
     Gantt,
@@ -4722,6 +4737,7 @@ impl PlanningSubpage {
             Self::Setup => tr!("planning-page-setup"),
             Self::View => tr!("planning-subpage-view"),
             Self::Layout => tr!("planning-subpage-layout"),
+            Self::Calendar => tr!("planning-subpage-calendar"),
             Self::Gantt => tr!("planning-subpage-gantt"),
             Self::Animate => tr!("planning-subpage-animate"),
         }
@@ -4866,6 +4882,10 @@ pub(crate) enum ScheduleEdit {
         class: crate::model::schedule::LoaderClassId,
     },
     DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Apply one atomic calendar edit or rectangular paste/clear batch.
+    SetCalendarCells {
+        edits: Vec<crate::model::schedule::CalendarCellEdit>,
+    },
     /// Nominate the reserve field whose summed value is read as tonnes, or
     /// clear the choice. Never inferred from a field's name.
     SetTonnageField(Option<crate::model::ReserveFieldId>),
@@ -5295,6 +5315,57 @@ pub(crate) struct ScheduleNameDraft {
 pub(crate) struct ScheduleBarHeightDraft {
     pub(crate) source: f32,
     pub(crate) text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CalendarCellAddress {
+    pub(crate) agent: crate::model::schedule::LoaderAgentId,
+    pub(crate) field: crate::model::schedule::CalendarField,
+    pub(crate) cell: crate::model::schedule::CalendarCell,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CalendarSelection {
+    pub(crate) anchor: CalendarCellAddress,
+    pub(crate) focus: CalendarCellAddress,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CalendarCellDraft {
+    pub(crate) address: CalendarCellAddress,
+    pub(crate) text: String,
+    pub(crate) error: Option<String>,
+    pub(crate) request_focus: bool,
+}
+
+/// Transient spreadsheet state, reset when the active project runtime moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleCalendarView {
+    pub(crate) runtime: u32,
+    pub(crate) visible_days: u32,
+    pub(crate) scroll_x: f32,
+    pub(crate) scroll_y: f32,
+    pub(crate) collapsed: std::collections::HashSet<crate::model::schedule::LoaderAgentId>,
+    pub(crate) selection: Option<CalendarSelection>,
+    pub(crate) draft: Option<CalendarCellDraft>,
+    pub(crate) error: Option<String>,
+    pub(crate) jump_day: String,
+}
+
+impl Default for ScheduleCalendarView {
+    fn default() -> Self {
+        Self {
+            runtime: 0,
+            visible_days: 14,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            collapsed: Default::default(),
+            selection: None,
+            draft: None,
+            error: None,
+            jump_day: String::new(),
+        }
+    }
 }
 
 /// Where the Gantt is looking: the window of project time across its

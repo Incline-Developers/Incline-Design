@@ -669,7 +669,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
                     priority: 0,
                     window: WorkWindow {
                         start_h: 0.0,
-                        end_h: Some(crate::app::schedule_run::PERIOD_H),
+                        end_h: Some(crate::model::schedule::SCHEDULE_PERIOD_H),
                     },
                 },
             ));
@@ -1555,7 +1555,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                             priority,
                             window: WorkWindow {
                                 start_h,
-                                end_h: Some(start_h + crate::app::schedule_run::PERIOD_H),
+                                end_h: Some(start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
                             },
                         },
                     ));

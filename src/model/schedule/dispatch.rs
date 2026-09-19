@@ -30,7 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{BarId, DigBlockRef, LoaderAgentId, WorkWindow};
+use super::{BarId, CompiledRateCalendar, DigBlockRef, LoaderAgentId, WorkWindow};
 use crate::model::DigBlockId;
 
 /// Tonnes below which a balance is treated as gone.
@@ -44,7 +44,9 @@ const TONNE_EPSILON: f64 = 1e-9;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DispatchAgent {
     pub(crate) agent: LoaderAgentId,
+    /// Class rate retained for input validation and context.
     pub(crate) rate_tph: f64,
+    pub(crate) calendar: CompiledRateCalendar,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +96,8 @@ pub(crate) struct ExecutionSegment {
     pub(crate) end_h: f64,
     /// This loader's own tonnes, not the block's depletion.
     pub(crate) tonnes: f64,
+    /// This loader's effective rate over the segment.
+    pub(crate) rate_tph: f64,
     /// What the block was depleting at over this interval - this loader's
     /// rate when it was alone on it, and the sum when it was not.
     pub(crate) combined_rate_tph: f64,
@@ -258,8 +262,8 @@ struct Balance {
 /// this publishes nothing.
 pub(crate) struct DispatchRun {
     input: DispatchInput,
-    /// Agents in a fixed order, with their rates. Only agents that can work.
-    fleet: Vec<(LoaderAgentId, f64)>,
+    /// Agents in a fixed order with their compiled effective-rate curves.
+    fleet: Vec<DispatchAgent>,
     /// Bars in their selection order, so the choice at every instant walks the
     /// same list.
     bars: Vec<usize>,
@@ -290,6 +294,17 @@ impl DispatchRun {
             if !agent.rate_tph.is_finite() || agent.rate_tph <= 0.0 {
                 errors.push(DispatchError::InvalidRate(agent.agent));
             }
+            let mut previous = 0.0;
+            if !agent.calendar.initial_rate_tph.is_finite() || agent.calendar.initial_rate_tph < 0.0 {
+                errors.push(DispatchError::InvalidRate(agent.agent));
+            }
+            for change in &agent.calendar.changes {
+                if !change.at_h.is_finite() || change.at_h <= previous || !change.rate_tph.is_finite() || change.rate_tph < 0.0 {
+                    errors.push(DispatchError::InvalidRate(agent.agent));
+                    break;
+                }
+                previous = change.at_h;
+            }
         }
         for bar in &input.bars {
             if !rates.contains_key(&bar.agent) {
@@ -316,8 +331,8 @@ impl DispatchRun {
             return Err(errors);
         }
 
-        let mut fleet: Vec<(LoaderAgentId, f64)> = input.agents.iter().map(|agent| (agent.agent, agent.rate_tph)).collect();
-        fleet.sort_by_key(|(agent, _)| *agent);
+        let mut fleet = input.agents.clone();
+        fleet.sort_by_key(|agent| agent.agent);
 
         // Priority, then the window's start, then the bar's own identity:
         // the same total order the tie-break in the event search uses, so a
@@ -371,9 +386,24 @@ impl DispatchRun {
             return Err(errors);
         }
 
-        // Every block can be exhausted once and every window has two edges,
-        // with room to spare for instants where several coincide.
-        let cap = 16 + 8 * (input.bars.len() * 2 + ledger_order.len());
+        // Every block can be exhausted once, every window has two edges, and
+        // every compiled rate change can become an event.
+        let changes = input
+            .agents
+            .iter()
+            .try_fold(0_usize, |total, agent| total.checked_add(agent.calendar.changes.len()))
+            .ok_or_else(|| vec![DispatchError::IterationCap])?;
+        let terms = input
+            .bars
+            .len()
+            .checked_mul(2)
+            .and_then(|bars| bars.checked_add(ledger_order.len()))
+            .and_then(|events| events.checked_add(changes))
+            .ok_or_else(|| vec![DispatchError::IterationCap])?;
+        let cap = terms
+            .checked_mul(8)
+            .and_then(|events| events.checked_add(16))
+            .ok_or_else(|| vec![DispatchError::IterationCap])?;
         Ok(Self {
             input,
             fleet,
@@ -419,6 +449,7 @@ impl DispatchRun {
     fn step(&mut self) -> Result<bool, DispatchError> {
         let assignments = self.assign();
         let window_next = self.next_window_boundary();
+        let rate_next = self.next_rate_boundary();
 
         // Group the loaders by the block they are on, so a block depletes at
         // the sum of the rates actually on it and at no other rate.
@@ -430,7 +461,10 @@ impl DispatchRun {
             }
         }
 
-        let mut next = window_next;
+        let mut next = match (window_next, rate_next) {
+            (Some(window), Some(rate)) => Some(window.min(rate)),
+            (window, rate) => window.or(rate),
+        };
         for (resolved, members) in &groups {
             let combined: f64 = members.iter().map(|index| assignments[*index].rate_tph).sum();
             let remaining = self.balances[resolved].remaining_t;
@@ -492,6 +526,7 @@ impl DispatchRun {
                     start_h: self.time_h,
                     end_h: next,
                     tonnes,
+                    rate_tph: assignment.rate_tph,
                     combined_rate_tph: combined,
                     sharers: others,
                 });
@@ -512,11 +547,15 @@ impl DispatchRun {
     /// same ledger before any of them is applied.
     fn assign(&self) -> Vec<Assignment> {
         let mut assignments = Vec::new();
-        for (agent, rate_tph) in &self.fleet {
+        for agent in &self.fleet {
+            let rate_tph = agent.calendar.rate_at(self.time_h);
+            if rate_tph <= 0.0 {
+                continue;
+            }
             let mut chosen = None;
             'bars: for index in &self.bars {
                 let bar = &self.input.bars[*index];
-                if bar.agent != *agent || !bar.window.contains(self.time_h) {
+                if bar.agent != agent.agent || !bar.window.contains(self.time_h) {
                     continue;
                 }
                 for block in &bar.blocks {
@@ -526,8 +565,8 @@ impl DispatchRun {
                     // block an event at the same instant forever.
                     if self.balances[&block.resolved].remaining_t > 0.0 {
                         chosen = Some(Assignment {
-                            agent: *agent,
-                            rate_tph: *rate_tph,
+                            agent: agent.agent,
+                            rate_tph,
                             bar: bar.bar,
                             block: block.block,
                             resolved: block.resolved,
@@ -554,13 +593,20 @@ impl DispatchRun {
             .min_by(f64::total_cmp)
     }
 
+    fn next_rate_boundary(&self) -> Option<f64> {
+        self.fleet.iter().filter_map(|agent| agent.calendar.next_change_after(self.time_h)).min_by(f64::total_cmp)
+    }
+
     fn outcome(&self) -> DispatchOutcome {
         if self.balances.values().all(|balance| balance.remaining_t <= 0.0) {
             return DispatchOutcome::Exhausted;
         }
         let future_eligible = self.input.bars.iter().any(|bar| {
-            let opens_after_now = bar.window.end_h.is_none_or(|end| end > self.time_h.max(bar.window.start_h));
-            opens_after_now && bar.blocks.iter().any(|block| self.balances[&block.resolved].remaining_t > 0.0)
+            let start = self.time_h.max(bar.window.start_h);
+            let calendar = self.fleet.iter().find(|agent| agent.agent == bar.agent).map(|agent| &agent.calendar);
+            bar.window.end_h.is_none_or(|end| end > start)
+                && calendar.is_some_and(|calendar| calendar.has_positive_rate_between(start, bar.window.end_h))
+                && bar.blocks.iter().any(|block| self.balances[&block.resolved].remaining_t > 0.0)
         });
         if self.stopped_at_limit && future_eligible {
             DispatchOutcome::Limited
@@ -586,6 +632,7 @@ impl DispatchRun {
                         && last.bar == segment.bar
                         && last.resolved == segment.resolved
                         && last.sharers == segment.sharers
+                        && (last.rate_tph - segment.rate_tph).abs() <= f64::EPSILON
                         && (last.combined_rate_tph - segment.combined_rate_tph).abs() <= f64::EPSILON
                         && (last.end_h - segment.start_h).abs() <= f64::EPSILON =>
                 {
@@ -606,10 +653,11 @@ impl DispatchRun {
         // is exactly the time it had no available work - never inferred from
         // where a bar happens to sit.
         let mut idle = Vec::new();
-        for (agent, _) in &self.fleet {
+        for fleet_agent in &self.fleet {
+            let agent = fleet_agent.agent;
             let mut spans: Vec<(f64, f64)> = merged
                 .iter()
-                .filter(|segment| segment.agent == *agent)
+                .filter(|segment| segment.agent == agent)
                 .map(|segment| (segment.start_h, segment.end_h))
                 .collect();
             spans.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -617,7 +665,7 @@ impl DispatchRun {
             for (start, end) in spans {
                 if start > cursor {
                     idle.push(IdleSegment {
-                        agent: *agent,
+                        agent,
                         start_h: cursor,
                         end_h: start,
                     });
@@ -626,7 +674,7 @@ impl DispatchRun {
             }
             if horizon_h > cursor {
                 idle.push(IdleSegment {
-                    agent: *agent,
+                    agent,
                     start_h: cursor,
                     end_h: horizon_h,
                 });

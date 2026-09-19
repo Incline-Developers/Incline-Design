@@ -296,11 +296,30 @@ pub(crate) fn dispatch_input(
         return Err(problems);
     }
 
-    let agents = plan
-        .agents()
-        .iter()
-        .filter_map(|agent| plan.effective_rate_tph(agent.id).map(|rate_tph| DispatchAgent { agent: agent.id, rate_tph }))
-        .collect();
+    let mut agents = Vec::with_capacity(plan.agents().len());
+    for agent in plan.agents() {
+        let Some(class) = plan.class(agent.class_id) else {
+            problems.push(ScheduleRunProblem {
+                bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent.id)).map(|bar| bar.id).collect(),
+                message: tr!("schedule-error-unknown-class"),
+            });
+            continue;
+        };
+        match agent.calendar.compile(class.default_dig_rate_tph) {
+            Ok(calendar) => agents.push(DispatchAgent {
+                agent: agent.id,
+                rate_tph: class.default_dig_rate_tph,
+                calendar,
+            }),
+            Err(error) => problems.push(ScheduleRunProblem {
+                bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent.id)).map(|bar| bar.id).collect(),
+                message: error.message(),
+            }),
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
     let bars = plan
         .bars()
         .iter()

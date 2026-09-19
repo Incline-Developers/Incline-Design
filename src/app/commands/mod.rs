@@ -761,7 +761,13 @@ impl<'a> App<'a> {
             UiCommand::SetPlanningSubpage(subpage) => {
                 if self.editor.planning_page.subpages().contains(&subpage) {
                     match self.editor.planning_page {
-                        crate::ui::state::PlanningPage::Schedule => self.editor.schedule_subpage = subpage,
+                        crate::ui::state::PlanningPage::Schedule => {
+                            if self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar && subpage != crate::ui::state::PlanningSubpage::Calendar {
+                                self.editor.schedule_calendar.draft = None;
+                                self.editor.schedule_calendar.error = None;
+                            }
+                            self.editor.schedule_subpage = subpage;
+                        }
                         crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
                         crate::ui::state::PlanningPage::Haulage => {}
                     }
@@ -777,6 +783,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetPlanningPage(page) => {
+                if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule
+                    && self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar
+                    && page != crate::ui::state::PlanningPage::Schedule
+                {
+                    self.editor.schedule_calendar.draft = None;
+                    self.editor.schedule_calendar.error = None;
+                }
                 self.editor.planning_page = page;
                 if self.editor.is_planning_viewport() {
                     self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;

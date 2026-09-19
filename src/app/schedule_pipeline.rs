@@ -437,7 +437,32 @@ impl crate::app::App<'_> {
         let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits())).collect();
         let classes_step = hash_of((configuration, classes));
 
-        let agents: Vec<_> = plan.agents().iter().map(|agent| (agent.id.0, agent.class_id.0)).collect();
+        let agents: Vec<_> = plan
+            .agents()
+            .iter()
+            .map(|agent| {
+                let periods: Vec<_> = agent
+                    .calendar
+                    .periods
+                    .iter()
+                    .map(|(period, value)| {
+                        (
+                            period.0,
+                            value.availability.map(f64::to_bits),
+                            value.utilisation.map(f64::to_bits),
+                            value.rate_tph.map(f64::to_bits),
+                        )
+                    })
+                    .collect();
+                (
+                    agent.id.0,
+                    agent.class_id.0,
+                    agent.calendar.default_availability.to_bits(),
+                    agent.calendar.default_utilisation.to_bits(),
+                    periods,
+                )
+            })
+            .collect();
         let agents_step = hash_of((classes_step, agents));
 
         // Where the Solids run stands, not what it produced: a status is
@@ -728,13 +753,24 @@ impl crate::app::App<'_> {
             });
         }
         for agent in plan.agents() {
-            match plan.effective_rate_tph(agent.id) {
-                Some(rate) if rate.is_finite() && rate > 0.0 => {}
-                Some(_) => diagnostics.push(StageDiagnostic {
+            if let Err(error) = agent.calendar.validate() {
+                diagnostics.push(StageDiagnostic {
                     entity: Some(agent.name.clone()),
-                    message: tr!("schedule-error-invalid-rate"),
+                    message: error.message(),
                     blocking: true,
-                }),
+                });
+                continue;
+            }
+            match plan.class(agent.class_id) {
+                Some(class) => {
+                    if let Err(error) = agent.calendar.compile(class.default_dig_rate_tph) {
+                        diagnostics.push(StageDiagnostic {
+                            entity: Some(agent.name.clone()),
+                            message: error.message(),
+                            blocking: true,
+                        });
+                    }
+                }
                 None => diagnostics.push(StageDiagnostic {
                     entity: Some(agent.name.clone()),
                     message: tr!("schedule-stage-agent-no-class"),

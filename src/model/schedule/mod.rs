@@ -13,9 +13,11 @@
 //! a replayed undo, a future script - is checked the same way.
 
 pub(crate) mod animation;
+pub(crate) mod calendar;
 pub(crate) mod dispatch;
 pub(crate) mod sequence;
 
+pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, SCHEDULE_PERIOD_H};
 pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchOutcome, DispatchSchedule};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
@@ -155,6 +157,9 @@ pub(crate) struct LoaderAgent {
     /// Never optional: an agent with no class has no rate, and stage 1 has
     /// no per-agent override to fall back on.
     pub(crate) class_id: LoaderClassId,
+    /// Availability, utilisation, and sparse per-period rate overrides.
+    #[serde(default)]
+    pub(crate) calendar: LoaderCalendar,
 }
 
 /// Why an edit to the plan was refused.
@@ -170,6 +175,12 @@ pub(crate) enum ScheduleError {
     DuplicateName(String),
     /// A dig rate that is zero, negative, infinite or NaN.
     InvalidRate,
+    InvalidCalendarPercentage,
+    EmptyCalendarOverride,
+    ReadOnlyCalendarCell,
+    DuplicateCalendarCell,
+    CalendarPeriodOverflow,
+    UnrepresentableEffectiveRate,
     /// An id that names nothing in this plan - a command from a stale UI, or
     /// a file whose agent outlived its class.
     UnknownClass,
@@ -208,6 +219,12 @@ impl ScheduleError {
             Self::EmptyName => tr!("schedule-error-empty-name"),
             Self::DuplicateName(name) => tr!("schedule-error-duplicate-name", name = name.clone()),
             Self::InvalidRate => tr!("schedule-error-invalid-rate"),
+            Self::InvalidCalendarPercentage => tr!("schedule-calendar-invalid-percentage"),
+            Self::EmptyCalendarOverride => tr!("schedule-calendar-empty-override"),
+            Self::ReadOnlyCalendarCell => tr!("schedule-calendar-read-only"),
+            Self::DuplicateCalendarCell => tr!("schedule-calendar-duplicate-cell"),
+            Self::CalendarPeriodOverflow => tr!("schedule-calendar-period-overflow"),
+            Self::UnrepresentableEffectiveRate => tr!("schedule-calendar-effective-rate"),
             Self::UnknownClass => tr!("schedule-error-unknown-class"),
             Self::UnknownAgent => tr!("schedule-error-unknown-agent"),
             Self::ClassInUse(agents) => tr!("schedule-error-class-in-use", agents = agents.join(", ")),
@@ -446,7 +463,12 @@ impl SchedulePlan {
         }
         let id = LoaderAgentId(self.next_agent_id);
         self.next_agent_id = self.next_agent_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
-        self.agents.push(LoaderAgent { id, name, class_id });
+        self.agents.push(LoaderAgent {
+            id,
+            name,
+            class_id,
+            calendar: LoaderCalendar::default(),
+        });
         Ok(id)
     }
 
@@ -468,6 +490,20 @@ impl SchedulePlan {
         }
         let agent = self.agents.iter_mut().find(|agent| agent.id == id).ok_or(ScheduleError::UnknownAgent)?;
         agent.class_id = class_id;
+        Ok(())
+    }
+
+    /// Apply an all-or-nothing calendar batch. Duplicate addresses are
+    /// rejected so paste order cannot decide the saved value.
+    pub(crate) fn set_calendar_cells(&mut self, edits: &[CalendarCellEdit]) -> ScheduleResult {
+        let mut addresses = std::collections::HashSet::new();
+        for edit in edits {
+            if !addresses.insert((edit.agent, edit.cell, edit.field)) {
+                return Err(ScheduleError::DuplicateCalendarCell);
+            }
+            let agent = self.agents.iter_mut().find(|agent| agent.id == edit.agent).ok_or(ScheduleError::UnknownAgent)?;
+            agent.calendar.set(edit.cell, edit.field, edit.value)?;
+        }
         Ok(())
     }
 
@@ -743,6 +779,9 @@ impl SchedulePlan {
         if !self.bar_height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&self.bar_height) {
             return Err(ScheduleError::InvalidBarHeight);
         }
+        for agent in &mut self.agents {
+            agent.calendar.canonicalize_percentages();
+        }
         for (index, class) in self.classes.iter().enumerate() {
             if self.classes[..index].iter().any(|earlier| earlier.id == class.id) {
                 return Err(ScheduleError::DuplicateId);
@@ -761,9 +800,8 @@ impl SchedulePlan {
             if self.agents[..index].iter().any(|earlier| same_name(&earlier.name, &agent.name)) {
                 return Err(ScheduleError::DuplicateName(agent.name.clone()));
             }
-            if !self.classes.iter().any(|class| class.id == agent.class_id) {
-                return Err(ScheduleError::UnknownClass);
-            }
+            let class = self.classes.iter().find(|class| class.id == agent.class_id).ok_or(ScheduleError::UnknownClass)?;
+            agent.calendar.compile(class.default_dig_rate_tph)?;
         }
         for (index, bar) in self.bars.iter().enumerate() {
             if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
@@ -814,6 +852,14 @@ impl SchedulePlan {
             agent.id.hash(hasher);
             agent.name.hash(hasher);
             agent.class_id.hash(hasher);
+            agent.calendar.default_availability.to_bits().hash(hasher);
+            agent.calendar.default_utilisation.to_bits().hash(hasher);
+            for (period, override_) in &agent.calendar.periods {
+                period.hash(hasher);
+                override_.availability.map(f64::to_bits).hash(hasher);
+                override_.utilisation.map(f64::to_bits).hash(hasher);
+                override_.rate_tph.map(f64::to_bits).hash(hasher);
+            }
         }
         self.tonnage_field.hash(hasher);
         self.bar_height.to_bits().hash(hasher);
@@ -853,7 +899,11 @@ impl SchedulePlan {
         size_of::<Self>()
             + self.name.len()
             + self.classes.iter().map(|class| size_of::<LoaderClass>() + class.name.len()).sum::<usize>()
-            + self.agents.iter().map(|agent| size_of::<LoaderAgent>() + agent.name.len()).sum::<usize>()
+            + self
+                .agents
+                .iter()
+                .map(|agent| size_of::<LoaderAgent>() + agent.name.len() + agent.calendar.periods.len() * size_of::<(CalendarPeriod, calendar::LoaderPeriodOverride)>())
+                .sum::<usize>()
             + self
                 .bars
                 .iter()

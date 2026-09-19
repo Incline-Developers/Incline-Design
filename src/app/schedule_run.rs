@@ -34,13 +34,6 @@ use crate::{
     model::schedule::{DispatchOutcome, DispatchSchedule, dispatch::DispatchRun},
 };
 
-/// How much of the schedule one Run Period covers.
-///
-/// A day, for now. What a period represents is expected to change - a week for
-/// a long-term schedule - which is why it is one constant read in one place
-/// rather than a `24.0` written wherever hours are counted.
-pub(crate) const PERIOD_H: f64 = 24.0;
-
 /// Events between cancellation polls on the background worker.
 const EVENT_BUDGET: usize = 64;
 
@@ -157,8 +150,10 @@ impl crate::app::App<'_> {
     /// from.
     fn next_period_horizon(&self) -> f64 {
         match self.schedule_calculation.as_ref().filter(|_| self.schedule_calculation_is_current()) {
-            Some(calculation) => calculation.horizon_limit_h.map_or(PERIOD_H, |reached| reached + PERIOD_H),
-            None => PERIOD_H,
+            Some(calculation) => calculation
+                .horizon_limit_h
+                .map_or(crate::model::schedule::SCHEDULE_PERIOD_H, |reached| reached + crate::model::schedule::SCHEDULE_PERIOD_H),
+            None => crate::model::schedule::SCHEDULE_PERIOD_H,
         }
     }
 

@@ -25,7 +25,7 @@ Paths below are relative to `src/`:
 | Planning solids | `app/commands/solids.rs` (Setup/shared slabs), `app/commands/solids_view.rs` (View cache/jobs), `model/solid_reserves.rs` (volume-prorated totals). |
 | Planning blast cuts | `app/commands/blasting.rs`, `model/arrangement.rs`, `BenchBlasts` in `model/mod.rs`; cut geometry stays in bench-owned planning storage. |
 | Planning dig strips | `app/commands/dig_strips.rs`, `ui/elements/dig_strips.rs`; strips live in `BlastingPlan::dig_strips` keyed by flitch, and dig blocks are derived from strip plus blast cuts. |
-| Schedule setup | `model/schedule.rs` (the loader fleet and its rules), `app/commands/schedule.rs` (undoable edits), `ui/elements/schedule_setup.rs` and `ui/dialogs/schedule.rs`; the plan lives on `Document` and is read by UI through `UiProjectView::schedule`, not the scene composite. |
+| Schedule setup | `model/schedule/mod.rs` (the loader fleet and its rules), `model/schedule/calendar.rs` (loader defaults and sparse period overrides), `app/commands/schedule.rs` (undoable edits), `ui/elements/schedule_setup.rs`, `ui/elements/schedule_calendar.rs`, and `ui/dialogs/schedule.rs`; the plan lives on `Document` and is read by UI through `UiProjectView::schedule`, not the scene composite. |
 | Schedule Gantt | `ui/elements/schedule_gantt.rs` (painting) and `GanttView` in `ui/state.rs` (the time axis: elapsed project seconds, zoom, tick ladder). |
 | Change persistence | `model/formats/`, `model/atomic_file.rs` (native writes), `app/web_storage.rs` (browser storage). |
 

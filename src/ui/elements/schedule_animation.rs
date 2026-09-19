@@ -2,13 +2,12 @@
 
 use crate::{
     i18n::tr_format,
+    model::schedule::SCHEDULE_PERIOD_H,
     ui::{EditorState, chrome},
 };
 
 pub(crate) const TIMELINE_PANEL_ID: &str = "schedule_animation_timeline";
 
-/// Hours in one timeline period.
-const PERIOD_H: f64 = 24.0;
 /// Strides the period rules step through as the band fills up, coarsest last.
 /// Round numbers, so a thinned scale still reads as one: every second day,
 /// every fifth, every tenth, and so on.
@@ -115,12 +114,12 @@ fn paint_period_band(ui: &egui::Ui, rect: egui::Rect, horizon: f64, current_h: f
         painter.rect_stroke(rect, 3.0, rule, egui::StrokeKind::Inside);
         return;
     }
-    let periods = (horizon / PERIOD_H).ceil().max(1.0) as usize;
+    let periods = (horizon / SCHEDULE_PERIOD_H).ceil().max(1.0) as usize;
     let cell_width = rect.width() / periods as f32;
 
-    let current = ((current_h / PERIOD_H).floor().max(0.0) as usize).min(periods - 1);
-    let start_h = current as f64 * PERIOD_H;
-    let end_h = ((current + 1) as f64 * PERIOD_H).min(horizon);
+    let current = ((current_h / SCHEDULE_PERIOD_H).floor().max(0.0) as usize).min(periods - 1);
+    let start_h = current as f64 * SCHEDULE_PERIOD_H;
+    let end_h = ((current + 1) as f64 * SCHEDULE_PERIOD_H).min(horizon);
     let left = egui::lerp(rect.x_range(), (start_h / horizon) as f32);
     let right = egui::lerp(rect.x_range(), (end_h / horizon) as f32);
     let cell = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(right, rect.bottom()));
@@ -134,7 +133,7 @@ fn paint_period_band(ui: &egui::Ui, rect: egui::Rect, horizon: f64, current_h: f
 
     if let Some(stride) = RULE_STRIDES.into_iter().find(|stride| cell_width * *stride as f32 >= MIN_RULE_SPACING) {
         for period in (stride..periods).step_by(stride) {
-            let boundary = egui::lerp(rect.x_range(), (period as f64 * PERIOD_H / horizon) as f32);
+            let boundary = egui::lerp(rect.x_range(), (period as f64 * SCHEDULE_PERIOD_H / horizon) as f32);
             painter.vline(boundary, rect.y_range(), rule);
         }
     }
