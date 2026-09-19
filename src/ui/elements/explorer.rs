@@ -61,29 +61,38 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, ite
 /// which reads the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "explorer_panel";
 
-/// The explorer column and its tree surface.
+/// The explorer column and its separate island surfaces.
 pub(crate) struct ExplorerLayout {
     /// The whole column, gaps included: what the panels drawn after it lay out
     /// against.
     pub(crate) column: egui::Rect,
     /// What the data tree claimed.
     pub(crate) tree: egui::Rect,
+    /// What the products island claimed, when the workspace uses it.
+    pub(crate) products: Option<egui::Rect>,
 }
 
 /// Draw the full-height project explorer.
 pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> ExplorerLayout {
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    let (_, max_width) = crate::ui::chrome::panel_size_limits(ui.ctx(), ui.available_width());
     let column = egui::Panel::left(PANEL_ID)
         .resizable(true)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .default_size(280.0)
-        .min_size(220.0)
+        .default_size(280.0_f32.min(max_width))
+        .min_size(220.0_f32.min(max_width))
+        .max_size(max_width)
         .frame(egui::Frame::NONE)
         .show(ui, |ui| {
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
-            crate::ui::chrome::region_frame(ui)
+            let products = (editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast).then(|| super::products::draw_products_panel(ui, editor));
+            if products.is_none() {
+                ui.skip_ahead_auto_ids(1);
+            }
+
+            let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
@@ -703,12 +712,14 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                     });
                 })
                 .response
-                .rect
+                .rect;
+            (tree, products)
         });
 
-    let tree = column.inner;
+    let (tree, products) = column.inner;
     ExplorerLayout {
         column: column.response.rect,
         tree,
+        products,
     }
 }

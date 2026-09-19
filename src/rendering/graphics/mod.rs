@@ -51,6 +51,7 @@ pub(crate) mod projections;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
 pub(crate) mod targets;
+mod touch;
 
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
 pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
@@ -394,6 +395,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) fly_camera_controller: FlyCameraController,
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
+    touch_gesture: touch::TouchGesture,
     pub(super) fly_mode_enabled: bool,
     pub(super) slice_view: Option<SliceViewState>,
     pub(super) frame_index: u64,
@@ -832,6 +834,7 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
+        self.touch_gesture = Default::default();
         self.camera_controller.end_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
@@ -883,7 +886,7 @@ impl<'a> Graphics<'a> {
     /// (right-mouse drag). Callers can skip expensive per-frame work like snap
     /// queries during camera movement.
     pub(crate) fn is_camera_active(&self) -> bool {
-        self.mouse_pressed == Some(MouseButton::Right)
+        self.mouse_pressed == Some(MouseButton::Right) || !self.touch_gesture.contacts.is_empty()
     }
 
     /// Record that the user is interacting with the view right now (camera

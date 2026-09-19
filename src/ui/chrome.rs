@@ -97,6 +97,15 @@ pub(crate) fn margin(ctx: &egui::Context) -> f32 {
     if enabled(ctx) { f32::from(REGION_MARGIN) } else { 0.0 }
 }
 
+/// Shared resize limits for workspace panels, measured along their resize axis.
+/// Preserve the console's minimum and leave at least half the available space
+/// for the neighbouring region, even when the window is very small.
+pub(crate) fn panel_size_limits(ctx: &egui::Context, available: f32) -> (f32, f32) {
+    let max = available.max(0.0) * 0.5;
+    let min = (120.0 - super::elements::toolbars::bottom_toolbar_height(ctx)).max(0.0).min(max);
+    (min, max)
+}
+
 /// Whether a top-level panel should draw egui's separator line along the edge
 /// it claimed.
 ///
@@ -254,7 +263,7 @@ pub(crate) enum Edge {
 /// `claimed` is the rect the drag resizes, as its panel claimed it - so its
 /// named edge *is* the seam. That is not always one region: the explorer's
 /// column is dragged as a whole, so its grip is centred on the tree and the
-/// properties panel together.
+/// products island together.
 #[derive(Clone, Copy)]
 pub(crate) struct Grip {
     claimed: Rect,

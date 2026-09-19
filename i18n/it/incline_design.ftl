@@ -48,6 +48,7 @@ menu-view = Vista
 ws-production = Produzione
 ws-drill-and-blast = Perforazione e volata
 ws-geology = Geologia
+ws-planning = Pianificazione
 
 ## Menubars
 
@@ -78,6 +79,9 @@ dialog-rename-submit = Rinomina
 dialog-delete-title = Elimina { $kind }
 dialog-delete-confirm =
     Eliminare '{ $name }' dal progetto?
+    Questa azione non può essere annullata.
+confirm-delete-product =
+    Eliminare il prodotto '{ $name }' dalla tavolozza?
     Questa azione non può essere annullata.
 
 
@@ -166,6 +170,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Si presenta in sincronia con lo schermo: nessun tearing, e lo schermo determina il frame rate. Se disattivato, i fotogrammi vengono presentati non appena disegnati e si applica il limite indicato sotto.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (intestazione vuota)
 literal-absolute-rl-455fe0d96abfbb7a = RL assoluta
@@ -333,6 +338,12 @@ literal-exit-application-206c61fdca9522f7 = Esci dall'applicazione
 literal-exit-incline-design-b11cdc542f0e84ef = Esci da Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Esci senza salvare
 literal-exit-slice-ec67c9da3a320e5f = Esci dalla sezione
+literal-set-section-grid-0317412c52213ca8 = Imposta griglia della sezione
+literal-hide-rl-grid-5777afd90dcfdfef = Nascondi griglia quote
+literal-show-rl-grid-87a5e28c30f9ca36 = Mostra griglia quote
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Griglia della sezione attiva = %enabled%
 literal-export-293aa6a6446fb153 = Esporta
 literal-export-block-model-csv-3755a5af2dbb71af = Esporta CSV modello a blocchi
 literal-export-csv-block-model-5c2ba2182ac51797 = Esporta CSV modello a blocchi
@@ -406,6 +417,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Carica
 literal-load-block-model-9e1eebcd6fc9e399 = Carica modello a blocchi
 literal-load-drillholes-0e0c59498b0a629f = Carica fori di sondaggio
+literal-load-layer-c8261cf60e655064 = Carica livello
 literal-load-point-cloud-348b63ef7b0faa4a = Carica nuvola di punti
 literal-load-project-645e82ec5117c718 = Carica progetto
 literal-load-raster-5393aaf7183657c2 = Carica raster
@@ -451,8 +463,11 @@ literal-near-clip-limit-25931ba2c7873778 = Limite di clip vicino
 literal-new-product-6c2124d5d6badd3a = Nuovo prodotto
 literal-new-project-cd084c5e5d3ea300 = Nuovo progetto
 literal-new-layer-name-e4ea5292efa5d03f = Nome nuovo livello
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Nessun prodotto di ritardo da collegare
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = fai clic destro sull'intestazione della tavolozza dei ritardi per aggiungerne uno
 literal-no-matches-28d7266643f5992f = Nessuna corrispondenza
 literal-no-object-selected-d42da7912e4d01b6 = Nessun oggetto selezionato
+literal-no-products-483f3f49aae9b3c2 = Nessun prodotto
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Nessuna estensione spaziale disponibile
 literal-none-669b18c6d2d9c95b = Nessuno
 literal-north-arrow-0a1293ff4a52606d = Freccia nord
@@ -482,6 +497,7 @@ literal-point-cloud-ef650548cfd32358 = Nuvola di punti
 literal-point-clouds-9bcb25b923c4c211 = Nuvole di punti
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Premi Invio per usare il raggio digitato
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = oppure fai clic per usare il raggio del puntatore
+literal-product-de1f02481331134c = Prodotto
 literal-project-282049f502eac1de = Progetto
 literal-project-name-446c46bc623ccce1 = Nome progetto
 literal-quit-app-fa0a388754b23d8b = Esci da %app%
@@ -633,6 +649,9 @@ literal-undrape-raster-19a3cb862f76d539 = Rimuovi adagiamento raster
 literal-undrape-rasters-08281f02a6ec6cbe = Rimuovi adagiamento raster
 literal-unload-5d3714bc882df1b2 = Scarica
 literal-unload-block-model-c14323e196f7603e = Scarica modello a blocchi
+literal-unload-drillholes-b63232aa559b051e = Scarica fori di sondaggio
+literal-unload-layer-e19afae5689edebb = Scarica livello
+literal-unload-point-cloud-2d0ee38fa0391df9 = Scarica nuvola di punti
 literal-unload-raster-19854bae2aea221f = Scarica raster
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Scarica triangolazione
 literal-unlock-5d303fbc88281c15 = Sblocca
@@ -643,6 +662,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Usa l'intero int
 literal-vertex-count-48fab462ae06a454 = Numero di vertici
 literal-vertical-exaggeration-3572327bb13435e7 = Esagerazione verticale
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Risalita o discesa verticale di ciascun gradino prima che venga creata la berma successiva.
+literal-vertical-sync-85fd0e942adbf2be = Sincronizzazione verticale
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Visualizza il partizionamento spaziale di Morton usato per il frustum culling.
 literal-website-82665b2ffabc9c0a = Sito web
 literal-weld-retry-b6c826b7541e89f1 = Salda e riprova
@@ -803,6 +823,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Rimosso l
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Quell'elemento non appartiene più al progetto attivo
 literal-renamed-before-to-name-88160afa8287cd38 = Rinominato '%before%' in '%name%'
 literal-exited-slice-view-0d1f935a85f65cd3 = Vista sezione chiusa
+literal-reset-the-section-view-a90255a33a618651 = Reimposta la vista in sezione
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Testo aggiornato sull'oggetto %object_id%
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Modifica del testo completata per l'oggetto %object_id%
 literal-contour-generation-failed-error-60e87eda1ee29afa = Generazione delle curve di livello non riuscita: %error%
@@ -1127,6 +1148,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Disattiva modalità volo
 literal-enable-flying-mode-5be056d1b9bdd218 = Attiva modalità volo
 literal-exit-slice-view-8f48e630d38a6390 = Esci dalla vista sezione
 literal-vertical-slice-view-a721497b5e8007fa = Vista sezione verticale
+literal-reset-section-view-569ba01ea5ad8448 = Reimposta vista in sezione
+literal-camera-square-to-the-section-095beff203b315a6 = Fotocamera perpendicolare alla sezione
 literal-hide-wireframes-a0bb1a91dde72948 = Nascondi wireframe
 literal-show-wireframes-7e8dc68f7023441b = Mostra wireframe
 literal-hide-points-6ec095fdf7ed73f4 = Nascondi punti
@@ -1138,6 +1161,9 @@ literal-value-dip-1a0edf99f1cb897b = %value%° inclinazione
 literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° direzione · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (orizzontale, nessuna direzione)
 literal-slice-view-531d1a0f0f256066 = Vista sezione
+slice-viewport-gestures = trascina con tasto centrale: pan · trascina con tasto destro: orbita · Maiusc+rotella: cammina · W/S: sposta lastra · Q/E: ruota · Esc: esci
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - non disponibile nella vista in sezione
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Questo strumento non è disponibile nella vista in sezione
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = trascina col tasto centrale per spostare · W/S sposta lastra · Q/E ruota · Esc esci
 literal-north-ca6a42d80c5dd964 = Nord
 literal-south-25b5d0c70a3936da = Sud
@@ -1573,6 +1599,46 @@ literal-update-8b0432eecbd8b034 = Aggiorna
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Profondità verticale sotto ciascuna bocca foro.
 literal-x-offset-cf30a60198d81e4a = Offset X
 literal-y-offset-ffb673aa94de0fa7 = Offset Y
+literal-appearance-f0e261e04eda82ff = Aspetto
+literal-arc-circle-69e83efed2ce9d47 = Arco e cerchio
+literal-arc-segments-f2c50c445ff0606b = Segmenti d'arco
+literal-bulge-5911694918e2fe44 = Freccia
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Gli archi con freccia sono orizzontali per modello dati: l'arco curva in pianta e la quota varia in linea retta da un vertice al successivo.
+literal-centre-x-39ad69e3af6db6be = Centro X
+literal-centre-y-39ad6ae3af6db871 = Centro Y
+literal-centre-z-39ad67e3af6db358 = Centro Z
+literal-chord-ebed35dc77f41c35 = Corda
+literal-circle-14c54ca33d0f3ea9 = Cerchio
+literal-colour-by-layer-01a922874fe4bebb = Colore per livello
+literal-edit-6caa725f12d7e915 = Modifica...
+literal-edit-object-03fd9f47ed01e398 = Modifica oggetto
+literal-edit-object-142afa7681e533de = Modifica oggetto...
+literal-edited-kind-017b9d5669af9d78 = %kind% modificato
+literal-edited-kind-count-vertices-4e063a8127567887 = %kind% modificato (%count% vertici)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Inserisci un numero
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Segui il colore del livello proprietario invece di un colore fissato a questo oggetto.
+literal-identity-94d63573d312fe9b = Identità
+literal-insert-after-3b715eafd7214722 = Inserisci dopo
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Ricongiunge l'ultimo vertice al primo.
+literal-length-length-m-7002054fb5f4218e = Lunghezza %length% m
+literal-move-down-b233557012dcb328 = Sposta giù
+literal-move-up-4ea0f21fc2a338a1 = Sposta su
+literal-no-changes-to-apply-dfa74d34ff069444 = Nessuna modifica da applicare
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = L'oggetto in modifica è cambiato; modifica scartata
+literal-ok-091d3d07b5b3076f = OK
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Una o più proprietà non sono un numero valido
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Perimetro %length% m, area %area% m²
+literal-reverse-3ffcdc5db5e7d0c5 = Inverti
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Riga %row%: la posizione o la freccia non sono un numero valido
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Seleziona un singolo oggetto di progetto da modificare
+literal-sweep-84b7af08cf834f43 = Angolo di spazzata
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%" non è un numero
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Questo oggetto non esiste più nel documento
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Questo oggetto è cambiato da quando l'editor è stato aperto; riaprilo per modificare la versione attuale
+literal-this-object-has-a-single-position-134add52252a573e = Questo oggetto ha una sola posizione.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Questo oggetto non ha segmenti d'arco.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Questo oggetto richiede almeno %required% vertici
+literal-unassigned-8a49b21a2c9c0022 = Non assegnato
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1582,3 +1648,135 @@ color-opacity = Opacità
 color-edit = Fai clic per modificare il colore
 color-saturation-value = Saturazione e luminosità
 color-hue = Tonalità
+asset-loading = Caricamento dati risorsa
+asset-unloading = Scaricamento dati risorsa
+asset-load-failed = Impossibile caricare i dati della risorsa
+asset-unload-failed = Impossibile scaricare i dati della risorsa
+preferences-title = Preferenze
+context-text-colour = Colore del testo
+context-polylines = Polilinee
+context-points = Punti
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Centro di rotazione rilasciato
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Nessun punto sotto il cursore su cui fissare il centro di rotazione
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Centro di rotazione fissato a %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Il centro di rotazione non è disponibile in modalità volo
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Rilascia centro di rotazione
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Fai clic su un punto per fissare il centro di rotazione
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Fissa centro di rotazione
+literal-centre-of-rotation-5c1f34327183860b = Centro di rotazione
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Fissa o rilascia il centro attorno a cui orbitano entrambe le viste
+literal-rl-grid-options-2329c7b8001bc333 = Opzioni griglia quote
+literal-automatic-colour-23347fe2c6749180 = Colore automatico
+literal-thickness-289be54832e4be75 = Spessore
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Spaziatura quote automatica
+literal-rl-spacing-88a1992aa9332272 = Spaziatura quote
+literal-hide-xy-grid-85952898e2cff804 = Nascondi griglia XY
+literal-show-xy-grid-d22a739bae102bb1 = Mostra griglia XY
+literal-set-grid-63bc48801d739665 = Imposta griglia
+literal-xy-grid-options-04861f560f92a08c = Opzioni griglia XY
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Reimposta la vista in sezione (adatta all'estensione)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Griglia XY attiva = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Rotazione antioraria del pattern dall'asse globale %axis%.
+literal-axis-offset-d064a568a65d9a1f = Offset %axis%
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Sposta la griglia del pattern lungo l'asse globale %axis% mantenendola ritagliata alla forma della volata.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Distanza di traslazione lungo l'asse mondiale %axis%.
+literal-axis-scale-ratio-851b3aab8b582f09 = Rapporto di scala %axis%
+literal-axis-range-5455776ed8bd0a89 = Intervallo %axis%
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Drappeggiato su una superficie
+crs-unknown-ellipsoid = Modello terrestre non riconosciuto "{ $name }" in questa definizione di sistema di coordinate.
+crs-no-ellipsoid = Questa definizione di sistema di coordinate non indica quale modello terrestre utilizza.
+crs-unknown-code = EPSG:{ $code } non è presente nel registro dei sistemi di coordinate.
+crs-transform-failed = Non è stato possibile convertire una coordinata; il risultato non era una posizione finita.
+crs-no-datum-path = Non è disponibile alcuna trasformazione pubblicata tra i sistemi di riferimento di { $from } e { $to } (datum EPSG { $source } e { $target }). Convertire comunque sarebbe errato di una quantità sconosciuta, quindi non è stato cambiato nulla.
+crs-unknown-datum = Il sistema di riferimento di { $from } o { $to } non può essere identificato, ed entrambi usano modelli terrestri diversi. La conversione tra loro sarebbe errata di una quantità sconosciuta.
+ws-survey = Rilievo
+survey-count-designs = { $count } { $count ->
+    [one] progetto
+   *[other] progetti
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] triangolazione
+   *[other] triangolazioni
+  }
+survey-count-models = { $count } { $count ->
+    [one] modello a blocchi
+   *[other] modelli a blocchi
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] nuvola di punti
+   *[other] nuvole di punti
+  }
+survey-count-holes = { $count } { $count ->
+    [one] set di fori di sondaggio
+   *[other] set di fori di sondaggio
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] raster
+   *[other] raster
+  }
+survey-unsupported = I raster non possono essere convertiti con questa trasformazione. Non sono selezionabili nel viewport, quindi nulla nella selezione è interessato.
+survey-angle = Rotazione attorno a Z (antioraria)
+survey-scale = Fattore di scala uniforme XYZ
+survey-invalid-transform = Le origini, l'angolo e le coordinate risultanti devono essere finiti.
+survey-invalid-scale = La scala deve essere un numero positivo finito con reciproco finito.
+survey-empty-selection = Seleziona almeno un elemento supportato da trasformare.
+survey-unavailable = Un elemento selezionato è mancante o non caricato. Caricalo prima di trasformare.
+survey-wrong-project = Seleziona progetti solo dal progetto attivo.
+survey-name-required = Inserisci un nome per il sistema di coordinate.
+survey-working = Trasformazione dei dati selezionati…
+survey-completed = Convertiti { $items } sul posto. L'annullamento li ripristina.
+survey-failed = Trasformazione non riuscita: { $error }
+survey-stale = Trasformazione scartata perché il progetto attivo o i dati di origine sono cambiati. Seleziona i dati di origine e riprova.
+survey-coordinates-menu = Coordinate
+survey-definitions-action = Definizioni…
+survey-transform-action = Trasforma…
+survey-definitions-title = Definizioni di coordinate
+survey-transform-title = Trasforma coordinate
+survey-new-system = Nuovo sistema di coordinate
+survey-new-system-name = Sistema di coordinate
+survey-set-local = Imposta come sistema di coordinate della miniera
+survey-delete-system = Elimina sistema di coordinate
+survey-systems-empty = Nessun sistema di coordinate
+survey-system-section = Definizione griglia miniera
+survey-reference-note = Il sistema rispetto al quale è scritta ogni definizione: le coordinate che i tuoi dati già portano all'importazione. Non ha parametri propri. Fai clic destro su un sistema per renderlo il sistema di coordinate della miniera, o sullo spazio vuoto sottostante per definirne uno.
+survey-system-name = Nome
+survey-reference-system = Sistema di riferimento
+survey-reference-origin = Punto noto — coordinate di riferimento
+survey-system-origin = Stesso punto — coordinate del sistema
+survey-angle-help = Antiorario dalla X di riferimento verso la Y di riferimento, visto dall'alto.
+survey-scale-help = Scala XYZ uniforme dal sistema di riferimento a questo sistema. Usa 1 per preservare le dimensioni.
+survey-close = Chiudi
+survey-from = Da
+survey-to = A
+survey-transform-button = Trasforma
+survey-swap = Scambia
+survey-drape-note = Le immagini drappeggiate vengono rimosse dalle superfici convertite e devono essere ridrappeggiate.
+survey-needs-grid-block-model = Un modello a blocchi è una griglia regolare di celle, e un cambio di proiezione o sistema di riferimento non ne preserva la regolarità. Convertirlo significherebbe ricampionare ogni cella in una nuova griglia perdendo i valori che contiene, quindi è stato lasciato invariato.
+survey-needs-grid-raster = Un raster è posizionato nel mondo tramite una mappa affine, cosa che un cambio di proiezione o sistema di riferimento non può preservare. Convertirlo significherebbe ricampionare l'immagine, quindi è stato lasciato invariato.
+survey-conversion-exact = Esatta: solo cambio di griglia, senza riproiezione.
+survey-conversion-accuracy = Precisione dichiarata { $accuracy } m.
+survey-kind = Tipo
+survey-axis-names = Nomi degli assi
+survey-axis-help = Come questo sistema chiama i propri assi, se non X, Y e Z — "E", "N", "RL" per una griglia di miniera. Usato ovunque siano mostrate le coordinate, ma solo finché questo è il sistema di coordinate della miniera. Nomina tutti e tre o nessuno.
+survey-kind-registry-short = Sistema del registro
+survey-kind-grid-short = Griglia su un altro sistema
+survey-registry-search = Cerca
+survey-registry-hint = Nome o codice EPSG, es. "mga zone 56"
+survey-registry-none = Nulla nel registro corrisponde a tutte le parole.
+survey-parent = Definito rispetto a
+survey-parent-origin = Punto noto — coordinate del sistema padre
+survey-pick-registry = Cerca il sistema e scegli tra i risultati.
+survey-pick-parent = Scegli il sistema rispetto al quale è definita questa griglia.
+survey-pick-system = Scegli un sistema
+survey-pick-systems = Scegli il sistema da cui convertire e quello a cui convertire.
+survey-no-selection = Scegli un sistema di coordinate a sinistra, o fai clic destro per aggiungerne uno.
+survey-kind-grid = Griglia su { $parent }
+survey-system-in-use = "{ $name }" non può essere eliminato: { $dependants } { $dependants ->
+    [one] è
+   *[other] sono
+  } definiti rispetto ad esso. Reindirizzali altrove prima.
+survey-system-cycle = "{ $name }" è definito rispetto a se stesso, direttamente o tramite i suoi sistemi padre.
+survey-system-missing = Quel sistema di coordinate non esiste più. Seleziona un'altra definizione.
+survey-same-system = Scegli sistemi di origine e destinazione diversi.
+survey-name-exists = Esiste già un sistema di coordinate con questo nome. Selezionalo per modificarlo, oppure scegli un altro nome.
