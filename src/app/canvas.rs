@@ -519,17 +519,35 @@ impl<'a> App<'a> {
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
         });
+        // Holes ride the same box, taken by their collars: they are not
+        // rendered geometry the picker walks, so `enclosed` never holds one,
+        // and Move takes none because it marquees only what it can move.
+        let holes = self
+            .graphics
+            .as_ref()
+            .filter(|_| !objects_only)
+            .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .unwrap_or_default();
         if self.modifiers.shift_key() {
             for handle in enclosed {
                 if !self.editor.selected_handles.remove(&handle) {
                     self.editor.selected_handles.insert(handle);
                 }
             }
+            for hole in holes {
+                if !self.editor.selected_drill_holes.remove(&hole) {
+                    self.editor.selected_drill_holes.insert(hole);
+                }
+            }
         } else {
             if !self.modifiers.control_key() {
                 self.editor.selected_handles.clear();
+                // Cleared with the handles, or a box over empty ground would
+                // leave the previous box's holes selected.
+                self.editor.selected_drill_holes.clear();
             }
             self.editor.selected_handles.extend(enclosed);
+            self.editor.selected_drill_holes.extend(holes);
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;
