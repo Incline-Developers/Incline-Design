@@ -120,9 +120,72 @@ fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillH
             });
         }
         BoreholeInspectorTab::Log => {
-            crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset).show(ui);
+            draw_log_field_pickers(ui, editor, dataset, commands);
+            crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+                .strat_field(strat_choice_for(editor, dataset))
+                .show(ui);
         }
     }
+}
+
+/// The strat field chosen for this dataset: the two conditions the log itself
+/// applies, so the picker never names a column the log is not reading.
+fn strat_choice_for(editor: &EditorState, dataset: &OpenDrillHoleDataset) -> Option<String> {
+    let (id, key) = editor.borehole_log_strat_field.as_ref()?;
+    (*id == dataset.id)
+        .then(|| dataset.dataset.field(key))
+        .flatten()
+        .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
+        .map(|field| field.key.clone())
+}
+
+/// Two pickers above the log: what the ribbon is coloured by, and what the
+/// strat column reads. Colour drives the dataset's own field, the one the
+/// scene is drawn by, because a categorical field's colours are held per
+/// dataset for that field alone. Strat is the panel's own, since which
+/// column names the rock is about this log.
+fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>) {
+    let fields = &dataset.dataset.fields;
+    let label_of = |key: Option<&str>, fallback: &str| {
+        key.and_then(|key| dataset.dataset.field(key))
+            .map_or_else(|| fallback.to_owned(), |field| field.label.clone())
+    };
+
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(tr!(literal = "Colour"));
+        let uniform = tr!(literal = "Uniform white");
+        let mut chosen = dataset.color.active_field.clone();
+        let before = chosen.clone();
+        egui::ComboBox::from_id_salt(("borehole_log_color_field", dataset.id))
+            .selected_text(label_of(chosen.as_deref(), &uniform))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut chosen, None, uniform.clone());
+                for field in fields {
+                    ui.selectable_value(&mut chosen, Some(field.key.clone()), field.label.clone());
+                }
+            });
+        if chosen != before {
+            commands.push(UiCommand::SetDrillHoleColorField { id: dataset.id, field: chosen });
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(tr!(literal = "Strat"));
+        let guessed = tr!(literal = "Guessed by name");
+        egui::ComboBox::from_id_salt(("borehole_log_strat_field", dataset.id))
+            .selected_text(label_of(strat_choice_for(editor, dataset).as_deref(), &guessed))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut editor.borehole_log_strat_field, None, guessed.clone());
+                for field in fields
+                    .iter()
+                    .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
+                {
+                    ui.selectable_value(&mut editor.borehole_log_strat_field, Some((dataset.id, field.key.clone())), field.label.clone());
+                }
+            });
+    });
+    ui.add_space(4.0);
 }
 
 /// Resolve the currently inspected hole to its dataset, the hole itself, and

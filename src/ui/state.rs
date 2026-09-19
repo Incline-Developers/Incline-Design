@@ -1055,6 +1055,10 @@ pub(crate) struct EditorState {
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
+    /// The field the Log tab's strat column reads and the dataset it was
+    /// chosen for: a choice about one set's columns says nothing about
+    /// another's. `None` guesses by name. Transient, like the tab.
+    pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
@@ -1930,6 +1934,7 @@ impl EditorState {
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
+        self.borehole_log_strat_field = None;
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
         self.frozen_handles.clear();
@@ -2143,6 +2148,7 @@ impl EditorState {
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
             borehole_inspector_tab: BoreholeInspectorTab::default(),
+            borehole_log_strat_field: None,
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: true,
@@ -2580,6 +2586,9 @@ impl EditorState {
     /// Forget every hole `keep` no longer vouches for: what is selected,
     /// what the inspector reads, the context menu's hole.
     pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
+        if self.inspected_hole.is_some_and(|hole| !keep(hole.dataset)) {
+            self.borehole_log_strat_field = None;
+        }
         self.selected_drill_holes.retain(|hole| keep(hole.dataset));
         self.selected_tie_ins.retain(|tie| keep(tie.dataset));
         self.inspected_hole = self.inspected_hole.filter(|hole| keep(hole.dataset));

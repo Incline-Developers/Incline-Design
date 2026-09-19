@@ -2129,6 +2129,8 @@ pub(crate) struct BoreholeLog<'a> {
     id: egui::Id,
     hole: &'a crate::model::drill_hole::DrillHole,
     dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset,
+    /// Read the strat column from this field rather than guessing by name.
+    strat_field: Option<String>,
 }
 
 impl<'a> BoreholeLog<'a> {
@@ -2137,7 +2139,13 @@ impl<'a> BoreholeLog<'a> {
             id: egui::Id::new(id_source),
             hole,
             dataset,
+            strat_field: None,
         }
+    }
+
+    pub(crate) fn strat_field(mut self, key: Option<String>) -> Self {
+        self.strat_field = key;
+        self
     }
 
     /// Draw the log into what the panel has left. Nothing here may report a
@@ -2332,10 +2340,22 @@ impl<'a> BoreholeLog<'a> {
         (east * radians.cos() - north * radians.sin()) as f32
     }
 
-    /// The field the strat column reads: an alias list, falling back to
-    /// the dataset's first categorical field.
+    /// The field the strat column reads: the one chosen in the panel, else an
+    /// alias list, falling back to the dataset's first categorical field.
+    ///
+    /// A chosen field is taken only while it is one of this dataset's and
+    /// still categorical: the panel holds one choice while the inspection
+    /// moves, and a numeric field here would draw a block per number.
     fn lithology_field(&self) -> Option<&crate::model::drill_hole::DrillField> {
         let fields = &self.dataset.dataset.fields;
+        let chosen = self
+            .strat_field
+            .as_deref()
+            .and_then(|key| self.dataset.dataset.field(key))
+            .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }));
+        if chosen.is_some() {
+            return chosen;
+        }
         fields
             .iter()
             .find(|field| LOG_LITHOLOGY_KEYS.contains(&field.key.to_ascii_lowercase().as_str()))
