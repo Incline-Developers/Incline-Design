@@ -2303,6 +2303,9 @@ pub(crate) struct EditorState {
     /// them takes this off the page until the schedule is run again, and the
     /// held result itself is kept and labelled rather than destroyed.
     pub(crate) schedule_dispatch: Option<std::sync::Arc<crate::model::schedule::DispatchSchedule>>,
+    /// Per-period tonnes for the mirrored result, present only while that
+    /// result is current. Derived display data, mirrored rather than authored.
+    pub(crate) schedule_production: Option<std::sync::Arc<crate::model::schedule::PeriodProduction>>,
     /// What the Gantt's own run controls say: which run is on screen, that it
     /// is out of date, or why one cannot be started.
     pub(crate) schedule_run_status: String,
@@ -2648,6 +2651,7 @@ impl EditorState {
         self.gantt_drag = None;
         self.schedule_bar_reports.clear();
         self.schedule_dispatch = None;
+        self.schedule_production = None;
         self.schedule_run_status.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
@@ -3222,6 +3226,7 @@ impl EditorState {
             gantt_drag: None,
             schedule_bar_reports: Vec::new(),
             schedule_dispatch: None,
+            schedule_production: None,
             schedule_run_status: String::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
@@ -5317,10 +5322,30 @@ pub(crate) struct ScheduleBarHeightDraft {
     pub(crate) text: String,
 }
 
+/// Which row of one loader's calendar group a cell sits in.
+///
+/// Input rows carry the authored [`crate::model::schedule::CalendarField`] they
+/// edit. The scheduled-tonnes row is read back off a calculated result and is
+/// never authored, so it has no field to name and can produce no edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CalendarRow {
+    Input(crate::model::schedule::CalendarField),
+    Tonnes,
+}
+
+impl CalendarRow {
+    pub(crate) fn field(self) -> Option<crate::model::schedule::CalendarField> {
+        match self {
+            Self::Input(field) => Some(field),
+            Self::Tonnes => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CalendarCellAddress {
     pub(crate) agent: crate::model::schedule::LoaderAgentId,
-    pub(crate) field: crate::model::schedule::CalendarField,
+    pub(crate) row: CalendarRow,
     pub(crate) cell: crate::model::schedule::CalendarCell,
 }
 

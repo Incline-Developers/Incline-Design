@@ -540,8 +540,17 @@ impl crate::app::App<'_> {
                 self.editor.schedule_bar_reports.clear();
                 self.redraw_requested = true;
             }
-            if self.editor.schedule_dispatch.take().is_some() {
-                self.redraw_requested = true;
+            // The Calendar reports per-period tonnes off the same held result,
+            // so on that page the result stays mirrored - under the same
+            // currentness gate - rather than being taken off the page.
+            if self.editor.is_schedule_calendar() {
+                self.mirror_schedule_calculation();
+            } else {
+                let dropped = self.editor.schedule_dispatch.take().is_some();
+                let dropped_production = self.editor.schedule_production.take().is_some();
+                if dropped || dropped_production {
+                    self.redraw_requested = true;
+                }
             }
             if let Some(cache) = self.schedule_report_cache.as_mut() {
                 cache.bar_views_key = None;

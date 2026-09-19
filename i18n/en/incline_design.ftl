@@ -1738,6 +1738,7 @@ schedule-calendar-loaders = Loaders
 schedule-calendar-availability = Availability (%)
 schedule-calendar-utilisation = Utilisation (%)
 schedule-calendar-rate = Rate (t/h)
+schedule-calendar-tonnes = Scheduled tonnes (t)
 schedule-calendar-extend = +14 days
 schedule-calendar-jump = Jump to day
 schedule-calendar-help = Blank cells use defaults. Production rate = rate × availability × utilisation. Percentages apply across the whole day.
@@ -1752,6 +1753,9 @@ schedule-calendar-invalid = This loader calendar is invalid
 schedule-calendar-invalid-number = Enter a number
 schedule-calendar-paste-outside = The pasted rectangle extends outside the loader grid
 schedule-calendar-paste-read-only = The pasted rectangle includes a read-only class rate
+schedule-calendar-calculated-selection = Selection includes calculated cells
+schedule-calendar-tonnes-partial = Calculated through { $hours } h · day partially covered
+schedule-calendar-results-stale = Results out of date
 schedule-error-unknown-class = That loader class is no longer in this project
 schedule-error-unknown-agent = That loader agent is no longer in this project
 schedule-error-class-in-use = Still assigned to ⁨{ $agents }⁩. Reassign or delete those agents first

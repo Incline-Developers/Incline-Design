@@ -402,6 +402,10 @@ pub(crate) struct App<'a> {
     pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleRunDiagnostics>,
     pub(crate) schedule_report_cache: Option<crate::app::commands::schedule_readiness::ScheduleReportCache>,
     pub(crate) schedule_plan_revision_cache: std::cell::Cell<Option<(u32, u64, u64)>>,
+    /// Per-period production aggregated from the held result, keyed by the
+    /// project runtime and the run that produced it. Derived display data: it
+    /// is never saved and never enters undo history.
+    pub(crate) schedule_production_cache: Option<(u32, u64, std::sync::Arc<crate::model::schedule::PeriodProduction>)>,
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
     pub(crate) schedule_run_serial: u64,
@@ -529,6 +533,7 @@ impl<'a> Default for App<'a> {
             schedule_run_diagnostics: None,
             schedule_report_cache: None,
             schedule_plan_revision_cache: std::cell::Cell::new(None),
+            schedule_production_cache: None,
             schedule_report_key_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
             schedule_animation: Default::default(),

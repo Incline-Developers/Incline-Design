@@ -364,6 +364,7 @@ impl crate::app::App<'_> {
             // A calculated schedule describes one project's ground; it does
             // not outlive the project it was calculated for.
             self.schedule_calculation = None;
+            self.schedule_production_cache = None;
             self.pending_schedule_run = None;
             self.schedule_run_diagnostics = None;
             self.mirror_schedule_stages();

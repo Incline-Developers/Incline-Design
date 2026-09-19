@@ -16,7 +16,7 @@ Paths relative to `src/`.
 | Change state | `app/mod.rs` (durable), `ui/state.rs` (`EditorState`, transient), `model/project.rs` (projects) |
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry + caches), `rendering/shaders/` (WGSL) |
 | Add or change a side panel | `ui/widgets/island.rs` (width, surface, region, seam), then the panel's own `ui/elements/*.rs` |
-| Schedule setup, Calendar and Gantt | `model/schedule/mod.rs` (fleet + rules), `model/schedule/calendar.rs` (loader defaults + sparse period overrides) → `app/commands/schedule.rs` → `ui/elements/schedule_setup.rs`, `schedule_calendar.rs`, `schedule_gantt.rs`; time axis is `GanttView` in `ui/state.rs` |
+| Schedule setup, Calendar and Gantt | `model/schedule/mod.rs` (fleet + rules), `model/schedule/calendar.rs` (loader defaults + sparse period overrides), `model/schedule/production.rs` (per-period tonnes read back off a run) → `app/commands/schedule.rs` → `ui/elements/schedule_setup.rs`, `schedule_calendar.rs`, `schedule_gantt.rs`; time axis is `GanttView` in `ui/state.rs` |
 | Background work | `app/jobs.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
 | Translations | `src/i18n.rs`, `i18n/en/incline_design.ftl` |

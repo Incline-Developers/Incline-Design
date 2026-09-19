@@ -4,10 +4,10 @@ use thousands::Separable;
 
 use crate::{
     i18n::tr,
-    model::schedule::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, LoaderAgent, SCHEDULE_PERIOD_H, SchedulePlan},
+    model::schedule::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, LoaderAgent, LoaderAgentId, PeriodProduction, SCHEDULE_PERIOD_H, SchedulePlan},
     ui::{
         EditorState, UiProjectView, chrome,
-        state::{CalendarCellAddress, CalendarCellDraft, CalendarSelection, PlanningSubpage, ScheduleEdit, ScheduleStep, UiCommand},
+        state::{CalendarCellAddress, CalendarCellDraft, CalendarRow, CalendarSelection, PlanningSubpage, ScheduleEdit, ScheduleStep, UiCommand},
     },
 };
 
@@ -21,8 +21,8 @@ const OVERSCAN: i32 = 1;
 #[derive(Clone, Copy)]
 enum Row {
     Loaders,
-    Agent(crate::model::schedule::LoaderAgentId),
-    Field(crate::model::schedule::LoaderAgentId, CalendarField),
+    Agent(LoaderAgentId),
+    Field(LoaderAgentId, CalendarRow),
 }
 
 pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
@@ -31,7 +31,11 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
         editor.schedule_calendar.runtime = project.active_session;
     }
     let plan = &project.schedule;
-    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan));
+    // Held by value for the frame: the grid needs the mirrored result while it
+    // also holds the editor mutably, and the clone is one refcount.
+    let production = editor.schedule_production.clone();
+    let production = production.as_deref();
+    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, production));
     egui::CentralPanel::default()
         .frame(chrome::region_frame(ui))
         .show(ui, |ui| {
@@ -42,7 +46,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             if plan.agents().is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
-                draw_grid(ui, grid, editor, plan, project.active_session, commands);
+                draw_grid(ui, grid, editor, plan, production, project.active_session, commands);
             }
             ui.allocate_rect(rect, egui::Sense::hover());
         })
@@ -72,6 +76,12 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
             ui.set_max_width(360.0);
             ui.label(tr!("schedule-calendar-help"));
         });
+        if editor.schedule_run_stale {
+            // Said once, here: the alternative is repeating it in every
+            // calculated row of every loader.
+            ui.add_space(8.0);
+            ui.colored_label(ui.visuals().warn_fg_color, tr!("schedule-calendar-results-stale"));
+        }
         if let Some(error) = &editor.schedule_calendar.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -92,7 +102,7 @@ fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
     });
 }
 
-fn required_days(plan: &SchedulePlan) -> u32 {
+fn required_days(plan: &SchedulePlan, production: Option<&PeriodProduction>) -> u32 {
     let override_day = plan
         .agents()
         .iter()
@@ -109,7 +119,10 @@ fn required_days(plan: &SchedulePlan) -> u32 {
         })
         .max()
         .unwrap_or(0);
-    14_u32.max(override_day).max(bar_day)
+    // Whatever the calculation answers for has to be reachable, or its own
+    // figures would sit past the end of the grid.
+    let calculated_day = production.map_or(0, PeriodProduction::covered_periods);
+    14_u32.max(override_day).max(bar_day).max(calculated_day)
 }
 
 fn rows(plan: &SchedulePlan, editor: &EditorState) -> Vec<Row> {
@@ -118,16 +131,26 @@ fn rows(plan: &SchedulePlan, editor: &EditorState) -> Vec<Row> {
         rows.push(Row::Agent(agent.id));
         if !editor.schedule_calendar.collapsed.contains(&agent.id) {
             rows.extend([
-                Row::Field(agent.id, CalendarField::Availability),
-                Row::Field(agent.id, CalendarField::Utilisation),
-                Row::Field(agent.id, CalendarField::Rate),
+                Row::Field(agent.id, CalendarRow::Input(CalendarField::Availability)),
+                Row::Field(agent.id, CalendarRow::Input(CalendarField::Utilisation)),
+                Row::Field(agent.id, CalendarRow::Input(CalendarField::Rate)),
+                Row::Field(agent.id, CalendarRow::Tonnes),
             ]);
         }
     }
     rows
 }
 
-fn draw_grid(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+#[allow(clippy::too_many_arguments)]
+fn draw_grid(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    production: Option<&PeriodProduction>,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) {
     let row_h = crate::ui::widgets::explorer::row_height(ui);
     let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + HEADER_H), rect.max);
     let period_left = rect.left() + HIERARCHY_W + DEFAULT_W;
@@ -143,7 +166,7 @@ fn draw_grid(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan
     editor.schedule_calendar.scroll_y = editor.schedule_calendar.scroll_y.clamp(0.0, max_y);
     editor.schedule_calendar.scroll_x = editor.schedule_calendar.scroll_x.clamp(0.0, max_x);
 
-    handle_keyboard(ui, editor, plan, session, commands);
+    handle_keyboard(ui, editor, plan, production, session, commands);
     let visuals = ui.visuals().clone();
     let stroke = visuals.widgets.noninteractive.bg_stroke;
     ui.painter().rect_filled(rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
@@ -178,7 +201,7 @@ fn draw_grid(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan
     for (row_index, row) in rows.iter().enumerate().take(last_row).skip(first_row) {
         let y = body.top() + row_index as f32 * row_h - editor.schedule_calendar.scroll_y;
         let row_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), row_h)).intersect(body);
-        draw_row(ui, row_rect, *row, editor, plan, first_period..last_period, period_left, session, commands);
+        draw_row(ui, row_rect, *row, editor, plan, production, first_period..last_period, period_left, session, commands);
     }
     ui.painter().rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
     ui.painter()
@@ -207,6 +230,7 @@ fn draw_row(
     row: Row,
     editor: &mut EditorState,
     plan: &SchedulePlan,
+    production: Option<&PeriodProduction>,
     periods: std::ops::Range<u32>,
     period_left: f32,
     session: u32,
@@ -237,26 +261,45 @@ fn draw_row(
                 }
             }
         }
-        Row::Field(agent_id, field) => {
+        Row::Field(agent_id, kind) => {
             let Some(agent) = plan.agent(agent_id) else { return };
-            let label = match field {
-                CalendarField::Availability => tr!("schedule-calendar-availability"),
-                CalendarField::Utilisation => tr!("schedule-calendar-utilisation"),
-                CalendarField::Rate => tr!("schedule-calendar-rate"),
-            };
-            ui.put(hierarchy.shrink2(egui::vec2(26.0, 2.0)), egui::Label::new(label).truncate().halign(egui::Align::Min));
+            let label_rect = hierarchy.shrink2(egui::vec2(26.0, 2.0));
+            match kind {
+                CalendarRow::Input(field) => {
+                    let label = match field {
+                        CalendarField::Availability => tr!("schedule-calendar-availability"),
+                        CalendarField::Utilisation => tr!("schedule-calendar-utilisation"),
+                        CalendarField::Rate => tr!("schedule-calendar-rate"),
+                    };
+                    ui.put(label_rect, egui::Label::new(label).truncate().halign(egui::Align::Min));
+                }
+                CalendarRow::Tonnes => {
+                    // A lock beside a quieter, italic label: the tint alone
+                    // would be the only thing saying this row cannot be typed
+                    // into, and colour alone is not enough to say it.
+                    let color = ui.visuals().weak_text_color();
+                    paint_lock(ui, egui::pos2(label_rect.left() - 10.0, label_rect.center().y), color);
+                    ui.put(
+                        label_rect,
+                        egui::Label::new(egui::RichText::new(tr!("schedule-calendar-tonnes")).italics().color(color))
+                            .truncate()
+                            .halign(egui::Align::Min),
+                    );
+                }
+            }
             let default_rect = egui::Rect::from_min_max(egui::pos2(hierarchy.right(), rect.top()), egui::pos2(hierarchy.right() + DEFAULT_W, rect.bottom()));
             draw_cell(
                 ui,
                 default_rect,
                 CalendarCellAddress {
                     agent: agent_id,
-                    field,
+                    row: kind,
                     cell: CalendarCell::Default,
                 },
                 editor,
                 plan,
                 agent,
+                production,
                 session,
                 commands,
             );
@@ -269,18 +312,27 @@ fn draw_row(
                     cell,
                     CalendarCellAddress {
                         agent: agent_id,
-                        field,
+                        row: kind,
                         cell: CalendarCell::Period(CalendarPeriod(period)),
                     },
                     editor,
                     plan,
                     agent,
+                    production,
                     session,
                     commands,
                 );
             }
         }
     }
+}
+
+/// A padlock a few pixels across: the shackle first, then the body over its
+/// lower half, so the two shapes read as one silhouette at this size.
+fn paint_lock(ui: &egui::Ui, center: egui::Pos2, color: egui::Color32) {
+    let body = egui::Rect::from_center_size(center + egui::vec2(0.0, 2.0), egui::vec2(7.0, 5.0));
+    ui.painter().circle_stroke(egui::pos2(center.x, body.top()), 2.2, egui::Stroke::new(1.2, color));
+    ui.painter().rect_filled(body, 1.0, color);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -291,6 +343,7 @@ fn draw_cell(
     editor: &mut EditorState,
     plan: &SchedulePlan,
     agent: &LoaderAgent,
+    production: Option<&PeriodProduction>,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
@@ -298,6 +351,9 @@ fn draw_cell(
         return;
     }
     let selected = selected(editor, plan, address);
+    if address.row == CalendarRow::Tonnes {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
     if selected {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
     }
@@ -371,38 +427,79 @@ fn draw_cell(
             move_selection(editor, plan, nav);
         }
     } else {
-        let explicit = cell_text(plan, agent, address);
         let color = if selected { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
         ui.painter().with_clip_rect(rect).text(
             rect.right_center() - egui::vec2(6.0, 0.0),
             egui::Align2::RIGHT_CENTER,
-            explicit,
+            display_text(plan, agent, production, address),
             egui::TextStyle::Body.resolve(ui.style()),
             color,
         );
     }
-    response.on_hover_text(resolved_hover(plan, agent, address));
+    if let Some(hover) = hover_text(plan, agent, production, address) {
+        response.on_hover_text(hover);
+    }
+}
+
+/// What a cell shows. A calculated cell says nothing at all outside the
+/// calculated interval, and marks a period the interval stops part-way through.
+fn display_text(plan: &SchedulePlan, agent: &LoaderAgent, production: Option<&PeriodProduction>, address: CalendarCellAddress) -> String {
+    match address.row {
+        CalendarRow::Input(_) => cell_text(plan, agent, address),
+        CalendarRow::Tonnes => match calculated(production, address) {
+            Some((tonnes, true)) => format!("{} *", format_tonnes(tonnes)),
+            Some((tonnes, false)) => format_tonnes(tonnes),
+            None => String::new(),
+        },
+    }
+}
+
+fn hover_text(plan: &SchedulePlan, agent: &LoaderAgent, production: Option<&PeriodProduction>, address: CalendarCellAddress) -> Option<String> {
+    match address.row {
+        CalendarRow::Input(_) => Some(resolved_hover(plan, agent, address)),
+        CalendarRow::Tonnes => {
+            let production = production?;
+            calculated(Some(production), address)?
+                .1
+                .then(|| tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(production.coverage_end_h())))
+        }
+    }
+}
+
+/// This cell's calculated tonnes and whether its period is only partly
+/// covered, or `None` where the calculation answers for nothing: no current
+/// result, a period beyond the calculated interval, or the Default column,
+/// which no calculation has an opinion about.
+fn calculated(production: Option<&PeriodProduction>, address: CalendarCellAddress) -> Option<(f64, bool)> {
+    let CalendarCell::Period(period) = address.cell else { return None };
+    let production = production?;
+    Some((production.tonnes(address.agent, period)?, production.is_partial(period)))
 }
 
 fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {
-    ui.id().with(("calendar_cell", address.agent, address.field, address.cell))
+    ui.id().with(("calendar_cell", address.agent, address.row, address.cell))
 }
 
 fn editable(address: CalendarCellAddress) -> bool {
-    !(address.cell == CalendarCell::Default && address.field == CalendarField::Rate)
+    match address.row {
+        // Calculated: selectable so it can be copied, and nothing more.
+        CalendarRow::Tonnes => false,
+        CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && field == CalendarField::Rate),
+    }
 }
 
 /// What this cell says in its own right, which is nothing at all for an
 /// inherited one. The Default rate is read-only class data rather than an
 /// authored value, so it has none either.
 fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f64> {
+    let field = address.row.field()?;
     match address.cell {
-        CalendarCell::Default => match address.field {
+        CalendarCell::Default => match field {
             CalendarField::Availability => Some(agent.calendar.default_availability),
             CalendarField::Utilisation => Some(agent.calendar.default_utilisation),
             CalendarField::Rate => None,
         },
-        CalendarCell::Period(period) => agent.calendar.periods.get(&period).and_then(|value| match address.field {
+        CalendarCell::Period(period) => agent.calendar.periods.get(&period).and_then(|value| match field {
             CalendarField::Availability => value.availability,
             CalendarField::Utilisation => value.utilisation,
             CalendarField::Rate => value.rate_tph,
@@ -411,7 +508,10 @@ fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f
 }
 
 fn explicit_text(agent: &LoaderAgent, address: CalendarCellAddress) -> String {
-    explicit_value(agent, address).map(|value| format_value(address.field, value)).unwrap_or_default()
+    match (address.row.field(), explicit_value(agent, address)) {
+        (Some(field), Some(value)) => format_value(field, value),
+        _ => String::new(),
+    }
 }
 
 /// The same value as plain digits: what an editor opens on and what the
@@ -419,11 +519,14 @@ fn explicit_text(agent: &LoaderAgent, address: CalendarCellAddress) -> String {
 /// something [`parse_value`] is obliged to read back, so a cell the user
 /// copies or re-opens must not hand them its painted form.
 fn raw_text(agent: &LoaderAgent, address: CalendarCellAddress) -> String {
-    explicit_value(agent, address).map(|value| trimmed_number(scaled(address.field, value))).unwrap_or_default()
+    match (address.row.field(), explicit_value(agent, address)) {
+        (Some(field), Some(value)) => trimmed_number(scaled(field, value)),
+        _ => String::new(),
+    }
 }
 
 fn cell_text(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddress) -> String {
-    if address.cell == CalendarCell::Default && address.field == CalendarField::Rate {
+    if address.cell == CalendarCell::Default && address.row == CalendarRow::Input(CalendarField::Rate) {
         return plan
             .class(agent.class_id)
             .map(|class| format_value(CalendarField::Rate, class.default_dig_rate_tph))
@@ -433,10 +536,11 @@ fn cell_text(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddr
 }
 
 fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddress) -> String {
+    let Some(field) = address.row.field() else { return String::new() };
     let Some(class) = plan.class(agent.class_id) else {
         return tr!("schedule-error-unknown-class");
     };
-    if address.cell == CalendarCell::Default && address.field == CalendarField::Rate {
+    if address.cell == CalendarCell::Default && field == CalendarField::Rate {
         return tr!(
             "schedule-calendar-class-default",
             value = format_value(CalendarField::Rate, class.default_dig_rate_tph),
@@ -450,7 +554,7 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
     let Ok(values) = agent.calendar.values_at(period, class.default_dig_rate_tph) else {
         return tr!("schedule-calendar-invalid");
     };
-    let (value, source) = match address.field {
+    let (value, source) = match field {
         CalendarField::Availability => (
             values.availability,
             if explicit_value(agent, address).is_none() {
@@ -476,7 +580,7 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
             },
         ),
     };
-    tr!("schedule-calendar-resolved", value = format_value(address.field, value), source = source)
+    tr!("schedule-calendar-resolved", value = format_value(field, value), source = source)
 }
 
 /// Percentages are stored as fractions and shown out of a hundred.
@@ -493,6 +597,17 @@ fn trimmed_number(value: f64) -> String {
         text.pop();
     }
     text
+}
+
+/// Tonnes to at most one decimal. Presentation only: the aggregation keeps
+/// full precision, and this rounding never feeds back into it.
+fn tonnes_number(value: f64) -> String {
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 { format!("{rounded:.0}") } else { format!("{rounded:.1}") }
+}
+
+fn format_tonnes(value: f64) -> String {
+    tonnes_number(value).separate_with_commas()
 }
 
 fn format_value(field: CalendarField, value: f64) -> String {
@@ -536,7 +651,13 @@ fn begin_edit(editor: &mut EditorState, plan: &SchedulePlan, address: CalendarCe
 
 fn commit_draft(editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) -> bool {
     let Some(draft) = editor.schedule_calendar.draft.as_mut() else { return true };
-    match parse_value(draft.address.field, &draft.text) {
+    // A draft only ever opens on an editable cell, so this field is always
+    // there; a calculated row has none and can reach no further than here.
+    let Some(field) = draft.address.row.field() else {
+        editor.schedule_calendar.draft = None;
+        return true;
+    };
+    match parse_value(field, &draft.text) {
         Ok(value) => {
             commands.push(UiCommand::schedule(
                 session,
@@ -544,7 +665,7 @@ fn commit_draft(editor: &mut EditorState, session: u32, commands: &mut Vec<UiCom
                     edits: vec![CalendarCellEdit {
                         agent: draft.address.agent,
                         cell: draft.address.cell,
-                        field: draft.address.field,
+                        field,
                         value,
                     }],
                 },
@@ -573,19 +694,27 @@ enum Nav {
     Down,
 }
 
-fn field_rows<'a>(plan: &'a SchedulePlan, editor: &'a EditorState) -> impl Iterator<Item = (crate::model::schedule::LoaderAgentId, CalendarField)> + 'a {
+/// Every row a loader group shows, in drawn order - the calculated row
+/// included. Row numbers are what a pasted rectangle is measured against, so
+/// leaving it out here would land pasted values on the wrong loader.
+fn grid_rows<'a>(plan: &'a SchedulePlan, editor: &'a EditorState) -> impl Iterator<Item = (LoaderAgentId, CalendarRow)> + 'a {
     plan.agents()
         .iter()
         .filter(|agent| !editor.schedule_calendar.collapsed.contains(&agent.id))
         .flat_map(|agent| {
-            [CalendarField::Availability, CalendarField::Utilisation, CalendarField::Rate]
-                .into_iter()
-                .map(move |field| (agent.id, field))
+            [
+                CalendarRow::Input(CalendarField::Availability),
+                CalendarRow::Input(CalendarField::Utilisation),
+                CalendarRow::Input(CalendarField::Rate),
+                CalendarRow::Tonnes,
+            ]
+            .into_iter()
+            .map(move |row| (agent.id, row))
         })
 }
 
 fn address_index(editor: &EditorState, plan: &SchedulePlan, address: CalendarCellAddress) -> Option<(usize, u32)> {
-    let row = field_rows(plan, editor).position(|(agent, field)| agent == address.agent && field == address.field)?;
+    let row = grid_rows(plan, editor).position(|(agent, row)| agent == address.agent && row == address.row)?;
     let column = match address.cell {
         CalendarCell::Default => 0,
         CalendarCell::Period(period) => period.0.saturating_add(1),
@@ -594,13 +723,13 @@ fn address_index(editor: &EditorState, plan: &SchedulePlan, address: CalendarCel
 }
 
 fn address_at(editor: &EditorState, plan: &SchedulePlan, row: usize, column: u32) -> Option<CalendarCellAddress> {
-    let (agent, field) = field_rows(plan, editor).nth(row)?;
+    let (agent, kind) = grid_rows(plan, editor).nth(row)?;
     let cell = if column == 0 {
         CalendarCell::Default
     } else {
         CalendarCell::Period(CalendarPeriod(column - 1))
     };
-    Some(CalendarCellAddress { agent, field, cell })
+    Some(CalendarCellAddress { agent, row: kind, cell })
 }
 
 fn selection_bounds(editor: &EditorState, plan: &SchedulePlan) -> Option<(usize, usize, u32, u32)> {
@@ -620,29 +749,33 @@ fn move_selection(editor: &mut EditorState, plan: &SchedulePlan, nav: Nav) {
     let Some((mut row, mut column)) = address_index(editor, plan, selection.focus) else {
         return;
     };
-    let field_row_count = field_rows(plan, editor).count();
-    if field_row_count == 0 {
+    let row_count = grid_rows(plan, editor).count();
+    if row_count == 0 {
         return;
     }
     loop {
+        let from = (row, column);
         match nav {
             Nav::Left => column = column.saturating_sub(1),
             Nav::Right => column = column.saturating_add(1).min(editor.schedule_calendar.visible_days),
             Nav::Up => row = row.saturating_sub(1),
-            Nav::Down => row = (row + 1).min(field_row_count - 1),
+            Nav::Down => row = (row + 1).min(row_count - 1),
+        }
+        // Clamped against the edge of the grid. Without this the search for the
+        // next editable cell would never end when the last row is a calculated
+        // one, which it always is.
+        if (row, column) == from {
+            return;
         }
         let Some(address) = address_at(editor, plan, row, column) else { return };
         if editable(address) {
             editor.schedule_calendar.selection = Some(CalendarSelection { anchor: address, focus: address });
             return;
         }
-        if matches!(nav, Nav::Left) && column == 0 {
-            return;
-        }
     }
 }
 
-fn handle_keyboard(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+fn handle_keyboard(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, production: Option<&PeriodProduction>, session: u32, commands: &mut Vec<UiCommand>) {
     // Cells are ordinary focusable widgets, so a Tab that moves along the row
     // also lands egui's focus on the cell the selection moved to. That focus is
     // this grid's own; only focus somewhere else - the jump field, a button -
@@ -661,7 +794,7 @@ fn handle_keyboard(ui: &mut egui::Ui, editor: &mut EditorState, plan: &ScheduleP
                 }
             }
             egui::Event::Paste(text) => paste(editor, plan, session, commands, &text),
-            egui::Event::Copy => copy(editor, plan, ui),
+            egui::Event::Copy => copy(editor, plan, production, ui),
             egui::Event::Key {
                 key, pressed: true, modifiers, ..
             } => match key {
@@ -687,17 +820,21 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, session: u32, 
     let mut edits = Vec::new();
     for row in r0..=r1 {
         for column in c0..=c1 {
-            let Some(address) = address_at(editor, plan, row, column).filter(|address| editable(*address)) else {
-                continue;
-            };
+            let Some(address) = address_at(editor, plan, row, column) else { continue };
+            if address.row == CalendarRow::Tonnes {
+                editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
+                return;
+            }
+            let Some(field) = address.row.field().filter(|_| editable(address)) else { continue };
             edits.push(CalendarCellEdit {
                 agent: address.agent,
                 cell: address.cell,
-                field: address.field,
+                field,
                 value: None,
             });
         }
     }
+    editor.schedule_calendar.error = None;
     if !edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits }));
     }
@@ -717,11 +854,15 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: 
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-paste-outside"));
                 return;
             };
-            if !editable(address) {
-                editor.schedule_calendar.error = Some(tr!("schedule-calendar-paste-read-only"));
+            if address.row == CalendarRow::Tonnes {
+                editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
             }
-            let value = match parse_value(address.field, text) {
+            let Some(field) = address.row.field().filter(|_| editable(address)) else {
+                editor.schedule_calendar.error = Some(tr!("schedule-calendar-paste-read-only"));
+                return;
+            };
+            let value = match parse_value(field, text) {
                 Ok(value) => value,
                 Err(error) => {
                     editor.schedule_calendar.error = Some(error);
@@ -731,7 +872,7 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: 
             edits.push(CalendarCellEdit {
                 agent: address.agent,
                 cell: address.cell,
-                field: address.field,
+                field,
                 value,
             });
         }
@@ -742,15 +883,20 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: 
     }
 }
 
-fn copy(editor: &EditorState, plan: &SchedulePlan, ui: &egui::Ui) {
+fn copy(editor: &EditorState, plan: &SchedulePlan, production: Option<&PeriodProduction>, ui: &egui::Ui) {
     let Some((r0, r1, c0, c1)) = selection_bounds(editor, plan) else { return };
     let mut lines = Vec::new();
     for row in r0..=r1 {
         let mut cells = Vec::new();
         for column in c0..=c1 {
-            let text = address_at(editor, plan, row, column)
-                .and_then(|address| plan.agent(address.agent).map(|agent| raw_text(agent, address)))
-                .unwrap_or_default();
+            // Plain digits throughout, calculated cells included: separators
+            // and the partial-period mark are things the grid paints, not
+            // things a clipboard should carry.
+            let text = match address_at(editor, plan, row, column) {
+                Some(address) if address.row == CalendarRow::Tonnes => calculated(production, address).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
+                Some(address) => plan.agent(address.agent).map(|agent| raw_text(agent, address)).unwrap_or_default(),
+                None => String::new(),
+            };
             cells.push(text);
         }
         lines.push(cells.join("\t"));

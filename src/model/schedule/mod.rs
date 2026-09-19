@@ -15,10 +15,12 @@
 pub(crate) mod animation;
 pub(crate) mod calendar;
 pub(crate) mod dispatch;
+pub(crate) mod production;
 pub(crate) mod sequence;
 
 pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, SCHEDULE_PERIOD_H};
 pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchOutcome, DispatchSchedule};
+pub(crate) use production::PeriodProduction;
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*

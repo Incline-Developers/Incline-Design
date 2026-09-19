@@ -31,7 +31,7 @@ use crate::{
         schedule_pipeline::ScheduleRunInputs,
     },
     i18n::tr,
-    model::schedule::{DispatchOutcome, DispatchSchedule, dispatch::DispatchRun},
+    model::schedule::{DispatchOutcome, DispatchSchedule, PeriodProduction, dispatch::DispatchRun},
 };
 
 /// Events between cancellation polls on the background worker.
@@ -303,6 +303,26 @@ impl crate::app::App<'_> {
         }
     }
 
+    /// Per-period production for the held result, aggregated once per run.
+    ///
+    /// Coverage is what the run was *asked* for, not merely what it found: a
+    /// Run Period through hour 48 answers for both days even if the ground ran
+    /// out at hour 30, while a whole-schedule run answers through its horizon.
+    fn schedule_production(&mut self) -> Option<Arc<PeriodProduction>> {
+        let calculation = self.schedule_calculation.as_ref()?;
+        let (runtime, run) = (calculation.inputs.runtime, calculation.run);
+        if let Some((cached_runtime, cached_run, production)) = self.schedule_production_cache.as_ref()
+            && *cached_runtime == runtime
+            && *cached_run == run
+        {
+            return Some(production.clone());
+        }
+        let coverage_end_h = calculation.horizon_limit_h.unwrap_or(calculation.schedule.horizon_h);
+        let production = Arc::new(PeriodProduction::aggregate(&calculation.schedule, coverage_end_h));
+        self.schedule_production_cache = Some((runtime, run, production.clone()));
+        Some(production)
+    }
+
     /// Copy the held result into the editor state the Gantt draws from - but
     /// only while it is current.
     ///
@@ -314,6 +334,7 @@ impl crate::app::App<'_> {
         let current = self.schedule_calculation_is_current();
         let running = self.pending_schedule_run.is_some();
         let dispatch = current.then(|| self.schedule_calculation.as_ref().expect("current calculation exists").schedule.clone());
+        let production = current.then(|| self.schedule_production()).flatten();
         let status = match (running, self.schedule_calculation.as_ref()) {
             (true, _) => tr!("schedule-run-working"),
             (false, None) => match self.schedule_run_inputs() {
@@ -337,13 +358,20 @@ impl crate::app::App<'_> {
             (None, None) => true,
             _ => false,
         };
+        let same_production = match (&self.editor.schedule_production, &production) {
+            (Some(held), Some(current)) => Arc::ptr_eq(held, current),
+            (None, None) => true,
+            _ => false,
+        };
         if !same_dispatch
+            || !same_production
             || self.editor.schedule_run_status != status
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running
             || self.editor.schedule_run_repair != repair
         {
             self.editor.schedule_dispatch = dispatch;
+            self.editor.schedule_production = production;
             self.editor.schedule_run_status = status;
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running;
