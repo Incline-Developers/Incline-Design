@@ -521,6 +521,14 @@ impl<'a> App<'a> {
                 self.set_drill_hole_color_preset(id, preset);
                 Ok(())
             }
+            UiCommand::SetDrillHoleWidth {
+                id,
+                radius_scale,
+                min_pixel_diameter,
+            } => {
+                self.set_drill_hole_width(id, radius_scale, min_pixel_diameter);
+                Ok(())
+            }
             UiCommand::SetDrillHoleColorStops { id, stops } => {
                 self.set_drill_hole_color_stops(id, stops);
                 Ok(())

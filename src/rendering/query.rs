@@ -8,7 +8,7 @@ use crate::{
     Size,
     model::{
         Document, SceneEntityId,
-        drill_hole::{COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillHoleRef, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
+        drill_hole::{COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillHoleRef, OpenDrillHoleDataset},
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
@@ -94,8 +94,9 @@ impl SceneQuery {
     /// Nearest selectable drill hole under a ray, named down to the hole
     /// itself - which dataset it belongs to is [`DrillHoleRef::dataset`].
     /// The hit geometry includes both the camera-facing collar marker and the
-    /// down-hole trace. The trace uses the same two-pixel visual floor as the
-    /// shader, with an additional pixel tolerance to keep it practical to
+    /// down-hole trace. The trace is picked at the width it is drawn, the
+    /// set's multiplier over the drilled radius behind the set's own pixel
+    /// floor, with an additional pixel tolerance to keep it practical to
     /// click.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn nearest_drill_hole(
@@ -119,13 +120,17 @@ impl SceneQuery {
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
             }
+            let floor_px = dataset.color.min_pixel_diameter;
             for (index, hole) in dataset.dataset.holes.iter().enumerate() {
-                let hole_radius = hole.render_radius();
+                // The marker keeps the drilled radius; the trace, and the lift
+                // that keeps the marker clear of it, take the drawn one.
+                let drilled_radius = hole.render_radius();
+                let hole_radius = drilled_radius * dataset.color.radius_scale;
                 // Reaches at least as far as both tests it gates: the collar
                 // disc's scaled radius plus its 1.5x lift, and the walk's own.
                 let gate_reach = GateReach {
-                    world_reach: hole_radius.max(hole_radius * COLLAR_MARKER_RADIUS_SCALE) + hole_radius * 1.5,
-                    pixel_radius: f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER).max(f64::from(MIN_RENDER_PIXEL_DIAMETER)) * 0.5 + 1.5 * f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5,
+                    world_reach: hole_radius.max(drilled_radius * COLLAR_MARKER_RADIUS_SCALE) + hole_radius * 1.5,
+                    pixel_radius: f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER).max(f64::from(floor_px)) * 0.5 + 1.5 * f64::from(floor_px) * 0.5,
                 };
                 if let Some(hole_box) = dataset.dataset.hole_box(index)
                     && !trace_box_hit(floor.as_ref(), hole_box, gate_reach, ray_origin, ray_direction, threshold_px, nearest)
@@ -141,9 +146,9 @@ impl SceneQuery {
                 let collar = hole.collar_position();
                 let rendered_hole_radius = floor
                     .as_ref()
-                    .and_then(|floor| floor.floored_radius(collar, hole_radius, f64::from(MIN_RENDER_PIXEL_DIAMETER), 0.0))
+                    .and_then(|floor| floor.floored_radius(collar, hole_radius, f64::from(floor_px), 0.0))
                     .unwrap_or(hole_radius);
-                let collar_source_radius = hole_radius * COLLAR_MARKER_RADIUS_SCALE;
+                let collar_source_radius = drilled_radius * COLLAR_MARKER_RADIUS_SCALE;
                 let collar_radius = floor
                     .as_ref()
                     .and_then(|floor| floor.floored_radius(collar, collar_source_radius, f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER), threshold_px))
@@ -165,8 +170,8 @@ impl SceneQuery {
                     if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint_depth && midpoint_depth < *to) {
                         continue;
                     }
-                    let drawn_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
-                    let radius = segment_pick_radius(floor.as_ref(), start.position, end.position, drawn_radius, hole_radius, threshold_px);
+                    let drawn_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5 * dataset.color.radius_scale);
+                    let radius = segment_pick_radius(floor.as_ref(), start.position, end.position, drawn_radius, hole_radius, floor_px, threshold_px);
                     if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
                         && distance < nearest
                     {
@@ -300,7 +305,7 @@ impl PixelFloor {
     }
 }
 
-fn segment_pick_radius(floor: Option<&PixelFloor>, start: DVec3, end: DVec3, source_radius: f64, fallback_radius: f64, threshold_px: f32) -> f64 {
+fn segment_pick_radius(floor: Option<&PixelFloor>, start: DVec3, end: DVec3, source_radius: f64, fallback_radius: f64, floor_px: f32, threshold_px: f32) -> f64 {
     let Some(floor) = floor else {
         return fallback_radius;
     };
@@ -308,7 +313,7 @@ fn segment_pick_radius(floor: Option<&PixelFloor>, start: DVec3, end: DVec3, sou
     // hole would otherwise be walked at nothing at all.
     let floored = [start, end]
         .into_iter()
-        .filter_map(|point| floor.floored_radius(point, source_radius, f64::from(MIN_RENDER_PIXEL_DIAMETER), threshold_px))
+        .filter_map(|point| floor.floored_radius(point, source_radius, f64::from(floor_px), threshold_px))
         .fold(f64::NEG_INFINITY, f64::max);
     if floored.is_finite() { floored } else { fallback_radius }
 }

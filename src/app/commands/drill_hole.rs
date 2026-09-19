@@ -247,6 +247,27 @@ impl<'a> App<'a> {
         self.request_topology_redraw();
     }
 
+    pub(crate) fn set_drill_hole_width(&mut self, id: DrillHoleId, radius_scale: f64, min_pixel_diameter: f32) {
+        // `clamp` passes NaN through, and a NaN radius renders nothing.
+        let scale = if radius_scale.is_finite() {
+            radius_scale.clamp(*crate::model::drill_hole::RADIUS_SCALE_RANGE.start(), *crate::model::drill_hole::RADIUS_SCALE_RANGE.end())
+        } else {
+            crate::model::drill_hole::default_radius_scale()
+        };
+        let floor = if min_pixel_diameter.is_finite() {
+            min_pixel_diameter.clamp(
+                *crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE.start(),
+                *crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE.end(),
+            )
+        } else {
+            crate::model::drill_hole::MIN_RENDER_PIXEL_DIAMETER
+        };
+        self.set_drill_hole_color(id, |_, color| {
+            color.radius_scale = scale;
+            color.min_pixel_diameter = floor;
+        });
+    }
+
     pub(crate) fn set_drill_hole_color_field(&mut self, id: DrillHoleId, field: Option<String>) {
         if self
             .drill_holes

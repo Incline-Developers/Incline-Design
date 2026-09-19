@@ -4,7 +4,7 @@ use crate::{i18n::tr_format, userspace_log};
 /// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
 /// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
 const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32];
-const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32];
+const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32, 4 => Float32];
 
 fn make_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));

@@ -29,8 +29,9 @@ pub(crate) struct DrillSegmentInstance {
 
 /// One spatial bucket of a dataset's segment instances: a contiguous range
 /// and the scene-relative box bounding every cylinder in it. Boxes overlap
-/// where a merged run crosses a cell edge; a culled cell can at most lose a
-/// sub-pixel sliver the shader's two-pixel floor would have drawn.
+/// where a merged run crosses a cell edge. A box is padded by world radius
+/// alone, so a culled cell can lose up to half the set's screen floor: a
+/// sliver under a pixel at the default, wider on a set that raised it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DrillCell {
     pub(crate) min: glam::Vec3,
@@ -51,6 +52,9 @@ pub(crate) struct DrillCollarInstance {
     pub(crate) fill: [f32; 3],
     pub(crate) hole_radius: f32,
     pub(crate) selection_index: u32,
+    /// The trace's own pixel floor, so the marker is lifted clear of the
+    /// trace as it is drawn far away, not as it would be at a fixed floor.
+    pub(crate) trace_pixel_diameter: f32,
 }
 
 /// How many `vec4<u32>` the selection uniform's bitset array holds. WebGPU
@@ -490,6 +494,7 @@ impl DrillHoleGpuCache {
                 fill: COLLAR_MARKER_FILL_COLOR,
                 hole_radius: preview_radius as f32,
                 selection_index: 0,
+                trace_pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
             })
             .collect();
         let buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -597,6 +602,8 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
     dataset.color.active_field.hash(&mut hash);
     (dataset.color.preset as u8).hash(&mut hash);
     dataset.color.smooth.hash(&mut hash);
+    dataset.color.radius_scale.to_bits().hash(&mut hash);
+    dataset.color.min_pixel_diameter.to_bits().hash(&mut hash);
     for stop in &dataset.color.stops {
         stop.t.to_bits().hash(&mut hash);
         for value in stop.color {
@@ -771,7 +778,7 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
             raw_segments.push(RawSegment {
                 start,
                 end,
-                radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32),
+                radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5 * dataset.color.radius_scale) as f32),
                 color: field
                     .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
                     .unwrap_or([1.0; 3]),
@@ -784,7 +791,7 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
             start: (segment.start - scene_origin).as_vec3().to_array(),
             radius: segment.radius,
             end: (segment.end - scene_origin).as_vec3().to_array(),
-            pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
+            pixel_diameter: dataset.color.min_pixel_diameter,
             color: segment.color,
             selection_index: segment.selection_index,
         }));
@@ -928,6 +935,8 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
         .enumerate()
         .map(|(index, hole)| {
             let center = hole.collar_position();
+            // The marker keeps the drilled radius; only the lift that holds it
+            // clear of the trace follows the width the trace is drawn at.
             let hole_radius = hole.render_radius();
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),
@@ -935,8 +944,9 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
                 outline: COLLAR_MARKER_OUTLINE_COLOR,
                 pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
                 fill: COLLAR_MARKER_FILL_COLOR,
-                hole_radius: hole_radius as f32,
+                hole_radius: (hole_radius * dataset.color.radius_scale) as f32,
                 selection_index: index as u32,
+                trace_pixel_diameter: dataset.color.min_pixel_diameter,
             }
         })
         .collect()

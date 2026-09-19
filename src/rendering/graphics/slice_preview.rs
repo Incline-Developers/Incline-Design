@@ -95,6 +95,8 @@ pub(super) fn slice_preview_scene_key(
         dataset.state.loaded.hash(&mut hasher);
         dataset.color.active_field.hash(&mut hasher);
         dataset.color.smooth.hash(&mut hasher);
+        dataset.color.radius_scale.to_bits().hash(&mut hasher);
+        dataset.color.min_pixel_diameter.to_bits().hash(&mut hasher);
         for stop in &dataset.color.stops {
             stop.t.to_bits().hash(&mut hasher);
             for value in stop.color {

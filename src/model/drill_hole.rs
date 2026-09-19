@@ -1033,6 +1033,50 @@ pub(crate) struct DrillColorState {
     pub(crate) smooth: bool,
     pub(crate) stops: Vec<DrillColorStop>,
     pub(crate) categories: CategoryTable,
+    /// Multiplies the drilled diameter where a hole is drawn: at true width a
+    /// hole reads as a pipe beside the geology and a set of thousands as a
+    /// mat, so how wide a set draws is the set's to choose.
+    #[serde(default = "default_radius_scale", deserialize_with = "clamped_radius_scale")]
+    pub(crate) radius_scale: f64,
+    /// Narrowest a hole is drawn, whatever the scale above and however far
+    /// the eye is: below this it would flicker out rather than thin.
+    #[serde(default = "default_min_pixel_diameter", deserialize_with = "clamped_min_pixel_diameter")]
+    pub(crate) min_pixel_diameter: f32,
+}
+
+/// A dataset is drawn at its drilled width until someone says otherwise.
+pub(crate) fn default_radius_scale() -> f64 {
+    1.0
+}
+
+fn default_min_pixel_diameter() -> f32 {
+    MIN_RENDER_PIXEL_DIAMETER
+}
+
+/// What the width controls accept: a hole thinner than a twentieth of its
+/// drilled width is a line, and one twice it is a shaft.
+pub(crate) const RADIUS_SCALE_RANGE: std::ops::RangeInclusive<f64> = 0.05..=2.0;
+/// One pixel is the thinnest a hole can be and still be drawn at all.
+pub(crate) const MIN_PIXEL_DIAMETER_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+
+// Clamped where a value comes in, not only where the dialog sets one: a file
+// edited by hand must not draw a hole at nothing and then save that back.
+fn clamped_radius_scale<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*RADIUS_SCALE_RANGE.start(), *RADIUS_SCALE_RANGE.end())
+    } else {
+        default_radius_scale()
+    })
+}
+
+fn clamped_min_pixel_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = f32::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*MIN_PIXEL_DIAMETER_RANGE.start(), *MIN_PIXEL_DIAMETER_RANGE.end())
+    } else {
+        default_min_pixel_diameter()
+    })
 }
 
 impl Default for DrillColorState {
@@ -1044,6 +1088,8 @@ impl Default for DrillColorState {
             smooth: preset.smooth(),
             stops: preset.stops(),
             categories: CategoryTable::default(),
+            radius_scale: default_radius_scale(),
+            min_pixel_diameter: default_min_pixel_diameter(),
         }
     }
 }

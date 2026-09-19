@@ -3148,6 +3148,13 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         preset: DrillColorPreset,
     },
+    /// How wide a dataset's holes are drawn: a multiple of the drilled
+    /// diameter, and the narrowest the eye is ever shown.
+    SetDrillHoleWidth {
+        id: DrillHoleId,
+        radius_scale: f64,
+        min_pixel_diameter: f32,
+    },
     SetDrillHoleColorStops {
         id: DrillHoleId,
         stops: Vec<DrillColorStop>,
@@ -3563,6 +3570,9 @@ impl UiCommand {
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
+            Self::SetDrillHoleWidth {
+                radius_scale, min_pixel_diameter, ..
+            } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!(literal = "Create Ore Triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!(literal = "Export Engineering Drawing"), tr!(literal = "Choose a destination")),
