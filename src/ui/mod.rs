@@ -555,8 +555,7 @@ fn draw_ui(
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
-        let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
+        let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -567,19 +566,6 @@ fn draw_ui(
     }
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
-
-    // The Drill & Blast workspace's products, down the right edge. Claimed
-    // after the two strips below it, so it stops at the bottom toolbar's top
-    // and they carry on underneath it, and after the viewport bar, so it
-    // starts directly under it: the mockup's shape, and the order it takes to
-    // get there.
-    let products_rect = (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor));
-    if products_rect.is_none() {
-        // `Panel::show` creates one direct child of `root_ui`. Keep the root
-        // auto-id sequence identical in the workspaces without this panel, or
-        // every panel drawn after it receives a different unique id.
-        root_ui.skip_ahead_auto_ids(1);
-    }
 
     // The drawing tools are a docked column between the explorer and the
     // scene, so they are claimed before the scene's rect is worked out: what
@@ -1091,7 +1077,7 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let products_claimed = products_rect.unwrap_or(egui::Rect::NOTHING);
+    let products_claimed = explorer.products.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
         [
@@ -1110,7 +1096,7 @@ fn draw_ui(
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-            chrome::Grip::new(products_claimed, chrome::Edge::Left, elements::products::PANEL_ID),
+            chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
         ],
     );
 
