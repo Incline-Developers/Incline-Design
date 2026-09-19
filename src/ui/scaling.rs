@@ -1,39 +1,10 @@
-//! Monitor-relative UI sizing. Resizing the window does not resize controls.
+//! UI zoom supplements native OS/browser density scaling; screen resolution
+//! and window size do not determine the size of text and controls.
 
-use winit::window::Window;
-
-pub(super) fn zoom_for_window(window: &Window, size_percent: f64) -> f32 {
-    zoom_factor(monitor_size(window), window.scale_factor() as f32, size_percent)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn monitor_size(window: &Window) -> Option<[u32; 2]> {
-    window.current_monitor().or_else(|| window.primary_monitor()).map(|monitor| monitor.size().into())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn monitor_size(window: &Window) -> Option<[u32; 2]> {
-    // Browser screen dimensions are CSS pixels, while the reference is physical
-    // pixels. Use the same device scale as the canvas/winit integration.
-    let screen = web_sys::window()?.screen().ok()?;
-    let scale = window.scale_factor();
-    let width = screen.width().ok()?;
-    let height = screen.height().ok()?;
-    (width > 0 && height > 0).then(|| [(f64::from(width) * scale).round() as u32, (f64::from(height) * scale).round() as u32])
-}
-
-fn zoom_factor(monitor_size: Option<[u32; 2]>, native_scale: f32, size_percent: f64) -> f32 {
-    let zoom = monitor_size
-        .filter(|size| !size.contains(&0))
-        .map(|size| {
-            let fit = (size[0] as f32 / 2560.0).min(size[1] as f32 / 1440.0);
-            // egui already multiplies zoom by native DPI. Avoid applying it twice
-            // to a physical-pixel reference. Without monitor information, retain
-            // ordinary OS scaling rather than falling back to window dimensions.
-            fit / native_scale
-        })
-        .unwrap_or(1.0);
-    zoom * (size_percent / 100.0) as f32
+pub(super) fn zoom_factor(size_percent: f64) -> f32 {
+    // egui-winit supplies native_pixels_per_point separately. Leave that intact
+    // so high-density displays render more pixels per logical UI point.
+    (size_percent / 100.0) as f32
 }
 
 /// Events queued by egui-winit used the previous zoom. Keep their physical

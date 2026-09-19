@@ -69,7 +69,7 @@ impl Gui {
         let ctx = egui::Context::default();
         ctx.options_mut(|options| {
             options.zoom_with_keyboard = false;
-            options.zoom_factor = scaling::zoom_for_window(window, 100.0);
+            options.zoom_factor = scaling::zoom_factor(100.0);
         });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
@@ -106,7 +106,7 @@ impl Gui {
     }
 
     fn update_scale(&mut self, window: &Window, size_percent: f64) {
-        let zoom = scaling::zoom_for_window(window, size_percent);
+        let zoom = scaling::zoom_factor(size_percent);
         let old_zoom = self.ctx.zoom_factor();
         if zoom == old_zoom {
             return;
