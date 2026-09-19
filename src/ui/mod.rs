@@ -93,6 +93,11 @@ impl Gui {
         self.state.on_window_event(window, event)
     }
 
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        let point = egui::pos2(x, y) / self.ctx.pixels_per_point();
+        self.ctx.layer_id_at(point).is_some_and(|layer| layer.order != egui::Order::Background)
+    }
+
     pub(crate) fn pointer_over_ui(&self) -> bool {
         self.ctx.is_pointer_over_egui()
     }

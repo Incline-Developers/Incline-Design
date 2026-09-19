@@ -1574,6 +1574,7 @@ impl<'a> Graphics<'a> {
             fly_camera_controller,
             projection,
             mouse_pressed: None,
+            touch_gesture: Default::default(),
             fly_mode_enabled: false,
             slice_view: None,
             stroke_index_buf: Vec::new(),
