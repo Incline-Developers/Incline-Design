@@ -45,6 +45,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
+    pub(crate) show_borehole_inspector: bool,
     pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
     pub(crate) show_world_axis_gizmo: bool,
@@ -86,6 +87,7 @@ impl Default for PreferencesDraft {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
@@ -1001,15 +1003,21 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
-    /// Individually selected drill holes, which the Drill & Blast workspace
-    /// works in place of whole datasets - see [`DrillHoleRef`]. Production
-    /// selects the dataset into [`Self::selected_handles`] and leaves this
-    /// empty; the two are never populated for the same drill hole at once.
+    /// Individually selected drill holes - see [`DrillHoleRef`]. A canvas
+    /// click lands here in every workspace; the explorer selects a dataset
+    /// whole into [`Self::selected_handles`] instead, which draws every hole
+    /// in it as selected whatever this holds.
     pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
     /// Surface connectors selected directly in Drill & Blast. They are not
     /// scene entities in their own right, so their stable dataset/hole pair
     /// lives beside the individual-hole selection.
     pub(crate) selected_tie_ins: HashSet<TieInRef>,
+    /// The hole the inspector reads, held while the panel is locked and kept
+    /// out of the selection so inspecting never changes what is selected.
+    pub(crate) inspected_hole: Option<DrillHoleRef>,
+    /// Holds the inspector on the hole it has, so the holes around it can be
+    /// picked and worked on without the panel following the cursor away.
+    pub(crate) borehole_inspector_locked: bool,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -1044,6 +1052,15 @@ pub(crate) struct EditorState {
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
     pub(crate) show_console: bool,
+    /// Show the Borehole Inspector panel.
+    pub(crate) show_borehole_inspector: bool,
+    /// Which tab of the Borehole Inspector panel is showing. Transient: not
+    /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
+    pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
+    /// The field the Log tab's strat column reads and the dataset it was
+    /// chosen for: a choice about one set's columns says nothing about
+    /// another's. `None` guesses by name. Transient, like the tab.
+    pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
@@ -1232,6 +1249,9 @@ pub(crate) struct EditorState {
     pub(crate) canvas_context_menu_open: bool,
     /// Physical-pixel position where the canvas context menu was opened.
     pub(crate) canvas_context_menu_px: Option<(f32, f32)>,
+    /// The drill hole under the cursor when the canvas context menu was
+    /// opened; its hole-specific rows act on this hole, not the selection.
+    pub(crate) canvas_context_menu_hole: Option<DrillHoleRef>,
     /// Selected polylines and the in-progress line-weight value for the
     /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
@@ -1740,6 +1760,7 @@ pub(crate) struct EditorState {
     pub(crate) export_layer: Option<LayerId>,
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
+    pub(crate) export_drill_hole: Option<DrillHoleId>,
 }
 
 impl EditorState {
@@ -1915,6 +1936,9 @@ impl EditorState {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
+        self.inspected_hole = None;
+        self.borehole_log_strat_field = None;
+        self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -1949,6 +1973,7 @@ impl EditorState {
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
+        self.canvas_context_menu_hole = None;
         self.design_line_weight_input = None;
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
@@ -2072,6 +2097,7 @@ impl EditorState {
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
+            show_borehole_inspector: self.show_borehole_inspector,
             panel_chrome: self.panel_chrome,
             ui_size_percent: self.ui_size_percent,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
@@ -2111,6 +2137,8 @@ impl EditorState {
             selected_handles: HashSet::new(),
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
+            inspected_hole: None,
+            borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -2122,6 +2150,9 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
+            borehole_inspector_tab: BoreholeInspectorTab::default(),
+            borehole_log_strat_field: None,
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
@@ -2218,6 +2249,7 @@ impl EditorState {
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
+            canvas_context_menu_hole: None,
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
@@ -2497,6 +2529,7 @@ impl EditorState {
             export_layer: None,
             export_triangulation: None,
             export_block_model: None,
+            export_drill_hole: None,
         }
     }
 
@@ -2538,6 +2571,33 @@ impl EditorState {
                 }
             }
         }
+    }
+
+    /// The one place a pick moves the inspector: any pick, left or right,
+    /// unless the panel is locked. A pick with no hole leaves it alone.
+    pub(crate) fn show_picked_hole(&mut self, picked: Option<DrillHoleRef>) {
+        if let Some(hole) = picked
+            && self.inspector_follows_selection()
+        {
+            self.inspected_hole = Some(hole);
+        }
+    }
+
+    /// Whether a pick may move the inspector; false while it is locked.
+    pub(crate) const fn inspector_follows_selection(&self) -> bool {
+        !self.borehole_inspector_locked
+    }
+
+    /// Forget every hole `keep` no longer vouches for: what is selected,
+    /// what the inspector reads, the context menu's hole.
+    pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
+        if self.inspected_hole.is_some_and(|hole| !keep(hole.dataset)) {
+            self.borehole_log_strat_field = None;
+        }
+        self.selected_drill_holes.retain(|hole| keep(hole.dataset));
+        self.selected_tie_ins.retain(|tie| keep(tie.dataset));
+        self.inspected_hole = self.inspected_hole.filter(|hole| keep(hole.dataset));
+        self.canvas_context_menu_hole = self.canvas_context_menu_hole.filter(|hole| keep(hole.dataset));
     }
 
     /// Put down whatever tie-in chain is running: the anchor it would carry
@@ -2801,6 +2861,7 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
+    BoreholeInspector,
 }
 
 impl ViewToggle {
@@ -2808,6 +2869,7 @@ impl ViewToggle {
         match self {
             Self::Console => tr!(literal = "Show Console"),
             Self::DarkMode => tr!(literal = "Dark Mode"),
+            Self::BoreholeInspector => tr!(literal = "Borehole Inspector"),
         }
     }
 
@@ -2818,8 +2880,17 @@ impl ViewToggle {
         match self {
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
+            Self::BoreholeInspector => editor.show_borehole_inspector,
         }
     }
+}
+
+/// Which tab of the Borehole Inspector panel is showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BoreholeInspectorTab {
+    #[default]
+    Data,
+    Log,
 }
 
 /// Commands sent from the UI back to the application core.
@@ -2900,6 +2971,8 @@ pub(crate) enum UiCommand {
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    /// One drillhole dataset out as the three tables it was read from.
+    ExportDrillHoleCsv(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -3069,6 +3142,9 @@ pub(crate) enum UiCommand {
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
+    /// Sends one named hole to the inspector and shows the panel, bypassing
+    /// the lock since this is an explicit request.
+    InspectDrillHole(DrillHoleRef),
     SetDrillHoleColorField {
         id: DrillHoleId,
         field: Option<String>,
@@ -3076,6 +3152,13 @@ pub(crate) enum UiCommand {
     SetDrillHoleColorPreset {
         id: DrillHoleId,
         preset: DrillColorPreset,
+    },
+    /// How wide a dataset's holes are drawn: a multiple of the drilled
+    /// diameter, and the narrowest the eye is ever shown.
+    SetDrillHoleWidth {
+        id: DrillHoleId,
+        radius_scale: f64,
+        min_pixel_diameter: f32,
     },
     SetDrillHoleColorStops {
         id: DrillHoleId,
@@ -3339,6 +3422,7 @@ impl UiCommand {
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::OpenDrillHoleColorDialog(_)
+            | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
             | Self::RequestDeleteLayer(_)
@@ -3392,6 +3476,7 @@ impl UiCommand {
             Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
+            Self::ExportDrillHoleCsv(id) => report(tr!(literal = "Export Drillhole CSV"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
@@ -3490,6 +3575,9 @@ impl UiCommand {
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
+            Self::SetDrillHoleWidth {
+                radius_scale, min_pixel_diameter, ..
+            } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!(literal = "Create Ore Triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!(literal = "Export Engineering Drawing"), tr!(literal = "Choose a destination")),

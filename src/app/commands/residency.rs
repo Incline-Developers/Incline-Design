@@ -58,6 +58,7 @@ impl<'a> App<'a> {
                 if let Some(target) = self.drill_holes.iter_mut().find(|target| target.id == item.id) {
                     preserve_state(&target.state, &mut item.state);
                     *target = *item;
+                    super::omf::reconcile_restored_drill_color(target);
                 }
             }
             OpenItem::PointCloud(mut item) => {

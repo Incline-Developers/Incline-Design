@@ -6,8 +6,8 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
-            OpenDrillHoleDataset, TraceStation, default_category_colors,
+            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, LoadedDrillHoleDataset,
+            MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT,
         },
         formats::csv_drill_hole,
     },
@@ -77,6 +77,7 @@ impl<'a> App<'a> {
                 ],
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
+                orientation_source: OrientationSource::Assumed,
             })
             .collect();
         let dataset = std::sync::Arc::new(DrillHoleDataset::new(holes));
@@ -201,6 +202,22 @@ impl<'a> App<'a> {
                 fields = loaded.dataset.fields.len()
             )
         );
+        // More distinct strings than any dictionary holds is usually free text:
+        // name the class and its extent, repair nothing.
+        for field in &loaded.dataset.fields {
+            if let DrillFieldKind::Categorical { categories } = &field.kind
+                && categories.len() > WIDE_CATEGORY_FIELD_HINT
+            {
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Drillhole field '%label%' has %count% distinct codes, more than a coded field would typically have; it looks like free text rather than a categorical field, but every code is kept and coloured",
+                        label = field.label.clone(),
+                        count = categories.len()
+                    )
+                );
+            }
+        }
         self.drill_holes.push(OpenDrillHoleDataset {
             id,
             state: crate::model::project::ProjectItemState::dirty(Some(loaded.source.display_name())),
@@ -230,6 +247,27 @@ impl<'a> App<'a> {
         self.request_topology_redraw();
     }
 
+    pub(crate) fn set_drill_hole_width(&mut self, id: DrillHoleId, radius_scale: f64, min_pixel_diameter: f32) {
+        // `clamp` passes NaN through, and a NaN radius renders nothing.
+        let scale = if radius_scale.is_finite() {
+            radius_scale.clamp(*crate::model::drill_hole::RADIUS_SCALE_RANGE.start(), *crate::model::drill_hole::RADIUS_SCALE_RANGE.end())
+        } else {
+            crate::model::drill_hole::default_radius_scale()
+        };
+        let floor = if min_pixel_diameter.is_finite() {
+            min_pixel_diameter.clamp(
+                *crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE.start(),
+                *crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE.end(),
+            )
+        } else {
+            crate::model::drill_hole::MIN_RENDER_PIXEL_DIAMETER
+        };
+        self.set_drill_hole_color(id, |_, color| {
+            color.radius_scale = scale;
+            color.min_pixel_diameter = floor;
+        });
+    }
+
     pub(crate) fn set_drill_hole_color_field(&mut self, id: DrillHoleId, field: Option<String>) {
         if self
             .drill_holes
@@ -244,14 +282,11 @@ impl<'a> App<'a> {
             color.preset = DrillColorPreset::Rainbow;
             color.smooth = true;
             color.stops = DrillColorPreset::Rainbow.stops();
-            color.categories = field
-                .as_deref()
-                .and_then(|key| dataset.dataset.field(key))
-                .and_then(|field| match &field.kind {
-                    DrillFieldKind::Categorical { categories } => Some(default_category_colors(categories)),
-                    DrillFieldKind::Numeric { .. } => None,
-                })
-                .unwrap_or_default();
+            // Switching field fills in what the new field adds and keeps every
+            // colour already chosen; the dialog's reset asks for fresh ones.
+            if let Some(field) = field.as_deref().and_then(|key| dataset.dataset.field(key)) {
+                color.reconcile_categories(field);
+            }
         });
     }
 
@@ -269,13 +304,16 @@ impl<'a> App<'a> {
         for stop in &mut stops {
             stop.t = stop.t.clamp(0.0, 1.0);
         }
-        if (2..=12).contains(&stops.len()) {
+        if (2..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
             self.set_drill_hole_color(id, |_, color| color.stops = stops);
         }
     }
 
     pub(crate) fn set_drill_hole_category_colors(&mut self, id: DrillHoleId, categories: Vec<crate::model::drill_hole::DrillCategoryColor>) {
-        self.set_drill_hole_color(id, |_, color| color.categories = categories.into_iter().take(12).collect());
+        // No cap on categories. A non-finite component is dropped, as a ramp
+        // stop's is, so no NaN reaches the shader.
+        let categories = categories.into_iter().filter(|category| category.color.iter().all(|value| value.is_finite())).collect();
+        self.set_drill_hole_color(id, |_, color| color.set_categories(categories));
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {
@@ -298,8 +336,7 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        self.editor.retain_drill_hole_datasets(|dataset| dataset != id);
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
@@ -321,12 +358,30 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        self.editor.retain_drill_hole_datasets(|dataset| dataset != id);
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
         self.delete_project_item(ItemRef::DrillHole(id));
         self.request_topology_redraw();
+    }
+
+    /// Sends one hole to the borehole inspector, opening the panel if it is
+    /// hidden. Ignores the inspector lock: this is an explicit request.
+    pub(crate) fn inspect_drill_hole(&mut self, hole: DrillHoleRef) -> Result<()> {
+        self.editor.inspected_hole = Some(hole);
+        self.redraw_requested = true;
+        // The one switch, shared with the menu and the Interface tab.
+        if !self.editor.show_borehole_inspector
+            && let Err(error) = self.toggle_view_option(crate::ui::state::ViewToggle::BoreholeInspector)
+        {
+            // A setting that will not save must not hold the panel shut.
+            self.editor.show_borehole_inspector = true;
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Opened the Borehole Inspector, but could not save the setting: %error%", error = error)
+            );
+        }
+        Ok(())
     }
 }

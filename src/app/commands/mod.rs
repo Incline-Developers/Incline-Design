@@ -304,6 +304,10 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
+            UiCommand::ExportDrillHoleCsv(id) => {
+                self.choose_export_drill_hole_csv(id);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
                 Ok(())
@@ -508,12 +512,21 @@ impl<'a> App<'a> {
                 self.editor.drill_hole_color_dialog = Some(id);
                 Ok(())
             }
+            UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
             UiCommand::SetDrillHoleColorField { id, field } => {
                 self.set_drill_hole_color_field(id, field);
                 Ok(())
             }
             UiCommand::SetDrillHoleColorPreset { id, preset } => {
                 self.set_drill_hole_color_preset(id, preset);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleWidth {
+                id,
+                radius_scale,
+                min_pixel_diameter,
+            } => {
+                self.set_drill_hole_width(id, radius_scale, min_pixel_diameter);
                 Ok(())
             }
             UiCommand::SetDrillHoleColorStops { id, stops } => {

@@ -95,18 +95,15 @@ pub(super) fn slice_preview_scene_key(
         dataset.state.loaded.hash(&mut hasher);
         dataset.color.active_field.hash(&mut hasher);
         dataset.color.smooth.hash(&mut hasher);
+        dataset.color.radius_scale.to_bits().hash(&mut hasher);
+        dataset.color.min_pixel_diameter.to_bits().hash(&mut hasher);
         for stop in &dataset.color.stops {
             stop.t.to_bits().hash(&mut hasher);
             for value in stop.color {
                 value.to_bits().hash(&mut hasher);
             }
         }
-        for category in &dataset.color.categories {
-            category.value.hash(&mut hasher);
-            for value in category.color {
-                value.to_bits().hash(&mut hasher);
-            }
-        }
+        dataset.color.categories.content_hash().hash(&mut hasher);
     }
     for point_cloud in point_clouds {
         point_cloud.id.hash(&mut hasher);

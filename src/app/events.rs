@@ -1142,9 +1142,9 @@ impl<'a> App<'a> {
                 });
                 if let Some(pick) = picked {
                     let handle = pick.entity;
-                    // Same rule the left-click path follows: Drill & Blast
-                    // acts on the hole under the cursor, not its dataset.
-                    let hole = pick.hole.filter(|_| self.editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast);
+                    // Same rule the left-click path follows: a click acts on
+                    // the hole under the cursor, not its dataset.
+                    let hole = pick.hole;
                     if let crate::model::SceneEntityId::Object(id) = handle {
                         self.activate_project_for_object(id);
                     }
@@ -1159,6 +1159,11 @@ impl<'a> App<'a> {
                         }
                         _ => {}
                     }
+                    // The panel follows a right click, but only a left click
+                    // decides what a repeat click toggles. The menu's hole
+                    // rows act on the hole under the cursor, selected or not.
+                    self.editor.show_picked_hole(pick.hole);
+                    self.editor.canvas_context_menu_hole = pick.hole;
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,

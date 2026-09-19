@@ -7,6 +7,11 @@ struct CollarInstance {
     // xyz: fill colour. w: the hole's own rendered radius, used to lift the
     // marker clear of the cylinder it caps.
     @location(2) fill_hole_radius: vec4<f32>,
+    // This hole's index into `selection.bits`.
+    @location(3) selection_index: u32,
+    // The trace's minimum diameter in physical pixels, so the lift clears the
+    // trace as it is actually drawn when far away.
+    @location(4) trace_pixel_diameter: f32,
 };
 
 struct VertexOutput {
@@ -24,8 +29,8 @@ struct VertexOutput {
 
 const OUTLINE_PIXELS: f32 = 1.6;
 const EDGE_PIXELS: f32 = 0.8;
-// Keep in sync with model::drill_hole::MIN_RENDER_PIXEL_DIAMETER.
-const MIN_HOLE_PIXEL_DIAMETER: f32 = 2.0;
+// The trace's screen floor arrives per instance, in trace_pixel_diameter,
+// because each set carries its own.
 
 @vertex
 fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -> VertexOutput {
@@ -63,18 +68,22 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
     // sliced open by it in any side-on view. Lifting the marker clear along
     // the view direction moves it nearer the camera by the same amount under
     // either projection.
-    let hole_radius = max(source_hole_radius, MIN_HOLE_PIXEL_DIAMETER * 0.5 / pixels_per_world);
+    let hole_radius = max(source_hole_radius, instance.trace_pixel_diameter * 0.5 / pixels_per_world);
     let lifted = center - view_direction * hole_radius * 1.5;
 
     var clip = camera.view_proj * vec4<f32>(lifted, 1.0);
     let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
     clip = vec4<f32>(clip.xy + corner * radius_pixels * pixel_to_ndc * clip.w, clip.zw);
 
+    // Selection swaps the disc's two colours rather than drawing a second
+    // marker: the outline becomes the instance's own (unselected) fill so
+    // the ring stays legible, and the fill becomes the selection colour.
+    let selected = selection_active(instance.selection_index);
     var out: VertexOutput;
     out.position = clip;
     out.offset = corner;
-    out.outline = instance.outline_pixels.xyz;
-    out.fill = instance.fill_hole_radius.xyz;
+    out.outline = select(instance.outline_pixels.xyz, instance.fill_hole_radius.xyz, selected);
+    out.fill = select(instance.fill_hole_radius.xyz, selection.selection_color.rgb, selected);
     out.radius_pixels = radius_pixels;
     out.section_offset = section_plane_offset(center);
     return out;

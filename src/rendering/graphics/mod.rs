@@ -26,8 +26,8 @@ use crate::{
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
-            BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
-            RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
+            BlockModelGpuCache, DesignPointGpuCache, DrillCell, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance,
+            PointPosition, RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
         },
@@ -744,7 +744,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn clear_item_caches(&mut self) {
         self.triangulation_gpu.clear();
         self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
+        self.drill_hole_gpu.clear();
         self.point_cloud_gpu = Default::default();
         self.raster_gpu.clear();
         self.static_strokes = Default::default();

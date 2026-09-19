@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -20,7 +25,12 @@ pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = 3.0;
 pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+/// How many stops a numeric ramp may carry. A limit on the ramp only: a
+/// categorical field colours every code it has.
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// Distinct codes above which a categorical column is named on load as
+/// likely free text. Nothing is dropped at any count.
+pub(crate) const WIDE_CATEGORY_FIELD_HINT: usize = 256;
 /// Upper bound for an interactively generated blast pattern. It keeps a bad
 /// unit/spacing entry from building millions of preview primitives on the UI
 /// thread while remaining comfortably above ordinary production rounds.
@@ -78,11 +88,38 @@ pub(crate) enum DrillValue {
     Category(String),
 }
 
+/// One interval as the site logged it, and its identity within its hole.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LoggedInterval {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) values: BTreeMap<String, DrillValue>,
+}
+
+/// One interval as interpreted: what every reader, colour and section sees.
+/// `logged` is what the site sent, or `None` when nothing has parted them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillInterval {
     pub(crate) from: f64,
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) logged: Option<LoggedInterval>,
+}
+
+impl DrillInterval {
+    pub(crate) fn logged(&self) -> (f64, f64, &BTreeMap<String, DrillValue>) {
+        match &self.logged {
+            Some(logged) => (logged.from, logged.to, &logged.values),
+            None => (self.from, self.to, &self.values),
+        }
+    }
+
+    pub(crate) fn is_corrected(&self) -> bool {
+        self.logged
+            .as_ref()
+            .is_some_and(|logged| logged.from != self.from || logged.to != self.to || logged.values != self.values)
+    }
 }
 
 /// One surface connector: the delay laid between two holes, and which way the
@@ -158,6 +195,28 @@ pub(crate) struct StoredInitiation {
     pub(crate) delay_ms: u32,
 }
 
+/// Where a hole's orientation came from: measured, assumed, or unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum OrientationSource {
+    /// A survey record placed or steered the trace.
+    Measured,
+    /// No survey; the direction was set by hand or by design.
+    Assumed,
+    /// Nothing recorded; the trace is only a projection.
+    #[default]
+    Unknown,
+}
+
+impl OrientationSource {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Measured => tr!(literal = "Measured"),
+            Self::Assumed => tr!(literal = "Assumed"),
+            Self::Unknown => tr!(literal = "Unknown"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
@@ -170,6 +229,9 @@ pub(crate) struct DrillHole {
     /// trace is continuous.
     pub(crate) render_ranges: Vec<(f64, f64)>,
     pub(crate) intervals: Vec<DrillInterval>,
+    /// Defaults to `Unknown` for a project saved before this field existed.
+    #[serde(default)]
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Row arrangement used when filling a blast boundary with collars.
@@ -390,6 +452,7 @@ pub(crate) fn generate_pattern_collars(
 pub(crate) struct HolePlacement {
     pub(crate) collar: DVec3,
     pub(crate) trace: Vec<TraceStation>,
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Where a hole points, in the terms a drill plan is written in: `azimuth`
@@ -504,6 +567,7 @@ impl DrillHole {
         HolePlacement {
             collar: self.collar,
             trace: self.trace.clone(),
+            orientation_source: self.orientation_source,
         }
     }
 
@@ -514,6 +578,7 @@ impl DrillHole {
     pub(crate) fn set_placement(&mut self, placement: &HolePlacement, delta: DVec3) {
         self.collar = placement.collar + delta;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if delta != DVec3::ZERO {
             for station in &mut self.trace {
                 station.position += delta;
@@ -532,6 +597,7 @@ impl DrillHole {
     pub(crate) fn set_rotated_placement(&mut self, placement: &HolePlacement, rotation: CollarRotation) {
         self.collar = placement.collar;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if rotation.is_identity() {
             // The restore path, taken on every rollback: the trace copy above
             // is already the whole of it.
@@ -552,6 +618,7 @@ impl DrillHole {
         for station in &mut self.trace {
             station.position = pivot + quat * (station.position - pivot);
         }
+        self.orientation_source = OrientationSource::Assumed;
     }
 
     /// The physical world radius of the hole. A dataset without diameters uses
@@ -574,21 +641,33 @@ impl DrillHole {
         trace_orientation(self.collar_position(), &self.trace)
     }
 
+    /// Where the trace stands at `depth`. Binary search, not a walk from the
+    /// collar, so building a hole stops being quadratic in its station count.
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {
         let first = *self.trace.first()?;
         if depth <= first.depth {
             return Some(first.position);
         }
-        for pair in self.trace.windows(2) {
-            let [a, b] = [pair[0], pair[1]];
-            if depth <= b.depth {
-                let span = b.depth - a.depth;
-                let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
-                return Some(a.position.lerp(b.position, t));
-            }
-        }
-        self.trace.last().map(|station| station.position)
+        let index = self.trace.partition_point(|station| station.depth < depth);
+        // Past the toe there is no bracketing pair, and a depth that is not a
+        // number lands at zero: both fall through to the last station.
+        let Some(&[a, b]) = index.checked_sub(1).and_then(|above| self.trace.get(above..=index)) else {
+            return self.trace.last().map(|station| station.position);
+        };
+        let span = b.depth - a.depth;
+        let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
+        Some(a.position.lerp(b.position, t))
     }
+}
+
+fn trace_box(collar: DVec3, trace: &[TraceStation]) -> WorldBox {
+    let mut min = collar;
+    let mut max = collar;
+    for station in trace {
+        min = min.min(station.position);
+        max = max.max(station.position);
+    }
+    (min, max)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -609,6 +688,9 @@ pub(crate) struct DrillHoleDataset {
     pub(crate) holes: Vec<DrillHole>,
     pub(crate) fields: Vec<DrillField>,
     pub(crate) bounds: Option<(DVec3, DVec3)>,
+    /// One box per hole, in `holes` order, worked out in the same pass as
+    /// `bounds` so a pick can test a hole before walking it. Not saved.
+    pub(crate) hole_boxes: Vec<WorldBox>,
     /// The surface connectors tying the pattern in. Content rather than
     /// styling: they dirty the project and are undone with everything else.
     pub(crate) ties: Vec<TieIn>,
@@ -620,15 +702,29 @@ pub(crate) struct DrillHoleDataset {
 impl DrillHoleDataset {
     pub(crate) fn new(mut holes: Vec<DrillHole>) -> Self {
         holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.dhid, &b.dhid));
+        // position_at_depth binary-searches on depth, so a trace must ascend.
+        for hole in &mut holes {
+            hole.trace.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+        }
         let fields = collect_fields(&holes);
-        let bounds = drill_bounds(&holes);
-        Self {
+        let mut dataset = Self {
             holes,
             fields,
-            bounds,
+            bounds: None,
+            hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
-        }
+        };
+        // The one gate every importer and project load passes through, so the
+        // boxes cannot fall out of step with the traces.
+        dataset.refresh_bounds();
+        dataset
+    }
+
+    /// An absent box is safe: the caller walks the hole. A stale one is not:
+    /// the gate says no, so hole geometry changes must end in `refresh_bounds`.
+    pub(crate) fn hole_box(&self, index: usize) -> Option<WorldBox> {
+        self.hole_boxes.get(index).copied()
     }
 
     /// The connector between two holes, whichever way round it runs.
@@ -776,22 +872,51 @@ impl DrillHoleDataset {
                                                 }
                                         })
                                         .fold(0usize, usize::saturating_add)
+                                    + interval.logged.as_ref().map_or(0, |logged| {
+                                        logged
+                                            .values
+                                            .iter()
+                                            .map(|(key, value)| {
+                                                key.len()
+                                                    + size_of::<DrillValue>()
+                                                    + match value {
+                                                        DrillValue::Category(text) => text.len(),
+                                                        DrillValue::Numeric(_) => 0,
+                                                    }
+                                            })
+                                            .fold(0usize, usize::saturating_add)
+                                    })
                             })
                             .fold(0usize, usize::saturating_add)
                 })
                 .fold(0usize, usize::saturating_add)
+            + self.hole_boxes.len() * size_of::<WorldBox>()
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self
+                .fields
+                .iter()
+                .map(|field| {
+                    size_of::<DrillField>()
+                        + field.key.len()
+                        + field.label.len()
+                        + match &field.kind {
+                            DrillFieldKind::Categorical { categories } => categories.iter().map(|value| size_of::<String>() + value.len()).fold(0usize, usize::saturating_add),
+                            DrillFieldKind::Numeric { .. } => 0,
+                        }
+                })
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
         self.fields.iter().find(|field| field.key == key)
     }
 
-    /// Recompute the dataset's extent after its holes have moved. Fields are
-    /// interval values rather than geometry, so only the bounds go stale.
     pub(crate) fn refresh_bounds(&mut self) {
-        self.bounds = drill_bounds(&self.holes);
+        let (bounds, hole_boxes) = drill_extents(&self.holes);
+        self.bounds = bounds;
+        self.hole_boxes = hole_boxes;
+        debug_assert_eq!(self.hole_boxes.len(), self.holes.len());
     }
 }
 
@@ -851,12 +976,107 @@ pub(crate) struct DrillCategoryColor {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Vec<DrillCategoryColor>", into = "Vec<DrillCategoryColor>")]
+pub(crate) struct CategoryTable {
+    entries: Vec<DrillCategoryColor>,
+    hash: u64,
+}
+
+impl CategoryTable {
+    fn new(mut entries: Vec<DrillCategoryColor>) -> Self {
+        entries.sort_by(|a, b| a.value.cmp(&b.value));
+        entries.dedup_by(|a, b| a.value == b.value);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for entry in &entries {
+            entry.value.hash(&mut hasher);
+            for channel in entry.color {
+                channel.to_bits().hash(&mut hasher);
+            }
+        }
+        Self { entries, hash: hasher.finish() }
+    }
+
+    pub(crate) fn content_hash(&self) -> u64 {
+        self.hash
+    }
+}
+
+impl From<Vec<DrillCategoryColor>> for CategoryTable {
+    fn from(entries: Vec<DrillCategoryColor>) -> Self {
+        Self::new(entries)
+    }
+}
+
+impl From<CategoryTable> for Vec<DrillCategoryColor> {
+    fn from(table: CategoryTable) -> Self {
+        table.entries
+    }
+}
+
+impl Default for CategoryTable {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl std::ops::Deref for CategoryTable {
+    type Target = [DrillCategoryColor];
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillColorState {
     pub(crate) active_field: Option<String>,
     pub(crate) preset: DrillColorPreset,
     pub(crate) smooth: bool,
     pub(crate) stops: Vec<DrillColorStop>,
-    pub(crate) categories: Vec<DrillCategoryColor>,
+    pub(crate) categories: CategoryTable,
+    /// Multiplies the drilled diameter where a hole is drawn: at true width a
+    /// hole reads as a pipe beside the geology and a set of thousands as a
+    /// mat, so how wide a set draws is the set's to choose.
+    #[serde(default = "default_radius_scale", deserialize_with = "clamped_radius_scale")]
+    pub(crate) radius_scale: f64,
+    /// Narrowest a hole is drawn, whatever the scale above and however far
+    /// the eye is: below this it would flicker out rather than thin.
+    #[serde(default = "default_min_pixel_diameter", deserialize_with = "clamped_min_pixel_diameter")]
+    pub(crate) min_pixel_diameter: f32,
+}
+
+/// A dataset is drawn at its drilled width until someone says otherwise.
+pub(crate) fn default_radius_scale() -> f64 {
+    1.0
+}
+
+fn default_min_pixel_diameter() -> f32 {
+    MIN_RENDER_PIXEL_DIAMETER
+}
+
+/// What the width controls accept: a hole thinner than a twentieth of its
+/// drilled width is a line, and one twice it is a shaft.
+pub(crate) const RADIUS_SCALE_RANGE: std::ops::RangeInclusive<f64> = 0.05..=2.0;
+/// One pixel is the thinnest a hole can be and still be drawn at all.
+pub(crate) const MIN_PIXEL_DIAMETER_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+
+// Clamped where a value comes in, not only where the dialog sets one: a file
+// edited by hand must not draw a hole at nothing and then save that back.
+fn clamped_radius_scale<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*RADIUS_SCALE_RANGE.start(), *RADIUS_SCALE_RANGE.end())
+    } else {
+        default_radius_scale()
+    })
+}
+
+fn clamped_min_pixel_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = f32::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*MIN_PIXEL_DIAMETER_RANGE.start(), *MIN_PIXEL_DIAMETER_RANGE.end())
+    } else {
+        default_min_pixel_diameter()
+    })
 }
 
 impl Default for DrillColorState {
@@ -867,8 +1087,61 @@ impl Default for DrillColorState {
             preset,
             smooth: preset.smooth(),
             stops: preset.stops(),
-            categories: Vec::new(),
+            categories: CategoryTable::default(),
+            radius_scale: default_radius_scale(),
+            min_pixel_diameter: default_min_pixel_diameter(),
         }
+    }
+}
+
+impl DrillColorState {
+    /// The colour chosen for one code, by binary search over the sorted table.
+    pub(crate) fn category_color(&self, value: &str) -> Option<[f32; 3]> {
+        self.categories
+            .binary_search_by(|entry| entry.value.as_str().cmp(value))
+            .ok()
+            .map(|index| self.categories[index].color)
+    }
+
+    /// Every write goes through here so the order the lookup searches holds.
+    pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
+        self.categories = CategoryTable::new(categories);
+    }
+
+    /// Give every code in `field` a colour, keeping every colour already
+    /// chosen, and return how many were filled in. Entries for codes absent
+    /// from `field` stay: a shorter extract must not lose the full one's picks.
+    pub(crate) fn reconcile_categories(&mut self, field: &DrillField) -> usize {
+        let DrillFieldKind::Categorical { categories } = &field.kind else {
+            return 0;
+        };
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        let mut used: Vec<[f32; 3]> = Vec::new();
+        for value in categories {
+            if let Ok(index) = table.binary_search_by(|entry| entry.value.as_str().cmp(value)) {
+                used.push(table[index].color);
+            }
+        }
+        let mut filled = Vec::new();
+        for (index, value) in categories.iter().enumerate() {
+            if table.binary_search_by(|entry| entry.value.as_str().cmp(value)).is_err() {
+                let mut color = None;
+                for offset in 0..=used.len() {
+                    let candidate = generated_category_color(index + offset);
+                    if !used.contains(&candidate) {
+                        color = Some(candidate);
+                        break;
+                    }
+                }
+                let color = color.unwrap_or_else(|| generated_category_color(index));
+                used.push(color);
+                filled.push(DrillCategoryColor { value: value.clone(), color });
+            }
+        }
+        let added = filled.len();
+        table.append(&mut filled);
+        self.set_categories(table);
+        added
     }
 }
 
@@ -917,10 +1190,17 @@ pub(crate) struct SurveyObservation {
     pub(crate) position: Option<DVec3>,
 }
 
-pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> Vec<TraceStation> {
+/// A resolved trace and whether an observation steered it past the collar.
+pub(crate) struct ResolvedTrace {
+    pub(crate) stations: Vec<TraceStation>,
+    pub(crate) steered: bool,
+}
+
+pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> ResolvedTrace {
     observations.sort_by(|a, b| a.depth.total_cmp(&b.depth));
     let mut trace = vec![TraceStation { depth: 0.0, position: collar }];
     let mut last_orientation = observations.iter().find_map(SurveyObservation::orientation);
+    let mut steered = false;
     for observation in observations.iter().copied() {
         if !observation.depth.is_finite() || observation.depth < 0.0 {
             continue;
@@ -930,11 +1210,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
             continue;
         }
         let stored_position = observation.position.filter(|position| position.is_finite());
+        steered |= observation.orientation().is_some();
         let position = stored_position.unwrap_or_else(|| {
             let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
             project_tangent(previous.position, observation.depth - previous.depth, azimuth, dip)
         });
         if observation.depth > previous.depth + 1.0e-9 {
+            steered |= stored_position.is_some() || last_orientation.is_some();
             trace.push(TraceStation {
                 depth: observation.depth,
                 position,
@@ -950,12 +1232,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
     let previous = *trace.last().expect("collar station exists");
     if target_depth.is_finite() && target_depth > previous.depth + 1.0e-9 {
         let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
+        steered |= last_orientation.is_some();
         trace.push(TraceStation {
             depth: target_depth,
             position: project_tangent(previous.position, target_depth - previous.depth, azimuth, dip),
         });
     }
-    trace
+    ResolvedTrace { stations: trace, steered }
 }
 
 impl SurveyObservation {
@@ -981,26 +1264,37 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
-    let mut numeric: BTreeMap<String, (String, f64, f64)> = BTreeMap::new();
-    let mut categorical: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
+    let mut categorical: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for hole in holes {
         for interval in &hole.intervals {
             for (key, value) in &interval.values {
                 let label = key.clone();
                 match value {
+                    // Sentinels stay out of the range; the field still shows.
                     DrillValue::Numeric(value) if value.is_finite() => {
+                        let sentinel = crate::model::block_model::is_no_data_sentinel(*value);
                         numeric
                             .entry(key.clone())
-                            .and_modify(|(_, min, max)| {
-                                *min = min.min(*value);
-                                *max = max.max(*value);
+                            .and_modify(|(_, min, max, has_real)| {
+                                if sentinel {
+                                    return;
+                                }
+                                if *has_real {
+                                    *min = min.min(*value);
+                                    *max = max.max(*value);
+                                } else {
+                                    *min = *value;
+                                    *max = *value;
+                                    *has_real = true;
+                                }
                             })
-                            .or_insert((label, *value, *value));
+                            .or_insert_with(|| if sentinel { (label, 0.0, 0.0, false) } else { (label, *value, *value, true) });
                     }
                     DrillValue::Category(value) if !value.trim().is_empty() => {
-                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, Vec::new())).1;
-                        if !values.contains(value) {
-                            values.push(value.clone());
+                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, BTreeSet::new())).1;
+                        if !values.contains(value.as_str()) {
+                            values.insert(value.clone());
                         }
                     }
                     _ => {}
@@ -1009,14 +1303,15 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
         }
     }
     let mut fields = Vec::new();
-    fields.extend(numeric.into_iter().map(|(key, (label, min, max))| DrillField {
+    fields.extend(numeric.into_iter().map(|(key, (label, min, max, _))| DrillField {
         key,
         label,
         kind: DrillFieldKind::Numeric { min, max },
     }));
-    fields.extend(categorical.into_iter().map(|(key, (label, mut categories))| {
+    fields.extend(categorical.into_iter().map(|(key, (label, categories))| {
+        // Every distinct code reaches the model; the ramp limit is not theirs.
+        let mut categories = categories.into_iter().collect::<Vec<_>>();
         categories.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
-        categories.truncate(MAX_DRILL_COLOR_STOPS);
         DrillField {
             key,
             label,
@@ -1027,51 +1322,76 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
     fields
 }
 
-fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
+pub(crate) type WorldBox = (DVec3, DVec3);
+
+/// One walk of the stations, so the dataset bounds and the per-hole boxes
+/// cannot come from different station sets.
+fn drill_extents(holes: &[DrillHole]) -> (Option<WorldBox>, Vec<WorldBox>) {
     let mut min = DVec3::splat(f64::INFINITY);
     let mut max = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
+    let mut boxes = Vec::with_capacity(holes.len());
     for hole in holes {
-        // A collar without a resolvable measured-depth segment remains part
-        // of the dataset/explorer counts, but it is not rendered and must not
-        // pull camera fitting toward an otherwise empty coordinate.
-        if hole.trace.len() < 2 {
-            continue;
-        }
-        // Conservatively cover both the trace and the world-sized collar. The
-        // trace's pixel floor has no stable world radius to add here.
+        let hole_box = trace_box(hole.collar_position(), &hole.trace);
+        boxes.push(hole_box);
+        // The bounds cover the collar marker; the hole's box is geometry alone.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
-        for station in &hole.trace {
-            min = min.min(station.position - DVec3::splat(radius));
-            max = max.max(station.position + DVec3::splat(radius));
-            any = true;
-        }
+        min = min.min(hole_box.0 - DVec3::splat(radius));
+        max = max.max(hole_box.1 + DVec3::splat(radius));
+        any = true;
     }
-    any.then_some((min, max))
+    (any.then_some((min, max)), boxes)
 }
 
-pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
-    const COLORS: [[f32; 3]; 12] = [
-        [0.12, 0.47, 0.71],
-        [1.00, 0.50, 0.05],
-        [0.17, 0.63, 0.17],
-        [0.84, 0.15, 0.16],
-        [0.58, 0.40, 0.74],
-        [0.55, 0.34, 0.29],
-        [0.89, 0.47, 0.76],
-        [0.50, 0.50, 0.50],
-        [0.74, 0.74, 0.13],
-        [0.09, 0.75, 0.81],
-        [0.30, 0.60, 0.90],
-        [0.90, 0.60, 0.20],
+/// The default colour for the code at `index` in a field's code list,
+/// generated so no code can fall past the end of a palette: hues advance by
+/// the golden angle through nine saturation and lightness bands, so near
+/// hues still differ in tone, and no band reaches white, the no-value colour.
+pub(crate) fn generated_category_color(index: usize) -> [f32; 3] {
+    const GOLDEN_STEP: f64 = 0.618_033_988_749_895;
+    const HUE_ORIGIN: f64 = 0.58;
+    const BANDS: [(f32, f32); 9] = [
+        (0.60, 0.52),
+        (0.90, 0.70),
+        (0.45, 0.32),
+        (0.75, 0.60),
+        (0.98, 0.42),
+        (0.55, 0.46),
+        (0.80, 0.36),
+        (0.70, 0.66),
+        (0.50, 0.40),
     ];
-    categories
+    let hue = (HUE_ORIGIN + index as f64 * GOLDEN_STEP).rem_euclid(1.0) as f32;
+    let (saturation, lightness) = BANDS[index % BANDS.len()];
+    hsl_to_rgb(hue, saturation, lightness)
+}
+
+/// Plain HSL to sRGB, in the component convention the shader takes.
+fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = hue.rem_euclid(1.0) * 6.0;
+    let second = chroma * (1.0 - (sector % 2.0 - 1.0).abs());
+    let (red, green, blue) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = lightness - chroma * 0.5;
+    [red + base, green + base, blue + base]
+}
+
+/// A colour for every code in `categories`, sorted by code for the lookup.
+pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
+    let colors = categories
         .iter()
-        .take(MAX_DRILL_COLOR_STOPS)
         .enumerate()
         .map(|(index, value)| DrillCategoryColor {
             value: value.clone(),
-            color: COLORS[index],
+            color: generated_category_color(index),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    CategoryTable::new(colors).into()
 }

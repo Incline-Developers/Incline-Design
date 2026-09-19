@@ -116,6 +116,7 @@ impl<'a> App<'a> {
         match option {
             ViewToggle::Console => preferences.show_console = value,
             ViewToggle::DarkMode => preferences.dark_mode = value,
+            ViewToggle::BoreholeInspector => preferences.show_borehole_inspector = value,
         }
         self.apply_preferences(preferences)
     }
@@ -158,6 +159,7 @@ impl<'a> App<'a> {
 
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
+        self.editor.show_borehole_inspector = preferences.show_borehole_inspector;
         self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
@@ -312,6 +314,7 @@ pub(crate) fn config_from(
         language: preferences.language,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
+        show_borehole_inspector: preferences.show_borehole_inspector,
         panel_chrome: preferences.panel_chrome,
         ui_size_percent: preferences.ui_size_percent,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,

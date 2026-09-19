@@ -984,6 +984,527 @@ impl<'a> BlockModelProperties<'a> {
     }
 }
 
+/// Read-only summary of one drill hole: collar, trace extent, orientation,
+/// provenance, and the interval table as a grid.
+pub(crate) struct DrillHoleProperties<'a> {
+    id: egui::Id,
+    hole: &'a crate::model::drill_hole::DrillHole,
+    /// The dataset's fields, in order, become the columns after From and
+    /// To, so every hole gets the same columns even if it never recorded one.
+    fields: &'a [crate::model::drill_hole::DrillField],
+    list_height: f32,
+}
+
+/// Default height the interval table scrolls within.
+const DRILL_INTERVAL_LIST_HEIGHT: f32 = 220.0;
+
+/// Breathing room either side of a cell's text.
+const DRILL_TABLE_CELL_PADDING: f32 = 5.0;
+
+/// Added to the body text height to get a row's height.
+const DRILL_TABLE_ROW_PADDING: f32 = 3.0;
+
+/// Narrowest a column is drawn, even one full of blanks.
+const DRILL_TABLE_MIN_COLUMN_WIDTH: f32 = 40.0;
+
+/// Widest a column is drawn; text past this truncates on screen but still
+/// travels whole in a copy.
+const DRILL_TABLE_MAX_COLUMN_WIDTH: f32 = 180.0;
+
+/// Intervals measured when sizing the columns, before the first row is
+/// drawn.
+const DRILL_TABLE_WIDTH_SAMPLE: usize = 512;
+
+/// A rectangular block of cells marked for copying: the cell the reader
+/// started from and the cell they last extended to.
+#[derive(Clone, Copy, PartialEq)]
+struct DrillTableSelection {
+    anchor: (usize, usize),
+    focus: (usize, usize),
+}
+
+impl DrillTableSelection {
+    fn rows(self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.0.min(self.focus.0)..=self.anchor.0.max(self.focus.0)
+    }
+
+    fn columns(self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.1.min(self.focus.1)..=self.anchor.1.max(self.focus.1)
+    }
+}
+
+/// Column widths measured once and cached in egui's frame store, keyed by
+/// a fingerprint so a different hole under the same panel re-measures.
+#[derive(Clone)]
+struct DrillTableColumns {
+    fingerprint: u64,
+    widths: Vec<f32>,
+}
+
+/// One column as the table draws it: its width and which edge its cells
+/// sit against.
+#[derive(Clone, Copy)]
+struct DrillTableColumn {
+    width: f32,
+    align: egui::Align,
+}
+
+impl<'a> DrillHoleProperties<'a> {
+    pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, fields: &'a [crate::model::drill_hole::DrillField]) -> Self {
+        Self {
+            id: egui::Id::new(id_source),
+            hole,
+            fields,
+            list_height: DRILL_INTERVAL_LIST_HEIGHT,
+        }
+    }
+
+    /// Cap the interval table at `height` instead of the default, so a panel
+    /// with little left below the summary still ends above its own edge.
+    pub(crate) fn max_list_height(mut self, height: f32) -> Self {
+        self.list_height = height;
+        self
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) {
+        let hole = self.hole;
+        let collar = hole.collar_position();
+
+        egui::Grid::new(self.id.with("summary")).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+            ui.label(tr!(literal = "Hole ID"));
+            ui.add(egui::Label::new(&hole.dhid).truncate());
+            ui.end_row();
+
+            ui.label(tr!(literal = "Easting"));
+            ui.label(format!("{:.2}", collar.x));
+            ui.end_row();
+
+            ui.label(tr!(literal = "Northing"));
+            ui.label(format!("{:.2}", collar.y));
+            ui.end_row();
+
+            ui.label(tr!(literal = "Elevation"));
+            ui.label(format!("{:.2}", collar.z));
+            ui.end_row();
+
+            ui.label(tr!(literal = "Trace extent"));
+            // Truncated with an ellipsis rather than clipped mid-glyph.
+            ui.add(
+                egui::Label::new(match (hole.trace.first(), hole.trace.last()) {
+                    (Some(first), Some(last)) => {
+                        tr_format!(literal = "%from% to %to%", from = format!("{:.2}", first.depth), to = format!("{:.2}", last.depth))
+                    }
+                    _ => tr!(literal = "No trace"),
+                })
+                .truncate(),
+            );
+            ui.end_row();
+
+            ui.label(tr!(literal = "Orientation"));
+            ui.add(
+                egui::Label::new(match hole.orientation() {
+                    Some(orientation) => tr_format!(
+                        literal = "Azimuth %azimuth%, dip %dip%",
+                        azimuth = format!("{:.1}", orientation.azimuth),
+                        dip = format!("{:.1}", orientation.dip)
+                    ),
+                    // Not "none": nobody recorded one, the same as its source.
+                    None => tr!(literal = "Unknown"),
+                })
+                .truncate(),
+            );
+            ui.end_row();
+
+            ui.label(tr!(literal = "Orientation source"));
+            ui.add(egui::Label::new(hole.orientation_source.label()).truncate());
+            ui.end_row();
+
+            ui.label(tr!(literal = "Intervals"));
+            ui.label(hole.intervals.len().to_string());
+            ui.end_row();
+        });
+
+        if hole.intervals.is_empty() {
+            return;
+        }
+
+        ui.separator();
+        self.show_interval_table(ui);
+    }
+
+    /// The interval spreadsheet: copy actions, a header row, and the rows.
+    /// Never reports a width wider than the panel gave it.
+    fn show_interval_table(&self, ui: &mut egui::Ui) {
+        let hole = self.hole;
+        let header = drill_table_header(self.fields);
+        let columns = self.columns(ui, &header);
+        let total_width: f32 = columns.iter().map(|column| column.width).sum();
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + DRILL_TABLE_ROW_PADDING;
+        let row_height_with_spacing = row_height + ui.spacing().item_spacing.y;
+
+        let selection_id = self.id.with("table_selection");
+        let drag_id = self.id.with("table_drag");
+        let mut selection: Option<DrillTableSelection> = ui.data(|data| data.get_temp(selection_id));
+        let mut drag_anchor: Option<(usize, usize)> = ui.data(|data| data.get_temp(drag_id));
+        let (copy_table, copy_selection) = self.show_table_heading(ui, selection.is_some());
+
+        // Painted after the scroll area reports its offset, so it tracks.
+        let available = ui.available_width();
+        let (header_rect, _) = ui.allocate_exact_size(egui::vec2(available, row_height), egui::Sense::hover());
+
+        let mut pending: Option<DrillTableSelection> = None;
+        // Captured from the first row drawn, so a live drag can map the
+        // pointer back to a row even if that row scrolls out of view.
+        let mut table_left: Option<f32> = None;
+        let mut first_row_top: Option<f32> = None;
+        let list_height = self.list_height.min(ui.available_height()).max(row_height * 3.0);
+        let output = egui::ScrollArea::both()
+            .id_salt(self.id.with("intervals_scroll"))
+            .max_width(available)
+            .max_height(list_height)
+            .auto_shrink([false, true])
+            // Turns off drag-to-scroll, which would otherwise fight the
+            // rows' own press-drag for the same pointer motion.
+            .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR | egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+            .show_rows(ui, row_height, hole.intervals.len(), |ui, rows| {
+                let clip = ui.clip_rect();
+                for index in rows {
+                    let Some(interval) = hole.intervals.get(index) else {
+                        continue;
+                    };
+                    let (_, row_rect) = ui.allocate_space(egui::vec2(total_width, row_height));
+                    if table_left.is_none() {
+                        table_left = Some(row_rect.left());
+                        first_row_top = Some(row_rect.top() - index as f32 * row_height_with_spacing);
+                    }
+                    // An explicit id, keyed by row index, keeps the row's
+                    // identity as the virtualised window slides.
+                    let response = ui.interact(row_rect, self.id.with(("interval_row", index)), egui::Sense::click_and_drag());
+                    if index % 2 == 1 {
+                        ui.painter().rect_filled(row_rect, 0.0, ui.visuals().faint_bg_color);
+                    }
+                    if let Some(current) = selection.filter(|current| current.rows().contains(&index)) {
+                        ui.painter().rect_filled(
+                            drill_table_span(&columns, row_rect, current.columns()),
+                            crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+                            ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                        );
+                    }
+                    draw_drill_table_row(
+                        ui,
+                        row_rect,
+                        clip,
+                        &columns,
+                        self.id.with(("interval_cells", index)),
+                        &drill_table_row(interval, self.fields, false),
+                        false,
+                    );
+                    if response.clicked()
+                        && let Some(position) = response.interact_pointer_pos()
+                    {
+                        let column = drill_table_column_at(&columns, row_rect.left(), position.x);
+                        let extend = ui.input(|input| input.modifiers.shift);
+                        pending = Some(match selection.filter(|_| extend) {
+                            Some(current) => DrillTableSelection {
+                                anchor: current.anchor,
+                                focus: (index, column),
+                            },
+                            None => DrillTableSelection {
+                                anchor: (index, column),
+                                focus: (index, column),
+                            },
+                        });
+                    }
+                    // Reads `press_origin`, not the pointer: it may already be
+                    // over another row by the time the drag is confirmed.
+                    if response.drag_started()
+                        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+                    {
+                        drag_anchor = Some((index, drill_table_column_at(&columns, row_rect.left(), origin.x)));
+                    }
+                }
+            });
+
+        // Follows the pointer from here rather than from the origin row's
+        // response, since that row can scroll out of view mid-drag.
+        if let Some(anchor) = drag_anchor {
+            if let (Some(left), Some(top), Some(position)) = (table_left, first_row_top, ui.input(|input| input.pointer.interact_pos())) {
+                let row = drill_table_row_at(top, row_height_with_spacing, hole.intervals.len(), position.y);
+                let column = drill_table_column_at(&columns, left, position.x);
+                pending = Some(DrillTableSelection { anchor, focus: (row, column) });
+            }
+            if !ui.input(|input| input.pointer.primary_down()) {
+                drag_anchor = None;
+            }
+        }
+
+        if let Some(next) = pending {
+            selection = Some(next);
+            ui.data_mut(|data| data.insert_temp(selection_id, next));
+        }
+        // Stored as the anchor itself: egui's store is keyed by id and
+        // type, so writing `Option<T>` and reading `T` back would fail.
+        ui.data_mut(|data| match drag_anchor {
+            Some(anchor) => {
+                data.insert_temp(drag_id, anchor);
+            }
+            None => data.remove::<(usize, usize)>(drag_id),
+        });
+
+        // Tracks the columns horizontally but ignores them vertically, so
+        // it still names the right one however far the reader has scrolled.
+        let header_row = egui::Rect::from_min_size(
+            egui::pos2(header_rect.left() - output.state.offset.x, header_rect.top()),
+            egui::vec2(total_width, row_height),
+        );
+        let header_clip = header_rect.intersect(ui.clip_rect());
+        ui.painter().rect_filled(header_rect, 0.0, ui.visuals().faint_bg_color);
+        draw_drill_table_row(ui, header_row, header_clip, &columns, self.id.with("header_cells"), &header, true);
+
+        // Ctrl+C over the table, scoped to the pointer being over it.
+        let wants_shortcut = ui.rect_contains_pointer(header_rect.union(output.inner_rect)) && ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::C));
+        match selection.filter(|_| copy_selection || (wants_shortcut && !copy_table)) {
+            Some(current) => ui.ctx().copy_text(drill_selection_text(hole, self.fields, current)),
+            None if copy_table || wants_shortcut => ui.ctx().copy_text(drill_table_text(hole, self.fields)),
+            None => {}
+        }
+    }
+
+    /// The strip above the table: its name on the left, its copy actions
+    /// on the right, both drawn into one exactly sized rect.
+    fn show_table_heading(&self, ui: &mut egui::Ui, has_selection: bool) -> (bool, bool) {
+        let strip_height = ui.spacing().interact_size.y;
+        let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), strip_height), egui::Sense::hover());
+
+        let mut actions = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(self.id.with("table_actions"))
+                .max_rect(strip)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        let copy_table = actions.small_button(tr!(literal = "Copy table")).clicked();
+        let copy_selection = actions.add_enabled(has_selection, egui::Button::new(tr!(literal = "Copy selection")).small()).clicked();
+
+        let mut title = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(self.id.with("table_title"))
+                .max_rect(strip.with_max_x((actions.min_rect().left() - 6.0).max(strip.left())))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        title.add(egui::Label::new(egui::RichText::new(tr!(literal = "Interval data")).strong().color(ui.visuals().weak_text_color())).truncate());
+
+        (copy_table, copy_selection)
+    }
+
+    /// The table's columns: each measured width paired with its alignment.
+    fn columns(&self, ui: &egui::Ui, header: &[String]) -> Vec<DrillTableColumn> {
+        self.column_widths(ui, header)
+            .into_iter()
+            .zip(drill_table_aligns(self.fields))
+            .map(|(width, align)| DrillTableColumn { width, align })
+            .collect()
+    }
+
+    /// Measure each column once, keyed on what it was measured from.
+    fn column_widths(&self, ui: &egui::Ui, header: &[String]) -> Vec<f32> {
+        let id = self.id.with("table_columns");
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let fingerprint = self.column_fingerprint(&font);
+        if let Some(cached) = ui.data(|data| data.get_temp::<DrillTableColumns>(id)).filter(|cached| cached.fingerprint == fingerprint) {
+            return cached.widths;
+        }
+
+        let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let mut widths: Vec<f32> = header.iter().map(|label| measure(label)).collect();
+        for interval in self.hole.intervals.iter().take(DRILL_TABLE_WIDTH_SAMPLE) {
+            for (width, cell) in widths.iter_mut().zip(drill_table_row(interval, self.fields, false)) {
+                *width = width.max(measure(&cell));
+            }
+        }
+        for width in &mut widths {
+            *width = (*width + DRILL_TABLE_CELL_PADDING * 2.0).clamp(DRILL_TABLE_MIN_COLUMN_WIDTH, DRILL_TABLE_MAX_COLUMN_WIDTH);
+        }
+
+        ui.data_mut(|data| {
+            data.insert_temp(
+                id,
+                DrillTableColumns {
+                    fingerprint,
+                    widths: widths.clone(),
+                },
+            )
+        });
+        widths
+    }
+
+    /// What the cached widths were measured from; a change invalidates them.
+    fn column_fingerprint(&self, font: &egui::FontId) -> u64 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hole.intervals.len().hash(&mut hasher);
+        self.hole
+            .intervals
+            .last()
+            .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
+            .hash(&mut hasher);
+        for field in self.fields {
+            field.label.hash(&mut hasher);
+        }
+        font.size.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The table's header row: From, To, then one column per dataset field.
+fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<String> {
+    let mut header = Vec::with_capacity(fields.len() + 2);
+    header.push(tr!(literal = "From"));
+    header.push(tr!(literal = "To"));
+    header.extend(fields.iter().map(|field| field.label.clone()));
+    header
+}
+
+/// One interval as text, one cell per header column, `raw` for full
+/// precision instead of display rounding. An unrecorded field is an empty cell.
+///
+/// A corrected cell shows the interpreted value with the logged one in
+/// brackets; raw text, which a copy carries, is the interpreted value alone.
+fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
+    let (logged_from, logged_to, logged_values) = interval.logged();
+    let corrected = !raw && interval.is_corrected();
+    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
+    let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
+        Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
+            if raw {
+                number.to_string()
+            } else {
+                format_grade(*number)
+            }
+        }
+        Some(crate::model::drill_hole::DrillValue::Category(category)) => category.clone(),
+        None => String::new(),
+    };
+    let mut row = Vec::with_capacity(fields.len() + 2);
+    row.push(beside(depth(interval.from), depth(logged_from)));
+    row.push(beside(depth(interval.to), depth(logged_to)));
+    row.extend(
+        fields
+            .iter()
+            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
+    );
+    row
+}
+
+/// Which edge a column's cells sit against: numbers right, categories left.
+fn drill_table_aligns(fields: &[crate::model::drill_hole::DrillField]) -> Vec<egui::Align> {
+    let mut aligns = vec![egui::Align::Max, egui::Align::Max];
+    aligns.extend(fields.iter().map(|field| match field.kind {
+        crate::model::drill_hole::DrillFieldKind::Numeric { .. } => egui::Align::Max,
+        crate::model::drill_hole::DrillFieldKind::Categorical { .. } => egui::Align::Min,
+    }));
+    aligns
+}
+
+/// The whole table as tab separated text, header included, ready to paste.
+fn drill_table_text(hole: &crate::model::drill_hole::DrillHole, fields: &[crate::model::drill_hole::DrillField]) -> String {
+    let mut rows = Vec::with_capacity(hole.intervals.len() + 1);
+    rows.push(drill_table_header(fields));
+    rows.extend(hole.intervals.iter().map(|interval| drill_table_row(interval, fields, true)));
+    drill_table_tsv(&rows)
+}
+
+/// The marked block as tab separated text, with no header row.
+fn drill_selection_text(hole: &crate::model::drill_hole::DrillHole, fields: &[crate::model::drill_hole::DrillField], selection: DrillTableSelection) -> String {
+    let columns = selection.columns();
+    let rows: Vec<Vec<String>> = selection
+        .rows()
+        .filter_map(|index| hole.intervals.get(index))
+        .map(|interval| {
+            let row = drill_table_row(interval, fields, true);
+            columns.clone().filter_map(|column| row.get(column).cloned()).collect()
+        })
+        .collect();
+    drill_table_tsv(&rows)
+}
+
+/// Serialise rows as tab separated lines, one cell per tab.
+fn drill_table_tsv(rows: &[Vec<String>]) -> String {
+    let mut text = String::new();
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            if index > 0 {
+                text.push('\t');
+            }
+            // A tab or newline inside a value travels as a space instead.
+            text.extend(cell.chars().map(|character| if matches!(character, '\t' | '\n' | '\r') { ' ' } else { character }));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// The rect a run of columns covers within `row`, for painting behind them.
+fn drill_table_span(columns: &[DrillTableColumn], row: egui::Rect, span: std::ops::RangeInclusive<usize>) -> egui::Rect {
+    let start: f32 = columns.iter().take(*span.start()).map(|column| column.width).sum();
+    let end: f32 = columns.iter().take(span.end().saturating_add(1)).map(|column| column.width).sum();
+    egui::Rect::from_x_y_ranges(row.left() + start..=row.left() + end, row.y_range())
+}
+
+/// Which column the pointer is over, clamped to the table's own edges.
+fn drill_table_column_at(columns: &[DrillTableColumn], left: f32, x: f32) -> usize {
+    let mut edge = left;
+    for (index, column) in columns.iter().enumerate() {
+        edge += column.width;
+        if x < edge {
+            return index;
+        }
+    }
+    columns.len().saturating_sub(1)
+}
+
+/// Which row the pointer is over during a drag, clamped to the row count.
+fn drill_table_row_at(first_row_top: f32, row_height: f32, total_rows: usize, y: f32) -> usize {
+    if total_rows == 0 || row_height <= 0.0 {
+        return 0;
+    }
+    let offset = ((y - first_row_top) / row_height).floor();
+    if offset <= 0.0 { 0 } else { (offset as usize).min(total_rows - 1) }
+}
+
+/// Lay one row of cells across `row`, each in its column's width and
+/// against its column's edge, clipped to `clip`.
+fn draw_drill_table_row(ui: &mut egui::Ui, row: egui::Rect, clip: egui::Rect, columns: &[DrillTableColumn], salt: egui::Id, cells: &[String], strong: bool) {
+    let mut x = row.left();
+    for (index, cell) in cells.iter().enumerate() {
+        let Some(&column) = columns.get(index) else {
+            break;
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(column.width, row.height()));
+        x += column.width;
+        let visible = rect.intersect(clip);
+        // Columns scrolled off either side are not laid out at all.
+        if cell.is_empty() || !visible.is_positive() {
+            continue;
+        }
+        let layout = if column.align == egui::Align::Max {
+            egui::Layout::right_to_left(egui::Align::Center)
+        } else {
+            egui::Layout::left_to_right(egui::Align::Center)
+        };
+        let mut cell_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(salt.with(index))
+                .max_rect(rect.shrink2(egui::vec2(DRILL_TABLE_CELL_PADDING, 0.0)))
+                .layout(layout),
+        );
+        cell_ui.set_clip_rect(visible);
+        let text = egui::RichText::new(cell);
+        cell_ui.add(egui::Label::new(if strong { text.strong() } else { text }).truncate().selectable(false));
+    }
+}
+
 /// Ink/outline pair for overlay text: black-on-white over a light background,
 /// white-on-black over a dark one, split at 0.45 Rec. 709 luminance.
 fn contrast_ink(background: [f32; 4]) -> (egui::Color32, egui::Color32) {
@@ -1562,5 +2083,664 @@ impl ViewportMiniMap {
                 #[cfg(target_arch = "wasm32")]
                 response.on_hover_text(tr!(literal = "Middle-drag to pan · Scroll to zoom"));
             });
+    }
+}
+
+/// Width of the hole's ribbon in the log track.
+const LOG_COLUMN_WIDTH: f32 = 46.0;
+/// Room reserved down the left of the log for depth ticks and their labels.
+const LOG_SCALE_WIDTH: f32 = 52.0;
+/// Narrowest the depth scale is drawn; never dropped entirely, only squeezed.
+const LOG_SCALE_MIN_WIDTH: f32 = 34.0;
+/// Width of the stratigraphic column drawn between the scale and the hole.
+const LOG_STRAT_WIDTH: f32 = 64.0;
+/// Narrowest a strat column is still worth drawing before it is dropped.
+const LOG_STRAT_MIN_WIDTH: f32 = 22.0;
+/// Narrowest the hole track is drawn before the strat column is dropped.
+const LOG_TRACK_MIN_WIDTH: f32 = 24.0;
+/// Gap between the stratigraphic column and the hole beside it.
+const LOG_TRACK_GAP: f32 = 10.0;
+/// Margin down the right of the log and below it.
+const LOG_EDGE_MARGIN: f32 = 8.0;
+/// Room above the plot for the strat column's field name.
+const LOG_PLOT_TOP_MARGIN: f32 = 14.0;
+/// Log width below which the header's compass shrinks to its smaller size.
+const LOG_NARROW_WIDTH: f32 = 240.0;
+/// Shortest the log is drawn, even with almost no panel height left.
+const LOG_MIN_HEIGHT: f32 = 120.0;
+/// Degrees of bearing per point of horizontal drag.
+const LOG_SPIN_PER_POINT: f32 = 0.5;
+/// Shallowest depth window the wheel will zoom to.
+const LOG_MIN_DEPTH_SPAN: f64 = 0.25;
+/// Wheel points to one e-fold of zoom.
+const LOG_ZOOM_PER_POINT: f64 = 0.004;
+/// Column keys a lithology is usually written under, tried in order.
+const LOG_LITHOLOGY_KEYS: [&str; 6] = ["lith", "litho", "lithology", "lithtype", "lith_1", "rock"];
+/// Size of the azimuth compass in the log's header.
+const LOG_COMPASS_SIZE: f32 = 54.0;
+/// Size of the compass once the panel is too narrow to spare the full dial.
+const LOG_COMPASS_MIN_SIZE: f32 = 36.0;
+/// Pixels a depth tick needs before its neighbour crowds it.
+const LOG_TICK_MIN_GAP: f32 = 28.0;
+
+/// One hole drawn down the page against a depth scale, coloured as the 3D
+/// view colours it; spins in plan, never tilts, the bearing sets the lean.
+pub(crate) struct BoreholeLog<'a> {
+    id: egui::Id,
+    hole: &'a crate::model::drill_hole::DrillHole,
+    dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset,
+    /// Read the strat column from this field rather than guessing by name.
+    strat_field: Option<String>,
+}
+
+impl<'a> BoreholeLog<'a> {
+    pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset) -> Self {
+        Self {
+            id: egui::Id::new(id_source),
+            hole,
+            dataset,
+            strat_field: None,
+        }
+    }
+
+    pub(crate) fn strat_field(mut self, key: Option<String>) -> Self {
+        self.strat_field = key;
+        self
+    }
+
+    /// Draw the log into what the panel has left. Nothing here may report a
+    /// width larger than the panel gave it, or the log would slide the scene.
+    pub(crate) fn show(self, ui: &mut egui::Ui) {
+        let Some(hole) = self.depth_range() else {
+            ui.weak(tr!(literal = "This hole has no trace to draw."));
+            return;
+        };
+
+        // The bearing and depth window live in egui's own per-id memory.
+        let azimuth_id = self.id.with("azimuth");
+        let view_id = self.id.with("depth_view");
+        let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
+        // Re-clamped rather than trusted: the panel keeps its id while the
+        // inspection moves, so the window may be from a different hole.
+        let mut view = clamp_depth_view(ui.data(|data| data.get_temp::<(f64, f64)>(view_id)).unwrap_or(hole), hole);
+
+        let width = ui.available_width();
+        let height = ui.available_height().max(LOG_MIN_HEIGHT);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+
+        // A strip of its own, or a floating compass at minimum width
+        // would cover the hole it is aiming.
+        let compass_size = if width < LOG_NARROW_WIDTH { LOG_COMPASS_MIN_SIZE } else { LOG_COMPASS_SIZE };
+        let header = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), compass_size.min(rect.height())));
+        let compass = egui::Rect::from_min_size(egui::pos2(header.right() - compass_size - 6.0, header.top() + 2.0), egui::Vec2::splat(compass_size - 4.0));
+
+        // The compass has its own drag zone, separate from the plot's.
+        let spin = ui
+            .interact(compass, self.id.with("compass"), egui::Sense::click_and_drag())
+            .on_hover_text(tr!(literal = "Drag to spin the view around the hole. Double-click to face north."));
+        if spin.dragged() {
+            azimuth = spun(azimuth, spin.drag_delta().x);
+        }
+        if spin.double_clicked() {
+            azimuth = 0.0;
+        }
+        if spin.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        let body = egui::Rect::from_min_max(egui::pos2(rect.left(), header.bottom()), rect.max);
+        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0));
+        let plot = egui::Rect::from_min_max(
+            egui::pos2(body.left() + columns.scale, body.top() + LOG_PLOT_TOP_MARGIN),
+            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN),
+        );
+
+        // Over the plot: drag sideways spins, drag vertically walks the depth
+        // window, wheel zooms around the depth under the cursor.
+        let handle = ui.interact(body, self.id.with("body"), egui::Sense::click_and_drag());
+        if handle.dragged() {
+            let drag = handle.drag_delta();
+            azimuth = spun(azimuth, drag.x);
+            if plot.height() > 0.0 {
+                let metres = f64::from(drag.y) * (view.1 - view.0) / f64::from(plot.height());
+                view = clamp_depth_view((view.0 - metres, view.1 - metres), hole);
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if handle.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if handle.double_clicked() {
+            view = hole;
+        }
+        if handle.hovered() && plot.height() > 0.0 {
+            // Read and then spent, so a scroll aimed at the log zooms it.
+            let wheel = ui.input_mut(|input| {
+                let wheel = input.smooth_scroll_delta.y;
+                if wheel != 0.0 {
+                    // egui's own ScrollArea marks a spent wheel this way.
+                    input.smooth_scroll_delta = egui::Vec2::ZERO;
+                }
+                wheel
+            });
+            if wheel != 0.0 {
+                let anchor = match ui.input(|input| input.pointer.hover_pos()) {
+                    Some(pointer) => depth_at(plot, view, pointer.y),
+                    None => 0.5 * (view.0 + view.1),
+                };
+                view = zoomed_depth_view(hole, view, anchor, (-f64::from(wheel) * LOG_ZOOM_PER_POINT).exp());
+            }
+        }
+
+        if self.draw_header(ui, &painter, header, compass, LogReadout { view, hole, azimuth }) {
+            view = hole;
+        }
+        ui.data_mut(|data| {
+            data.insert_temp(azimuth_id, azimuth);
+            data.insert_temp(view_id, view);
+        });
+
+        let (top, bottom) = view;
+        if !plot.is_positive() {
+            draw_azimuth_compass(ui, &painter, compass, azimuth);
+            return;
+        }
+        self.draw_scale(ui, &painter, plot, columns, top, bottom);
+        let strat = egui::Rect::from_x_y_ranges(plot.left()..=plot.left() + columns.strat, plot.y_range());
+        let track = egui::Rect::from_x_y_ranges(plot.right() - columns.track..=plot.right(), plot.y_range());
+        if columns.strat > 0.0 {
+            self.draw_strat(ui, &painter, strat, top, bottom);
+        }
+        if track.is_positive() {
+            self.draw_column(ui, &painter, track, top, bottom, azimuth);
+        }
+        draw_azimuth_compass(ui, &painter, compass, azimuth);
+    }
+
+    /// The strip above the plot: reset button, depth/bearing readout, compass.
+    /// Returns whether the reader asked for the whole hole back.
+    fn draw_header(&self, ui: &mut egui::Ui, painter: &egui::Painter, header: egui::Rect, compass: egui::Rect, readout: LogReadout) -> bool {
+        let LogReadout { view, hole, azimuth } = readout;
+        let zoomed = view != hole;
+        let room = egui::Rect::from_min_max(header.min, egui::pos2((compass.left() - 6.0).max(header.left()), header.bottom()));
+        let mut buttons = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(self.id.with("log_header"))
+                .max_rect(room)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        buttons.set_clip_rect(room.intersect(ui.clip_rect()));
+        let reset = buttons
+            .add_enabled(
+                zoomed,
+                egui::Button::new(tr!(literal = "Whole hole"))
+                    .small()
+                    .corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
+            )
+            .on_hover_text(tr!(literal = "Back to the whole hole."))
+            // Disabled exactly when the log already shows the whole hole.
+            .on_disabled_hover_text(tr!(
+                literal = "Roll the wheel over the log to zoom in on a seam. Drag the log to spin the hole and to walk down it."
+            ))
+            .clicked();
+
+        // Painted, not laid out, and dropped when the width is not there.
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let ink = ui.visuals().weak_text_color();
+        let mut right = compass.left() - 4.0;
+        for label in [
+            format!("{azimuth:.0}°"),
+            if zoomed {
+                tr_format!(literal = "%from% to %to% m", from = format!("{:.1}", view.0), to = format!("{:.1}", view.1))
+            } else {
+                tr_format!(literal = "%depth% m", depth = format!("{:.1}", hole.1 - hole.0))
+            },
+        ] {
+            let galley = painter.layout_no_wrap(label, font.clone(), ink);
+            if galley.size().x > right - 6.0 - buttons.min_rect().right() {
+                break;
+            }
+            right -= galley.size().x;
+            painter.galley(egui::pos2(right, header.center().y - galley.size().y * 0.5), galley, egui::Color32::PLACEHOLDER);
+            right -= 8.0;
+        }
+        reset
+    }
+
+    /// The depths the log spans, widened to cover any interval past the trace.
+    fn depth_range(&self) -> Option<(f64, f64)> {
+        let first = self.hole.trace.first()?.depth;
+        let last = self.hole.trace.last()?.depth;
+        let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max);
+        (deepest > first).then_some((first, deepest))
+    }
+
+    /// Where a depth sits down the page.
+    fn y_at(plot: egui::Rect, top: f64, bottom: f64, depth: f64) -> f32 {
+        let t = ((depth - top) / (bottom - top)).clamp(0.0, 1.0) as f32;
+        plot.top() + t * plot.height()
+    }
+
+    /// How far the hole has wandered sideways at `depth`, seen from `azimuth`.
+    fn offset_at(&self, depth: f64, azimuth: f32) -> f32 {
+        match self.hole.position_at_depth(depth) {
+            Some(position) => self.sideways_offset(position, azimuth),
+            None => 0.0,
+        }
+    }
+
+    /// Sideways offset of `position` from the collar, seen from `azimuth`.
+    fn sideways_offset(&self, position: glam::DVec3, azimuth: f32) -> f32 {
+        let Some(collar) = self.hole.trace.first().map(|station| station.position) else {
+            return 0.0;
+        };
+        let (east, north) = (position.x - collar.x, position.y - collar.y);
+        let radians = f64::from(azimuth).to_radians();
+        // Screen right is the bearing turned a quarter turn clockwise.
+        (east * radians.cos() - north * radians.sin()) as f32
+    }
+
+    /// The field the strat column reads: the one chosen in the panel, else an
+    /// alias list, falling back to the dataset's first categorical field.
+    ///
+    /// A chosen field is taken only while it is one of this dataset's and
+    /// still categorical: the panel holds one choice while the inspection
+    /// moves, and a numeric field here would draw a block per number.
+    fn lithology_field(&self) -> Option<&crate::model::drill_hole::DrillField> {
+        let fields = &self.dataset.dataset.fields;
+        let chosen = self
+            .strat_field
+            .as_deref()
+            .and_then(|key| self.dataset.dataset.field(key))
+            .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }));
+        if chosen.is_some() {
+            return chosen;
+        }
+        fields
+            .iter()
+            .find(|field| LOG_LITHOLOGY_KEYS.contains(&field.key.to_ascii_lowercase().as_str()))
+            .or_else(|| {
+                fields
+                    .iter()
+                    .find(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
+            })
+    }
+
+    /// Consecutive intervals reading the same lithology, merged into one
+    /// run, so forty abutting records of the same rock draw as one bed.
+    fn lithology_runs(&self, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
+        let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
+        let mut cursor = top;
+        let mut sorted = self
+            .hole
+            .intervals
+            .iter()
+            .filter(|interval| interval.to > top && interval.from < bottom)
+            .collect::<Vec<_>>();
+        sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
+
+        for interval in sorted {
+            let (from, to) = (interval.from.max(top), interval.to.min(bottom));
+            if to <= from {
+                continue;
+            }
+            let value = match interval.values.get(&field.key) {
+                Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+                Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
+                _ => None,
+            };
+            if from > cursor + 1.0e-9 {
+                push_run(&mut runs, cursor, from, None);
+            }
+            push_run(&mut runs, from.max(cursor), to, value);
+            cursor = cursor.max(to);
+        }
+        if cursor < bottom - 1.0e-9 {
+            push_run(&mut runs, cursor, bottom, None);
+        }
+        runs
+    }
+
+    /// Colour for one strat run, matched to the ribbon's own set.
+    fn strat_run_color(&self, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
+        if self.dataset.color.active_field.as_deref() == Some(field.key.as_str()) {
+            return self.dataset.color.category_color(code).unwrap_or([1.0, 1.0, 1.0]);
+        }
+        match &field.kind {
+            crate::model::drill_hole::DrillFieldKind::Categorical { categories } => categories
+                .iter()
+                .position(|category| category == code)
+                .map_or([1.0, 1.0, 1.0], crate::model::drill_hole::generated_category_color),
+            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => [1.0, 1.0, 1.0],
+        }
+    }
+
+    fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, top: f64, bottom: f64) {
+        let visuals = ui.visuals();
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let Some(field) = self.lithology_field() else {
+            painter.text(strat.center_top(), egui::Align2::CENTER_TOP, tr!(literal = "No lithology"), font, visuals.weak_text_color());
+            return;
+        };
+        for (from, to, value) in self.lithology_runs(field, top, bottom) {
+            let block = egui::Rect::from_x_y_ranges(strat.x_range(), Self::y_at(strat, top, bottom, from)..=Self::y_at(strat, top, bottom, to));
+            if block.height() <= 0.0 {
+                continue;
+            }
+            let (fill, label) = match &value {
+                Some(code) => {
+                    let [red, green, blue] = self.strat_run_color(field, code);
+                    (crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]), code.clone())
+                }
+                None => (visuals.extreme_bg_color, tr!(literal = "Not logged")),
+            };
+            painter.rect_filled(block, 0.0, fill);
+            if value.is_some() {
+                hatch_placeholder(painter, block, visuals.weak_text_color().gamma_multiply(0.30));
+            }
+            painter.rect_stroke(block, 0.0, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.45)), egui::StrokeKind::Inside);
+            // Only drawn once its galley is measured to fit; a squeezed
+            // strat column goes quiet rather than spilling onto the hole.
+            if block.height() >= font.size + 3.0 {
+                let ink = if value.is_some() { visuals.strong_text_color() } else { visuals.weak_text_color() };
+                let galley = painter.layout_no_wrap(label, font.clone(), ink);
+                if galley.size().x <= block.width() - 2.0 {
+                    painter.galley(block.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
+                }
+            }
+        }
+        // Elided to the column's own width, or a field named at length
+        // would write itself across the top of the hole beside it.
+        let name = elided(painter, field.label.clone(), font, visuals.weak_text_color(), strat.width());
+        painter.galley(
+            egui::pos2(strat.center().x - name.size().x * 0.5, strat.top() - 4.0 - name.size().y),
+            name,
+            egui::Color32::PLACEHOLDER,
+        );
+    }
+
+    /// The depth ticks down the left of the plot, spaced for the window
+    /// that is actually showing rather than for the whole hole.
+    fn draw_scale(&self, ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect, columns: LogColumns, top: f64, bottom: f64) {
+        let visuals = ui.visuals();
+        let step = log_tick_step(bottom - top, plot.height());
+        // Decimals enough to tell adjacent ticks apart at this step.
+        let places = if step.is_finite() && step > 0.0 && step < 1.0 {
+            (-step.log10()).ceil().clamp(0.0, 3.0) as usize
+        } else {
+            0
+        };
+        let overhang = (columns.scale * 0.12).min(6.0);
+        let gap = (columns.scale * 0.2).min(10.0);
+
+        let first = (top / step).ceil() * step;
+        // Capped independently of step: a bad interval must not hang the UI.
+        let max_ticks = (plot.height() / LOG_TICK_MIN_GAP) as usize + 2;
+        for index in 0..=max_ticks {
+            let depth = first + index as f64 * step;
+            if depth > bottom {
+                break;
+            }
+            let y = Self::y_at(plot, top, bottom, depth);
+            painter.line_segment(
+                [egui::pos2(plot.left() - overhang, y), egui::pos2(plot.right(), y)],
+                egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.35)),
+            );
+            painter.text(
+                egui::pos2(plot.left() - gap, y),
+                egui::Align2::RIGHT_CENTER,
+                format!("{depth:.places$}"),
+                egui::TextStyle::Small.resolve(ui.style()),
+                visuals.weak_text_color(),
+            );
+        }
+    }
+
+    fn draw_column(&self, ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect, top: f64, bottom: f64, azimuth: f32) {
+        let field = self.dataset.color.active_field.as_deref().and_then(|key| self.dataset.dataset.field(key));
+        let centre = plot.center().x;
+        let half = (LOG_COLUMN_WIDTH * 0.5).min(plot.width() * 0.5 - 1.0).max(1.0);
+        let uncoloured = ui.visuals().widgets.inactive.bg_fill;
+
+        let lean = LogLean::new(plot, top, bottom, half);
+
+        // The unlogged hole first, so logged intervals draw on top of it.
+        let mut ribbon = Vec::new();
+        for pair in self.hole.trace.windows(2) {
+            let [a, b] = [pair[0], pair[1]];
+            if b.depth <= top || a.depth >= bottom {
+                continue;
+            }
+            let (from, to) = (a.depth.max(top), b.depth.min(bottom));
+            let span = b.depth - a.depth;
+            let station_at = |depth: f64| a.position.lerp(b.position, if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 });
+            let x0 = lean.x(self.sideways_offset(station_at(from), azimuth));
+            let x1 = lean.x(self.sideways_offset(station_at(to), azimuth));
+            ribbon.push(Self::quad_between(plot, top, bottom, from, to, x0, x1, half, uncoloured));
+        }
+        painter.extend(ribbon);
+
+        for interval in &self.hole.intervals {
+            if interval.to <= top || interval.from >= bottom {
+                continue;
+            }
+            let color = field
+                .and_then(|field| {
+                    interval.values.get(&field.key).map(|value| {
+                        let [red, green, blue] = crate::rendering::scene::drill_hole_cache::evaluate_color_for(&field.kind, value, &self.dataset.color);
+                        crate::rendering::color::rgba_to_color32([red, green, blue, 1.0])
+                    })
+                })
+                .unwrap_or(uncoloured);
+            painter.add(self.quad(plot, top, bottom, interval.from, interval.to, azimuth, lean, color));
+        }
+
+        painter.rect_stroke(
+            egui::Rect::from_x_y_ranges(centre - half..=centre + half, plot.y_range()),
+            0.0,
+            egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.5)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    /// One depth slice of the ribbon, leaning by however far the hole has
+    /// deviated at each end of it.
+    #[allow(clippy::too_many_arguments)]
+    fn quad(&self, plot: egui::Rect, top: f64, bottom: f64, from: f64, to: f64, azimuth: f32, lean: LogLean, color: egui::Color32) -> egui::Shape {
+        let (from, to) = (from.max(top), to.min(bottom));
+        let (x0, x1) = (lean.x(self.offset_at(from, azimuth)), lean.x(self.offset_at(to, azimuth)));
+        Self::quad_between(plot, top, bottom, from, to, x0, x1, lean.half, color)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn quad_between(plot: egui::Rect, top: f64, bottom: f64, from: f64, to: f64, x0: f32, x1: f32, half: f32, color: egui::Color32) -> egui::Shape {
+        let (y0, y1) = (Self::y_at(plot, top, bottom, from), Self::y_at(plot, top, bottom, to));
+        egui::Shape::convex_polygon(
+            vec![egui::pos2(x0 - half, y0), egui::pos2(x0 + half, y0), egui::pos2(x1 + half, y1), egui::pos2(x1 - half, y1)],
+            color,
+            egui::Stroke::NONE,
+        )
+    }
+}
+
+/// Metres of deviation as points across the track, at the scale the depth
+/// axis is drawn to, and never further out than the track's own edge.
+#[derive(Clone, Copy)]
+struct LogLean {
+    centre: f32,
+    half: f32,
+    points_per_metre: f32,
+    limit: f32,
+}
+
+impl LogLean {
+    fn new(plot: egui::Rect, top: f64, bottom: f64, half: f32) -> Self {
+        let span = bottom - top;
+        let points_per_metre = if span.is_finite() && span > 0.0 {
+            (f64::from(plot.height()) / span) as f32
+        } else {
+            0.0
+        };
+        Self {
+            centre: plot.center().x,
+            half,
+            points_per_metre,
+            limit: (plot.width() * 0.5 - half).max(0.0),
+        }
+    }
+
+    fn x(self, offset: f32) -> f32 {
+        let lean = offset * self.points_per_metre;
+        self.centre + if lean.is_finite() { lean.clamp(-self.limit, self.limit) } else { 0.0 }
+    }
+}
+
+/// What the log's header has to report: the depth window, the hole it is
+/// a window on, and the bearing it is seen from.
+#[derive(Clone, Copy)]
+struct LogReadout {
+    view: (f64, f64),
+    hole: (f64, f64),
+    azimuth: f32,
+}
+
+/// How a log's width is shared between its three columns; a strat column
+/// of zero means there was no room for one.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct LogColumns {
+    scale: f32,
+    strat: f32,
+    track: f32,
+}
+
+/// Share `width` between the depth scale, the strat column and the hole.
+/// The scale is squeezed but never dropped; the strat column goes first.
+fn log_columns(width: f32) -> LogColumns {
+    let width = width.max(0.0);
+    let scale = LOG_SCALE_WIDTH.min(width * 0.35).max(LOG_SCALE_MIN_WIDTH.min(width));
+    let rest = (width - scale).max(0.0);
+    if rest < LOG_STRAT_MIN_WIDTH + LOG_TRACK_GAP + LOG_TRACK_MIN_WIDTH {
+        return LogColumns { scale, strat: 0.0, track: rest };
+    }
+    let strat = LOG_STRAT_WIDTH.min(rest * 0.45).min(rest - LOG_TRACK_GAP - LOG_TRACK_MIN_WIDTH);
+    LogColumns {
+        scale,
+        strat,
+        track: rest - strat - LOG_TRACK_GAP,
+    }
+}
+
+/// The depth a point down the page stands for, unclamped and the inverse
+/// of [`BoreholeLog::y_at`].
+fn depth_at(plot: egui::Rect, view: (f64, f64), y: f32) -> f64 {
+    if plot.height() <= 0.0 {
+        return view.0;
+    }
+    let t = f64::from((y - plot.top()) / plot.height());
+    view.0 + t * (view.1 - view.0)
+}
+
+/// Slide a depth window back inside the hole it belongs to, keeping its
+/// span, so a 5 m window read off a 300 m hole still lands sensibly on a
+/// 40 m hole that replaces it.
+fn clamp_depth_view(view: (f64, f64), hole: (f64, f64)) -> (f64, f64) {
+    let whole = (hole.1 - hole.0).max(0.0);
+    let span = (view.1 - view.0).clamp(LOG_MIN_DEPTH_SPAN.min(whole), whole);
+    let top = view.0.clamp(hole.0, hole.1 - span);
+    (top, top + span)
+}
+
+/// The depth window after one wheel step of `factor`, holding `anchor` still.
+fn zoomed_depth_view(hole: (f64, f64), view: (f64, f64), anchor: f64, factor: f64) -> (f64, f64) {
+    let whole = (hole.1 - hole.0).max(0.0);
+    let span = view.1 - view.0;
+    if span <= 0.0 || whole <= 0.0 {
+        return hole;
+    }
+    let next = (span * factor).clamp(LOG_MIN_DEPTH_SPAN.min(whole), whole);
+    let held = ((anchor - view.0) / span).clamp(0.0, 1.0);
+    let top = anchor - held * next;
+    clamp_depth_view((top, top + next), hole)
+}
+
+/// One line of text cut to `width` with an ellipsis.
+fn elided(painter: &egui::Painter, text: String, font: egui::FontId, ink: egui::Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, ink);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(0.0));
+    painter.layout_job(job)
+}
+
+/// The tick spacing to read a `span` of depth over `height` points.
+fn log_tick_step(span: f64, height: f32) -> f64 {
+    if span <= 0.0 || height <= 0.0 {
+        return 1.0;
+    }
+    crate::model::plot::round_up_to_series(span * f64::from(LOG_TICK_MIN_GAP) / f64::from(height), &[1.0, 2.0, 5.0, 10.0])
+}
+
+/// A bearing turned by a drag across the page, wrapped back into 0..360.
+fn spun(azimuth: f32, drag_x: f32) -> f32 {
+    (azimuth + drag_x * LOG_SPIN_PER_POINT).rem_euclid(360.0)
+}
+
+/// The dial showing which way the log is looked at; flat, since this view
+/// has no tilt to report.
+fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, azimuth: f32) {
+    let visuals = ui.visuals();
+    let centre = rect.center();
+    let radius = rect.width() * 0.5 - 2.0;
+    painter.circle_filled(centre, radius, visuals.extreme_bg_color.gamma_multiply(0.8));
+    painter.circle_stroke(centre, radius, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.6)));
+
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    for (label, bearing, strong) in [
+        (tr!(literal = "N"), 0.0_f32, true),
+        (tr!(literal = "E"), 90.0, false),
+        (tr!(literal = "S"), 180.0, false),
+        (tr!(literal = "W"), 270.0, false),
+    ] {
+        // Screen angle, with the current bearing rotated to the top.
+        let screen = (bearing - azimuth - 90.0).to_radians();
+        let at = centre + egui::vec2(screen.cos(), screen.sin()) * (radius - 9.0);
+        painter.text(
+            at,
+            egui::Align2::CENTER_CENTER,
+            label,
+            font.clone(),
+            if strong { visuals.strong_text_color() } else { visuals.weak_text_color() },
+        );
+    }
+    painter.line_segment([centre, centre + egui::vec2(0.0, -radius + 4.0)], egui::Stroke::new(2.0, visuals.strong_text_color()));
+}
+
+/// Extend the last run rather than start a new one when values and depths abut.
+fn push_run(runs: &mut Vec<(f64, f64, Option<String>)>, from: f64, to: f64, value: Option<String>) {
+    if to <= from + 1.0e-9 {
+        return;
+    }
+    if let Some(last) = runs.last_mut()
+        && last.2 == value
+        && (from - last.1).abs() <= 1.0e-9
+    {
+        last.1 = to;
+        return;
+    }
+    runs.push((from, to, value));
+}
+
+/// Diagonal hatching over a lithology block, marking it as standing in
+/// for the pattern that belongs there.
+fn hatch_placeholder(painter: &egui::Painter, block: egui::Rect, ink: egui::Color32) {
+    const SPACING: f32 = 7.0;
+    let stroke = egui::Stroke::new(1.0, ink);
+    let clipped = painter.with_clip_rect(block);
+    let mut offset = block.left() - block.height();
+    while offset < block.right() {
+        let a = egui::pos2(offset, block.bottom());
+        let b = egui::pos2(offset + block.height(), block.top());
+        if a.x < block.right() && b.x > block.left() {
+            clipped.line_segment([a, b], stroke);
+        }
+        offset += SPACING;
     }
 }

@@ -183,6 +183,32 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
     }
 }
 
+/// One draw per run of visible cells; an off-screen cell costs a box test
+/// instead of its instances. An entry with no cells draws whole.
+fn draw_drill_cells(render_pass: &mut wgpu::RenderPass<'_>, cells: &[DrillCell], count: u32, frustum: &Frustum) {
+    if cells.is_empty() {
+        render_pass.draw(0..144, 0..count);
+        return;
+    }
+    let mut run: Option<std::ops::Range<u32>> = None;
+    for cell in cells {
+        if !frustum.intersects_aabb(cell.min, cell.max) {
+            continue;
+        }
+        match run.as_mut() {
+            Some(range) if range.end == cell.start => range.end = cell.end,
+            Some(range) => {
+                render_pass.draw(0..144, range.clone());
+                *range = cell.start..cell.end;
+            }
+            None => run = Some(cell.start..cell.end),
+        }
+    }
+    if let Some(range) = run {
+        render_pass.draw(0..144, range);
+    }
+}
+
 impl<'a> Graphics<'a> {
     #[allow(clippy::too_many_arguments)]
     fn draw_drill_holes<'pass>(
@@ -190,6 +216,7 @@ impl<'a> Graphics<'a> {
         render_pass: &mut wgpu::RenderPass<'pass>,
         drill_holes: &[OpenDrillHoleDataset],
         editor: &EditorState,
+        frustum: &Frustum,
         xray_enabled: bool,
         draw_traces: bool,
         draw_surface_marks: bool,
@@ -199,12 +226,18 @@ impl<'a> Graphics<'a> {
             return;
         }
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        let hole_pipeline = if xray_enabled {
+            &self.xray_drill_hole_render_pipeline
+        } else {
+            &self.drill_hole_render_pipeline
+        };
+        let collar_pipeline = if xray_enabled {
+            &self.xray_drill_collar_render_pipeline
+        } else {
+            &self.drill_collar_render_pipeline
+        };
         if draw_traces {
-            render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
-            } else {
-                &self.drill_hole_render_pipeline
-            });
+            render_pass.set_pipeline(hole_pipeline);
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
@@ -212,16 +245,19 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
                     continue;
                 };
-                let Some(buffer) = cached.buffer.as_ref() else {
-                    continue;
-                };
-                render_pass.set_vertex_buffer(0, buffer.slice(..));
-                render_pass.draw(0..144, 0..cached.count);
+                // A selected hole is picked out by the shader reading group
+                // 1's selection bitset, not by a second draw.
+                if let Some(buffer) = cached.buffer.as_ref() {
+                    render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, buffer.slice(..));
+                    draw_drill_cells(render_pass, &cached.cells, cached.count, frustum);
+                }
             }
             if draw_preview
                 && let Some(cached) = self.drill_hole_gpu.preview()
                 && let Some(buffer) = cached.buffer.as_ref()
             {
+                render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..144, 0..cached.count);
             }
@@ -237,11 +273,7 @@ impl<'a> Graphics<'a> {
         // still cached; only the draw is skipped, so switching tab costs
         // nothing to come back from.
         if editor.shows_tie_ins() {
-            render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
-            } else {
-                &self.drill_hole_render_pipeline
-            });
+            render_pass.set_pipeline(hole_pipeline);
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
@@ -252,17 +284,14 @@ impl<'a> Graphics<'a> {
                 let Some(buffer) = cached.tie_buffer.as_ref() else {
                     continue;
                 };
+                render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..144, 0..cached.tie_count);
             }
         }
         // Collar markers go over the traces they cap, in their own pass so the
         // pipeline switch happens once rather than per dataset.
-        render_pass.set_pipeline(if xray_enabled {
-            &self.xray_drill_collar_render_pipeline
-        } else {
-            &self.drill_collar_render_pipeline
-        });
+        render_pass.set_pipeline(collar_pipeline);
         for dataset in drill_holes {
             if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                 continue;
@@ -273,6 +302,7 @@ impl<'a> Graphics<'a> {
             let Some(buffer) = cached.collar_buffer.as_ref() else {
                 continue;
             };
+            render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }
@@ -280,6 +310,7 @@ impl<'a> Graphics<'a> {
             && let Some(cached) = self.drill_hole_gpu.preview()
             && let Some(buffer) = cached.collar_buffer.as_ref()
         {
+            render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }
@@ -637,7 +668,7 @@ impl<'a> Graphics<'a> {
         // Ordinarily drillholes are opaque, depth-writing scene assets. In
         // x-ray mode they move to the late overlay pass instead.
         if !editor.xray_enabled {
-            self.draw_drill_holes(&mut render_pass, drill_holes, editor, false, true, !editor.tying_holes(), include_editor_overlays);
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, &frustum, false, true, !editor.tying_holes(), include_editor_overlays);
         }
 
         // Opaque document fills and strokes must establish colour and depth
@@ -864,13 +895,13 @@ impl<'a> Graphics<'a> {
             // X-ray deliberately bypasses scene depth and stays above all
             // composited transparency. Drillholes draw first so design strings
             // and their outlines remain the topmost x-ray content.
-            self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, true, true, include_editor_overlays);
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, &frustum, true, true, true, include_editor_overlays);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
         } else {
             if editor.tying_holes() {
-                self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, false, true, include_editor_overlays);
+                self.draw_drill_holes(&mut render_pass, drill_holes, editor, &frustum, true, false, true, include_editor_overlays);
             }
             // Alpha document primitives test the complete opaque depth buffer
             // but never update it, so farther translucent fills still blend.

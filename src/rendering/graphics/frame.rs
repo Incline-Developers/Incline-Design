@@ -222,7 +222,7 @@ impl<'a> Graphics<'a> {
             &self.block_model_volume_bind_group_layout,
             &self.edge_style_bind_group_layout,
         );
-        self.drill_hole_gpu.sync(&self.device, self.scene_origin, drill_holes, editor);
+        self.drill_hole_gpu.sync(&self.device, &self.queue, self.scene_origin, drill_holes, editor);
         self.point_cloud_gpu.sync(
             &self.device,
             &self.queue,

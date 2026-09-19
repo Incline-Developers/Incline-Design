@@ -33,6 +33,7 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
+        drill_hole::DrillHoleId,
         formats::{self, MeshFormat},
         project::{self, OpenProject},
         triangulation::TriangulationId,
@@ -158,6 +159,8 @@ pub(crate) enum FileDialogAction {
     ExportTriangulation { id: TriangulationId, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportBlockModelCsv { id: BlockModelId, path: PathBuf },
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportDrillHoleCsv { id: DrillHoleId, path: PathBuf },
     /// Save one open project under a new path.
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs { project_runtime_id: u32, path: PathBuf },
@@ -182,6 +185,8 @@ pub(crate) enum FileDialogAction {
     },
     #[cfg(target_arch = "wasm32")]
     WebDownloadBlockModelCsv { id: BlockModelId, file_name: String, close_after: bool },
+    #[cfg(target_arch = "wasm32")]
+    WebDownloadDrillHoleCsv { id: DrillHoleId, stem: String },
     #[cfg(target_arch = "wasm32")]
     WebViewportImage(String),
 }
@@ -665,6 +670,8 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportBlockModelCsv { id, path } => self.export_block_model_csv_to_path(id, path),
             #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportDrillHoleCsv { id, path } => self.export_drill_hole_csv_to_path(id, path),
+            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SaveProjectAs { project_runtime_id, path } => {
                 if self.project_revert_is_pending(project_runtime_id) {
                     anyhow::bail!("Wait for the project revert to finish before saving");
@@ -785,6 +792,41 @@ impl<'a> App<'a> {
                         Err(error) => {
                             userspace_warn!("{}", tr_format!(literal = "Triangulation download encoding failed: %error%", error = format!("{error:#}")))
                         }
+                    },
+                );
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebDownloadDrillHoleCsv { id, stem } => {
+                let dataset = self
+                    .drill_holes
+                    .iter()
+                    .find(|item| item.id == id)
+                    .context("The selected drillhole dataset is no longer loaded")?;
+                let snapshot = dataset.clone();
+                self.spawn_job(
+                    tr_format!(literal = "Exporting %name%…", name = stem.clone()),
+                    // Anonymous, not keyed on the dataset: the bytes are already
+                    // copied, so unloading the source must not cancel the write.
+                    vec![crate::app::jobs::JobKey::Anonymous],
+                    move |cancel| {
+                        if cancel.is_cancelled() {
+                            anyhow::bail!("Cancelled");
+                        }
+                        let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
+                            unreachable!()
+                        };
+                        Ok(crate::model::formats::csv_drill_hole::write_bundle(&item.dataset))
+                    },
+                    move |_app, result| match result {
+                        // Three downloads, since a browser saves one file at a
+                        // time and a bundle is three tables.
+                        Ok(bundle) => {
+                            for (suffix, text) in [("collars", bundle.collars), ("survey", bundle.survey), ("intervals", bundle.intervals)] {
+                                Self::trigger_browser_download(format!("{stem}_{suffix}.csv"), text.into_bytes(), "text/csv", "drillhole CSV");
+                            }
+                        }
+                        Err(error) => userspace_warn!("{}", tr_format!(literal = "Drillhole CSV export failed: %error%", error = format!("{error:#}"))),
                     },
                 );
                 Ok(())
@@ -1492,6 +1534,82 @@ impl<'a> App<'a> {
                 .into_path();
             Some(FileDialogAction::ExportBlockModelCsv { id, path })
         });
+    }
+
+    pub(crate) fn choose_export_drill_hole_csv(&mut self, id: DrillHoleId) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            userspace_warn!("{}", tr!(literal = "The selected drillhole dataset is no longer loaded"));
+            return;
+        };
+        let stem = Path::new(&dataset.name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("drillholes")
+            .trim_end_matches("_collars")
+            .to_owned();
+        #[cfg(target_arch = "wasm32")]
+        self.start_browser_export(FileDialogAction::WebDownloadDrillHoleCsv { id, stem });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let default_name = format!("{stem}_collars.csv");
+            self.spawn_file_dialog(async move {
+                let path = AsyncFileDialog::new()
+                    .add_filter("CSV drillhole bundle", &["csv"])
+                    .set_file_name(&default_name)
+                    .save_file()
+                    .await?
+                    .into_path();
+                Some(FileDialogAction::ExportDrillHoleCsv { id, path })
+            });
+        }
+    }
+
+    /// The three tables are written beside the name that was chosen, since a
+    /// bundle is one dataset and a reader expects its parts together.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_drill_hole_csv_to_path(&mut self, id: DrillHoleId, path: PathBuf) -> Result<()> {
+        let dataset = self
+            .drill_holes
+            .iter()
+            .find(|item| item.id == id)
+            .context("The selected drillhole dataset is no longer loaded")?;
+        let snapshot = dataset.clone();
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.trim_end_matches("_collars").to_owned())
+            .unwrap_or_else(|| "drillholes".to_owned());
+        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let display = directory.clone();
+        self.spawn_job(
+            tr_format!(literal = "Exporting %name%…", name = stem.clone()),
+            // Anonymous, not keyed on the dataset: the bytes are already
+            // copied, so unloading the source must not cancel the write.
+            vec![crate::app::jobs::JobKey::Anonymous],
+            move |cancel| {
+                if cancel.is_cancelled() {
+                    anyhow::bail!("Cancelled");
+                }
+                let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
+                    unreachable!()
+                };
+                let bundle = crate::model::formats::csv_drill_hole::write_bundle(&item.dataset);
+                for (suffix, text) in [("collars", &bundle.collars), ("survey", &bundle.survey), ("intervals", &bundle.intervals)] {
+                    let path = directory.join(format!("{stem}_{suffix}.csv"));
+                    crate::model::atomic_file::write_atomic(&path, |file| {
+                        use std::io::Write as _;
+                        file.write_all(text.as_bytes()).map_err(anyhow::Error::new)
+                    })?;
+                }
+                Ok(())
+            },
+            move |_app, result| match result {
+                Ok(()) => userspace_log!("{}", tr_format!(literal = "Exported three drillhole CSVs to %path%", path = display.display())),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "Drillhole CSV export failed: %error%", error = format!("{error:#}"))),
+            },
+        );
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
