@@ -898,8 +898,8 @@ impl<'a> Graphics<'a> {
         hits
     }
 
-    /// Anchors a plan orbit on the fixed centre, else on the pivot a C pick
-    /// would take. The section orbits by a separate path.
+    /// Anchors an orbit on the fixed centre, else on the pivot a C pick
+    /// would take. Touch also uses this anchor for the section camera.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_orbit_at_surface(
         &mut self,
@@ -913,7 +913,10 @@ impl<'a> Graphics<'a> {
         rotation_centre: Option<DVec3>,
         xray_enabled: bool,
     ) {
-        let pt = rotation_centre.unwrap_or_else(|| self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled));
+        let pt = rotation_centre.unwrap_or_else(|| {
+            self.pick_rotation_centre(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled)
+                .unwrap_or_else(|| self.unexaggerate_point(self.cursor_world_at_target_depth()))
+        });
         self.camera.sync_angles_from_forward();
         self.camera_controller.begin_orbit(self.exaggerate_point(pt));
         self.orbit_marker = rotation_centre.is_none().then_some(pt);
@@ -1687,7 +1690,7 @@ impl<'a> Graphics<'a> {
     /// and Q/E rotation, consume accumulated pan/scroll deltas, then derive
     /// the camera from the slice state (which stays the single source of
     /// truth).
-    fn update_slice_camera(&mut self, dt: Duration, rotation_centre: Option<DVec3>) {
+    pub(super) fn update_slice_camera(&mut self, dt: Duration, rotation_centre: Option<DVec3>) {
         let screen = self.screen_size();
         let mouse_loc = self.camera_controller.mouse_loc;
         let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
