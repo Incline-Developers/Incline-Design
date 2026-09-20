@@ -39,7 +39,8 @@ use crate::{
         EditorState, UiProjectView, chrome,
         fonts::bold,
         state::{
-            BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningPage, PlanningSubpage, ScheduleBarView, ScheduleEdit, ScheduleRepairTarget, UiCommand,
+            BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
+            ScheduleRepairTarget, UiCommand,
         },
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -145,6 +146,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
         .rect;
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
     rect
 }
@@ -895,7 +897,18 @@ pub(crate) fn bar_display_name(editor: &EditorState, bar: &ScheduleBar) -> Strin
 /// the marker names the work, and the figures belong in the hover.
 fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>) -> String {
     if bar.has_custom_name() {
-        bar.name().to_owned()
+        if bar.reclaim().is_some() {
+            format!("↺ {}", bar.name())
+        } else {
+            bar.name().to_owned()
+        }
+    } else if bar.reclaim().is_some() {
+        format!(
+            "↺ {}",
+            report
+                .map(|report| report.default_name.clone())
+                .unwrap_or_else(|| tr!("reclaim-bar-default-name", stockpile = tr!("destination-unresolved")))
+        )
     } else {
         report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!(literal = "Dig sequence"))
     }
@@ -916,6 +929,12 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         bar_label(bar, report),
         tr_format!(literal = "%label%: %span%", label = tr!("schedule-gantt-window"), span = span),
     ];
+    if let Some(work) = bar.reclaim() {
+        lines.push(match work.maximum_t {
+            Some(maximum) => tr!("reclaim-maximum-value", tonnes = format!("{maximum:.3}")),
+            None => tr!("reclaim-maximum-unlimited"),
+        });
+    }
     if let Some(schedule) = schedule {
         let worked = schedule.bar_tonnes(bar.id);
         lines.push(tr!("schedule-bar-worked", tonnes = format!("{worked:.1}")));
@@ -1224,6 +1243,7 @@ fn draw_bars(
     let mut open_dialog: Option<BarNameDialog> = None;
     let mut open_window: Option<BarWindowDialog> = None;
     let mut open_editor: Option<crate::ui::state::SequenceDraft> = None;
+    let mut open_reclaim: Option<ReclaimBarDialog> = None;
 
     // A bar deleted - by an edit, by undo, or with the project it belonged
     // to - leaves nothing to move. The session is checked as well as the id
@@ -1453,13 +1473,27 @@ fn draw_bars(
                     }
                     let menu_label = bar_label(bar, report);
                     context_menu_popup(&response, &menu_label, |ui| {
-                        if ContextMenuAction::new(tr!("schedule-bar-edit-sequence")).show(ui).clicked() {
+                        if bar.dig_order().is_some() && ContextMenuAction::new(tr!("schedule-bar-edit-sequence")).show(ui).clicked() {
                             // Opening reads the bar and nothing else: the
                             // draft is editor state, and no geometry, run or
                             // pipeline demand is touched by opening a window.
                             open_editor = Some(crate::ui::state::SequenceDraft::open(session, bar.id, bar.members()));
                             editor.solids_view_selection.clear();
                             editor.selected_blast = None;
+                            ui.close();
+                        }
+                        if let Some(work) = bar.reclaim()
+                            && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
+                        {
+                            open_reclaim = Some(ReclaimBarDialog {
+                                target: Some(bar.id),
+                                source: Some(work.source),
+                                agent: bar.agent,
+                                priority: bar.priority,
+                                start: bar.window.start_h.to_string(),
+                                end: bar.window.end_h.map(|value| value.to_string()).unwrap_or_default(),
+                                maximum: work.maximum_t.map(|value| value.to_string()).unwrap_or_default(),
+                            });
                             ui.close();
                         }
                         // Dragging an edge is quick and imprecise; a real
@@ -1570,6 +1604,9 @@ fn draw_bars(
     if let Some(draft) = open_editor {
         editor.sequence_editor = Some(draft);
     }
+    if let Some(dialog) = open_reclaim {
+        editor.reclaim_bar_dialog = Some(dialog);
+    }
 }
 
 /// The placement a drag is currently previewing, as one value.
@@ -1617,7 +1654,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
             let title = row.title.clone();
             let priority = row.lanes[lane].priority;
             context_menu_popup(&response, title, |ui| {
-                if ContextMenuAction::new(tr!("schedule-new-bar")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("reclaim-add-dig-bar")).show(ui).clicked() {
                     // The new bar lands in the row, the lane and at the instant
                     // it was asked for, rather than unassigned at hour zero
                     // somewhere off screen: right-clicking a machine's lane at
@@ -1638,6 +1675,19 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                             },
                         },
                     ));
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("reclaim-add-bar")).show(ui).clicked() {
+                    let start_h = ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR;
+                    editor.reclaim_bar_dialog = Some(ReclaimBarDialog {
+                        target: None,
+                        source: None,
+                        agent: row.agent,
+                        priority,
+                        start: start_h.to_string(),
+                        end: (start_h + crate::model::schedule::SCHEDULE_PERIOD_H).to_string(),
+                        maximum: String::new(),
+                    });
                     ui.close();
                 }
             });

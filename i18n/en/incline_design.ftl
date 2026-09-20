@@ -1873,6 +1873,10 @@ destination-rule-target = Delivers to
 destination-rule-disabled = Disabled: this rule takes no part in routing
 destination-rule-loaders = Loaders
 destination-rule-all-loaders = All loaders
+destination-rule-none = None chosen
+destination-rule-no-loaders = No loaders in the fleet yet.
+destination-no-destinations = No destinations yet.
+destination-select-all = Select all
 destination-rule-sources = Sources
 destination-rule-all-sources = All sources
 destination-rule-conditions = Conditions
@@ -2305,3 +2309,175 @@ literal-volume-m-faces-faces-dc46a8587ba57078 = %volume% m³ · %faces% faces
 literal-weighted-average-740d7e8b131e9e97 = Weighted average
 literal-weighted-avg-by-name-8f48b7cb01e5e0aa = Weighted avg. by %name%
 literal-weighted-by-0a019be68e9c0bfd = Weighted by
+
+## Trucks and trucking rules
+
+truck-error-invalid-payload = Payload must be a positive number of tonnes.
+truck-error-invalid-speed = Speed must be a positive number of km/h.
+truck-error-invalid-distance = Distance must be a positive number of kilometres.
+truck-error-invalid-units = Units must be a whole number of trucks.
+truck-error-unknown-class = That truck class is no longer in this project.
+truck-error-unknown-rule = That trucking rule is no longer in this project.
+truck-error-class-in-use = Still used by { $rules }.
+truck-error-unrepresentable = Those settings produce a haulage figure no number can express.
+truck-help-optimised-only = Truck constraints apply to optimised schedules.
+
+truck-classes = Truck Classes
+truck-rules = Trucking Rules
+truck-class = Truck class
+truck-rule = Trucking rule
+truck-new-class = New Truck Class
+truck-duplicate-class = Duplicate Truck Class
+truck-delete-class = Delete Truck Class
+truck-no-classes = No truck classes yet. Right-click to add one.
+truck-select-class = Select a truck class.
+truck-default-class-name = HT
+truck-payload = Payload (t)
+truck-loaded-speed = Loaded speed (km/h)
+truck-unloaded-speed = Unloaded speed (km/h)
+truck-travel-cycle = Travel cycle time
+truck-travel-cycle-note = Out loaded and back empty over the destination's one-way distance. Loading, spotting, dumping and queuing are not included.
+truck-cycle-at = { $hours } h at { $distance } km
+truck-hours-per-tonne = Truck-hours per tonne
+
+truck-new-rule = New Trucking Rule
+truck-duplicate-rule = Duplicate Trucking Rule
+truck-delete-rule = Delete Trucking Rule
+truck-no-rules = No trucking rules yet. Right-click to add one.
+truck-select-rule = Select a trucking rule.
+truck-default-rule-name = Trucking rule
+truck-rule-enabled = Enabled
+truck-rule-disabled = Disabled
+truck-rule-loaders = Loaders
+truck-rule-sources = Sources
+truck-rule-destinations = Destinations
+truck-rule-classes = Truck classes
+truck-rule-all-destinations = All destinations
+truck-rule-matches-all = Every movement
+truck-rule-stockpiles = Stockpiles
+truck-rule-ground = Pit ground
+truck-rule-no-classes = Add a truck class first.
+truck-rule-class-missing = A truck class this rule names is gone.
+truck-rule-destination-missing = A destination this rule names is gone.
+
+truck-stage-no-classes = No truck classes are configured. Trucks do not constrain this schedule.
+truck-stage-zero-units = { $class } has no trucks rostered, so it supplies no capacity.
+truck-stage-no-rules = No trucking rules are configured, so no truck class is permitted anywhere.
+
+schedule-calendar-trucks = Trucks
+truck-calendar-units = Units
+truck-calendar-availability = Availability (%)
+truck-calendar-utilisation = Utilisation (%)
+
+destination-distance = One-way distance (km)
+
+## Cashflow
+
+cashflow = Cashflow
+cashflow-error-invalid-value = Value must be a number.
+cashflow-error-unknown-rule = That cashflow rule is no longer in this project.
+cashflow-error-unrepresentable = Those values produce a figure no number can express.
+cashflow-error-empty-currency = Currency needs a label.
+
+cashflow-activity-all = Any activity
+cashflow-activity-dig = Dig
+cashflow-activity-reclaim = Reclaim
+cashflow-activity = Activity
+
+cashflow-rule = Cashflow rule
+cashflow-rule-matches-all = Every movement
+cashflow-rule-destinations-count = { $count } destinations
+cashflow-rule-enabled = Enabled
+cashflow-rule-disabled = Disabled
+cashflow-rule-value = Value per tonne
+cashflow-rule-loaders = Loaders
+cashflow-rule-sources = Sources
+cashflow-rule-destinations = Destinations
+cashflow-rule-conditions = Conditions
+cashflow-rule-all-destinations = All destinations
+cashflow-new-rule = New Cashflow Rule
+cashflow-duplicate-rule = Duplicate Cashflow Rule
+cashflow-delete-rule = Delete Cashflow Rule
+cashflow-no-rules = No cashflow rules yet. Right-click to add one.
+cashflow-select-rule = Select a cashflow rule.
+cashflow-default-rule-name = Cashflow rule
+cashflow-currency = Currency
+cashflow-help = Matching rules add together. Values guide optimisation; they do not guarantee movement priority.
+
+cashflow-stage-no-rules = No cashflow rules are configured. Movements are worth nothing.
+cashflow-stage-zero-value = { $rule } describes movements but pays nothing.
+
+## Stockpile inventory and reclaim
+
+inventory-order-fifo = FIFO (oldest first)
+inventory-order-lifo = LIFO (newest first)
+inventory-error-invalid-tonnes = Tonnes must be a number above zero.
+inventory-error-invalid-value = That value is not a number, or the category is blank.
+inventory-error-duplicate-value = That field already has a value on this portion.
+inventory-error-unknown-lot = That lot is no longer in this stockpile.
+inventory-error-unknown-portion = That portion is no longer in this lot.
+inventory-error-last-portion = A lot needs at least one portion. Delete the lot instead.
+inventory-error-lot-at-end = That lot is already at the end of the order.
+inventory-error-over-capacity = Opening inventory would exceed this stockpile's capacity.
+inventory-error-stockpile-full = This stockpile is at its capacity.
+inventory-error-overdrawn = That lot does not hold that many tonnes.
+inventory-error-invalid-interval = That is not a model interval.
+
+inventory-reclaim-order = Reclaim order
+inventory-opening = Opening inventory
+inventory-opening-tonnes = Opening tonnes
+inventory-opening-order-note = Oldest → newest
+inventory-no-lots = No opening inventory. Right-click to add a lot.
+inventory-new-lot = New Lot
+inventory-duplicate-lot = Duplicate Lot
+inventory-delete-lot = Delete Lot
+inventory-move-lot-older = Move Towards Oldest
+inventory-move-lot-newer = Move Towards Newest
+inventory-default-lot-name = Lot
+inventory-lot = Lot
+inventory-lot-name = Name
+inventory-lot-tonnes = Tonnes
+inventory-portion = Portion
+inventory-portions = Portions
+inventory-new-portion = New Portion
+inventory-delete-portion = Delete Portion
+inventory-portion-value = Set Value
+inventory-portion-clear-value = Clear Value
+inventory-portion-missing = —
+inventory-select-lot = Select a lot.
+inventory-help = Opening inventory and reclaim order apply to optimised schedules.
+inventory-stage-over-capacity = { $stockpile } opens with more than its capacity.
+inventory-stage-invalid-fields = { $count } opening-inventory properties refer to missing fields or incompatible field types.
+inventory-field-missing = Missing field #{ $id }
+inventory-field-incompatible = { $field } (incompatible type)
+inventory-field-incompatible-note = The saved value is preserved, but its field type has changed.
+
+## Reclaim bars
+
+reclaim-error-not-a-stockpile = A reclaim bar's source has to be a stockpile.
+reclaim-error-invalid-limit = Maximum tonnes must be a number above zero, or blank.
+reclaim-error-wrong-activity = That edit does not apply to this kind of bar.
+
+reclaim-bar = Reclaim
+reclaim-bar-default-name = Reclaim { $stockpile }
+reclaim-add-bar = Add Reclaim Bar
+reclaim-add-dig-bar = Add Dig Sequence
+reclaim-edit-bar = Edit Reclaim
+reclaim-source = Stockpile
+reclaim-source-choose = Choose a stockpile
+reclaim-source-required = Choose a stockpile.
+reclaim-loader = Loader
+reclaim-loader-choose = Choose a loader
+reclaim-maximum = Maximum tonnes
+reclaim-maximum-none = No limit
+reclaim-maximum-value = Maximum: { $tonnes } t
+reclaim-maximum-unlimited = Maximum: no limit
+reclaim-set-source = Set Stockpile
+reclaim-set-maximum = Set Maximum Tonnes
+reclaim-source-unresolved = That stockpile is no longer in this project.
+reclaim-no-stockpiles = No stockpiles to reclaim from.
+reclaim-unsupported = Reclaim tasks require the optimised scheduler.
+
+schedule-calendar-reclaim-rate = Reclaim rate (t/h)
+schedule-calendar-dig-rate = Dig rate (t/h)
+schedule-class-reclaim-rate = Reclaim rate (t/h)

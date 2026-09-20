@@ -1683,8 +1683,22 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             island(ui, layout, "schedule_destination_list_island", 320.0, |ui, rect| {
                 super::schedule_destinations::draw_destination_list(ui, rect, editor, &plan, document, kind, session, commands)
             });
+            // Stockpiles carry a third list: what the pile already holds, oldest
+            // first. It sits beside the pile rather than on a page of its own,
+            // because opening stock is a property of one stockpile.
+            if kind == crate::model::schedule::DestinationKind::Stockpile {
+                island(ui, layout, "schedule_opening_lots_island", 300.0, |ui, rect| {
+                    super::schedule_destinations::draw_opening_lots(ui, rect, editor, &plan, document, session, commands)
+                });
+            }
             central_island(ui, layout, |ui, rect| {
-                super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands)
+                let table = super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands);
+                if kind == crate::model::schedule::DestinationKind::Stockpile {
+                    let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table.bottom() + ui.spacing().item_spacing.y), rect.max);
+                    if below.is_positive() {
+                        super::schedule_destinations::draw_lot_editor(ui, below, editor, &plan, document, session, commands);
+                    }
+                }
             });
             super::schedule_destinations::draw_new_destination_dialog(ui, editor, &plan, session, commands);
         }
@@ -1694,6 +1708,30 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             });
             central_island(ui, layout, |ui, rect| {
                 super::schedule_destinations::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
+            });
+        }
+        ScheduleStep::TruckClasses => {
+            island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
+                super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
+            });
+        }
+        ScheduleStep::TruckingRules => {
+            island(ui, layout, "schedule_truck_rule_list_island", 380.0, |ui, rect| {
+                super::schedule_trucking::draw_rule_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_trucking::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
+            });
+        }
+        ScheduleStep::Cashflow => {
+            island(ui, layout, "schedule_cashflow_list_island", 380.0, |ui, rect| {
+                super::schedule_cashflow::draw_rule_list(ui, rect, editor, &plan, document, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_cashflow::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
             });
         }
         ScheduleStep::Readiness => {

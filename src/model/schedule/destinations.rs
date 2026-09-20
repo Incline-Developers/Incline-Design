@@ -48,7 +48,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CalendarPeriod, LoaderAgentId, ScheduleError, ScheduleResult, checked_name, same_name};
+use super::{
+    CalendarPeriod, LoaderAgentId, ScheduleError, ScheduleResult, checked_name,
+    inventory::{OpeningLotId, OpeningPortionId, OpeningValue, ReclaimOrder, StockpileInventory},
+    same_name,
+};
 use crate::{
     i18n::{tr, tr_format},
     model::{ReserveFieldId, SolidId},
@@ -224,6 +228,15 @@ pub(crate) struct StandaloneDestination {
     /// for a crusher, which has no storage in this increment.
     #[serde(default)]
     pub(crate) capacity_t: Option<f64>,
+    /// One-way haul distance in kilometres. The return trip uses the same
+    /// figure, and a reclaim from here will too. Never derived from geometry:
+    /// a straight line between two solids is not a haul road.
+    #[serde(default = "default_distance")]
+    pub(crate) distance_km: f64,
+    /// Stockpile only: what it already holds, and which end reclaim takes
+    /// from. Empty and FIFO for every project that has not authored any.
+    #[serde(default)]
+    pub(crate) inventory: StockpileInventory,
     /// Crusher only.
     #[serde(default)]
     pub(crate) crusher: CrusherCalendar,
@@ -240,6 +253,126 @@ pub(crate) struct SolidDestination {
     pub(crate) solid: SolidId,
     #[serde(default)]
     pub(crate) capacity_t: Option<f64>,
+    /// One-way haul distance in kilometres; see
+    /// [`StandaloneDestination::distance_km`]. Projects saved before trucks
+    /// existed have no stored figure and resolve to the default.
+    #[serde(default = "default_distance")]
+    pub(crate) distance_km: f64,
+    /// Stockpile only; see [`StandaloneDestination::inventory`].
+    #[serde(default)]
+    pub(crate) inventory: StockpileInventory,
+}
+
+/// One place material moves *from*.
+///
+/// Ground and stockpiles in one space because the rules built on it - trucking
+/// today, cashflow beside it - may name either. Reclaim is not executed yet,
+/// but a rule authored for it now must resolve to the same stockpile when it
+/// is.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", from = "ScopeRepr")]
+pub(crate) enum MovementSourceScope {
+    /// A pit, a bench of it, or a flitch of that bench - the same identities
+    /// and tolerances the destination rules use.
+    Ground(SourceScope),
+    /// A stockpile the material is reclaimed from.
+    Stockpile(DestinationId),
+}
+
+/// What a saved scope is read through.
+///
+/// A destination rule's sources used to be ground only, written as a bare
+/// [`SourceScope`], and projects written then are still on disk. The two forms
+/// are disjoint by key - `pit` and `bench` against `ground` and `stockpile` -
+/// so the older one is accepted and read as ground rather than being refused a
+/// field it was right to write. Only reading goes through this; what is written
+/// is the tagged form.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ScopeRepr {
+    Tagged(TaggedScope),
+    Ground(SourceScope),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum TaggedScope {
+    Ground(SourceScope),
+    Stockpile(DestinationId),
+}
+
+impl From<ScopeRepr> for MovementSourceScope {
+    fn from(repr: ScopeRepr) -> Self {
+        match repr {
+            ScopeRepr::Tagged(TaggedScope::Ground(scope)) | ScopeRepr::Ground(scope) => Self::Ground(scope),
+            ScopeRepr::Tagged(TaggedScope::Stockpile(id)) => Self::Stockpile(id),
+        }
+    }
+}
+
+impl MovementSourceScope {
+    /// Whether this scope is one at all: a ground band that is a band, or any
+    /// stockpile.
+    pub(crate) fn is_valid(self) -> bool {
+        match self {
+            Self::Ground(scope) => scope.is_valid(),
+            Self::Stockpile(_) => true,
+        }
+    }
+
+    /// Whether this scope covers where material is being loaded from *now*.
+    ///
+    /// Ground and stockpiles are disjoint: a stockpile scope never matches
+    /// ex-pit ground, and an ex-pit scope never matches a reclaim, however the
+    /// material in that pile originally got there.
+    pub(crate) fn covers(self, source: super::RouteSource) -> bool {
+        match (self, source) {
+            (Self::Ground(ground), super::RouteSource::Ground { solid, bench, flitch }) => ground.covers(solid, bench, flitch),
+            (Self::Stockpile(held), super::RouteSource::Stockpile(from)) => held == from,
+            _ => false,
+        }
+    }
+
+    /// The ground half, for the checks that only ground can answer - whether a
+    /// scope is placeable against the blocks a run produced, say.
+    pub(crate) fn ground(self) -> Option<SourceScope> {
+        match self {
+            Self::Ground(scope) => Some(scope),
+            Self::Stockpile(_) => None,
+        }
+    }
+}
+
+/// Which sources a rule applies to.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub(crate) enum MovementSourceSelection {
+    /// Every source, ground and stockpile alike - including any added later.
+    #[default]
+    All,
+    /// Any one of these. Never empty: "only these, and there are none" matches
+    /// nothing and is not what All means.
+    Only(Vec<MovementSourceScope>),
+}
+
+/// Which destinations a rule applies to.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub(crate) enum DestinationSelection {
+    #[default]
+    All,
+    Only(Vec<DestinationId>),
+}
+
+/// Fold one scope into a fingerprint. Shared with the trucking rules, which
+/// name the same ground by the same identities.
+pub(crate) fn hash_scope<H: std::hash::Hasher>(scope: SourceScope, hasher: &mut H) {
+    use std::hash::Hash;
+    match scope {
+        SourceScope::Pit(solid) => (0u8, solid).hash(hasher),
+        SourceScope::Bench { solid, base, top } => (1u8, solid, base.to_bits(), top.to_bits()).hash(hasher),
+        SourceScope::Flitch { solid, base, top } => (2u8, solid, base.to_bits(), top.to_bits()).hash(hasher),
+    }
 }
 
 /// Which loaders a rule applies to.
@@ -280,7 +413,7 @@ impl SourceScope {
         }
     }
 
-    fn is_valid(self) -> bool {
+    pub(crate) fn is_valid(self) -> bool {
         match self.bands() {
             None => true,
             Some((base, top)) => base.is_finite() && top.is_finite() && base < top,
@@ -299,17 +432,6 @@ impl SourceScope {
             Self::Flitch { base, top, .. } => same((base, top), flitch),
         }
     }
-}
-
-/// Which ground a rule applies to.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case")]
-pub(crate) enum SourceSelection {
-    #[default]
-    All,
-    /// Any one of these. Scopes may be mixed freely - a whole pit plus one
-    /// bench of another is a normal thing to want.
-    Only(Vec<SourceScope>),
 }
 
 /// One end of a numerical condition.
@@ -396,23 +518,29 @@ pub(crate) enum PortionValue {
     Missing,
 }
 
-/// One routing rule: a destination and the material allowed to reach it.
+/// One routing rule: the destinations it may deliver to, and the material
+/// allowed to reach them.
+///
+/// The destinations are ordered and are tried in the order they are listed,
+/// which is the same resolution the rule list itself uses one level up: the
+/// first with room takes the material. Listing two here rather than writing
+/// two identical rules says only that this material may go to either.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "RuleRepr")]
 pub(crate) struct DestinationRule {
     pub(crate) id: RuleId,
     /// A disabled rule takes no part in routing *or* in readiness: it is a
     /// rule the user has switched off, not a rule that is broken.
-    #[serde(default = "yes")]
     pub(crate) enabled: bool,
     pub(crate) name: String,
-    pub(crate) destination: DestinationId,
-    #[serde(default)]
+    /// In the order they are tried. Never empty.
+    pub(crate) destinations: Vec<DestinationId>,
     pub(crate) loaders: LoaderSelection,
-    #[serde(default)]
-    pub(crate) sources: SourceSelection,
+    /// Ground *and* stockpiles: a rule may route what a loader digs out of a
+    /// pit and what it reclaims out of a pile, and the same selection model
+    /// serves both here, in the trucking rules and in the cashflow rules.
+    pub(crate) sources: MovementSourceSelection,
     /// Every condition must hold. An empty list restricts nothing.
-    #[serde(default)]
     pub(crate) conditions: Vec<FieldCondition>,
 }
 
@@ -420,15 +548,73 @@ fn yes() -> bool {
     true
 }
 
+/// What a saved rule is read through.
+///
+/// A rule used to name exactly one destination, and projects written then are
+/// still on disk; the singular field is accepted and folded into the list so
+/// those projects load rather than being refused a field they were right to
+/// write. Only reading goes through this - what is written is the list.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleRepr {
+    id: RuleId,
+    #[serde(default = "yes")]
+    enabled: bool,
+    name: String,
+    #[serde(default)]
+    destination: Option<DestinationId>,
+    #[serde(default)]
+    destinations: Vec<DestinationId>,
+    #[serde(default)]
+    loaders: LoaderSelection,
+    #[serde(default)]
+    sources: MovementSourceSelection,
+    #[serde(default)]
+    conditions: Vec<FieldCondition>,
+}
+
+impl From<RuleRepr> for DestinationRule {
+    fn from(repr: RuleRepr) -> Self {
+        let RuleRepr {
+            id,
+            enabled,
+            name,
+            destination,
+            mut destinations,
+            loaders,
+            sources,
+            conditions,
+        } = repr;
+        if let Some(destination) = destination
+            && !destinations.contains(&destination)
+        {
+            destinations.insert(0, destination);
+        }
+        Self {
+            id,
+            enabled,
+            name,
+            destinations,
+            loaders,
+            sources,
+            conditions,
+        }
+    }
+}
+
 impl DestinationRule {
     /// Whether this rule accepts material of this composition, from this
-    /// ground, dug by this loader.
+    /// source, moved by this loader.
     ///
     /// All three groups must hold; within the loader and source groups the
     /// entries are alternatives, and the conditions are conjunctive. Reading
     /// the values is the caller's job - `value` answers for one field at a
     /// time so a portion's payload is never copied to be tested.
-    pub(crate) fn accepts(&self, loader: LoaderAgentId, ground: impl Fn(SourceScope) -> bool, value: impl Fn(ReserveFieldId) -> Option<PortionValue>) -> bool {
+    ///
+    /// `source` is where the material is being loaded from *now*: a reclaim's
+    /// source is its stockpile, so a rule written for ex-pit ground cannot
+    /// route material a second time on its way out of a pile.
+    pub(crate) fn accepts(&self, loader: LoaderAgentId, source: super::RouteSource, value: impl Fn(ReserveFieldId) -> Option<PortionValue>) -> bool {
         if !self.enabled {
             return false;
         }
@@ -438,9 +624,9 @@ impl DestinationRule {
             LoaderSelection::Only(_) => return false,
         }
         match &self.sources {
-            SourceSelection::All => {}
-            SourceSelection::Only(scopes) if scopes.iter().copied().any(&ground) => {}
-            SourceSelection::Only(_) => return false,
+            MovementSourceSelection::All => {}
+            MovementSourceSelection::Only(scopes) if scopes.iter().any(|scope| scope.covers(source)) => {}
+            MovementSourceSelection::Only(_) => return false,
         }
         self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
     }
@@ -467,6 +653,69 @@ pub(crate) struct RoutingConfig {
     next_rule_id: u64,
 }
 
+/// What a destination's one-way haul distance is until somebody says otherwise.
+pub(crate) const DEFAULT_DISTANCE_KM: f64 = 2.0;
+
+fn default_distance() -> f64 {
+    DEFAULT_DISTANCE_KM
+}
+
+/// The destinations one rule may deliver to, in order, with repeats dropped.
+///
+/// An empty list is refused rather than stored: a rule that matches material
+/// and names nowhere to send it would read as a restriction and behave as a
+/// hole in the configuration.
+fn checked_destinations(destinations: Vec<DestinationId>) -> ScheduleResult<Vec<DestinationId>> {
+    let mut ordered: Vec<DestinationId> = Vec::with_capacity(destinations.len());
+    for destination in destinations {
+        if !ordered.contains(&destination) {
+            ordered.push(destination);
+        }
+    }
+    if ordered.is_empty() {
+        return Err(ScheduleError::EmptyRuleSelection);
+    }
+    Ok(ordered)
+}
+
+/// The movement sources one rule names, deduplicated and never empty.
+///
+/// Shared by the destination, trucking and cashflow rules: "only these, and
+/// there are none" matches nothing and is not what All means, wherever it is
+/// written.
+pub(crate) fn checked_sources(sources: MovementSourceSelection) -> ScheduleResult<MovementSourceSelection> {
+    match sources {
+        MovementSourceSelection::All => Ok(MovementSourceSelection::All),
+        MovementSourceSelection::Only(scopes) => {
+            if scopes.is_empty() {
+                return Err(ScheduleError::EmptyRuleSelection);
+            }
+            if !scopes.iter().copied().all(MovementSourceScope::is_valid) {
+                return Err(ScheduleError::InvalidSourceScope);
+            }
+            let mut kept: Vec<MovementSourceScope> = Vec::with_capacity(scopes.len());
+            for scope in scopes {
+                if !kept.contains(&scope) {
+                    kept.push(scope);
+                }
+            }
+            Ok(MovementSourceSelection::Only(kept))
+        }
+    }
+}
+
+/// Whether a pile's opening stock fits its capacity. Equality is valid: a pile
+/// that starts exactly full is a real answer, and one tonne over is not.
+fn check_opening_fits(opening_t: f64, capacity_t: Option<f64>) -> ScheduleResult {
+    if !opening_t.is_finite() {
+        return Err(ScheduleError::InvalidLotTonnes);
+    }
+    if capacity_t.is_some_and(|capacity| opening_t > capacity) {
+        return Err(ScheduleError::OpeningOverCapacity);
+    }
+    Ok(())
+}
+
 fn checked_capacity(value: f64) -> ScheduleResult<f64> {
     if !value.is_finite() || value < 0.0 {
         return Err(ScheduleError::InvalidCapacity);
@@ -478,7 +727,7 @@ impl RoutingConfig {
     /// Whether nothing here has ever been configured, so an untouched project
     /// is not reported as holding routing setup.
     pub(crate) fn is_pristine(&self) -> bool {
-        !self.enabled && self.standalone.is_empty() && self.rules.is_empty() && self.solids.iter().all(|entry| entry.capacity_t.is_none())
+        !self.enabled && self.standalone.is_empty() && self.rules.is_empty() && self.solids.iter().all(|entry| entry.capacity_t.is_none() && entry.inventory.is_pristine())
     }
 
     pub(crate) fn standalone(&self, id: StandaloneDestinationId) -> Option<&StandaloneDestination> {
@@ -505,6 +754,137 @@ impl RoutingConfig {
         }
     }
 
+    /// One destination's one-way haul distance, whichever kind it is. A
+    /// destination nothing has been stored against is at the default.
+    pub(crate) fn distance_km(&self, id: DestinationId) -> f64 {
+        match id {
+            DestinationId::Solid(solid) => self.solids.iter().find(|entry| entry.solid == solid).map_or(DEFAULT_DISTANCE_KM, |entry| entry.distance_km),
+            DestinationId::Standalone(standalone) => self.standalone(standalone).map_or(DEFAULT_DISTANCE_KM, |entry| entry.distance_km),
+        }
+    }
+
+    /// Store a one-way haul distance against any destination.
+    pub(crate) fn set_distance_km(&mut self, id: DestinationId, distance_km: f64) -> ScheduleResult {
+        let distance_km = super::trucking::checked_distance(distance_km)?;
+        match id {
+            DestinationId::Standalone(standalone) => self.standalone_mut(standalone)?.distance_km = distance_km,
+            DestinationId::Solid(solid) => match self.solids.iter_mut().find(|entry| entry.solid == solid) {
+                Some(entry) => entry.distance_km = distance_km,
+                None => self.solids.push(SolidDestination {
+                    solid,
+                    capacity_t: None,
+                    distance_km,
+                    inventory: StockpileInventory::default(),
+                }),
+            },
+        }
+        Ok(())
+    }
+
+    /// One stockpile's opening stock and reclaim order. A stockpile nothing has
+    /// been stored against is empty and FIFO.
+    pub(crate) fn inventory(&self, id: DestinationId) -> Option<&StockpileInventory> {
+        match id {
+            DestinationId::Solid(solid) => self.solids.iter().find(|entry| entry.solid == solid).map(|entry| &entry.inventory),
+            DestinationId::Standalone(standalone) => self.standalone(standalone).map(|entry| &entry.inventory),
+        }
+    }
+
+    /// What one stockpile holds at hour zero.
+    pub(crate) fn opening_tonnes(&self, id: DestinationId) -> f64 {
+        self.inventory(id).map_or(0.0, StockpileInventory::opening_tonnes)
+    }
+
+    pub(crate) fn reclaim_order(&self, id: DestinationId) -> ReclaimOrder {
+        self.inventory(id).map_or_else(ReclaimOrder::default, |inventory| inventory.order)
+    }
+
+    /// Apply one edit to a stockpile's inventory, all or nothing.
+    ///
+    /// Every inventory edit goes through here, and so does every capacity edit,
+    /// which is what makes "opening stock must fit" one check rather than two
+    /// that could disagree: the edit is made on a copy, the copy is weighed
+    /// against the capacity, and only then does it become the stored answer.
+    fn edit_inventory<T>(&mut self, id: DestinationId, edit: impl FnOnce(&mut StockpileInventory) -> ScheduleResult<T>) -> ScheduleResult<T> {
+        let capacity_t = self.capacity_t(id);
+        let mut draft = self.inventory(id).cloned().unwrap_or_default();
+        // A destination that holds nothing yet still has to exist: an edit to a
+        // stockpile that is gone is a stale command, not a new stockpile.
+        if self.inventory(id).is_none()
+            && let DestinationId::Standalone(standalone) = id
+            && self.standalone(standalone).is_none()
+        {
+            return Err(ScheduleError::UnknownDestination);
+        }
+        let outcome = edit(&mut draft)?;
+        check_opening_fits(draft.opening_tonnes(), capacity_t)?;
+        match id {
+            DestinationId::Standalone(standalone) => self.standalone_mut(standalone)?.inventory = draft,
+            DestinationId::Solid(solid) => match self.solids.iter_mut().find(|entry| entry.solid == solid) {
+                Some(entry) => entry.inventory = draft,
+                None => self.solids.push(SolidDestination {
+                    solid,
+                    capacity_t: None,
+                    distance_km: DEFAULT_DISTANCE_KM,
+                    inventory: draft,
+                }),
+            },
+        }
+        self.solids
+            .retain(|entry| entry.capacity_t.is_some() || entry.distance_km != DEFAULT_DISTANCE_KM || !entry.inventory.is_pristine());
+        Ok(outcome)
+    }
+
+    pub(crate) fn set_reclaim_order(&mut self, id: DestinationId, order: ReclaimOrder) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| {
+            inventory.order = order;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn add_opening_lot(&mut self, id: DestinationId, name: &str, tonnes_t: f64) -> ScheduleResult<OpeningLotId> {
+        self.edit_inventory(id, |inventory| inventory.add_lot(name, tonnes_t))
+    }
+
+    pub(crate) fn duplicate_opening_lot(&mut self, id: DestinationId, lot: OpeningLotId, name: &str) -> ScheduleResult<OpeningLotId> {
+        self.edit_inventory(id, |inventory| inventory.duplicate_lot(lot, name))
+    }
+
+    pub(crate) fn remove_opening_lot(&mut self, id: DestinationId, lot: OpeningLotId) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.remove_lot(lot))
+    }
+
+    pub(crate) fn rename_opening_lot(&mut self, id: DestinationId, lot: OpeningLotId, name: &str) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.rename_lot(lot, name))
+    }
+
+    pub(crate) fn move_opening_lot(&mut self, id: DestinationId, lot: OpeningLotId, newer: bool) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.move_lot(lot, newer))
+    }
+
+    pub(crate) fn add_opening_portion(&mut self, id: DestinationId, lot: OpeningLotId, tonnes_t: f64) -> ScheduleResult<OpeningPortionId> {
+        self.edit_inventory(id, |inventory| inventory.add_portion(lot, tonnes_t))
+    }
+
+    pub(crate) fn remove_opening_portion(&mut self, id: DestinationId, lot: OpeningLotId, portion: OpeningPortionId) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.remove_portion(lot, portion))
+    }
+
+    pub(crate) fn set_opening_portion_tonnes(&mut self, id: DestinationId, lot: OpeningLotId, portion: OpeningPortionId, tonnes_t: f64) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.set_portion_tonnes(lot, portion, tonnes_t))
+    }
+
+    pub(crate) fn set_opening_portion_value(
+        &mut self,
+        id: DestinationId,
+        lot: OpeningLotId,
+        portion: OpeningPortionId,
+        field: ReserveFieldId,
+        value: Option<OpeningValue>,
+    ) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.set_portion_value(lot, portion, field, value))
+    }
+
     pub(crate) fn crusher(&self, id: StandaloneDestinationId) -> Option<&CrusherCalendar> {
         self.standalone(id).map(|entry| &entry.crusher)
     }
@@ -529,6 +909,8 @@ impl RoutingConfig {
             name,
             kind,
             capacity_t: None,
+            distance_km: DEFAULT_DISTANCE_KM,
+            inventory: StockpileInventory::default(),
             crusher: CrusherCalendar::default(),
         });
         Ok(id)
@@ -545,7 +927,12 @@ impl RoutingConfig {
 
     pub(crate) fn set_standalone_capacity(&mut self, id: StandaloneDestinationId, capacity_t: Option<f64>) -> ScheduleResult {
         let capacity_t = capacity_t.map(checked_capacity).transpose()?;
-        self.standalone_mut(id)?.capacity_t = capacity_t;
+        let entry = self.standalone_mut(id)?;
+        // Checked before it is stored, against the stock that is already there:
+        // a capacity typed below the opening inventory is refused rather than
+        // leaving a pile that starts the schedule overfull.
+        check_opening_fits(entry.inventory.opening_tonnes(), capacity_t)?;
+        entry.capacity_t = capacity_t;
         Ok(())
     }
 
@@ -601,12 +988,21 @@ impl RoutingConfig {
     /// on first use and removing an entry that no longer says anything.
     pub(crate) fn set_solid_capacity(&mut self, solid: SolidId, capacity_t: Option<f64>) -> ScheduleResult {
         let capacity_t = capacity_t.map(checked_capacity).transpose()?;
+        check_opening_fits(self.opening_tonnes(DestinationId::Solid(solid)), capacity_t)?;
         match self.solids.iter_mut().find(|entry| entry.solid == solid) {
             Some(entry) => entry.capacity_t = capacity_t,
-            None if capacity_t.is_some() => self.solids.push(SolidDestination { solid, capacity_t }),
+            None if capacity_t.is_some() => self.solids.push(SolidDestination {
+                solid,
+                capacity_t,
+                distance_km: DEFAULT_DISTANCE_KM,
+                inventory: StockpileInventory::default(),
+            }),
             None => {}
         }
-        self.solids.retain(|entry| entry.capacity_t.is_some());
+        // An entry that says nothing the defaults do not is not kept: it would
+        // be a stored setting for a solid nobody has configured.
+        self.solids
+            .retain(|entry| entry.capacity_t.is_some() || entry.distance_km != DEFAULT_DISTANCE_KM || !entry.inventory.is_pristine());
         Ok(())
     }
 
@@ -619,7 +1015,7 @@ impl RoutingConfig {
         let users: Vec<String> = self
             .rules
             .iter()
-            .filter(|rule| rule.destination == DestinationId::Standalone(id))
+            .filter(|rule| rule.destinations.contains(&DestinationId::Standalone(id)))
             .map(|rule| rule.name.clone())
             .collect();
         if !users.is_empty() {
@@ -633,20 +1029,21 @@ impl RoutingConfig {
         Ok(())
     }
 
-    pub(crate) fn add_rule(&mut self, name: &str, destination: DestinationId) -> ScheduleResult<RuleId> {
+    pub(crate) fn add_rule(&mut self, name: &str, destinations: Vec<DestinationId>) -> ScheduleResult<RuleId> {
         let name = checked_name(name)?;
         if self.rule_name_taken(&name, None) {
             return Err(ScheduleError::DuplicateName(name));
         }
         let id = RuleId(self.next_rule_id);
         self.next_rule_id = self.next_rule_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
+        let destinations = checked_destinations(destinations)?;
         self.rules.push(DestinationRule {
             id,
             enabled: true,
             name,
-            destination,
+            destinations,
             loaders: LoaderSelection::All,
-            sources: SourceSelection::All,
+            sources: MovementSourceSelection::All,
             conditions: Vec::new(),
         });
         Ok(id)
@@ -693,8 +1090,15 @@ impl RoutingConfig {
         Ok(())
     }
 
-    pub(crate) fn set_rule_destination(&mut self, id: RuleId, destination: DestinationId) -> ScheduleResult {
-        self.rule_mut(id)?.destination = destination;
+    /// Replace the destinations one rule may deliver to.
+    ///
+    /// Ordered, so the caller's order is the order they are tried; deduplicated,
+    /// because naming one twice would say nothing the first mention has not; and
+    /// never empty, which would be a rule that matches material and then has
+    /// nowhere to put it.
+    pub(crate) fn set_rule_destinations(&mut self, id: RuleId, destinations: Vec<DestinationId>) -> ScheduleResult {
+        let destinations = checked_destinations(destinations)?;
+        self.rule_mut(id)?.destinations = destinations;
         Ok(())
     }
 
@@ -714,25 +1118,8 @@ impl RoutingConfig {
         Ok(())
     }
 
-    pub(crate) fn set_rule_sources(&mut self, id: RuleId, sources: SourceSelection) -> ScheduleResult {
-        let sources = match sources {
-            SourceSelection::All => SourceSelection::All,
-            SourceSelection::Only(scopes) => {
-                if scopes.is_empty() {
-                    return Err(ScheduleError::EmptyRuleSelection);
-                }
-                if !scopes.iter().copied().all(SourceScope::is_valid) {
-                    return Err(ScheduleError::InvalidSourceScope);
-                }
-                let mut kept: Vec<SourceScope> = Vec::with_capacity(scopes.len());
-                for scope in scopes {
-                    if !kept.contains(&scope) {
-                        kept.push(scope);
-                    }
-                }
-                SourceSelection::Only(kept)
-            }
-        };
+    pub(crate) fn set_rule_sources(&mut self, id: RuleId, sources: MovementSourceSelection) -> ScheduleResult {
+        let sources = checked_sources(sources)?;
         self.rule_mut(id)?.sources = sources;
         Ok(())
     }
@@ -787,6 +1174,7 @@ impl RoutingConfig {
             if let Some(capacity) = entry.capacity_t {
                 checked_capacity(capacity)?;
             }
+            super::trucking::checked_distance(entry.distance_km)?;
             entry.crusher.validate()?;
         }
         for (index, entry) in self.solids.iter().enumerate() {
@@ -796,6 +1184,15 @@ impl RoutingConfig {
             if let Some(capacity) = entry.capacity_t {
                 checked_capacity(capacity)?;
             }
+            super::trucking::checked_distance(entry.distance_km)?;
+        }
+        for entry in &mut self.standalone {
+            entry.inventory.validate_loaded()?;
+            check_opening_fits(entry.inventory.opening_tonnes(), entry.capacity_t)?;
+        }
+        for entry in &mut self.solids {
+            entry.inventory.validate_loaded()?;
+            check_opening_fits(entry.inventory.opening_tonnes(), entry.capacity_t)?;
         }
         for (index, rule) in self.rules.iter().enumerate() {
             if self.rules[..index].iter().any(|earlier| earlier.id == rule.id) {
@@ -805,10 +1202,18 @@ impl RoutingConfig {
             if self.rules[..index].iter().any(|earlier| same_name(&earlier.name, &rule.name)) {
                 return Err(ScheduleError::DuplicateName(rule.name.clone()));
             }
-            if let DestinationId::Standalone(id) = rule.destination
-                && !self.standalone.iter().any(|entry| entry.id == id)
-            {
-                return Err(ScheduleError::UnknownDestination);
+            if rule.destinations.is_empty() {
+                return Err(ScheduleError::EmptyRuleSelection);
+            }
+            for (position, destination) in rule.destinations.iter().enumerate() {
+                if rule.destinations[..position].contains(destination) {
+                    return Err(ScheduleError::DuplicateId);
+                }
+                if let DestinationId::Standalone(id) = destination
+                    && !self.standalone.iter().any(|entry| entry.id == *id)
+                {
+                    return Err(ScheduleError::UnknownDestination);
+                }
             }
             match &rule.loaders {
                 LoaderSelection::All => {}
@@ -816,10 +1221,10 @@ impl RoutingConfig {
                 LoaderSelection::Only(_) => return Err(ScheduleError::EmptyRuleSelection),
             }
             match &rule.sources {
-                SourceSelection::All => {}
-                SourceSelection::Only(scopes) if scopes.is_empty() => return Err(ScheduleError::EmptyRuleSelection),
-                SourceSelection::Only(scopes) => {
-                    if !scopes.iter().copied().all(SourceScope::is_valid) {
+                MovementSourceSelection::All => {}
+                MovementSourceSelection::Only(scopes) if scopes.is_empty() => return Err(ScheduleError::EmptyRuleSelection),
+                MovementSourceSelection::Only(scopes) => {
+                    if !scopes.iter().copied().all(MovementSourceScope::is_valid) {
                         return Err(ScheduleError::InvalidSourceScope);
                     }
                 }
@@ -846,6 +1251,18 @@ impl RoutingConfig {
     pub(crate) fn raise_allocator_to(&mut self, other: &Self) {
         self.next_standalone_id = self.next_standalone_id.max(other.next_standalone_id);
         self.next_rule_id = self.next_rule_id.max(other.next_rule_id);
+        // Lot and portion ids are allocated per stockpile, and are protected
+        // the same way: an undone lot must not hand its id to the next one.
+        for entry in &mut self.standalone {
+            if let Some(source) = other.standalone.iter().find(|held| held.id == entry.id) {
+                entry.inventory.raise_allocator_to(&source.inventory);
+            }
+        }
+        for entry in &mut self.solids {
+            if let Some(source) = other.solids.iter().find(|held| held.solid == entry.solid) {
+                entry.inventory.raise_allocator_to(&source.inventory);
+            }
+        }
     }
 
     pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
@@ -856,6 +1273,8 @@ impl RoutingConfig {
             entry.name.hash(hasher);
             entry.kind.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
+            entry.distance_km.to_bits().hash(hasher);
+            entry.inventory.hash_content(hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(hasher);
             for (period, value) in &entry.crusher.periods {
                 period.hash(hasher);
@@ -866,9 +1285,22 @@ impl RoutingConfig {
         for entry in &self.solids {
             entry.solid.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
+            entry.distance_km.to_bits().hash(hasher);
+            entry.inventory.hash_content(hasher);
         }
         for rule in &self.rules {
             rule.hash_content(hasher);
+        }
+    }
+
+    /// Opening-lot labels are saved content but do not alter future movement
+    /// coefficients or inventory feasibility.
+    pub(crate) fn hash_inventory_names<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        for entry in &self.standalone {
+            entry.inventory.hash_names(hasher);
+        }
+        for entry in &self.solids {
+            entry.inventory.hash_names(hasher);
         }
     }
 
@@ -877,9 +1309,18 @@ impl RoutingConfig {
             + self
                 .standalone
                 .iter()
-                .map(|entry| size_of::<StandaloneDestination>() + entry.name.len() + entry.crusher.periods.len() * size_of::<(CalendarPeriod, CrusherOverride)>())
+                .map(|entry| {
+                    size_of::<StandaloneDestination>()
+                        + entry.name.len()
+                        + entry.crusher.periods.len() * size_of::<(CalendarPeriod, CrusherOverride)>()
+                        + entry.inventory.estimated_bytes()
+                })
                 .sum::<usize>()
-            + self.solids.len() * size_of::<SolidDestination>()
+            + self
+                .solids
+                .iter()
+                .map(|entry| size_of::<SolidDestination>() + entry.inventory.estimated_bytes())
+                .sum::<usize>()
             + self
                 .rules
                 .iter()
@@ -892,8 +1333,8 @@ impl RoutingConfig {
                             LoaderSelection::Only(agents) => size_of_val(agents.as_slice()),
                         }
                         + match &rule.sources {
-                            SourceSelection::All => 0,
-                            SourceSelection::Only(scopes) => size_of_val(scopes.as_slice()),
+                            MovementSourceSelection::All => 0,
+                            MovementSourceSelection::Only(scopes) => size_of_val(scopes.as_slice()),
                         }
                 })
                 .sum::<usize>()
@@ -911,7 +1352,7 @@ impl DestinationRule {
         self.id.hash(hasher);
         self.enabled.hash(hasher);
         self.name.hash(hasher);
-        self.destination.hash(hasher);
+        self.destinations.hash(hasher);
         match &self.loaders {
             LoaderSelection::All => 0u8.hash(hasher),
             LoaderSelection::Only(agents) => {
@@ -920,14 +1361,16 @@ impl DestinationRule {
             }
         }
         match &self.sources {
-            SourceSelection::All => 0u8.hash(hasher),
-            SourceSelection::Only(scopes) => {
+            MovementSourceSelection::All => 0u8.hash(hasher),
+            MovementSourceSelection::Only(scopes) => {
                 1u8.hash(hasher);
                 for scope in scopes {
                     match scope {
-                        SourceScope::Pit(solid) => (0u8, solid).hash(hasher),
-                        SourceScope::Bench { solid, base, top } => (1u8, solid, base.to_bits(), top.to_bits()).hash(hasher),
-                        SourceScope::Flitch { solid, base, top } => (2u8, solid, base.to_bits(), top.to_bits()).hash(hasher),
+                        MovementSourceScope::Ground(ground) => {
+                            0u8.hash(hasher);
+                            hash_scope(*ground, hasher);
+                        }
+                        MovementSourceScope::Stockpile(id) => (1u8, id).hash(hasher),
                     }
                 }
             }
@@ -957,8 +1400,8 @@ impl DestinationRule {
             LoaderSelection::Only(agents) => parts.push(agents.iter().copied().map(loader_name).collect::<Vec<_>>().join(" / ")),
         }
         match &self.sources {
-            SourceSelection::All => {}
-            SourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string())),
+            MovementSourceSelection::All => {}
+            MovementSourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string())),
         }
         for condition in &self.conditions {
             parts.push(condition.summary(&field_name(condition.field)));
@@ -971,6 +1414,29 @@ impl DestinationRule {
 }
 
 impl FieldCondition {
+    /// This condition's own content hash, shared with the cashflow rules,
+    /// which carry the same conditions.
+    pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        use std::hash::Hash;
+        self.field.hash(hasher);
+        match &self.test {
+            ConditionTest::Category { values } => {
+                0u8.hash(hasher);
+                values.hash(hasher);
+            }
+            ConditionTest::Range { lower, upper } => {
+                1u8.hash(hasher);
+                for bound in [lower, upper] {
+                    bound.map(|bound| (bound.value.to_bits(), bound.inclusive)).hash(hasher);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn estimated_bytes_public(&self) -> usize {
+        self.estimated_bytes()
+    }
+
     fn estimated_bytes(&self) -> usize {
         size_of::<Self>()
             + match &self.test {
@@ -1014,7 +1480,7 @@ impl FieldCondition {
 }
 
 /// A condition has to be able to accept something and reject something.
-fn check_condition(test: &ConditionTest) -> ScheduleResult {
+pub(crate) fn check_condition(test: &ConditionTest) -> ScheduleResult {
     match test {
         ConditionTest::Category { values } => {
             if values.is_empty() {
@@ -1067,6 +1533,11 @@ pub(crate) struct DestinationView {
     pub(crate) name: String,
     pub(crate) kind: DestinationKind,
     pub(crate) capacity_t: Option<f64>,
+    /// One-way haul distance in kilometres.
+    pub(crate) distance_km: f64,
+    /// Stockpile only: what it opens holding, and which end reclaim takes from.
+    pub(crate) opening_t: f64,
+    pub(crate) reclaim_order: ReclaimOrder,
     /// The solid this destination is, when it is one. Its name and kind are
     /// read-only here and edited in Solids.
     pub(crate) solid: Option<SolidId>,
@@ -1093,6 +1564,9 @@ pub(crate) fn available(solids: &[crate::model::Solid], routing: &RoutingConfig)
             name: solid.name.clone(),
             kind,
             capacity_t: routing.capacity_t(DestinationId::Solid(solid.id)),
+            distance_km: routing.distance_km(DestinationId::Solid(solid.id)),
+            opening_t: routing.opening_tonnes(DestinationId::Solid(solid.id)),
+            reclaim_order: routing.reclaim_order(DestinationId::Solid(solid.id)),
             solid: Some(solid.id),
         });
     }
@@ -1102,6 +1576,9 @@ pub(crate) fn available(solids: &[crate::model::Solid], routing: &RoutingConfig)
             name: entry.name.clone(),
             kind: entry.kind,
             capacity_t: entry.capacity_t,
+            distance_km: entry.distance_km,
+            opening_t: entry.inventory.opening_tonnes(),
+            reclaim_order: entry.inventory.order,
             solid: None,
         });
     }
@@ -1145,6 +1622,9 @@ pub(crate) fn resolve(id: DestinationId, solids: &[crate::model::Solid], routing
                 name: solid.name.clone(),
                 kind,
                 capacity_t: routing.capacity_t(id),
+                distance_km: routing.distance_km(id),
+                opening_t: routing.opening_tonnes(id),
+                reclaim_order: routing.reclaim_order(id),
                 solid: Some(solid_id),
             })
         }
@@ -1155,6 +1635,9 @@ pub(crate) fn resolve(id: DestinationId, solids: &[crate::model::Solid], routing
                 name: entry.name.clone(),
                 kind: entry.kind,
                 capacity_t: entry.capacity_t,
+                distance_km: entry.distance_km,
+                opening_t: entry.inventory.opening_tonnes(),
+                reclaim_order: entry.inventory.order,
                 solid: None,
             })
         }

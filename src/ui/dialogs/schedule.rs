@@ -7,13 +7,136 @@
 
 use crate::{
     i18n::tr,
-    model::schedule::SchedulePlan,
+    model::{
+        Document,
+        schedule::{DestinationKind, SchedulePlan, WorkWindow, destinations},
+    },
     ui::{
         EditorState,
         state::{BarNameDialog, BarWindowDialog, ScheduleEdit, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
     },
 };
+
+/// Add a reclaim bar, or edit the stockpile and cumulative cap of an existing
+/// one. Creation asks for the loader and complete work window here because it
+/// never enters the viewport's dig-block picking mode.
+pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(target) = editor.reclaim_bar_dialog.as_ref().map(|dialog| dialog.target) else {
+        return;
+    };
+    if target.is_some_and(|id| plan.bar(id).is_none_or(|bar| bar.reclaim().is_none())) {
+        editor.reclaim_bar_dialog = None;
+        return;
+    }
+    let stockpiles: Vec<_> = destinations::available(document.solids(), plan.routing())
+        .into_iter()
+        .filter(|entry| entry.kind == DestinationKind::Stockpile)
+        .collect();
+    let mut open = true;
+    let mut close = false;
+    let draft = editor.reclaim_bar_dialog.as_mut().expect("checked above");
+    let title = if target.is_some() { tr!("reclaim-edit-bar") } else { tr!("reclaim-add-bar") };
+    DragableMenu::new("reclaim_bar_dialog", title).open(&mut open).min_width(360.0).show(ui.ctx(), |ui| {
+        let source_label = draft
+            .source
+            .and_then(|id| stockpiles.iter().find(|entry| entry.id == id))
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| {
+                if draft.source.is_some() {
+                    tr!("destination-unresolved")
+                } else {
+                    tr!("reclaim-source-choose")
+                }
+            });
+        MenuFieldCombo::new(
+            "reclaim_bar_source",
+            tr!("reclaim-source"),
+            &mut draft.source,
+            source_label,
+            stockpiles.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+        )
+        .show(ui);
+
+        if target.is_none() {
+            let agent_label = draft
+                .agent
+                .and_then(|id| plan.agent(id))
+                .map(|agent| agent.name.clone())
+                .unwrap_or_else(|| tr!("reclaim-loader-choose"));
+            MenuFieldCombo::new(
+                "reclaim_bar_loader",
+                tr!("reclaim-loader"),
+                &mut draft.agent,
+                agent_label,
+                plan.agents().iter().map(|agent| (Some(agent.id), agent.name.clone().into())),
+            )
+            .show(ui);
+            MenuFieldText::new(tr!("schedule-window-start"), &mut draft.start).show(ui);
+            MenuFieldText::new(tr!("schedule-window-end"), &mut draft.end).show(ui);
+        }
+        MenuFieldText::new(tr!("reclaim-maximum"), &mut draft.maximum)
+            .hint_text(tr!("reclaim-maximum-none"))
+            .show(ui);
+
+        let maximum = if draft.maximum.trim().is_empty() {
+            Some(None)
+        } else {
+            draft.maximum.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0).map(Some)
+        };
+        let window = if target.is_none() {
+            let start = draft.start.trim().parse::<f64>().ok();
+            let end = draft.end.trim().parse::<f64>().ok();
+            start
+                .zip(end)
+                .map(|(start_h, end_h)| WorkWindow { start_h, end_h: Some(end_h) })
+                .filter(|window| window.is_valid())
+        } else {
+            None
+        };
+        let valid = draft.source.is_some() && maximum.is_some() && (target.is_some() || (draft.agent.is_some() && window.is_some()));
+        if !stockpiles.is_empty() && draft.source.is_none() {
+            ui.label(egui::RichText::new(tr!("reclaim-source-required")).color(ui.visuals().error_fg_color));
+        } else if stockpiles.is_empty() {
+            ui.label(egui::RichText::new(tr!("reclaim-no-stockpiles")).color(ui.visuals().error_fg_color));
+        }
+        if maximum.is_none() {
+            ui.label(egui::RichText::new(crate::model::schedule::ScheduleError::InvalidReclaimLimit.message()).color(ui.visuals().error_fg_color));
+        }
+        menu::menu_actions(ui, |ui| {
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked())
+                && valid
+                && let (Some(source), Some(maximum_t)) = (draft.source, maximum)
+            {
+                match target {
+                    Some(bar) => {
+                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimSource { bar, source }));
+                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimMaximum { bar, maximum_t }));
+                    }
+                    None => commands.push(UiCommand::schedule(
+                        session,
+                        ScheduleEdit::AddReclaimBar {
+                            name: String::new(),
+                            agent: draft.agent,
+                            priority: draft.priority,
+                            window: window.expect("validated above"),
+                            source,
+                            maximum_t,
+                        },
+                    )),
+                }
+                close = true;
+            }
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                close = true;
+            }
+        });
+    });
+    if close || !open {
+        editor.reclaim_bar_dialog = None;
+    }
+}
 
 /// Add one machine type: a name, and the rate it digs at in tonnes per hour.
 pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {

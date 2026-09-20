@@ -117,6 +117,13 @@ impl crate::app::App<'_> {
             bar.priority.hash(&mut hasher);
             bar.window.start_h.to_bits().hash(&mut hasher);
             bar.window.end_h.map(f64::to_bits).hash(&mut hasher);
+            if let Some(work) = bar.reclaim() {
+                1u8.hash(&mut hasher);
+                work.source.hash(&mut hasher);
+                work.maximum_t.map(f64::to_bits).hash(&mut hasher);
+            } else {
+                0u8.hash(&mut hasher);
+            }
             for member in bar.members() {
                 member.solid.hash(&mut hasher);
                 member.source.hash(&mut hasher);
@@ -164,6 +171,10 @@ impl crate::app::App<'_> {
     /// button: the button is what the user pressed, and it has to answer.
     pub(crate) fn start_schedule_run(&mut self, mode: ScheduleRunMode) {
         let preparation_started = web_time::Instant::now();
+        if self.workspace.active_document().is_some_and(|document| document.schedule().has_reclaim_bars()) {
+            crate::userspace_warn!("{}", tr!("reclaim-unsupported"));
+            return;
+        }
         // Validate the lightweight Schedule Setup stages as part of the
         // normal Run action. Solids remains an explicit prerequisite.
         self.run_all_schedule_steps();

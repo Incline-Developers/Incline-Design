@@ -8,7 +8,7 @@ use crate::{
         Document,
         schedule::{
             CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationProduction,
-            LoaderAgent, PeriodProduction, SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, destinations,
+            LoaderAgent, PeriodProduction, SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations,
         },
     },
     ui::{
@@ -38,6 +38,7 @@ const NEST_INDENT: f32 = 16.0;
 #[derive(Clone, Copy)]
 enum Row {
     Loaders,
+    Trucks,
     Destinations,
     Group(CalendarOwner),
     Field(CalendarOwner, CalendarRow),
@@ -163,6 +164,7 @@ fn required_days(plan: &SchedulePlan, production: Option<&PeriodProduction>, rec
         .iter()
         .flat_map(|agent| agent.calendar.periods.keys())
         .chain(plan.routing().standalone.iter().flat_map(|entry| entry.crusher.periods.keys()))
+        .chain(plan.trucks().classes.iter().flat_map(|class| class.calendar.periods.keys()))
         .map(|period| period.0.saturating_add(2))
         .max()
         .unwrap_or(0);
@@ -192,6 +194,16 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
             rows.extend(LOADER_ROWS.iter().map(|row| Row::Field(owner, *row)));
         }
     }
+    if !plan.trucks().classes.is_empty() {
+        rows.push(Row::Trucks);
+        for class in &plan.trucks().classes {
+            let owner = CalendarOwner::Truck(class.id);
+            rows.push(Row::Group(owner));
+            if !editor.schedule_calendar.collapsed.contains(&owner) {
+                rows.extend(TRUCK_ROWS.iter().map(|row| Row::Field(owner, *row)));
+            }
+        }
+    }
     if !destinations.is_empty() {
         rows.push(Row::Destinations);
         for destination in destinations {
@@ -205,11 +217,24 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
     rows
 }
 
+/// The rows one truck class shows, in drawn order. All three are authored;
+/// calculated truck rows need an optimised result, which does not exist yet.
+const TRUCK_ROWS: [CalendarRow; 3] = [
+    CalendarRow::Truck(TruckField::Units),
+    CalendarRow::Truck(TruckField::Availability),
+    CalendarRow::Truck(TruckField::Utilisation),
+];
+
 /// The rows one loader group shows, in drawn order.
-const LOADER_ROWS: [CalendarRow; 4] = [
+///
+/// Two rates, one beneath the other: availability and utilisation are the
+/// machine's and apply to both, so they stay above the pair rather than being
+/// repeated under each.
+const LOADER_ROWS: [CalendarRow; 5] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
+    CalendarRow::Input(CalendarField::ReclaimRate),
     CalendarRow::Tonnes,
 ];
 
@@ -389,7 +414,7 @@ fn draw_row(
     // in that level's own colour. Unbroken down the column, so a loader's
     // three settings read as being inside the loader, which is inside Loaders.
     let depth = match row {
-        Row::Loaders | Row::Destinations => 0,
+        Row::Loaders | Row::Trucks | Row::Destinations => 0,
         Row::Group(_) => 1,
         Row::Field(..) => 2,
     };
@@ -403,11 +428,11 @@ fn draw_row(
     let indent = depth as f32 * NEST_INDENT;
     let label_start = hierarchy.left() + indent;
     match row {
-        Row::Loaders | Row::Destinations => {
-            let label = if matches!(row, Row::Loaders) {
-                tr!("schedule-calendar-loaders")
-            } else {
-                tr!("destination-destinations")
+        Row::Loaders | Row::Trucks | Row::Destinations => {
+            let label = match row {
+                Row::Loaders => tr!("schedule-calendar-loaders"),
+                Row::Trucks => tr!("schedule-calendar-trucks"),
+                _ => tr!("destination-destinations"),
             };
             ui.painter().rect_filled(hierarchy, 0.0, nest_fill(ui, 0));
             paint_label(ui, hierarchy, label_start + 8.0, &label, LabelStyle::Heading);
@@ -416,6 +441,10 @@ fn draw_row(
             let name = match owner {
                 CalendarOwner::Loader(id) => match plan.agent(id) {
                     Some(agent) => agent.name.clone(),
+                    None => return,
+                },
+                CalendarOwner::Truck(id) => match plan.trucks().class(id) {
+                    Some(class) => class.name.clone(),
                     None => return,
                 },
                 CalendarOwner::Destination(id) => match destinations.iter().find(|entry| entry.id == id) {
@@ -446,6 +475,12 @@ fn draw_row(
                     Some(agent) => Some(agent),
                     None => return,
                 },
+                CalendarOwner::Truck(id) => {
+                    if plan.trucks().class(id).is_none() {
+                        return;
+                    }
+                    None
+                }
                 CalendarOwner::Destination(id) => {
                     if !destinations.iter().any(|entry| entry.id == id) {
                         return;
@@ -455,7 +490,7 @@ fn draw_row(
             };
             let destination_kind = match owner {
                 CalendarOwner::Destination(id) => destinations.iter().find(|entry| entry.id == id).map(|entry| entry.kind),
-                CalendarOwner::Loader(_) => None,
+                CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
             };
             let text_left = label_start + 18.0;
             let label = row_label(kind, destination_kind);
@@ -519,7 +554,11 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>) -> String {
     match row {
         CalendarRow::Input(CalendarField::Availability) => tr!("schedule-calendar-availability"),
         CalendarRow::Input(CalendarField::Utilisation) => tr!("schedule-calendar-utilisation"),
-        CalendarRow::Input(CalendarField::Rate) => tr!("schedule-calendar-rate"),
+        CalendarRow::Input(CalendarField::Rate) => tr!("schedule-calendar-dig-rate"),
+        CalendarRow::Input(CalendarField::ReclaimRate) => tr!("schedule-calendar-reclaim-rate"),
+        CalendarRow::Truck(TruckField::Units) => tr!("truck-calendar-units"),
+        CalendarRow::Truck(TruckField::Availability) => tr!("truck-calendar-availability"),
+        CalendarRow::Truck(TruckField::Utilisation) => tr!("truck-calendar-utilisation"),
         CalendarRow::Tonnes => tr!("schedule-calendar-tonnes"),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
         CalendarRow::Received => match destination {
@@ -717,6 +756,7 @@ fn display_text(
     };
     match address.row {
         CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
+        CalendarRow::Truck(field) => truck_text(plan, address, field),
         CalendarRow::Tonnes => marked(calculated(production, address)),
         CalendarRow::CrusherLimit => crusher_text(plan, address),
         CalendarRow::Received => marked(destination_figure(received, address, false)),
@@ -739,6 +779,7 @@ fn hover_text(
                 .1
                 .then(|| tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(production.coverage_end_h())))
         }
+        CalendarRow::Truck(field) => Some(truck_hover(plan, address, field)),
         CalendarRow::CrusherLimit => Some(crusher_hover(plan, address)),
         CalendarRow::Received | CalendarRow::Cumulative => {
             let received = received?;
@@ -761,6 +802,100 @@ fn destination_figure(received: Option<&DestinationProduction>, address: Calenda
         received.received(destination, period)?
     };
     Some((tonnes, received.is_partial(period)))
+}
+
+/// A truck cell's own text.
+///
+/// Blank on a period means *inherit*: the default, not yesterday. Every
+/// default cell holds a figure, because a new class starts at zero trucks and
+/// a hundred per cent of both percentages.
+fn truck_text(plan: &SchedulePlan, address: CalendarCellAddress, field: TruckField) -> String {
+    let Some(class) = address.truck().and_then(|id| plan.trucks().class(id)) else {
+        return String::new();
+    };
+    match address.cell {
+        CalendarCell::Default => match field {
+            TruckField::Units => class.calendar.default_units.to_string(),
+            TruckField::Availability => format_percentage(class.calendar.default_availability),
+            TruckField::Utilisation => format_percentage(class.calendar.default_utilisation),
+        },
+        CalendarCell::Period(period) => match class.calendar.periods.get(&period) {
+            None => String::new(),
+            Some(held) => match field {
+                TruckField::Units => held.units.map(|units| units.to_string()).unwrap_or_default(),
+                TruckField::Availability => held.availability.map(format_percentage).unwrap_or_default(),
+                TruckField::Utilisation => held.utilisation.map(format_percentage).unwrap_or_default(),
+            },
+        },
+    }
+}
+
+/// The same value as plain digits: what an editor opens on and what the
+/// clipboard carries. Percentages lose their sign, units their separators.
+fn truck_raw_text(plan: &SchedulePlan, address: CalendarCellAddress, field: TruckField) -> String {
+    truck_text(plan, address, field).trim_end_matches('%').to_owned()
+}
+
+fn truck_hover(plan: &SchedulePlan, address: CalendarCellAddress, field: TruckField) -> String {
+    let Some(class) = address.truck().and_then(|id| plan.trucks().class(id)) else {
+        return String::new();
+    };
+    let period = match address.cell {
+        CalendarCell::Default => return tr!("destination-calendar-default-hover"),
+        CalendarCell::Period(period) => period,
+    };
+    let fleet = class.calendar.values_at(period);
+    let explicit = class.calendar.periods.get(&period).is_some_and(|held| match field {
+        TruckField::Units => held.units.is_some(),
+        TruckField::Availability => held.availability.is_some(),
+        TruckField::Utilisation => held.utilisation.is_some(),
+    });
+    let value = match field {
+        TruckField::Units => fleet.units.to_string(),
+        TruckField::Availability => format_percentage(fleet.availability),
+        TruckField::Utilisation => format_percentage(fleet.utilisation),
+    };
+    let source = if explicit {
+        tr!("schedule-calendar-explicit")
+    } else {
+        tr!("destination-calendar-inherited")
+    };
+    tr!("schedule-calendar-resolved", value = value, source = source)
+}
+
+/// Percentages are stored as fractions and shown out of a hundred, exactly as
+/// the loader rows show theirs.
+fn format_percentage(value: f64) -> String {
+    format!("{}%", trimmed_number(value * 100.0))
+}
+
+/// Parse a typed truck cell. Blank clears the cell - which returns a period to
+/// inheritance and a default to what a new class starts at.
+fn parse_truck(field: TruckField, text: &str) -> Result<Option<f64>, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match field {
+        TruckField::Units => {
+            let number = trimmed.replace(',', "");
+            let parsed = number.parse::<f64>().map_err(|_| tr!("schedule-calendar-invalid-number"))?;
+            // Refused rather than rounded: half a truck is a typo, and a
+            // rounded one would quietly change the fleet.
+            if !parsed.is_finite() || parsed < 0.0 || parsed.fract() != 0.0 {
+                return Err(crate::model::schedule::ScheduleError::InvalidTruckUnits.message());
+            }
+            Ok(Some(parsed))
+        }
+        TruckField::Availability | TruckField::Utilisation => {
+            let number = trimmed.strip_suffix('%').unwrap_or(trimmed).trim();
+            let parsed = number.parse::<f64>().map_err(|_| tr!("schedule-calendar-invalid-number"))?;
+            if !parsed.is_finite() || !(0.0..=100.0).contains(&parsed) {
+                return Err(tr!("schedule-calendar-invalid-percentage"));
+            }
+            Ok(Some(parsed / 100.0))
+        }
+    }
 }
 
 /// A crusher cell's own text.
@@ -835,8 +970,10 @@ fn editable(address: CalendarCellAddress) -> bool {
     match address.row {
         // Calculated: selectable so it can be copied, and nothing more.
         CalendarRow::Tonnes | CalendarRow::Received | CalendarRow::Cumulative => false,
+        CalendarRow::Truck(_) => address.truck().is_some(),
         CalendarRow::CrusherLimit => crusher_target(address).is_some(),
-        CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && field == CalendarField::Rate),
+        // Both default rates are the class's, shown here and edited in Setup.
+        CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate)),
     }
 }
 
@@ -849,12 +986,13 @@ fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f
         CalendarCell::Default => match field {
             CalendarField::Availability => Some(agent.calendar.default_availability),
             CalendarField::Utilisation => Some(agent.calendar.default_utilisation),
-            CalendarField::Rate => None,
+            CalendarField::Rate | CalendarField::ReclaimRate => None,
         },
         CalendarCell::Period(period) => agent.calendar.periods.get(&period).and_then(|value| match field {
             CalendarField::Availability => value.availability,
             CalendarField::Utilisation => value.utilisation,
             CalendarField::Rate => value.rate_tph,
+            CalendarField::ReclaimRate => value.reclaim_rate_tph,
         }),
     }
 }
@@ -890,6 +1028,7 @@ fn raw_cell_text(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
             },
             (None, _) => String::new(),
         },
+        CalendarRow::Truck(field) => truck_raw_text(plan, address, field),
         _ => address.agent().and_then(|id| plan.agent(id)).map(|agent| raw_text(agent, address)).unwrap_or_default(),
     }
 }
@@ -929,13 +1068,22 @@ fn parse_crusher(text: &str) -> Result<Option<CrusherOverride>, String> {
 }
 
 fn cell_text(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddress) -> String {
-    if address.cell == CalendarCell::Default && address.row == CalendarRow::Input(CalendarField::Rate) {
-        return plan
-            .class(agent.class_id)
-            .map(|class| format_value(CalendarField::Rate, class.default_dig_rate_tph))
-            .unwrap_or_default();
+    if address.cell == CalendarCell::Default
+        && let Some(field @ (CalendarField::Rate | CalendarField::ReclaimRate)) = address.row.field()
+    {
+        return plan.class(agent.class_id).map(|class| format_value(field, class_rate(class, field))).unwrap_or_default();
     }
     explicit_text(agent, address)
+}
+
+/// Which of a class's two rates a row reads. The shared factors have none, and
+/// fall back to the dig rate so a caller that asks anyway gets a figure rather
+/// than a panic.
+fn class_rate(class: &crate::model::schedule::LoaderClass, field: CalendarField) -> f64 {
+    match field {
+        CalendarField::ReclaimRate => class.default_reclaim_rate_tph,
+        _ => class.default_dig_rate_tph,
+    }
 }
 
 fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddress) -> String {
@@ -943,10 +1091,10 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
     let Some(class) = plan.class(agent.class_id) else {
         return tr!("schedule-error-unknown-class");
     };
-    if address.cell == CalendarCell::Default && field == CalendarField::Rate {
+    if address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate) {
         return tr!(
             "schedule-calendar-class-default",
-            value = format_value(CalendarField::Rate, class.default_dig_rate_tph),
+            value = format_value(field, class_rate(class, field)),
             class = class.name.clone()
         );
     }
@@ -954,7 +1102,12 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
         CalendarCell::Default => CalendarPeriod(0),
         CalendarCell::Period(period) => period,
     };
-    let Ok(values) = agent.calendar.values_at(period, class.default_dig_rate_tph) else {
+    let kind = if field == CalendarField::ReclaimRate {
+        crate::model::schedule::RateKind::Reclaim
+    } else {
+        crate::model::schedule::RateKind::Dig
+    };
+    let Ok(values) = agent.calendar.rate_values_at(period, kind, class_rate(class, field)) else {
         return tr!("schedule-calendar-invalid");
     };
     let (value, source) = match field {
@@ -974,7 +1127,7 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
                 tr!("schedule-calendar-explicit")
             },
         ),
-        CalendarField::Rate => (
+        CalendarField::Rate | CalendarField::ReclaimRate => (
             values.rate_tph,
             if explicit_value(agent, address).is_none() {
                 tr!("schedule-calendar-class-source")
@@ -988,7 +1141,10 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
 
 /// Percentages are stored as fractions and shown out of a hundred.
 fn scaled(field: CalendarField, value: f64) -> f64 {
-    if field == CalendarField::Rate { value } else { value * 100.0 }
+    match field {
+        CalendarField::Rate | CalendarField::ReclaimRate => value,
+        CalendarField::Availability | CalendarField::Utilisation => value * 100.0,
+    }
 }
 
 fn trimmed_number(value: f64) -> String {
@@ -1006,6 +1162,10 @@ fn trimmed_number(value: f64) -> String {
 /// full precision, and this rounding never feeds back into it.
 fn tonnes_number(value: f64) -> String {
     let rounded = (value * 10.0).round() / 10.0;
+    // A balance that cancelled to a hair below zero, and negative zero itself,
+    // both read as nothing received - never as "-0", which looks like a
+    // measurement rather than the rounding it is.
+    let rounded = if rounded == 0.0 { 0.0 } else { rounded };
     if rounded.fract() == 0.0 { format!("{rounded:.0}") } else { format!("{rounded:.1}") }
 }
 
@@ -1016,8 +1176,8 @@ pub(crate) fn format_tonnes(value: f64) -> String {
 fn format_value(field: CalendarField, value: f64) -> String {
     let text = trimmed_number(scaled(field, value)).separate_with_commas();
     match field {
-        CalendarField::Rate => format!("{text} t/h"),
-        _ => format!("{text}%"),
+        CalendarField::Rate | CalendarField::ReclaimRate => format!("{text} t/h"),
+        CalendarField::Availability | CalendarField::Utilisation => format!("{text}%"),
     }
 }
 
@@ -1028,14 +1188,14 @@ fn parse_value(field: CalendarField, text: &str) -> Result<Option<f64>, String> 
     }
     let number = match field {
         CalendarField::Availability | CalendarField::Utilisation => trimmed.strip_suffix('%').unwrap_or(trimmed).trim(),
-        CalendarField::Rate => trimmed,
+        CalendarField::Rate | CalendarField::ReclaimRate => trimmed,
     };
     let parsed = number.parse::<f64>().map_err(|_| tr!("schedule-calendar-invalid-number"))?;
     match field {
         CalendarField::Availability | CalendarField::Utilisation if parsed.is_finite() && (0.0..=100.0).contains(&parsed) => Ok(Some(parsed / 100.0)),
-        CalendarField::Rate if parsed.is_finite() && parsed > 0.0 => Ok(Some(parsed)),
+        CalendarField::Rate | CalendarField::ReclaimRate if parsed.is_finite() && parsed > 0.0 => Ok(Some(parsed)),
         CalendarField::Availability | CalendarField::Utilisation => Err(tr!("schedule-calendar-invalid-percentage")),
-        CalendarField::Rate => Err(tr!("schedule-error-invalid-rate")),
+        CalendarField::Rate | CalendarField::ReclaimRate => Err(tr!("schedule-error-invalid-rate")),
     }
 }
 
@@ -1070,6 +1230,38 @@ fn commit_draft(editor: &mut EditorState, session: u32, commands: &mut Vec<UiCom
                         edits: vec![CrusherCellEdit {
                             destination,
                             cell: crusher_cell(draft.address.cell),
+                            value,
+                        }],
+                    },
+                ));
+                editor.schedule_calendar.draft = None;
+                editor.schedule_calendar.error = None;
+                return true;
+            }
+            Err(error) => {
+                draft.error = Some(error.clone());
+                draft.request_focus = true;
+                editor.schedule_calendar.error = Some(error);
+                return false;
+            }
+        }
+    }
+    // A truck cell commits through its own edit, for the same reason: a truck
+    // calendar and a loader calendar are different things with different cells.
+    if let Some(field) = draft.address.row.truck_field() {
+        let Some(class) = draft.address.truck() else {
+            editor.schedule_calendar.draft = None;
+            return true;
+        };
+        match parse_truck(field, &draft.text) {
+            Ok(value) => {
+                commands.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetTruckCells {
+                        edits: vec![TruckCellEdit {
+                            class,
+                            cell: draft.address.cell,
+                            field,
                             value,
                         }],
                     },
@@ -1140,6 +1332,13 @@ fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &Edit
             continue;
         }
         rows.extend(LOADER_ROWS.iter().map(|row| (owner, *row)));
+    }
+    for class in &plan.trucks().classes {
+        let owner = CalendarOwner::Truck(class.id);
+        if editor.schedule_calendar.collapsed.contains(&owner) {
+            continue;
+        }
+        rows.extend(TRUCK_ROWS.iter().map(|row| (owner, *row)));
     }
     for destination in destinations {
         let owner = CalendarOwner::Destination(destination.id);
@@ -1271,12 +1470,24 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
     let Some((r0, r1, c0, c1)) = selection_bounds(editor, plan, destinations) else { return };
     let mut edits = Vec::new();
     let mut crusher_edits = Vec::new();
+    let mut truck_edits = Vec::new();
     for row in r0..=r1 {
         for column in c0..=c1 {
             let Some(address) = address_at(editor, plan, destinations, row, column) else { continue };
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if let Some(field) = address.row.truck_field() {
+                if let Some(class) = address.truck() {
+                    truck_edits.push(TruckCellEdit {
+                        class,
+                        cell: address.cell,
+                        field,
+                        value: None,
+                    });
+                }
+                continue;
             }
             if address.row == CalendarRow::CrusherLimit {
                 if let Some(destination) = crusher_target(address) {
@@ -1306,6 +1517,9 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
     if !crusher_edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetCrusherCells { edits: crusher_edits }));
     }
+    if !truck_edits.is_empty() {
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
+    }
 }
 
 fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationRow], session: u32, commands: &mut Vec<UiCommand>, text: &str) {
@@ -1317,6 +1531,7 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     let rows: Vec<Vec<&str>> = text.lines().map(|line| line.trim_end_matches('\r').split('\t').collect()).collect();
     let mut edits = Vec::new();
     let mut crusher_edits = Vec::new();
+    let mut truck_edits = Vec::new();
     for (row_offset, values) in rows.iter().enumerate() {
         for (column_offset, text) in values.iter().enumerate() {
             let Some(address) = address_at(editor, plan, destinations, start_row + row_offset, start_column.saturating_add(column_offset as u32)) else {
@@ -1326,6 +1541,25 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if let Some(field) = address.row.truck_field() {
+                let Some(class) = address.truck() else {
+                    editor.schedule_calendar.error = Some(tr!("schedule-calendar-paste-read-only"));
+                    return;
+                };
+                match parse_truck(field, text) {
+                    Ok(value) => truck_edits.push(TruckCellEdit {
+                        class,
+                        cell: address.cell,
+                        field,
+                        value,
+                    }),
+                    Err(error) => {
+                        editor.schedule_calendar.error = Some(error);
+                        return;
+                    }
+                }
+                continue;
             }
             if address.row == CalendarRow::CrusherLimit {
                 let Some(destination) = crusher_target(address) else {
@@ -1371,6 +1605,9 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     if !crusher_edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetCrusherCells { edits: crusher_edits }));
     }
+    if !truck_edits.is_empty() {
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
+    }
 }
 
 fn copy(
@@ -1394,7 +1631,7 @@ fn copy(
                     CalendarRow::Tonnes => calculated(production, address).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
                     CalendarRow::Received => destination_figure(received, address, false).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
                     CalendarRow::Cumulative => destination_figure(received, address, true).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
-                    CalendarRow::CrusherLimit | CalendarRow::Input(_) => raw_cell_text(plan, address),
+                    CalendarRow::CrusherLimit | CalendarRow::Truck(_) | CalendarRow::Input(_) => raw_cell_text(plan, address),
                 },
                 None => String::new(),
             };

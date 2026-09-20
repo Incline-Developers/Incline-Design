@@ -141,6 +141,10 @@ pub(crate) enum ReadinessProblem {
     /// Every member's figure was sound, but their total is not a finite
     /// number.
     TotalNotFinite,
+    /// A reclaim bar whose stockpile is gone, or is no longer a stockpile. The
+    /// bar keeps the source exactly as authored: repointing it at another pile
+    /// would reclaim material nobody chose.
+    ReclaimSourceUnresolved,
 }
 
 impl ReadinessProblem {
@@ -159,6 +163,7 @@ impl ReadinessProblem {
             }
             Self::InvalidTonnes { block, value } => tr!("sequence-invalid-tonnes", block = block.clone(), value = format!("{value}")),
             Self::TotalNotFinite => tr!("sequence-total-not-finite"),
+            Self::ReclaimSourceUnresolved => tr!("reclaim-source-unresolved"),
         }
     }
 }
@@ -187,10 +192,20 @@ pub(crate) struct MemberReport {
     pub(crate) resolved: Option<crate::model::DigBlockId>,
 }
 
+/// What a reclaim bar would take, as the current project sees it.
+pub(crate) struct ReclaimReport {
+    /// What the stockpile is currently called, or `None` when the source no
+    /// longer resolves - which is a problem beside it rather than a repair.
+    pub(crate) source_name: Option<String>,
+}
+
 /// What one bar would execute.
 pub(crate) struct BarReport {
     pub(crate) bar: BarId,
     pub(crate) members: Vec<MemberReport>,
+    /// Present exactly when this bar reclaims. Its members are empty and its
+    /// tonnes are the pile's to decide, so neither says what the bar is.
+    pub(crate) reclaim: Option<ReclaimReport>,
     /// The bar's total tonnes, present only when every member resolved and
     /// every one of them carries a complete measured figure.
     pub(crate) tonnes: Option<f64>,
@@ -201,8 +216,10 @@ pub(crate) struct BarReport {
 }
 
 impl BarReport {
+    /// A dig bar is ready when every member measured; a reclaim bar has no
+    /// members to measure, so what makes it ready is that its pile resolves.
     pub(crate) fn is_ready(&self) -> bool {
-        self.problems.is_empty() && self.tonnes.is_some()
+        self.problems.is_empty() && (self.tonnes.is_some() || self.reclaim.is_some())
     }
 
     pub(crate) fn unresolved_count(&self) -> usize {
@@ -269,6 +286,18 @@ pub(crate) fn dispatch_input(
 ) -> Result<DispatchInput, Vec<ScheduleRunProblem>> {
     let plan = document.schedule();
     let mut problems = Vec::new();
+    // The current dispatcher cannot execute reclaim, and a plan holding reclaim
+    // bars is refused whole rather than run without them. Leaving them out
+    // would publish a schedule that reads as complete and is not - the pile
+    // would never be drawn down, and the crusher it feeds would look starved.
+    // Stage 5's optimised run is what lifts this.
+    let reclaim: Vec<BarId> = plan.bars().iter().filter(|bar| bar.is_reclaim()).map(|bar| bar.id).collect();
+    if !reclaim.is_empty() {
+        return Err(vec![ScheduleRunProblem {
+            bars: reclaim,
+            message: tr!("reclaim-unsupported"),
+        }]);
+    }
     // A bar holding no blocks is not work, so it is not a fault either: it
     // describes nothing to dig, contributes nothing to the schedule, and the
     // loader carrying it moves on to its next bar or idles. It is left out of
@@ -402,8 +431,14 @@ pub(crate) fn dispatch_input(
     // quietly widened.
     if enabled {
         for rule in routing.rules.iter().filter(|rule| rule.enabled) {
-            if let crate::model::schedule::SourceSelection::Only(scopes) = &rule.sources
-                && let Some(_) = scopes.iter().find(|scope| !super::schedule_routing::scope_is_placeable(**scope, blocks))
+            if let crate::model::schedule::MovementSourceSelection::Only(scopes) = &rule.sources
+                // Ground only: whether a stockpile exists is the destination
+                // list's answer and is reported on the Destinations step, while
+                // whether a band was cut is the Solids run's.
+                && scopes
+                    .iter()
+                    .filter_map(|scope| scope.ground())
+                    .any(|scope| !super::schedule_routing::scope_is_placeable(scope, blocks))
             {
                 problems.push(ScheduleRunProblem {
                     bars: Vec::new(),
@@ -707,7 +742,15 @@ impl crate::app::App<'_> {
                         .filter(|problem| problem.bars.contains(&report.bar))
                         .map(|problem| problem.message.clone()),
                 );
-                let default_name = default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref()));
+                let default_name = match &report.reclaim {
+                    // A reclaim bar is named by its pile, which is what the user
+                    // chose when they created it.
+                    Some(reclaim) => tr!(
+                        "reclaim-bar-default-name",
+                        stockpile = reclaim.source_name.clone().unwrap_or_else(|| tr!("destination-unresolved"))
+                    ),
+                    None => default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref())),
+                };
                 ScheduleBarView {
                     bar: report.bar,
                     default_name,
@@ -1010,10 +1053,28 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     let mut report = BarReport {
         bar: bar.id,
         members: Vec::with_capacity(bar.members().len()),
+        reclaim: None,
         tonnes: None,
         problems: Vec::new(),
         generation: None,
     };
+    // Reclaiming asks none of the questions below it: there is no ground to
+    // resolve, no tonnage field to read and no dig order to be empty. What it
+    // does need is the pile it names, which is the project's answer rather than
+    // the Solids run's.
+    if let Some(work) = bar.reclaim() {
+        let plan = document.schedule();
+        let resolved = crate::model::schedule::destinations::resolve(work.source, document.solids(), plan.routing())
+            .ok()
+            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile);
+        if resolved.is_none() {
+            report.problems.push(ReadinessProblem::ReclaimSourceUnresolved);
+        }
+        report.reclaim = Some(ReclaimReport {
+            source_name: resolved.map(|entry| entry.name),
+        });
+        return report;
+    }
     if bar.members().is_empty() {
         report.problems.push(ReadinessProblem::Empty);
     }

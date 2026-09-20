@@ -471,6 +471,44 @@ impl crate::app::App<'_> {
             .collect();
         let agents_step = hash_of((classes_step, agents));
 
+        // Transport inputs hang off the fleet and go no further: nothing
+        // downstream reads them yet, and folding them into the destination or
+        // readiness fingerprints would retire a dig-only calculation the
+        // moment a truck was rostered - implying it had used truck constraints
+        // it never saw.
+        let trucks = plan.trucks();
+        let truck_classes: Vec<_> = trucks
+            .classes
+            .iter()
+            .map(|class| {
+                let periods: Vec<_> = class
+                    .calendar
+                    .periods
+                    .iter()
+                    .map(|(period, value)| (period.0, value.units, value.availability.map(f64::to_bits), value.utilisation.map(f64::to_bits)))
+                    .collect();
+                (
+                    class.id.0,
+                    class.name.clone(),
+                    class.payload_t.to_bits(),
+                    class.loaded_speed_kph.to_bits(),
+                    class.unloaded_speed_kph.to_bits(),
+                    class.calendar.default_units,
+                    class.calendar.default_availability.to_bits(),
+                    class.calendar.default_utilisation.to_bits(),
+                    periods,
+                )
+            })
+            .collect();
+        // Haul distances are a transport input even though they are edited on
+        // the destination pages, so they belong to this chain rather than to
+        // the stockpile, dump and crusher steps.
+        let distances: Vec<_> = crate::model::schedule::destinations::available(document.solids(), plan.routing())
+            .into_iter()
+            .map(|entry| (format!("{:?}", entry.id), entry.distance_km.to_bits()))
+            .collect();
+        let truck_classes_step = hash_of((agents_step, truck_classes, distances));
+
         // Destinations are fingerprinted in the three groups the pages edit,
         // each chained onto the last, so editing a crusher's budget does not
         // retire the stockpile step - and the solids the stockpile and dump
@@ -542,6 +580,65 @@ impl crate::app::App<'_> {
         };
         let destinations_step = rules;
 
+        let trucking_rules = {
+            let mut hasher = DefaultHasher::new();
+            truck_classes_step.hash(&mut hasher);
+            for rule in &trucks.rules {
+                let mut rule_hasher = DefaultHasher::new();
+                rule.hash_content_public(&mut rule_hasher);
+                rule_hasher.finish().hash(&mut hasher);
+            }
+            // What the rule's selectors can resolve against, so a destination
+            // or loader that disappears is an input change here too.
+            for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
+                format!("{:?}", entry.id).hash(&mut hasher);
+            }
+            for agent in plan.agents() {
+                agent.id.0.hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let trucking_rules_step = trucking_rules;
+
+        // Cashflow hangs off the transport chain and, like it, reaches no
+        // further: editing what a movement is worth must not retire a dig-only
+        // calculation that never consulted a value. Only the coefficients are
+        // folded in - a rule renamed is unsaved work, not a different number.
+        let cashflow_step = {
+            let mut hasher = DefaultHasher::new();
+            trucking_rules_step.hash(&mut hasher);
+            plan.cashflow().hash_content(&mut hasher);
+            plan.currency().hash(&mut hasher);
+            for field in document.reserve_fields() {
+                field.id.0.hash(&mut hasher);
+                format!("{:?}", field.aggregation).hash(&mut hasher);
+            }
+            // The reclaim half of the optimised inputs rides this chain too, and
+            // for the same reason: a reclaim rate, a lot of opening stock or a
+            // FIFO/LIFO choice is read by nothing the current dispatcher does,
+            // so folding any of it into the dig-only chain would retire a result
+            // that never consulted it - and make the dispatcher look as though
+            // it had used opening inventory.
+            for class in plan.classes() {
+                class.id.0.hash(&mut hasher);
+                class.default_reclaim_rate_tph.to_bits().hash(&mut hasher);
+            }
+            for agent in plan.agents() {
+                agent.id.0.hash(&mut hasher);
+                for (period, value) in &agent.calendar.periods {
+                    period.0.hash(&mut hasher);
+                    value.reclaim_rate_tph.map(f64::to_bits).hash(&mut hasher);
+                }
+            }
+            for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
+                format!("{:?}", entry.id).hash(&mut hasher);
+                if let Some(inventory) = plan.routing().inventory(entry.id) {
+                    inventory.hash_content(&mut hasher);
+                }
+            }
+            hasher.finish()
+        };
+
         // Where the Solids run stands, not what it produced: a status is
         // cheap, and it moves exactly when a schedule's ground does.
         let solids = match self.planning_snapshot_status() {
@@ -554,10 +651,13 @@ impl crate::app::App<'_> {
             configuration,
             classes_step,
             agents_step,
+            truck_classes_step,
             stockpiles_step,
             dumps_step,
             crushers_step,
             destinations_step,
+            trucking_rules_step,
+            cashflow_step,
             readiness_step,
         ]
     }
@@ -762,6 +862,9 @@ impl crate::app::App<'_> {
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
             ScheduleStep::Destinations => self.evaluate_destination_rules(),
+            ScheduleStep::TruckClasses => self.evaluate_truck_classes(),
+            ScheduleStep::TruckingRules => self.evaluate_trucking_rules(),
+            ScheduleStep::Cashflow => self.evaluate_cashflow(),
             ScheduleStep::Readiness => self.evaluate_schedule_readiness(),
         }
     }
@@ -933,6 +1036,33 @@ impl crate::app::App<'_> {
                 blocking: false,
             });
         }
+        // Opening stock against capacity. Refused when it is typed and when a
+        // file is read, so reaching this means a capacity and a pile parted
+        // company some other way; said out loud rather than assumed impossible,
+        // and not blocking, because nothing in a dig-only run reads either.
+        if kind == crate::model::schedule::DestinationKind::Stockpile {
+            for entry in available.iter().filter(|entry| entry.kind == kind) {
+                if entry.capacity_t.is_some_and(|capacity| entry.opening_t > capacity) {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(entry.name.clone()),
+                        message: tr!("inventory-stage-over-capacity", stockpile = entry.name.clone()),
+                        blocking: false,
+                    });
+                }
+                let invalid = routing
+                    .inventory(entry.id)
+                    .map_or(0, |inventory| inventory.invalid_field_references(document.reserve_fields()));
+                if invalid > 0 {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(entry.name.clone()),
+                        message: tr!("inventory-stage-invalid-fields", count = invalid.to_string()),
+                        // The present dispatcher reads no inventory. The
+                        // optimiser input builder will require this clean.
+                        blocking: false,
+                    });
+                }
+            }
+        }
         StageOutcome::Settled { diagnostics, entities }
     }
 
@@ -963,6 +1093,189 @@ impl crate::app::App<'_> {
         StageOutcome::Settled {
             diagnostics,
             entities: crushers.len(),
+        }
+    }
+
+    /// The truck classes and their fleet calendars.
+    ///
+    /// Never blocking. Empty truck configuration is a valid project at this
+    /// stage - nothing in the current dispatcher reads a truck - so what this
+    /// step reports is information, not a gate on Run Schedule.
+    fn evaluate_truck_classes(&self) -> StageOutcome {
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let trucks = document.schedule().trucks();
+        let mut diagnostics = Vec::new();
+        if trucks.classes.is_empty() {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("truck-stage-no-classes"),
+                blocking: false,
+            });
+        }
+        for class in &trucks.classes {
+            if let Err(error) = class.calendar.validate() {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(class.name.clone()),
+                    message: error.message(),
+                    blocking: false,
+                });
+                continue;
+            }
+            // A rostered fleet of zero is a legitimate answer - a class on site
+            // next year - and is said out loud rather than treated as a fault,
+            // because it supplies no capacity at all.
+            if class.calendar.default_units == 0 && class.calendar.periods.values().all(|value| value.units.unwrap_or(0) == 0) {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(class.name.clone()),
+                    message: tr!("truck-stage-zero-units", class = class.name.clone()),
+                    blocking: false,
+                });
+            }
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: trucks.classes.len(),
+        }
+    }
+
+    /// The trucking rules: does each enabled one still resolve what it names.
+    ///
+    /// Also never blocking, for the same reason. A broken reference is reported
+    /// against the rule that holds it and is never repaired: deleting a
+    /// destination must not silently widen a rule that named it.
+    fn evaluate_trucking_rules(&self) -> StageOutcome {
+        use crate::model::schedule::{DestinationSelection, LoaderSelection, MovementSourceScope, MovementSourceSelection, destinations};
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let plan = document.schedule();
+        let trucks = plan.trucks();
+        let routing = plan.routing();
+        let mut diagnostics = Vec::new();
+        if trucks.rules.is_empty() && !trucks.classes.is_empty() {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("truck-stage-no-rules"),
+                blocking: false,
+            });
+        }
+        let resolves = |id| destinations::resolve(id, document.solids(), routing).is_ok();
+        for rule in trucks.rules.iter().filter(|rule| rule.enabled) {
+            let mut report = |message: String| {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(rule.name.clone()),
+                    message,
+                    blocking: false,
+                });
+            };
+            if let LoaderSelection::Only(agents) = &rule.loaders
+                && agents.iter().any(|agent| plan.agent(*agent).is_none())
+            {
+                report(tr!("destination-stage-rule-loader-missing"));
+            }
+            if let MovementSourceSelection::Only(scopes) = &rule.sources
+                && scopes.iter().any(|scope| matches!(scope, MovementSourceScope::Stockpile(id) if !resolves(*id)))
+            {
+                report(tr!("truck-rule-destination-missing"));
+            }
+            if let DestinationSelection::Only(ids) = &rule.destinations
+                && ids.iter().any(|id| !resolves(*id))
+            {
+                report(tr!("truck-rule-destination-missing"));
+            }
+            if rule.classes.iter().any(|class| trucks.class(*class).is_none()) {
+                report(tr!("truck-rule-class-missing"));
+            }
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: trucks.rules.len(),
+        }
+    }
+
+    /// The cashflow rules: does each enabled one still resolve what it names.
+    ///
+    /// Never blocking. Nothing in the current dispatcher reads a value, so an
+    /// empty or broken cashflow configuration cannot stop a dig-only run - it
+    /// is reported here and nothing is repaired, because deleting a
+    /// destination must not silently widen a rule that priced it.
+    fn evaluate_cashflow(&self) -> StageOutcome {
+        use crate::model::schedule::{DestinationSelection, LoaderSelection, MovementSourceScope, MovementSourceSelection, destinations};
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let plan = document.schedule();
+        let cashflow = plan.cashflow();
+        let routing = plan.routing();
+        let mut diagnostics = Vec::new();
+        if cashflow.rules.is_empty() {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("cashflow-stage-no-rules"),
+                blocking: false,
+            });
+        }
+        let resolves = |id| destinations::resolve(id, document.solids(), routing).is_ok();
+        for rule in cashflow.rules.iter().filter(|rule| rule.enabled) {
+            let mut report = |message: String| {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(rule.name.clone()),
+                    message,
+                    blocking: false,
+                });
+            };
+            if let LoaderSelection::Only(agents) = &rule.loaders
+                && agents.iter().any(|agent| plan.agent(*agent).is_none())
+            {
+                report(tr!("destination-stage-rule-loader-missing"));
+            }
+            if let MovementSourceSelection::Only(scopes) = &rule.sources
+                && scopes.iter().any(|scope| matches!(scope, MovementSourceScope::Stockpile(id) if !resolves(*id)))
+            {
+                report(tr!("truck-rule-destination-missing"));
+            }
+            if let DestinationSelection::Only(ids) = &rule.destinations
+                && ids.iter().any(|id| !resolves(*id))
+            {
+                report(tr!("truck-rule-destination-missing"));
+            }
+            // A condition reads its field through the definition, so a field
+            // that is gone or has been re-aggregated invalidates the rule
+            // rather than being read some other way.
+            for condition in &rule.conditions {
+                let field = document.reserve_fields().iter().find(|field| field.id == condition.field);
+                match field {
+                    None => report(tr!("destination-stage-field-missing")),
+                    Some(field) => {
+                        let categorical = field.aggregation == crate::model::ReserveAggregation::Category;
+                        let wants_category = matches!(condition.test, crate::model::schedule::ConditionTest::Category { .. });
+                        if categorical != wants_category {
+                            report(tr!("destination-stage-field-kind"));
+                        }
+                    }
+                }
+            }
+            // Said out loud rather than refused: a rule that describes
+            // movements and pays nothing is legitimate, and is usually a
+            // figure somebody has not filled in yet.
+            if rule.value_per_tonne == 0.0 {
+                report(tr!("cashflow-stage-zero-value", rule = rule.name.clone()));
+            }
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: cashflow.rules.len(),
         }
     }
 
@@ -1014,12 +1327,14 @@ impl crate::app::App<'_> {
             });
         }
         for rule in routing.rules.iter().filter(|rule| rule.enabled) {
-            if let Err(problem) = destinations::resolve(rule.destination, document.solids(), routing) {
-                diagnostics.push(StageDiagnostic {
-                    entity: Some(rule.name.clone()),
-                    message: problem.message(&rule.name),
-                    blocking: true,
-                });
+            for destination in &rule.destinations {
+                if let Err(problem) = destinations::resolve(*destination, document.solids(), routing) {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(rule.name.clone()),
+                        message: problem.message(&rule.name),
+                        blocking: true,
+                    });
+                }
             }
             if let crate::model::schedule::LoaderSelection::Only(agents) = &rule.loaders
                 && agents.iter().any(|agent| plan.agent(*agent).is_none())

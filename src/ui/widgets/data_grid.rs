@@ -282,6 +282,35 @@ pub(crate) fn grid_choice_row<T: Copy + PartialEq>(
     .inner
 }
 
+/// One named multiple selection: a field-shaped button naming what is chosen,
+/// which opens a checkable list.
+///
+/// A summary and a button rather than a column of checkboxes, because the
+/// things being chosen from - every loader, every bench of every pit - are a
+/// list of unbounded length, and a rule editor that grew with the mine would
+/// push everything below it off the page.
+pub(crate) fn grid_select_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, summary: &str, depth: usize) -> egui::Response {
+    let (cell, _) = grid_named_row(ui, label, depth);
+    if !cell.is_positive() {
+        // Still a response, so the caller can hang its popup off something.
+        return ui.interact(egui::Rect::NOTHING, egui::Id::new(id), egui::Sense::click());
+    }
+    let id = egui::Id::new(id);
+    ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(cell));
+        ui.spacing_mut().interact_size.y = cell.height();
+        ui.put(
+            cell,
+            egui::Button::new(egui::RichText::new(summary))
+                .fill(ui.visuals().extreme_bg_color)
+                .stroke(ui.visuals().widgets.inactive.bg_stroke)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .min_size(cell.size()),
+        )
+    })
+    .inner
+}
+
 /// A captioned rule inside a grid, marking off the group of rows beneath it:
 /// the flitching list's styling options from the heights they style.
 pub(crate) fn grid_separator_row(ui: &mut egui::Ui, label: &str, depth: usize) {

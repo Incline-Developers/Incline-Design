@@ -2287,6 +2287,20 @@ pub(crate) struct EditorState {
     /// destination is one thing whichever page it is listed on.
     pub(crate) schedule_selected_destination: Option<crate::model::schedule::DestinationId>,
     pub(crate) schedule_destination_draft: Option<ScheduleDestinationDraft>,
+    /// The selected truck class and the cells being typed into it.
+    pub(crate) schedule_selected_truck_class: Option<crate::model::schedule::TruckClassId>,
+    pub(crate) schedule_truck_class_draft: Option<ScheduleTruckClassDraft>,
+    /// The selected trucking rule and the name being typed into it.
+    pub(crate) schedule_selected_truck_rule: Option<crate::model::schedule::TruckingRuleId>,
+    pub(crate) schedule_truck_rule_draft: Option<ScheduleRuleNameDraft>,
+    /// The selected cashflow rule and the cells being typed into its editor.
+    pub(crate) schedule_selected_cashflow_rule: Option<crate::model::schedule::CashflowRuleId>,
+    pub(crate) schedule_cashflow_draft: Option<ScheduleCashflowDraft>,
+    /// The selected opening-inventory lot on the Stockpiles page, and the cells
+    /// being typed into it. One selection, like the destination one: a lot
+    /// belongs to whichever stockpile is selected beside it.
+    pub(crate) schedule_selected_lot: Option<crate::model::schedule::OpeningLotId>,
+    pub(crate) schedule_lot_draft: Option<ScheduleLotDraft>,
     /// The selected routing rule and the cells being typed into its editor.
     pub(crate) schedule_selected_rule: Option<crate::model::schedule::RuleId>,
     pub(crate) schedule_rule_draft: Option<ScheduleRuleDraft>,
@@ -2294,6 +2308,11 @@ pub(crate) struct EditorState {
     /// being edited. Held apart from the rule's committed conditions so a
     /// half-typed bound is never a routing decision.
     pub(crate) schedule_condition_draft: Option<ScheduleConditionDraft>,
+    /// Which groups of the source picker are folded shut, keyed by the band
+    /// itself rather than by its row: the list is rebuilt from the run every
+    /// time it opens, and a row index would fold a different bench each time
+    /// the ground changed.
+    pub(crate) schedule_source_collapsed: Vec<(u64, u64, u64)>,
     /// The source scopes a rule can name, as the last completed Solids run
     /// describes them: every pit, its benches, and their flitches. Mirrored
     /// out of the run rather than read from the document, because which bands
@@ -2313,6 +2332,9 @@ pub(crate) struct EditorState {
     /// The New Bar / Rename Bar dialog, while one is open. One dialog serves
     /// both: they ask the same question, and the target is what says which.
     pub(crate) bar_name_dialog: Option<BarNameDialog>,
+    /// Add or edit a reclaim bar. The draft stays outside the project until
+    /// Apply, so a half-typed limit or cancelled dialog changes nothing.
+    pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
     /// The numeric work-window dialog, while one is open. Dragging an edge is
     /// quick and imprecise; this is the same edit said exactly.
     pub(crate) bar_window_dialog: Option<BarWindowDialog>,
@@ -2685,9 +2707,18 @@ impl EditorState {
         self.schedule_bar_height_draft = None;
         self.schedule_selected_destination = None;
         self.schedule_destination_draft = None;
+        self.schedule_selected_truck_class = None;
+        self.schedule_truck_class_draft = None;
+        self.schedule_selected_truck_rule = None;
+        self.schedule_truck_rule_draft = None;
+        self.schedule_selected_cashflow_rule = None;
+        self.schedule_cashflow_draft = None;
+        self.schedule_selected_lot = None;
+        self.schedule_lot_draft = None;
         self.schedule_selected_rule = None;
         self.schedule_rule_draft = None;
         self.schedule_condition_draft = None;
+        self.schedule_source_collapsed.clear();
         self.schedule_routing_sources = Default::default();
         self.schedule_category_values = Default::default();
         self.new_destination_open = false;
@@ -2695,6 +2726,7 @@ impl EditorState {
         self.schedule_selected_bar = None;
         self.schedule_selected_member = None;
         self.bar_name_dialog = None;
+        self.reclaim_bar_dialog = None;
         self.bar_window_dialog = None;
         self.gantt_drag = None;
         self.schedule_bar_reports.clear();
@@ -3266,9 +3298,18 @@ impl EditorState {
             schedule_class_draft: None,
             schedule_selected_destination: None,
             schedule_destination_draft: None,
+            schedule_selected_truck_class: None,
+            schedule_truck_class_draft: None,
+            schedule_selected_truck_rule: None,
+            schedule_truck_rule_draft: None,
+            schedule_selected_cashflow_rule: None,
+            schedule_cashflow_draft: None,
+            schedule_selected_lot: None,
+            schedule_lot_draft: None,
             schedule_selected_rule: None,
             schedule_rule_draft: None,
             schedule_condition_draft: None,
+            schedule_source_collapsed: Vec::new(),
             schedule_routing_sources: Default::default(),
             schedule_category_values: Default::default(),
             schedule_agent_draft: None,
@@ -3277,6 +3318,7 @@ impl EditorState {
             schedule_selected_bar: None,
             schedule_selected_member: None,
             bar_name_dialog: None,
+            reclaim_bar_dialog: None,
             bar_window_dialog: None,
             gantt_drag: None,
             schedule_bar_reports: Vec::new(),
@@ -4298,6 +4340,12 @@ impl UiCommand {
                 ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
                 ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
+                ScheduleEdit::AddReclaimBar { name, .. } => report(tr!("reclaim-add-bar"), name.clone()),
+                ScheduleEdit::AddOpeningLot { name, tonnes_t, .. } => report(tr!("inventory-new-lot"), format!("{name} · {tonnes_t} t")),
+                ScheduleEdit::DuplicateOpeningLot { lot, .. } => report(tr!("inventory-duplicate-lot"), format!("{lot:?}")),
+                ScheduleEdit::DeleteOpeningLot { lot, .. } => report(tr!("inventory-delete-lot"), format!("{lot:?}")),
+                ScheduleEdit::AddOpeningPortion { tonnes_t, .. } => report(tr!("inventory-new-portion"), format!("{tonnes_t} t")),
+                ScheduleEdit::DeleteOpeningPortion { portion, .. } => report(tr!("inventory-delete-portion"), format!("{portion:?}")),
                 ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
                 ScheduleEdit::DeleteBar(id) => report(tr!("schedule-delete-bar"), format!("{id:?}")),
                 // Applying a sequence edit is a deliberate, single act on a
@@ -4313,6 +4361,16 @@ impl UiCommand {
                 ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
+                ScheduleEdit::DuplicateTruckClass(id) => report(tr!("truck-duplicate-class"), format!("{id:?}")),
+                ScheduleEdit::DeleteTruckClass(id) => report(tr!("truck-delete-class"), format!("{id:?}")),
+                ScheduleEdit::AddTruckingRule { name, .. } => report(tr!("truck-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateTruckingRule(id) => report(tr!("truck-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteTruckingRule(id) => report(tr!("truck-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::SetName(_)
                 | ScheduleEdit::RenameClass { .. }
                 | ScheduleEdit::SetClassRate { .. }
@@ -4342,11 +4400,44 @@ impl UiCommand {
                 | ScheduleEdit::SetDestinationCapacity { .. }
                 | ScheduleEdit::RenameRule { .. }
                 | ScheduleEdit::SetRuleEnabled { .. }
-                | ScheduleEdit::SetRuleDestination { .. }
+                | ScheduleEdit::SetRuleDestinations { .. }
                 | ScheduleEdit::SetRuleLoaders { .. }
                 | ScheduleEdit::SetRuleSources { .. }
                 | ScheduleEdit::SetRuleConditions { .. }
-                | ScheduleEdit::MoveRule { .. } => None,
+                | ScheduleEdit::MoveRule { .. }
+                // Truck cell edits, for the same reason: the class editor and
+                // the rule editor show the result where it was typed.
+                | ScheduleEdit::SetDestinationDistance { .. }
+                | ScheduleEdit::RenameTruckClass { .. }
+                | ScheduleEdit::SetTruckClassPayload { .. }
+                | ScheduleEdit::SetTruckClassSpeeds { .. }
+                | ScheduleEdit::RenameTruckingRule { .. }
+                | ScheduleEdit::SetTruckingRuleEnabled { .. }
+                | ScheduleEdit::SetTruckingRuleLoaders { .. }
+                | ScheduleEdit::SetTruckingRuleSources { .. }
+                | ScheduleEdit::SetTruckingRuleDestinations { .. }
+                | ScheduleEdit::SetTruckingRuleClasses { .. }
+                // Cashflow cell edits: the rule editor shows the result where
+                // it was typed.
+                | ScheduleEdit::SetCurrency(_)
+                | ScheduleEdit::RenameCashflowRule { .. }
+                | ScheduleEdit::SetCashflowRuleEnabled { .. }
+                | ScheduleEdit::SetCashflowRuleActivity { .. }
+                | ScheduleEdit::SetCashflowRuleLoaders { .. }
+                | ScheduleEdit::SetCashflowRuleSources { .. }
+                | ScheduleEdit::SetCashflowRuleDestinations { .. }
+                | ScheduleEdit::SetCashflowRuleConditions { .. }
+                | ScheduleEdit::SetCashflowRuleValue { .. }
+                // Inventory and reclaim cell edits: the Stockpiles page and the
+                // bar's own menu show the result where it was typed.
+                | ScheduleEdit::SetClassReclaimRate { .. }
+                | ScheduleEdit::SetReclaimOrder { .. }
+                | ScheduleEdit::RenameOpeningLot { .. }
+                | ScheduleEdit::MoveOpeningLot { .. }
+                | ScheduleEdit::SetOpeningPortionTonnes { .. }
+                | ScheduleEdit::SetOpeningPortionValue { .. }
+                | ScheduleEdit::SetReclaimSource { .. }
+                | ScheduleEdit::SetReclaimMaximum { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
@@ -4845,10 +4936,13 @@ pub(crate) enum ScheduleStep {
     Configuration,
     LoaderClasses,
     LoaderAgents,
+    TruckClasses,
     Stockpiles,
     Dumps,
     Crushers,
     Destinations,
+    TruckingRules,
+    Cashflow,
     Readiness,
 }
 
@@ -4859,14 +4953,19 @@ impl ScheduleStep {
     /// and before Readiness: a rule names a destination, so the lists it
     /// chooses from have to be checked first, and the ground its source scopes
     /// name is only known once Readiness has the Solids run.
-    pub(crate) const ALL: [Self; 8] = [
+    /// Truck Classes sits with the loader fleet because it is fleet, and
+    /// Trucking Rules after Destinations because a trucking rule names them.
+    pub(crate) const ALL: [Self; 11] = [
         Self::Configuration,
         Self::LoaderClasses,
         Self::LoaderAgents,
+        Self::TruckClasses,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
         Self::Destinations,
+        Self::TruckingRules,
+        Self::Cashflow,
         Self::Readiness,
     ];
 
@@ -4879,10 +4978,13 @@ impl ScheduleStep {
             Self::Configuration => tr!("planning-configuration"),
             Self::LoaderClasses => tr!("schedule-loader-classes"),
             Self::LoaderAgents => tr!("schedule-loader-agents"),
+            Self::TruckClasses => tr!("truck-classes"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
             Self::Crushers => tr!("destination-crushers"),
             Self::Destinations => tr!("destination-destinations"),
+            Self::TruckingRules => tr!("truck-rules"),
+            Self::Cashflow => tr!("cashflow"),
             Self::Readiness => tr!("schedule-readiness-step"),
         }
     }
@@ -4892,10 +4994,13 @@ impl ScheduleStep {
             Self::Configuration => "schedule_configuration",
             Self::LoaderClasses => "schedule_loader_classes",
             Self::LoaderAgents => "schedule_loader_agents",
+            Self::TruckClasses => "schedule_truck_classes",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
             Self::Crushers => "schedule_crushers",
             Self::Destinations => "schedule_destinations",
+            Self::TruckingRules => "schedule_trucking_rules",
+            Self::Cashflow => "schedule_cashflow",
             Self::Readiness => "schedule_readiness",
         }
     }
@@ -4947,11 +5052,61 @@ pub(crate) struct ScheduleDestinationDraft {
     pub(crate) id: crate::model::schedule::DestinationId,
     /// What the project held when this draft was seeded, so an edit made
     /// elsewhere replaces the draft rather than being overwritten by it.
-    pub(crate) source: (String, Option<f64>, Option<f64>),
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64),
     pub(crate) name: String,
     pub(crate) capacity: String,
     /// A crusher's default daily budget, blank for unlimited.
     pub(crate) crusher_default: String,
+    /// One-way haul distance in kilometres. Always a figure - there is no
+    /// blank state, because every destination is somewhere.
+    pub(crate) distance: String,
+}
+
+/// One truck class's cells as they are being typed.
+///
+/// Text, not numbers: a half-typed payload is not a payload, and a numeric
+/// draft would have to hold some number while it was being written.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleTruckClassDraft {
+    pub(crate) id: crate::model::schedule::TruckClassId,
+    /// What the project held when this draft was seeded, so an edit made
+    /// elsewhere replaces the draft rather than being overwritten by it.
+    pub(crate) source: (String, u64, u64, u64),
+    pub(crate) name: String,
+    pub(crate) payload: String,
+    pub(crate) loaded: String,
+    pub(crate) unloaded: String,
+}
+
+/// Which rule a condition being written belongs to.
+///
+/// One dialog serves both rule kinds: they ask exactly the same question of the
+/// same field variables, and a second copy of it would be a second place for
+/// `60 < Fe < 70` to be parsed slightly differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConditionOwner {
+    Routing(crate::model::schedule::RuleId),
+    Cashflow(crate::model::schedule::CashflowRuleId),
+}
+
+/// One cashflow rule's name and value as they are being typed.
+///
+/// Text, so a half-typed value - "-" on the way to "-35" - is not a value, and
+/// so full stored precision survives an edit that does not change it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleCashflowDraft {
+    pub(crate) id: crate::model::schedule::CashflowRuleId,
+    pub(crate) source: (String, u64),
+    pub(crate) name: String,
+    pub(crate) value: String,
+}
+
+/// One trucking rule's name as it is being typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleRuleNameDraft {
+    pub(crate) id: crate::model::schedule::TruckingRuleId,
+    pub(crate) source: String,
+    pub(crate) name: String,
 }
 
 /// One routing rule's cells as they are being typed.
@@ -4969,7 +5124,7 @@ pub(crate) struct ScheduleRuleDraft {
 /// that, so nothing here may quietly close an endpoint.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleConditionDraft {
-    pub(crate) rule: crate::model::schedule::RuleId,
+    pub(crate) rule: ConditionOwner,
     /// The condition being replaced, or `None` while a new one is being added.
     pub(crate) replacing: Option<crate::model::ReserveFieldId>,
     pub(crate) field: Option<crate::model::ReserveFieldId>,
@@ -4996,9 +5151,12 @@ pub(crate) struct ScheduleConditionDraft {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleClassDraft {
     pub(crate) id: crate::model::schedule::LoaderClassId,
-    pub(crate) source: (String, f64),
+    pub(crate) source: (String, f64, f64),
     pub(crate) name: String,
     pub(crate) rate: String,
+    /// The rate this type reclaims at, typed on its own: the two rates are
+    /// separate answers, so committing one must not carry the other with it.
+    pub(crate) reclaim_rate: String,
 }
 
 /// The editable cell of one loader agent, on the same rule as
@@ -5182,7 +5340,7 @@ pub(crate) enum ScheduleEdit {
     /// Add a routing rule at the end of the priority order.
     AddRule {
         name: String,
-        destination: crate::model::schedule::DestinationId,
+        destinations: Vec<crate::model::schedule::DestinationId>,
     },
     /// Copy a rule into an independent one directly below it.
     DuplicateRule(crate::model::schedule::RuleId),
@@ -5195,9 +5353,11 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::RuleId,
         enabled: bool,
     },
-    SetRuleDestination {
+    /// Replace the destinations one rule may deliver to, in the order it
+    /// should try them.
+    SetRuleDestinations {
         rule: crate::model::schedule::RuleId,
-        destination: crate::model::schedule::DestinationId,
+        destinations: Vec<crate::model::schedule::DestinationId>,
     },
     SetRuleLoaders {
         rule: crate::model::schedule::RuleId,
@@ -5205,7 +5365,7 @@ pub(crate) enum ScheduleEdit {
     },
     SetRuleSources {
         rule: crate::model::schedule::RuleId,
-        sources: crate::model::schedule::SourceSelection,
+        sources: crate::model::schedule::MovementSourceSelection,
     },
     /// Replace one rule's whole condition list, validated as a set.
     SetRuleConditions {
@@ -5217,6 +5377,218 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::RuleId,
         later: bool,
     },
+    /// One destination's one-way haul distance, in kilometres. A transport
+    /// input, edited on the destination pages because that is where the
+    /// destination is.
+    SetDestinationDistance {
+        destination: crate::model::schedule::DestinationId,
+        distance_km: f64,
+    },
+    /// Add a truck class - a shared pool of one type of truck, starting with
+    /// no trucks in it.
+    AddTruckClass {
+        name: String,
+    },
+    /// Copy a class, calendar overrides included, under a new id.
+    DuplicateTruckClass(crate::model::schedule::TruckClassId),
+    /// Delete a class. Refused, with the rules named, while one permits it.
+    DeleteTruckClass(crate::model::schedule::TruckClassId),
+    RenameTruckClass {
+        class: crate::model::schedule::TruckClassId,
+        name: String,
+    },
+    SetTruckClassPayload {
+        class: crate::model::schedule::TruckClassId,
+        payload_t: f64,
+    },
+    /// Both speeds at once: they are two halves of one travel cycle, and an
+    /// editor that committed them separately would put two undo steps on the
+    /// stack for one thought.
+    SetTruckClassSpeeds {
+        class: crate::model::schedule::TruckClassId,
+        loaded_kph: f64,
+        unloaded_kph: f64,
+    },
+    /// Apply one atomic truck-calendar edit, or one rectangular paste or clear.
+    SetTruckCells {
+        edits: Vec<crate::model::schedule::TruckCellEdit>,
+    },
+    AddTruckingRule {
+        name: String,
+        classes: Vec<crate::model::schedule::TruckClassId>,
+    },
+    DuplicateTruckingRule(crate::model::schedule::TruckingRuleId),
+    DeleteTruckingRule(crate::model::schedule::TruckingRuleId),
+    RenameTruckingRule {
+        rule: crate::model::schedule::TruckingRuleId,
+        name: String,
+    },
+    SetTruckingRuleEnabled {
+        rule: crate::model::schedule::TruckingRuleId,
+        enabled: bool,
+    },
+    SetTruckingRuleLoaders {
+        rule: crate::model::schedule::TruckingRuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetTruckingRuleSources {
+        rule: crate::model::schedule::TruckingRuleId,
+        sources: crate::model::schedule::MovementSourceSelection,
+    },
+    SetTruckingRuleDestinations {
+        rule: crate::model::schedule::TruckingRuleId,
+        destinations: crate::model::schedule::DestinationSelection,
+    },
+    SetTruckingRuleClasses {
+        rule: crate::model::schedule::TruckingRuleId,
+        classes: Vec<crate::model::schedule::TruckClassId>,
+    },
+    /// What the schedule's figures are labelled with. Display only; nothing is
+    /// converted.
+    SetCurrency(String),
+    /// Add a cashflow rule worth nothing.
+    AddCashflowRule {
+        name: String,
+    },
+    /// Copy a rule. Two identical rules contribute twice, deliberately.
+    DuplicateCashflowRule(crate::model::schedule::CashflowRuleId),
+    DeleteCashflowRule(crate::model::schedule::CashflowRuleId),
+    RenameCashflowRule {
+        rule: crate::model::schedule::CashflowRuleId,
+        name: String,
+    },
+    SetCashflowRuleEnabled {
+        rule: crate::model::schedule::CashflowRuleId,
+        enabled: bool,
+    },
+    SetCashflowRuleActivity {
+        rule: crate::model::schedule::CashflowRuleId,
+        activity: crate::model::schedule::ActivitySelection,
+    },
+    SetCashflowRuleLoaders {
+        rule: crate::model::schedule::CashflowRuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetCashflowRuleSources {
+        rule: crate::model::schedule::CashflowRuleId,
+        sources: crate::model::schedule::MovementSourceSelection,
+    },
+    SetCashflowRuleDestinations {
+        rule: crate::model::schedule::CashflowRuleId,
+        destinations: crate::model::schedule::DestinationSelection,
+    },
+    SetCashflowRuleConditions {
+        rule: crate::model::schedule::CashflowRuleId,
+        conditions: Vec<crate::model::schedule::FieldCondition>,
+    },
+    /// Signed, and never clamped: a cost is a negative value.
+    SetCashflowRuleValue {
+        rule: crate::model::schedule::CashflowRuleId,
+        value_per_tonne: f64,
+    },
+    /// The rate one machine type reclaims at. Separate from its dig rate:
+    /// loading a pile back out is a different job, and editing one must not
+    /// move the other.
+    SetClassReclaimRate {
+        class: crate::model::schedule::LoaderClassId,
+        rate_tph: f64,
+    },
+    /// Which end of a stockpile's lots reclaim takes from.
+    SetReclaimOrder {
+        destination: crate::model::schedule::DestinationId,
+        order: crate::model::schedule::ReclaimOrder,
+    },
+    /// Add a lot of opening stock at the newest end of a stockpile.
+    AddOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        name: String,
+        tonnes_t: f64,
+    },
+    /// Copy a lot, portions included, under fresh ids.
+    DuplicateOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+    },
+    DeleteOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+    },
+    RenameOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        name: String,
+    },
+    /// Move a lot one place along the oldest-to-newest order. `newer` is down.
+    MoveOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        newer: bool,
+    },
+    AddOpeningPortion {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        tonnes_t: f64,
+    },
+    DeleteOpeningPortion {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+    },
+    SetOpeningPortionTonnes {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+        tonnes_t: f64,
+    },
+    /// Set or clear one field's value on one portion. `None` returns it to
+    /// missing, which no condition matches and which is not zero.
+    SetOpeningPortionValue {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+        field: crate::model::ReserveFieldId,
+        value: Option<crate::model::schedule::OpeningValue>,
+    },
+    /// Add a Gantt bar that reclaims from one stockpile. No viewport picking:
+    /// a reclaim bar names a pile, not ground.
+    AddReclaimBar {
+        name: String,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        source: crate::model::schedule::DestinationId,
+        maximum_t: Option<f64>,
+    },
+    /// Point a reclaim bar at a different stockpile.
+    SetReclaimSource {
+        bar: crate::model::schedule::BarId,
+        source: crate::model::schedule::DestinationId,
+    },
+    /// The most one reclaim bar may take over the whole calculation, or `None`
+    /// for no cap of its own.
+    SetReclaimMaximum {
+        bar: crate::model::schedule::BarId,
+        maximum_t: Option<f64>,
+    },
+}
+
+/// One opening lot's name and its portions' tonnages as they are being typed.
+///
+/// Text, not numbers: a half-typed figure is not a tonnage, and the stored
+/// value must not move until the field is left with something valid in it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleLotDraft {
+    pub(crate) destination: crate::model::schedule::DestinationId,
+    pub(crate) lot: crate::model::schedule::OpeningLotId,
+    /// What the lot held when this draft was opened, so an edit from elsewhere
+    /// replaces the draft rather than being overwritten by it.
+    pub(crate) source: String,
+    pub(crate) name: String,
+    /// One entry per portion, in the lot's order: its id and its tonnage.
+    pub(crate) portions: Vec<(crate::model::schedule::OpeningPortionId, String)>,
+    /// One entry per numerical value being typed. A field with no entry is
+    /// missing, which is what an empty field commits back to.
+    pub(crate) values: Vec<(crate::model::schedule::OpeningPortionId, crate::model::ReserveFieldId, String)>,
 }
 
 /// The New Bar / Rename Bar dialog's draft.
@@ -5231,6 +5603,19 @@ pub(crate) struct BarNameDialog {
     /// one: it clears the override and returns the bar to the name its
     /// ground derives.
     pub(crate) name: String,
+}
+
+/// Draft for creating a reclaim bar or changing the source and cumulative cap
+/// of one that already exists.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReclaimBarDialog {
+    pub(crate) target: Option<crate::model::schedule::BarId>,
+    pub(crate) source: Option<crate::model::schedule::DestinationId>,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) start: String,
+    pub(crate) end: String,
+    pub(crate) maximum: String,
 }
 
 /// What a drag on a bar is doing to its window.
@@ -5564,6 +5949,10 @@ pub(crate) enum CalendarRow {
     /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
     /// figure for the whole calculation, not for a day of it.
     CrusherLimit,
+    /// One truck class's fleet size or time percentages for the period. Sized
+    /// here rather than in Setup because a fleet changes day to day, unlike the
+    /// truck itself.
+    Truck(crate::model::schedule::TruckField),
     /// What a destination received in the period. For a crusher this is also
     /// what it processed, because nothing is buffered in this increment.
     Received,
@@ -5576,7 +5965,7 @@ impl CalendarRow {
     pub(crate) fn field(self) -> Option<crate::model::schedule::CalendarField> {
         match self {
             Self::Input(field) => Some(field),
-            Self::Tonnes | Self::CrusherLimit | Self::Received | Self::Cumulative => None,
+            Self::Truck(_) | Self::Tonnes | Self::CrusherLimit | Self::Received | Self::Cumulative => None,
         }
     }
 
@@ -5585,6 +5974,14 @@ impl CalendarRow {
     /// nothing more.
     pub(crate) fn is_calculated(self) -> bool {
         matches!(self, Self::Tonnes | Self::Received | Self::Cumulative)
+    }
+
+    /// The truck-calendar field this row edits, when it is one.
+    pub(crate) fn truck_field(self) -> Option<crate::model::schedule::TruckField> {
+        match self {
+            Self::Truck(field) => Some(field),
+            _ => None,
+        }
     }
 }
 
@@ -5596,6 +5993,7 @@ impl CalendarRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CalendarOwner {
     Loader(crate::model::schedule::LoaderAgentId),
+    Truck(crate::model::schedule::TruckClassId),
     Destination(crate::model::schedule::DestinationId),
 }
 
@@ -5610,14 +6008,21 @@ impl CalendarCellAddress {
     pub(crate) fn agent(self) -> Option<crate::model::schedule::LoaderAgentId> {
         match self.owner {
             CalendarOwner::Loader(agent) => Some(agent),
-            CalendarOwner::Destination(_) => None,
+            CalendarOwner::Truck(_) | CalendarOwner::Destination(_) => None,
+        }
+    }
+
+    pub(crate) fn truck(self) -> Option<crate::model::schedule::TruckClassId> {
+        match self.owner {
+            CalendarOwner::Truck(class) => Some(class),
+            CalendarOwner::Loader(_) | CalendarOwner::Destination(_) => None,
         }
     }
 
     pub(crate) fn destination(self) -> Option<crate::model::schedule::DestinationId> {
         match self.owner {
             CalendarOwner::Destination(destination) => Some(destination),
-            CalendarOwner::Loader(_) => None,
+            CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
         }
     }
 }

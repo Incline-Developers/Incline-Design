@@ -19,11 +19,16 @@ pub(crate) struct LoaderPeriodOverride {
     pub(crate) availability: Option<f64>,
     pub(crate) utilisation: Option<f64>,
     pub(crate) rate_tph: Option<f64>,
+    /// Tonnes per productive hour reclaiming, when this period overrides it.
+    /// Independent of the dig rate above: the two are separate answers about
+    /// the same machine, and a project saved before reclaim existed has
+    /// neither.
+    pub(crate) reclaim_rate_tph: Option<f64>,
 }
 
 impl LoaderPeriodOverride {
     fn is_empty(&self) -> bool {
-        self.availability.is_none() && self.utilisation.is_none() && self.rate_tph.is_none()
+        self.availability.is_none() && self.utilisation.is_none() && self.rate_tph.is_none() && self.reclaim_rate_tph.is_none()
     }
 }
 
@@ -55,7 +60,30 @@ impl Default for LoaderCalendar {
 pub(crate) enum CalendarField {
     Availability,
     Utilisation,
+    /// Tonnes per productive hour digging.
     Rate,
+    /// Tonnes per productive hour reclaiming from a stockpile. Availability and
+    /// utilisation are shared: they are the machine's, not the activity's.
+    ReclaimRate,
+}
+
+impl CalendarField {
+    /// Which of the two rates this field is, or `None` for the shared factors.
+    fn rate_kind(self) -> Option<RateKind> {
+        match self {
+            Self::Rate => Some(RateKind::Dig),
+            Self::ReclaimRate => Some(RateKind::Reclaim),
+            Self::Availability | Self::Utilisation => None,
+        }
+    }
+}
+
+/// Which rate a calculation is reading. The shared availability and
+/// utilisation apply to both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RateKind {
+    Dig,
+    Reclaim,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -111,21 +139,39 @@ impl LoaderCalendar {
             if let Some(rate) = value.rate_tph {
                 checked_override_rate(rate)?;
             }
+            if let Some(rate) = value.reclaim_rate_tph {
+                checked_override_rate(rate)?;
+            }
         }
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "dig-rate convenience retained for the current dispatcher while shared rate selection serves future reclaim"
+    )]
     pub(crate) fn values_at(&self, period: CalendarPeriod, class_rate: f64) -> ScheduleResult<CalendarValues> {
-        checked_override_rate(class_rate)?;
-        self.validate()?;
-        self.values_at_validated(period, class_rate)
+        self.rate_values_at(period, RateKind::Dig, class_rate)
     }
 
-    fn values_at_validated(&self, period: CalendarPeriod, class_rate: f64) -> ScheduleResult<CalendarValues> {
+    /// The same, for the rate this machine reclaims at. Availability and
+    /// utilisation are the shared ones: they describe the machine's time, which
+    /// it spends on whichever activity it is given.
+    pub(crate) fn rate_values_at(&self, period: CalendarPeriod, kind: RateKind, class_rate: f64) -> ScheduleResult<CalendarValues> {
+        checked_override_rate(class_rate)?;
+        self.validate()?;
+        self.values_at_validated(period, kind, class_rate)
+    }
+
+    fn values_at_validated(&self, period: CalendarPeriod, kind: RateKind, class_rate: f64) -> ScheduleResult<CalendarValues> {
         let override_ = self.periods.get(&period);
         let availability = override_.and_then(|value| value.availability).unwrap_or(self.default_availability);
         let utilisation = override_.and_then(|value| value.utilisation).unwrap_or(self.default_utilisation);
-        let rate_tph = override_.and_then(|value| value.rate_tph).unwrap_or(class_rate);
+        let held = override_.and_then(|value| match kind {
+            RateKind::Dig => value.rate_tph,
+            RateKind::Reclaim => value.reclaim_rate_tph,
+        });
+        let rate_tph = held.unwrap_or(class_rate);
         let effective_rate_tph = rate_tph * availability * utilisation;
         if effective_rate_tph == 0.0 && availability != 0.0 && utilisation != 0.0 {
             return Err(ScheduleError::UnrepresentableEffectiveRate);
@@ -144,9 +190,15 @@ impl LoaderCalendar {
     /// Compile only boundaries introduced by explicit overrides. Long blank
     /// spans remain one interval regardless of how distant the next override is.
     pub(crate) fn compile(&self, class_rate: f64) -> ScheduleResult<CompiledRateCalendar> {
+        self.compile_rate(RateKind::Dig, class_rate)
+    }
+
+    /// The same, for reclaiming. Kept out of the dig-only calculation's inputs:
+    /// adding a reclaim override must not retire a result that never read one.
+    pub(crate) fn compile_rate(&self, kind: RateKind, class_rate: f64) -> ScheduleResult<CompiledRateCalendar> {
         checked_override_rate(class_rate)?;
         self.validate()?;
-        let initial_rate_tph = self.values_at_validated(CalendarPeriod(0), class_rate)?.effective_rate_tph;
+        let initial_rate_tph = self.values_at_validated(CalendarPeriod(0), kind, class_rate)?.effective_rate_tph;
         let mut boundaries = BTreeSet::new();
         for period in self.periods.keys() {
             let start = f64::from(period.0) * SCHEDULE_PERIOD_H;
@@ -158,7 +210,7 @@ impl LoaderCalendar {
         let mut previous = initial_rate_tph;
         let mut changes = Vec::new();
         for period in boundaries {
-            let rate_tph = self.values_at_validated(CalendarPeriod(period), class_rate)?.effective_rate_tph;
+            let rate_tph = self.values_at_validated(CalendarPeriod(period), kind, class_rate)?.effective_rate_tph;
             if rate_tph != previous {
                 changes.push(RateChange {
                     at_h: f64::from(period) * SCHEDULE_PERIOD_H,
@@ -172,22 +224,23 @@ impl LoaderCalendar {
 
     pub(crate) fn set(&mut self, cell: CalendarCell, field: CalendarField, value: Option<f64>) -> ScheduleResult {
         match (cell, field) {
-            (CalendarCell::Default, CalendarField::Rate) => return Err(ScheduleError::ReadOnlyCalendarCell),
+            (CalendarCell::Default, CalendarField::Rate | CalendarField::ReclaimRate) => return Err(ScheduleError::ReadOnlyCalendarCell),
             (CalendarCell::Default, CalendarField::Availability) => self.default_availability = value.map(checked_percentage).transpose()?.unwrap_or(1.0),
             (CalendarCell::Default, CalendarField::Utilisation) => self.default_utilisation = value.map(checked_percentage).transpose()?.unwrap_or(1.0),
             (CalendarCell::Period(period), field) => {
                 if value.is_some() {
                     period.0.checked_add(1).ok_or(ScheduleError::CalendarPeriodOverflow)?;
                 }
-                let value = match field {
-                    CalendarField::Availability | CalendarField::Utilisation => value.map(checked_percentage).transpose()?,
-                    CalendarField::Rate => value.map(checked_override_rate).transpose()?,
+                let value = match field.rate_kind() {
+                    None => value.map(checked_percentage).transpose()?,
+                    Some(_) => value.map(checked_override_rate).transpose()?,
                 };
                 let override_ = self.periods.entry(period).or_default();
                 match field {
                     CalendarField::Availability => override_.availability = value,
                     CalendarField::Utilisation => override_.utilisation = value,
                     CalendarField::Rate => override_.rate_tph = value,
+                    CalendarField::ReclaimRate => override_.reclaim_rate_tph = value,
                 }
                 if override_.is_empty() {
                     self.periods.remove(&period);

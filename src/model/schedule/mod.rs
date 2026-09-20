@@ -14,19 +14,25 @@
 
 pub(crate) mod animation;
 pub(crate) mod calendar;
+pub(crate) mod cashflow;
 pub(crate) mod destinations;
 pub(crate) mod dispatch;
+pub(crate) mod inventory;
 pub(crate) mod production;
 pub(crate) mod sequence;
+pub(crate) mod trucking;
 
-pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, SCHEDULE_PERIOD_H};
+pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, RateKind, SCHEDULE_PERIOD_H};
+pub(crate) use cashflow::{Activity, ActivitySelection, CashflowConfig, CashflowRuleId};
 pub(crate) use destinations::{
-    Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, FieldCondition, LoaderSelection, PortionValue,
-    RoutingConfig, RuleId, SourceScope, SourceSelection, StandaloneDestinationId,
+    Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationSelection, FieldCondition, LoaderSelection,
+    MovementSourceScope, MovementSourceSelection, PortionValue, RoutingConfig, RuleId, SourceScope, StandaloneDestinationId,
 };
 pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchDestination, DispatchError, DispatchInput, DispatchOutcome, DispatchPortion, DispatchSchedule};
+pub(crate) use inventory::{OpeningLotId, OpeningPortionId, OpeningValue, ReclaimOrder};
 pub(crate) use production::{DestinationProduction, PeriodProduction};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
+pub(crate) use trucking::{RouteContext, RouteSource, TruckCellEdit, TruckClassId, TruckField, TruckFleetConfig, TruckingRuleId};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*
 /// run. The command boundary checks both halves against the current snapshot
@@ -99,21 +105,71 @@ impl WorkWindow {
     }
 }
 
-/// One authored bar on the Gantt: a named dig order, the machine asked to
-/// work it, the lane it competes in, and the period it may be worked in.
+/// What one bar's work actually is.
+///
+/// Two activities, one bar: everything a bar carries besides this - its
+/// identity, its name, its machine, its lane and its window - means the same
+/// thing whichever it is, so only the work itself is typed. A reclaim bar
+/// holds no dig order at all rather than an empty one, which is what makes
+/// "edit this bar's dig sequence" unavailable on it by construction rather
+/// than by a check someone has to remember.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub(crate) enum BarWork {
+    /// Ground, in the order it is dug.
+    Dig(DigOrder),
+    /// Material taken back out of a stockpile.
+    Reclaim(ReclaimWork),
+}
+
+impl Default for BarWork {
+    fn default() -> Self {
+        Self::Dig(DigOrder::default())
+    }
+}
+
+/// Reclaiming from one stockpile, up to an optional total.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReclaimWork {
+    /// The stockpile this bar takes from. An id that no longer names a
+    /// stockpile stays exactly as authored and is reported unresolved: a bar
+    /// silently repointed at another pile would reclaim material nobody chose.
+    pub(crate) source: DestinationId,
+    /// The most this bar may reclaim over the whole calculation, or `None` for
+    /// no cap of its own. Cumulative across the bar rather than per period, and
+    /// per bar rather than per stockpile - a copy of the bar gets its own.
+    #[serde(default)]
+    pub(crate) maximum_t: Option<f64>,
+}
+
+impl ReclaimWork {
+    /// Whether the cap is one: absent, or a finite positive tonnage. Zero is
+    /// refused rather than read as "reclaim nothing", which is what deleting
+    /// the bar says.
+    pub(crate) fn is_valid(self) -> bool {
+        self.maximum_t.is_none_or(|maximum| maximum.is_finite() && maximum > 0.0)
+    }
+}
+
+/// One authored bar on the Gantt: some work, the machine asked to do it, the
+/// lane it competes in, and the period it may be worked in.
 ///
 /// A bar carries no duration of its own work. Its window is the period a
 /// loader is *allowed* to work it; what is actually executed in that period
 /// is the evaluator's answer, drawn as a separate indicator, and a bar whose
-/// work outlasts its window simply leaves the rest in the ground for a later
-/// bar to take.
+/// work outlasts its window simply leaves the rest behind for a later bar to
+/// take.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "BarRepr")]
 pub(crate) struct ScheduleBar {
     pub(crate) id: BarId,
-    /// What this bar is called and the ground it works, in order. Owned
-    /// outright: a copy holds its own, so editing one never reaches another.
-    pub(crate) order: DigOrder,
+    /// What the user calls this bar, or empty to take the label its work
+    /// derives.
+    pub(crate) name: String,
+    /// What this bar does. Owned outright: a copy holds its own, so editing one
+    /// never reaches another.
+    pub(crate) work: BarWork,
     /// The loader this bar is assigned to, or `None` while it is being built,
     /// and after the machine it named was deleted: deleting a machine
     /// unassigns its bars rather than taking their work out of the project.
@@ -130,28 +186,143 @@ pub(crate) struct ScheduleBar {
     pub(crate) window: WorkWindow,
 }
 
-impl ScheduleBar {
-    pub(crate) fn name(&self) -> &str {
-        &self.order.name
-    }
+/// What a saved bar is read through.
+///
+/// Every bar used to be a dig sequence, and its name lived inside the dig
+/// order; projects written then are still on disk, so that shape is accepted
+/// and read as [`BarWork::Dig`] with its membership intact. Only reading goes
+/// through this - what is written is the typed form.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BarRepr {
+    id: BarId,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    order: Option<LegacyOrder>,
+    #[serde(default)]
+    work: Option<BarWork>,
+    #[serde(default)]
+    agent: Option<LoaderAgentId>,
+    #[serde(default)]
+    priority: u32,
+    #[serde(default)]
+    window: WorkWindow,
+}
 
-    pub(crate) fn has_custom_name(&self) -> bool {
-        !self.order.name.trim().is_empty()
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyOrder {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    members: Vec<DigBlockRef>,
+}
 
-    pub(crate) fn members(&self) -> &[DigBlockRef] {
-        self.order.members()
+impl From<BarRepr> for ScheduleBar {
+    fn from(repr: BarRepr) -> Self {
+        let BarRepr {
+            id,
+            name,
+            order,
+            work,
+            agent,
+            priority,
+            window,
+        } = repr;
+        let legacy_name = order.as_ref().map(|order| order.name.clone()).unwrap_or_default();
+        Self {
+            id,
+            name: if name.trim().is_empty() { legacy_name } else { name },
+            work: work.unwrap_or_else(|| {
+                BarWork::Dig(DigOrder {
+                    members: order.map(|order| order.members).unwrap_or_default(),
+                })
+            }),
+            agent,
+            priority,
+            window,
+        }
     }
 }
 
-/// A machine type: what it is called, and how fast it digs.
+impl ScheduleBar {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn has_custom_name(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
+
+    /// The ground this bar digs, in order. Empty for a reclaim bar: it has no
+    /// dig order, which is a different statement from having an empty one.
+    pub(crate) fn members(&self) -> &[DigBlockRef] {
+        match &self.work {
+            BarWork::Dig(order) => order.members(),
+            BarWork::Reclaim(_) => &[],
+        }
+    }
+
+    pub(crate) fn dig_order(&self) -> Option<&DigOrder> {
+        match &self.work {
+            BarWork::Dig(order) => Some(order),
+            BarWork::Reclaim(_) => None,
+        }
+    }
+
+    pub(crate) fn reclaim(&self) -> Option<ReclaimWork> {
+        match &self.work {
+            BarWork::Dig(_) => None,
+            BarWork::Reclaim(work) => Some(*work),
+        }
+    }
+
+    pub(crate) fn is_reclaim(&self) -> bool {
+        matches!(self.work, BarWork::Reclaim(_))
+    }
+}
+
+/// A machine type: what it is called, how fast it digs, and how fast it
+/// reclaims.
+///
+/// Two rates, not one scaled from the other: loading a stockpile back into a
+/// truck is a different job from digging a face, and nothing here knows the
+/// ratio. They begin equal only because that is the least surprising starting
+/// point; from then on each is edited on its own.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "ClassRepr")]
 pub(crate) struct LoaderClass {
     pub(crate) id: LoaderClassId,
     pub(crate) name: String,
     /// Tonnes per hour. Strictly positive and finite; see [`ScheduleError`].
     pub(crate) default_dig_rate_tph: f64,
+    /// Tonnes per productive hour reclaiming. Strictly positive and finite.
+    pub(crate) default_reclaim_rate_tph: f64,
+}
+
+/// What a saved class is read through: a project written before reclaim existed
+/// has no reclaim rate, and starts with its dig rate rather than with a figure
+/// nobody chose.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClassRepr {
+    id: LoaderClassId,
+    name: String,
+    default_dig_rate_tph: f64,
+    #[serde(default)]
+    default_reclaim_rate_tph: Option<f64>,
+}
+
+impl From<ClassRepr> for LoaderClass {
+    fn from(repr: ClassRepr) -> Self {
+        Self {
+            id: repr.id,
+            name: repr.name,
+            default_dig_rate_tph: repr.default_dig_rate_tph,
+            default_reclaim_rate_tph: repr.default_reclaim_rate_tph.unwrap_or(repr.default_dig_rate_tph),
+        }
+    }
 }
 
 /// One machine on site, of one class.
@@ -249,6 +420,69 @@ pub(crate) enum ScheduleError {
     DuplicateConditionValue(String),
     /// A rule already at the top or bottom of the priority order.
     RuleAtEnd,
+    /// A truck payload that is zero, negative, infinite or NaN.
+    InvalidPayload,
+    /// A travel speed that is zero, negative, infinite or NaN.
+    InvalidSpeed,
+    /// A haul distance that is zero, negative, infinite or NaN.
+    InvalidDistance,
+    /// A truck count that is fractional, negative or not a number. Refused
+    /// rather than rounded: half a truck is a typo.
+    InvalidTruckUnits,
+    /// An id that names no truck class in this plan.
+    UnknownTruckClass,
+    /// An id that names no trucking rule in this plan.
+    UnknownTruckingRule,
+    /// A truck class still named by the listed trucking rules.
+    TruckClassInUse(Vec<String>),
+    /// Derived transport figures that no finite number can express.
+    UnrepresentableTransport,
+    /// A value per tonne that is not a finite number. Negative and zero are
+    /// both legitimate answers and never reach this.
+    InvalidValue,
+    /// An id that names no cashflow rule in this plan.
+    UnknownCashflowRule,
+    /// A summed coefficient or movement value no finite number can express.
+    UnrepresentableValue,
+    /// A currency label that is empty once trimmed.
+    EmptyCurrency,
+    /// A lot or portion tonnage that is zero, negative, infinite or NaN. Blank
+    /// is not a legitimate answer here: a portion of nothing is not a portion.
+    InvalidLotTonnes,
+    /// An authored property value that is not a finite number, or a category
+    /// label that is empty once trimmed. A value nobody entered is *missing*,
+    /// which is a different state and never reaches this.
+    InvalidLotValue,
+    /// Two values for one field on one portion.
+    DuplicateLotValue,
+    /// An id that names no opening lot in this stockpile.
+    UnknownLot,
+    /// An id that names no portion in this lot.
+    UnknownPortion,
+    /// The last portion of a lot. An empty lot is not stock; deleting the lot
+    /// is the edit that says so.
+    LastPortion,
+    /// A lot already at the oldest or newest end of the order.
+    LotAtEnd,
+    /// Opening stock that would not fit the stockpile's capacity. Equality is
+    /// valid - a pile that starts exactly full is a real answer.
+    OpeningOverCapacity,
+    /// A receipt with nowhere to go: the pile is at its capacity.
+    StockpileFull,
+    /// More tonnes asked of a lot than it has left. Refused rather than
+    /// clamped: the caller decided how much to ask for.
+    LotOverdrawn,
+    /// A model interval that is not one, or an instant before the grid's
+    /// origin.
+    InvalidInterval,
+    /// A reclaim source that is not a stockpile.
+    NotAStockpile,
+    /// A maximum reclaimed tonnage that is zero, negative or not finite. Blank
+    /// is a legitimate answer - no cap of this bar's own - and never reaches
+    /// this.
+    InvalidReclaimLimit,
+    /// A dig edit addressed to a reclaim bar, or the other way round.
+    WrongActivity,
 }
 
 impl ScheduleError {
@@ -287,6 +521,32 @@ impl ScheduleError {
             Self::DuplicateCondition(_) => tr!("destination-error-duplicate-condition"),
             Self::DuplicateConditionValue(value) => tr!("destination-error-duplicate-value", value = value.clone()),
             Self::RuleAtEnd => tr!("destination-error-rule-at-end"),
+            Self::InvalidPayload => tr!("truck-error-invalid-payload"),
+            Self::InvalidSpeed => tr!("truck-error-invalid-speed"),
+            Self::InvalidDistance => tr!("truck-error-invalid-distance"),
+            Self::InvalidTruckUnits => tr!("truck-error-invalid-units"),
+            Self::UnknownTruckClass => tr!("truck-error-unknown-class"),
+            Self::UnknownTruckingRule => tr!("truck-error-unknown-rule"),
+            Self::TruckClassInUse(rules) => tr!("truck-error-class-in-use", rules = rules.join(", ")),
+            Self::UnrepresentableTransport => tr!("truck-error-unrepresentable"),
+            Self::InvalidValue => tr!("cashflow-error-invalid-value"),
+            Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
+            Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
+            Self::EmptyCurrency => tr!("cashflow-error-empty-currency"),
+            Self::InvalidLotTonnes => tr!("inventory-error-invalid-tonnes"),
+            Self::InvalidLotValue => tr!("inventory-error-invalid-value"),
+            Self::DuplicateLotValue => tr!("inventory-error-duplicate-value"),
+            Self::UnknownLot => tr!("inventory-error-unknown-lot"),
+            Self::UnknownPortion => tr!("inventory-error-unknown-portion"),
+            Self::LastPortion => tr!("inventory-error-last-portion"),
+            Self::LotAtEnd => tr!("inventory-error-lot-at-end"),
+            Self::OpeningOverCapacity => tr!("inventory-error-over-capacity"),
+            Self::StockpileFull => tr!("inventory-error-stockpile-full"),
+            Self::LotOverdrawn => tr!("inventory-error-overdrawn"),
+            Self::InvalidInterval => tr!("inventory-error-invalid-interval"),
+            Self::NotAStockpile => tr!("reclaim-error-not-a-stockpile"),
+            Self::InvalidReclaimLimit => tr!("reclaim-error-invalid-limit"),
+            Self::WrongActivity => tr!("reclaim-error-wrong-activity"),
         }
     }
 }
@@ -345,6 +605,21 @@ pub(crate) struct SchedulePlan {
     /// authored against.
     #[serde(default)]
     routing: RoutingConfig,
+    /// Truck classes, their fleet calendars and the trucking rules. Empty and
+    /// inert: nothing in the current dispatcher reads them, so a project that
+    /// has never opened the Trucks pages behaves exactly as it did.
+    #[serde(default)]
+    trucks: TruckFleetConfig,
+    /// What movements are worth, and what the money is called. Empty and
+    /// inert: nothing in the current dispatcher reads a value.
+    #[serde(default)]
+    cashflow: CashflowConfig,
+    #[serde(default = "default_currency")]
+    currency: String,
+}
+
+fn default_currency() -> String {
+    cashflow::DEFAULT_CURRENCY.to_owned()
 }
 
 impl Default for SchedulePlan {
@@ -360,6 +635,9 @@ impl Default for SchedulePlan {
             tonnage_field: None,
             bar_height: DEFAULT_BAR_HEIGHT,
             routing: RoutingConfig::default(),
+            trucks: TruckFleetConfig::default(),
+            cashflow: CashflowConfig::default(),
+            currency: default_currency(),
         }
     }
 }
@@ -400,11 +678,14 @@ impl SchedulePlan {
             && self.tonnage_field.is_none()
             && self.bar_height == DEFAULT_BAR_HEIGHT
             && self.routing.is_pristine()
+            && self.trucks.is_empty()
+            && self.cashflow.is_empty()
+            && self.currency == cashflow::DEFAULT_CURRENCY
     }
 
     /// No visible content or retired identities to preserve in a save/import.
     pub(crate) fn is_pristine(&self) -> bool {
-        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_bar_id == 0
+        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_bar_id == 0 && self.trucks.is_pristine() && self.cashflow.is_pristine()
     }
 
     /// Never hand out an id `other` has already issued.
@@ -423,6 +704,8 @@ impl SchedulePlan {
         self.next_agent_id = self.next_agent_id.max(other.next_agent_id);
         self.next_bar_id = self.next_bar_id.max(other.next_bar_id);
         self.routing.raise_allocator_to(&other.routing);
+        self.trucks.raise_allocator_to(&other.trucks);
+        self.cashflow.raise_allocator_to(&other.cashflow);
     }
 
     pub(crate) fn routing(&self) -> &RoutingConfig {
@@ -434,6 +717,41 @@ impl SchedulePlan {
     /// so one committed routing edit is one undo step.
     pub(crate) fn routing_mut(&mut self) -> &mut RoutingConfig {
         &mut self.routing
+    }
+
+    pub(crate) fn trucks(&self) -> &TruckFleetConfig {
+        &self.trucks
+    }
+
+    /// Edit the truck fleet. Every caller goes through
+    /// [`crate::model::Command::SetSchedulePlan`] like the rest of the plan,
+    /// so one committed truck edit is one undo step.
+    pub(crate) fn trucks_mut(&mut self) -> &mut TruckFleetConfig {
+        &mut self.trucks
+    }
+
+    pub(crate) fn cashflow(&self) -> &CashflowConfig {
+        &self.cashflow
+    }
+
+    /// Edit the cashflow rules. One committed edit is one undo step, like the
+    /// rest of the plan.
+    pub(crate) fn cashflow_mut(&mut self) -> &mut CashflowConfig {
+        &mut self.cashflow
+    }
+
+    pub(crate) fn currency(&self) -> &str {
+        &self.currency
+    }
+
+    /// The label figures are shown with. Display only - nothing is converted.
+    pub(crate) fn set_currency(&mut self, currency: &str) -> ScheduleResult {
+        let trimmed = currency.trim();
+        if trimmed.is_empty() {
+            return Err(ScheduleError::EmptyCurrency);
+        }
+        self.currency = trimmed.to_owned();
+        Ok(())
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -479,6 +797,8 @@ impl SchedulePlan {
         self.agents.iter().any(|agent| Some(agent.id) != except && same_name(&agent.name, name))
     }
 
+    /// Add a machine type. Its reclaim rate starts at the dig rate it was
+    /// created with, and is its own from then on.
     pub(crate) fn add_class(&mut self, name: &str, rate_tph: f64) -> ScheduleResult<LoaderClassId> {
         let name = checked_name(name)?;
         let rate = checked_rate(rate_tph)?;
@@ -491,6 +811,7 @@ impl SchedulePlan {
             id,
             name,
             default_dig_rate_tph: rate,
+            default_reclaim_rate_tph: rate,
         });
         Ok(id)
     }
@@ -507,10 +828,20 @@ impl SchedulePlan {
         Ok(())
     }
 
+    /// Set the rate this type digs at. Deliberately leaves the reclaim rate
+    /// alone: once the two exist they are separate answers, and moving one
+    /// because the other moved would overwrite a figure the user chose.
     pub(crate) fn set_class_rate(&mut self, id: LoaderClassId, rate_tph: f64) -> ScheduleResult {
         let rate = checked_rate(rate_tph)?;
         let class = self.classes.iter_mut().find(|class| class.id == id).ok_or(ScheduleError::UnknownClass)?;
         class.default_dig_rate_tph = rate;
+        Ok(())
+    }
+
+    pub(crate) fn set_class_reclaim_rate(&mut self, id: LoaderClassId, rate_tph: f64) -> ScheduleResult {
+        let rate = checked_rate(rate_tph)?;
+        let class = self.classes.iter_mut().find(|class| class.id == id).ok_or(ScheduleError::UnknownClass)?;
+        class.default_reclaim_rate_tph = rate;
         Ok(())
     }
 
@@ -607,6 +938,11 @@ impl SchedulePlan {
         &self.bars
     }
 
+    /// Whether the current dig-only dispatcher must refuse this plan.
+    pub(crate) fn has_reclaim_bars(&self) -> bool {
+        self.bars.iter().any(|bar| bar.reclaim().is_some())
+    }
+
     pub(crate) fn bar(&self, id: BarId) -> Option<&ScheduleBar> {
         self.bars.iter().find(|bar| bar.id == id)
     }
@@ -642,7 +978,7 @@ impl SchedulePlan {
     /// copying a bar.
     #[allow(dead_code, reason = "read by the checkpoint 4 dispatch rules, which refuse the same ground to two executable assignments")]
     pub(crate) fn bars_holding(&self, block: &DigBlockRef) -> impl Iterator<Item = &ScheduleBar> {
-        self.bars.iter().filter(move |bar| bar.order.contains(block))
+        self.bars.iter().filter(move |bar| bar.dig_order().is_some_and(|order| order.contains(block)))
     }
 
     fn bar_name_taken(&self, name: &str, except: Option<BarId>) -> bool {
@@ -676,12 +1012,93 @@ impl SchedulePlan {
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
-            order: DigOrder::new(name),
+            name,
+            work: BarWork::Dig(DigOrder::default()),
             agent,
             priority,
             window,
         });
         Ok(id)
+    }
+
+    /// Add a bar that reclaims from one stockpile.
+    ///
+    /// The source is checked to be a stockpile *of this plan's standalone
+    /// destinations* only when it is one of them: a solid-backed stockpile's
+    /// kind is the solid's, which the plan cannot see, so that half is checked
+    /// where the document is - and an id that stops naming a stockpile later
+    /// stays as authored and is reported unresolved.
+    pub(crate) fn add_reclaim_bar(
+        &mut self,
+        name: &str,
+        agent: Option<LoaderAgentId>,
+        priority: u32,
+        window: WorkWindow,
+        source: DestinationId,
+        maximum_t: Option<f64>,
+    ) -> ScheduleResult<BarId> {
+        let name = name.trim().to_owned();
+        if self.bar_name_taken(&name, None) {
+            return Err(ScheduleError::DuplicateName(name));
+        }
+        if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+            return Err(ScheduleError::UnknownAgent);
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        self.check_reclaim_source(source)?;
+        let work = ReclaimWork { source, maximum_t };
+        if !work.is_valid() {
+            return Err(ScheduleError::InvalidReclaimLimit);
+        }
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            name,
+            work: BarWork::Reclaim(work),
+            agent,
+            priority,
+            window,
+        });
+        Ok(id)
+    }
+
+    /// Whether a destination can be a reclaim source, as far as the plan can
+    /// tell: a standalone destination it holds must be a stockpile, and a
+    /// solid-backed one is the document's to judge.
+    fn check_reclaim_source(&self, source: DestinationId) -> ScheduleResult {
+        if let DestinationId::Standalone(id) = source {
+            let entry = self.routing.standalone(id).ok_or(ScheduleError::UnknownDestination)?;
+            if entry.kind != DestinationKind::Stockpile {
+                return Err(ScheduleError::NotAStockpile);
+            }
+        }
+        Ok(())
+    }
+
+    /// Point a reclaim bar at a different stockpile.
+    pub(crate) fn set_reclaim_source(&mut self, id: BarId, source: DestinationId) -> ScheduleResult {
+        self.check_reclaim_source(source)?;
+        let bar = self.bar_mut(id)?;
+        match &mut bar.work {
+            BarWork::Reclaim(work) => work.source = source,
+            BarWork::Dig(_) => return Err(ScheduleError::WrongActivity),
+        }
+        Ok(())
+    }
+
+    /// Set or clear the most one reclaim bar may take over the calculation.
+    pub(crate) fn set_reclaim_maximum(&mut self, id: BarId, maximum_t: Option<f64>) -> ScheduleResult {
+        if maximum_t.is_some_and(|maximum| !maximum.is_finite() || maximum <= 0.0) {
+            return Err(ScheduleError::InvalidReclaimLimit);
+        }
+        let bar = self.bar_mut(id)?;
+        match &mut bar.work {
+            BarWork::Reclaim(work) => work.maximum_t = maximum_t,
+            BarWork::Dig(_) => return Err(ScheduleError::WrongActivity),
+        }
+        Ok(())
     }
 
     pub(crate) fn rename_bar(&mut self, id: BarId, name: &str) -> ScheduleResult {
@@ -692,7 +1109,7 @@ impl SchedulePlan {
         if self.bar_name_taken(&name, Some(id)) {
             return Err(ScheduleError::DuplicateName(name));
         }
-        self.bars.iter_mut().find(|bar| bar.id == id).expect("checked above").order.name = name;
+        self.bars.iter_mut().find(|bar| bar.id == id).expect("checked above").name = name;
         Ok(())
     }
 
@@ -728,7 +1145,7 @@ impl SchedulePlan {
         let new_id = self.allocate_bar_id()?;
         let mut copy = self.bars[index].clone();
         copy.id = new_id;
-        copy.order.name = name;
+        copy.name = name;
         self.bars.insert(index + 1, copy);
         Ok(new_id)
     }
@@ -803,6 +1220,16 @@ impl SchedulePlan {
         self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)
     }
 
+    /// One bar's dig order, refusing a bar that has none. A reclaim bar is not
+    /// a dig sequence with nothing in it, so an edit addressed to its ground is
+    /// refused rather than applied to an order invented on the spot.
+    fn dig_order_mut(&mut self, id: BarId) -> ScheduleResult<&mut DigOrder> {
+        match &mut self.bar_mut(id)?.work {
+            BarWork::Dig(order) => Ok(order),
+            BarWork::Reclaim(_) => Err(ScheduleError::WrongActivity),
+        }
+    }
+
     /// Append ground to the end of a bar's dig order.
     #[allow(
         dead_code,
@@ -814,16 +1241,16 @@ impl SchedulePlan {
 
     /// Put ground at `position` in a bar's dig order, clamped to the end.
     pub(crate) fn insert_bar_member(&mut self, id: BarId, position: usize, block: DigBlockRef) -> ScheduleResult {
-        self.bar_mut(id)?.order.insert(position, block)
+        self.dig_order_mut(id)?.insert(position, block)
     }
 
     pub(crate) fn remove_bar_member(&mut self, id: BarId, position: usize) -> ScheduleResult {
-        self.bar_mut(id)?.order.remove(position)
+        self.dig_order_mut(id)?.remove(position)
     }
 
     /// Move one block to a different place in a bar's dig order.
     pub(crate) fn move_bar_member(&mut self, id: BarId, from: usize, to: usize) -> ScheduleResult {
-        self.bar_mut(id)?.order.move_member(from, to)
+        self.dig_order_mut(id)?.move_member(from, to)
     }
 
     /// Replace a bar's whole dig order in one edit.
@@ -835,11 +1262,11 @@ impl SchedulePlan {
     /// through a door the other edits are guarded on.
     #[allow(dead_code, reason = "the checkpoint 3 sequence editor's Apply; the Gantt edits membership one block at a time")]
     pub(crate) fn set_bar_members(&mut self, id: BarId, members: Vec<DigBlockRef>) -> ScheduleResult {
-        let mut order = DigOrder::new(String::new());
+        let mut order = DigOrder::default();
         for block in members {
             order.insert(usize::MAX, block)?;
         }
-        self.bar_mut(id)?.order.members = order.members;
+        self.dig_order_mut(id)?.members = order.members;
         Ok(())
     }
 
@@ -864,6 +1291,7 @@ impl SchedulePlan {
             }
             checked_name(&class.name)?;
             checked_rate(class.default_dig_rate_tph)?;
+            checked_rate(class.default_reclaim_rate_tph)?;
             if self.classes[..index].iter().any(|earlier| same_name(&earlier.name, &class.name)) {
                 return Err(ScheduleError::DuplicateName(class.name.clone()));
             }
@@ -878,6 +1306,7 @@ impl SchedulePlan {
             }
             let class = self.classes.iter().find(|class| class.id == agent.class_id).ok_or(ScheduleError::UnknownClass)?;
             agent.calendar.compile(class.default_dig_rate_tph)?;
+            agent.calendar.compile_rate(RateKind::Reclaim, class.default_reclaim_rate_tph)?;
         }
         for (index, bar) in self.bars.iter().enumerate() {
             if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
@@ -892,9 +1321,22 @@ impl SchedulePlan {
             if !bar.window.is_valid() {
                 return Err(ScheduleError::InvalidWindow);
             }
-            bar.order.check_loaded()?;
+            match &bar.work {
+                BarWork::Dig(order) => order.check_loaded()?,
+                // The source is deliberately *not* required to resolve: a
+                // stockpile deleted or retyped since leaves the bar holding an
+                // unresolved reference, which the readiness report names. A file
+                // is not broken because the project moved on.
+                BarWork::Reclaim(work) if work.is_valid() => {}
+                BarWork::Reclaim(_) => return Err(ScheduleError::InvalidReclaimLimit),
+            }
         }
         self.routing.validate_loaded()?;
+        self.trucks.validate_loaded()?;
+        self.cashflow.validate_loaded()?;
+        if self.currency.trim().is_empty() {
+            return Err(ScheduleError::EmptyCurrency);
+        }
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -924,6 +1366,7 @@ impl SchedulePlan {
             class.id.hash(hasher);
             class.name.hash(hasher);
             class.default_dig_rate_tph.to_bits().hash(hasher);
+            class.default_reclaim_rate_tph.to_bits().hash(hasher);
         }
         for agent in &self.agents {
             agent.id.hash(hasher);
@@ -936,14 +1379,30 @@ impl SchedulePlan {
                 override_.availability.map(f64::to_bits).hash(hasher);
                 override_.utilisation.map(f64::to_bits).hash(hasher);
                 override_.rate_tph.map(f64::to_bits).hash(hasher);
+                override_.reclaim_rate_tph.map(f64::to_bits).hash(hasher);
             }
         }
         self.tonnage_field.hash(hasher);
         self.bar_height.to_bits().hash(hasher);
         self.routing.hash_content(hasher);
+        self.routing.hash_inventory_names(hasher);
+        self.trucks.hash_content(hasher);
+        // Both halves: the coefficients an optimisation would use, and the
+        // names it would not. A rename is unsaved work without being a change
+        // of coefficient.
+        self.cashflow.hash_content(hasher);
+        self.cashflow.hash_names(hasher);
+        self.currency.hash(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
-            bar.order.name.hash(hasher);
+            bar.name.hash(hasher);
+            if let Some(work) = bar.reclaim() {
+                1u8.hash(hasher);
+                work.source.hash(hasher);
+                work.maximum_t.map(f64::to_bits).hash(hasher);
+            } else {
+                0u8.hash(hasher);
+            }
             bar.agent.hash(hasher);
             bar.priority.hash(hasher);
             bar.window.start_h.to_bits().hash(hasher);
@@ -985,9 +1444,12 @@ impl SchedulePlan {
             + self
                 .bars
                 .iter()
-                .map(|bar| size_of::<ScheduleBar>() + bar.name().len() + size_of_val(bar.members()))
+                .map(|bar| size_of::<ScheduleBar>() + bar.name.len() + size_of_val(bar.members()))
                 .sum::<usize>()
             + self.routing.estimated_bytes()
+            + self.trucks.estimated_bytes()
+            + self.cashflow.estimated_bytes()
+            + self.currency.len()
     }
 }
 

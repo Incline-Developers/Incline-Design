@@ -230,13 +230,14 @@ pub(crate) fn draw_configuration(
     let height_error = (!parsed_height
         .is_some_and(|height| height.is_finite() && (crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT).contains(&height)))
     .then(|| crate::model::schedule::ScheduleError::InvalidBarHeight.message());
+    let mut currency = plan.currency().to_owned();
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
     // Header + schedule name + bar height + scheduling quantity + destination
     // routing, plus the explanatory empty-field row when the project has no
     // reserve schema. The header is a table row too; omitting it from this
     // count clips the quantity combo.
-    let rows = 5 + usize::from(no_fields);
+    let rows = 6 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
     PropertyTable::new("schedule_configuration", table_rect, &tr!("planning-configuration")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -275,6 +276,13 @@ pub(crate) fn draw_configuration(
         let mut routing = plan.routing().enabled;
         if rows.checkbox(&tr!("destination-routing-enabled"), &mut routing).changed() {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetRoutingEnabled(routing)));
+        }
+        // A label, not a conversion: every figure in this schedule is in this
+        // currency and nothing here converts between any two.
+        let currency_error = currency.trim().is_empty().then(|| crate::model::schedule::ScheduleError::EmptyCurrency.message());
+        let response = rows.field(&tr!("cashflow-currency"), &mut currency, currency_error.as_deref());
+        if response.lost_focus() && currency_error.is_none() && currency.trim() != plan.currency() {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetCurrency(currency.trim().to_owned())));
         }
         if no_fields {
             rows.readonly("", &tr!("schedule-tonnage-field-no-fields"), None, None);
@@ -339,18 +347,20 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         });
         return;
     };
-    let source = (class.name.clone(), class.default_dig_rate_tph);
+    let source = (class.name.clone(), class.default_dig_rate_tph, class.default_reclaim_rate_tph);
     if editor.schedule_class_draft.as_ref().is_none_or(|draft| draft.id != class.id || draft.source != source) {
         editor.schedule_class_draft = Some(ScheduleClassDraft {
             id: class.id,
             name: source.0.clone(),
             rate: source.1.to_string(),
+            reclaim_rate: source.2.to_string(),
             source,
         });
     }
     let draft = editor.schedule_class_draft.as_mut().expect("just ensured");
     let name_error = name_problem(&draft.name, plan.classes().iter().filter(|other| other.id != class.id).map(|other| other.name.clone()));
     let rate_error = parse_rate(&draft.rate).err();
+    let reclaim_error = parse_rate(&draft.reclaim_rate).err();
     let users = plan.agents_of(class.id).count();
     let mut edits = Vec::new();
     PropertyTable::new("schedule_class_properties", rect, &class.name).show(ui, |rows| {
@@ -374,6 +384,17 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             && value != class.default_dig_rate_tph
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassRate { class: class.id, rate_tph: value }));
+        }
+        // Its own row and its own commit: loading a stockpile back into a truck
+        // is a different job from digging a face, and nothing here knows the
+        // ratio between them.
+        let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
+        reclaim.clone().on_hover_text(tr!("inventory-help"));
+        if reclaim.lost_focus()
+            && let Ok(value) = parse_rate(&draft.reclaim_rate)
+            && value != class.default_reclaim_rate_tph
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassReclaimRate { class: class.id, rate_tph: value }));
         }
         // Named here rather than only on deletion: a class in use cannot be
         // deleted, and knowing that before trying is the point.

@@ -76,16 +76,81 @@ impl crate::app::App<'_> {
             ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
             ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
             ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
-            ScheduleEdit::AddRule { name, destination } => self.add_destination_rule(name, destination),
+            ScheduleEdit::AddRule { name, destinations } => self.add_destination_rule(name, destinations),
             ScheduleEdit::DuplicateRule(rule) => self.duplicate_destination_rule(rule),
             ScheduleEdit::DeleteRule(rule) => self.delete_destination_rule(rule),
             ScheduleEdit::RenameRule { rule, name } => self.edit_routing(|routing| routing.rename_rule(rule, &name)),
             ScheduleEdit::SetRuleEnabled { rule, enabled } => self.edit_routing(|routing| routing.set_rule_enabled(rule, enabled)),
-            ScheduleEdit::SetRuleDestination { rule, destination } => self.edit_routing(|routing| routing.set_rule_destination(rule, destination)),
+            ScheduleEdit::SetRuleDestinations { rule, destinations } => self.edit_routing(|routing| routing.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetRuleLoaders { rule, loaders } => self.edit_routing(|routing| routing.set_rule_loaders(rule, loaders)),
             ScheduleEdit::SetRuleSources { rule, sources } => self.edit_routing(|routing| routing.set_rule_sources(rule, sources)),
             ScheduleEdit::SetRuleConditions { rule, conditions } => self.edit_routing(|routing| routing.set_rule_conditions(rule, conditions)),
             ScheduleEdit::MoveRule { rule, later } => self.edit_routing(|routing| routing.move_rule(rule, later)),
+            ScheduleEdit::SetDestinationDistance { destination, distance_km } => self.edit_routing(|routing| routing.set_distance_km(destination, distance_km)),
+            ScheduleEdit::AddTruckClass { name } => self.add_truck_class(name),
+            ScheduleEdit::DuplicateTruckClass(class) => self.duplicate_truck_class(class),
+            ScheduleEdit::DeleteTruckClass(class) => self.delete_truck_class(class),
+            ScheduleEdit::RenameTruckClass { class, name } => self.edit_trucks(|trucks| trucks.rename_class(class, &name)),
+            ScheduleEdit::SetTruckClassPayload { class, payload_t } => self.edit_trucks(|trucks| trucks.set_class_payload(class, payload_t)),
+            ScheduleEdit::SetTruckClassSpeeds { class, loaded_kph, unloaded_kph } => self.edit_trucks(|trucks| trucks.set_class_speeds(class, loaded_kph, unloaded_kph)),
+            ScheduleEdit::SetTruckCells { edits } => self.edit_trucks(|trucks| trucks.set_truck_cells(&edits)),
+            ScheduleEdit::AddTruckingRule { name, classes } => self.add_trucking_rule(name, classes),
+            ScheduleEdit::DuplicateTruckingRule(rule) => self.duplicate_trucking_rule(rule),
+            ScheduleEdit::DeleteTruckingRule(rule) => self.delete_trucking_rule(rule),
+            ScheduleEdit::RenameTruckingRule { rule, name } => self.edit_trucks(|trucks| trucks.rename_rule(rule, &name)),
+            ScheduleEdit::SetTruckingRuleEnabled { rule, enabled } => self.edit_trucks(|trucks| trucks.set_rule_enabled(rule, enabled)),
+            ScheduleEdit::SetTruckingRuleLoaders { rule, loaders } => self.edit_trucks(|trucks| trucks.set_rule_loaders(rule, loaders)),
+            ScheduleEdit::SetTruckingRuleSources { rule, sources } => self.edit_trucks(|trucks| trucks.set_rule_sources(rule, sources)),
+            ScheduleEdit::SetTruckingRuleDestinations { rule, destinations } => self.edit_trucks(|trucks| trucks.set_rule_destinations(rule, destinations)),
+            ScheduleEdit::SetTruckingRuleClasses { rule, classes } => self.edit_trucks(|trucks| trucks.set_rule_classes(rule, classes)),
+            ScheduleEdit::SetCurrency(currency) => self.edit_schedule(|plan| plan.set_currency(&currency)),
+            ScheduleEdit::AddCashflowRule { name } => self.add_cashflow_rule(name),
+            ScheduleEdit::DuplicateCashflowRule(rule) => self.duplicate_cashflow_rule(rule),
+            ScheduleEdit::DeleteCashflowRule(rule) => self.delete_cashflow_rule(rule),
+            ScheduleEdit::RenameCashflowRule { rule, name } => self.edit_cashflow(|cashflow| cashflow.rename_rule(rule, &name)),
+            ScheduleEdit::SetCashflowRuleEnabled { rule, enabled } => self.edit_cashflow(|cashflow| cashflow.set_rule_enabled(rule, enabled)),
+            ScheduleEdit::SetCashflowRuleActivity { rule, activity } => self.edit_cashflow(|cashflow| cashflow.set_rule_activity(rule, activity)),
+            ScheduleEdit::SetCashflowRuleLoaders { rule, loaders } => self.edit_cashflow(|cashflow| cashflow.set_rule_loaders(rule, loaders)),
+            ScheduleEdit::SetCashflowRuleSources { rule, sources } => self.edit_cashflow(|cashflow| cashflow.set_rule_sources(rule, sources)),
+            ScheduleEdit::SetCashflowRuleDestinations { rule, destinations } => self.edit_cashflow(|cashflow| cashflow.set_rule_destinations(rule, destinations)),
+            ScheduleEdit::SetCashflowRuleConditions { rule, conditions } => self.edit_cashflow(|cashflow| cashflow.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::SetCashflowRuleValue { rule, value_per_tonne } => self.edit_cashflow(|cashflow| cashflow.set_rule_value(rule, value_per_tonne)),
+            ScheduleEdit::SetClassReclaimRate { class, rate_tph } => self.edit_schedule(|plan| plan.set_class_reclaim_rate(class, rate_tph)),
+            ScheduleEdit::SetReclaimOrder { destination, order } => self.edit_stockpile_routing(destination, |routing| routing.set_reclaim_order(destination, order)),
+            ScheduleEdit::AddOpeningLot { destination, name, tonnes_t } => self.add_opening_lot(destination, name, tonnes_t),
+            ScheduleEdit::DuplicateOpeningLot { destination, lot } => self.duplicate_opening_lot(destination, lot),
+            ScheduleEdit::DeleteOpeningLot { destination, lot } => self.delete_opening_lot(destination, lot),
+            ScheduleEdit::RenameOpeningLot { destination, lot, name } => self.edit_stockpile_routing(destination, |routing| routing.rename_opening_lot(destination, lot, &name)),
+            ScheduleEdit::MoveOpeningLot { destination, lot, newer } => self.edit_stockpile_routing(destination, |routing| routing.move_opening_lot(destination, lot, newer)),
+            ScheduleEdit::AddOpeningPortion { destination, lot, tonnes_t } => {
+                self.edit_stockpile_routing(destination, |routing| routing.add_opening_portion(destination, lot, tonnes_t).map(|_| ()))
+            }
+            ScheduleEdit::DeleteOpeningPortion { destination, lot, portion } => {
+                self.edit_stockpile_routing(destination, |routing| routing.remove_opening_portion(destination, lot, portion))
+            }
+            ScheduleEdit::SetOpeningPortionTonnes {
+                destination,
+                lot,
+                portion,
+                tonnes_t,
+            } => self.edit_stockpile_routing(destination, |routing| routing.set_opening_portion_tonnes(destination, lot, portion, tonnes_t)),
+            ScheduleEdit::SetOpeningPortionValue {
+                destination,
+                lot,
+                portion,
+                field,
+                value,
+            } => self.edit_stockpile_routing(destination, |routing| routing.set_opening_portion_value(destination, lot, portion, field, value)),
+            ScheduleEdit::AddReclaimBar {
+                name,
+                agent,
+                priority,
+                window,
+                source,
+                maximum_t,
+            } => self.add_reclaim_bar(name, agent, priority, window, source, maximum_t),
+            ScheduleEdit::SetReclaimSource { bar, source } => self.set_reclaim_source(bar, source),
+            ScheduleEdit::SetReclaimMaximum { bar, maximum_t } => self.edit_schedule(|plan| plan.set_reclaim_maximum(bar, maximum_t)),
         }
     }
 
@@ -96,6 +161,164 @@ impl crate::app::App<'_> {
     /// undo puts back are the ids the rules still name.
     fn edit_routing(&mut self, edit: impl FnOnce(&mut crate::model::schedule::RoutingConfig) -> ScheduleResult) {
         self.edit_schedule(|plan| edit(plan.routing_mut()));
+    }
+
+    /// Apply an inventory edit only while the destination resolves as a
+    /// stockpile in the current document. Saved references are preserved when
+    /// their target later disappears; this guards new authored mutations.
+    fn edit_stockpile_routing(&mut self, destination: crate::model::schedule::DestinationId, edit: impl FnOnce(&mut crate::model::schedule::RoutingConfig) -> ScheduleResult) {
+        if !self.destination_is_stockpile(destination) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return;
+        }
+        self.edit_routing(edit);
+    }
+
+    fn destination_is_stockpile(&self, destination: crate::model::schedule::DestinationId) -> bool {
+        self.workspace.active_document().is_some_and(|document| {
+            crate::model::schedule::destinations::resolve(destination, document.solids(), document.schedule().routing())
+                .is_ok_and(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
+        })
+    }
+
+    fn edit_trucks(&mut self, edit: impl FnOnce(&mut crate::model::schedule::TruckFleetConfig) -> ScheduleResult) {
+        self.edit_schedule(|plan| edit(plan.trucks_mut()));
+    }
+
+    fn edit_cashflow(&mut self, edit: impl FnOnce(&mut crate::model::schedule::CashflowConfig) -> ScheduleResult) {
+        self.edit_schedule(|plan| edit(plan.cashflow_mut()));
+    }
+
+    fn add_cashflow_rule(&mut self, name: String) {
+        let mut added = None;
+        self.edit_cashflow(|cashflow| {
+            added = Some(cashflow.add_rule(&name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_cashflow_rule = Some(id);
+            self.editor.schedule_cashflow_draft = None;
+        }
+    }
+
+    fn duplicate_cashflow_rule(&mut self, rule: crate::model::schedule::CashflowRuleId) {
+        let Some(document) = self.workspace.active_document() else { return };
+        let cashflow = document.schedule().cashflow();
+        let Some(source) = cashflow.rule(rule) else {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownCashflowRule.message());
+            return;
+        };
+        let name = crate::model::schedule::suggested_name(&source.name, cashflow.rules.iter().map(|rule| rule.name.clone()));
+        let mut added = None;
+        self.edit_cashflow(|cashflow| {
+            added = Some(cashflow.duplicate_rule(rule, &name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_cashflow_rule = Some(id);
+            self.editor.schedule_cashflow_draft = None;
+        }
+    }
+
+    fn delete_cashflow_rule(&mut self, rule: crate::model::schedule::CashflowRuleId) {
+        let mut removed = false;
+        self.edit_cashflow(|cashflow| {
+            cashflow.remove_rule(rule)?;
+            removed = true;
+            Ok(())
+        });
+        if removed && self.editor.schedule_selected_cashflow_rule == Some(rule) {
+            self.editor.schedule_selected_cashflow_rule = None;
+            self.editor.schedule_cashflow_draft = None;
+        }
+    }
+
+    fn add_truck_class(&mut self, name: String) {
+        let mut added = None;
+        self.edit_trucks(|trucks| {
+            added = Some(trucks.add_class(&name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_truck_class = Some(id);
+            self.editor.schedule_truck_class_draft = None;
+        }
+    }
+
+    fn duplicate_truck_class(&mut self, class: crate::model::schedule::TruckClassId) {
+        let Some(document) = self.workspace.active_document() else { return };
+        let trucks = document.schedule().trucks();
+        let Some(source) = trucks.class(class) else {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownTruckClass.message());
+            return;
+        };
+        let name = crate::model::schedule::suggested_name(&source.name, trucks.classes.iter().map(|class| class.name.clone()));
+        let mut added = None;
+        self.edit_trucks(|trucks| {
+            added = Some(trucks.duplicate_class(class, &name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_truck_class = Some(id);
+            self.editor.schedule_truck_class_draft = None;
+        }
+    }
+
+    fn delete_truck_class(&mut self, class: crate::model::schedule::TruckClassId) {
+        let mut removed = false;
+        self.edit_trucks(|trucks| {
+            trucks.remove_class(class)?;
+            removed = true;
+            Ok(())
+        });
+        if removed && self.editor.schedule_selected_truck_class == Some(class) {
+            self.editor.schedule_selected_truck_class = None;
+            self.editor.schedule_truck_class_draft = None;
+        }
+    }
+
+    fn add_trucking_rule(&mut self, name: String, classes: Vec<crate::model::schedule::TruckClassId>) {
+        let mut added = None;
+        self.edit_trucks(|trucks| {
+            added = Some(trucks.add_rule(&name, classes.clone())?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_truck_rule = Some(id);
+            self.editor.schedule_truck_rule_draft = None;
+        }
+    }
+
+    fn duplicate_trucking_rule(&mut self, rule: crate::model::schedule::TruckingRuleId) {
+        let Some(document) = self.workspace.active_document() else { return };
+        let trucks = document.schedule().trucks();
+        let Some(source) = trucks.rule(rule) else {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownTruckingRule.message());
+            return;
+        };
+        let name = crate::model::schedule::suggested_name(&source.name, trucks.rules.iter().map(|rule| rule.name.clone()));
+        let mut added = None;
+        self.edit_trucks(|trucks| {
+            added = Some(trucks.duplicate_rule(rule, &name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_truck_rule = Some(id);
+            self.editor.schedule_truck_rule_draft = None;
+        }
+    }
+
+    fn delete_trucking_rule(&mut self, rule: crate::model::schedule::TruckingRuleId) {
+        let mut removed = false;
+        self.edit_trucks(|trucks| {
+            trucks.remove_rule(rule)?;
+            removed = true;
+            Ok(())
+        });
+        if removed && self.editor.schedule_selected_truck_rule == Some(rule) {
+            self.editor.schedule_selected_truck_rule = None;
+            self.editor.schedule_truck_rule_draft = None;
+        }
     }
 
     fn set_routing_enabled(&mut self, enabled: bool) {
@@ -140,10 +363,10 @@ impl crate::app::App<'_> {
         });
     }
 
-    fn add_destination_rule(&mut self, name: String, destination: crate::model::schedule::DestinationId) {
+    fn add_destination_rule(&mut self, name: String, destinations: Vec<crate::model::schedule::DestinationId>) {
         let mut added = None;
         self.edit_routing(|routing| {
-            added = Some(routing.add_rule(&name, destination)?);
+            added = Some(routing.add_rule(&name, destinations.clone())?);
             Ok(())
         });
         if let Some(id) = added {
@@ -300,6 +523,95 @@ impl crate::app::App<'_> {
         if let Some(id) = added {
             self.editor.schedule_selected_bar = Some(id);
             self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Add a bar that reclaims from one stockpile, and select it.
+    ///
+    /// No dig-block picking: a reclaim bar names a pile and a window, so
+    /// creating it never puts the viewport into a picking mode.
+    fn add_reclaim_bar(
+        &mut self,
+        name: String,
+        agent: Option<LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        source: crate::model::schedule::DestinationId,
+        maximum_t: Option<f64>,
+    ) {
+        if !self.destination_is_stockpile(source) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return;
+        }
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            added = Some(plan.add_reclaim_bar(&name, agent, priority, window, source, maximum_t)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    fn set_reclaim_source(&mut self, bar: BarId, source: crate::model::schedule::DestinationId) {
+        if !self.destination_is_stockpile(source) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return;
+        }
+        self.edit_schedule(|plan| plan.set_reclaim_source(bar, source));
+    }
+
+    fn add_opening_lot(&mut self, destination: crate::model::schedule::DestinationId, name: String, tonnes_t: f64) {
+        let mut added = None;
+        self.edit_stockpile_routing(destination, |routing| {
+            added = Some(routing.add_opening_lot(destination, &name, tonnes_t)?);
+            Ok(())
+        });
+        if let Some(lot) = added {
+            self.editor.schedule_selected_lot = Some(lot);
+        }
+    }
+
+    /// Copy a lot into an independent one below it. The name is suggested here
+    /// rather than in the model, for the same reason a copied bar's is: the
+    /// model refuses a duplicate outright, and choosing one for the user is a
+    /// decision that belongs where the user can see it.
+    fn duplicate_opening_lot(&mut self, destination: crate::model::schedule::DestinationId, lot: crate::model::schedule::OpeningLotId) {
+        if !self.destination_is_stockpile(destination) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return;
+        }
+        let Some(inventory) = self
+            .workspace
+            .active_document()
+            .and_then(|document| document.schedule().routing().inventory(destination).cloned())
+        else {
+            return;
+        };
+        let Some(source) = inventory.lot(lot) else {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownLot.message());
+            return;
+        };
+        let name = crate::model::schedule::suggested_name(&source.name.clone(), inventory.lots.iter().map(|lot| lot.name.clone()));
+        let mut added = None;
+        self.edit_stockpile_routing(destination, |routing| {
+            added = Some(routing.duplicate_opening_lot(destination, lot, &name)?);
+            Ok(())
+        });
+        if let Some(lot) = added {
+            self.editor.schedule_selected_lot = Some(lot);
+        }
+    }
+
+    fn delete_opening_lot(&mut self, destination: crate::model::schedule::DestinationId, lot: crate::model::schedule::OpeningLotId) {
+        self.edit_stockpile_routing(destination, |routing| routing.remove_opening_lot(destination, lot));
+        let gone = self
+            .workspace
+            .active_document()
+            .is_none_or(|document| document.schedule().routing().inventory(destination).is_none_or(|inventory| inventory.lot(lot).is_none()));
+        if gone && self.editor.schedule_selected_lot == Some(lot) {
+            self.editor.schedule_selected_lot = None;
         }
     }
 

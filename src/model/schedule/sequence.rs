@@ -556,30 +556,24 @@ fn same_volume(was: Option<f64>, now: Option<f64>) -> bool {
     }
 }
 
-/// An ordered run of ground, named by the user: the dig order one Gantt bar
-/// works through.
+/// An ordered run of ground: the dig order one Gantt bar works through.
 ///
 /// Order is the whole point: it is the order the blocks are dug in, so
 /// membership is a `Vec` rather than a set, and the same ground cannot appear
 /// in it twice.
 ///
-/// Exactly one thing owns one of these: a [`ScheduleBar`](super::ScheduleBar),
-/// and nothing else. The stage 2A standalone sequence is gone and its
-/// membership moved here unchanged, so the project holds one notion of "an
-/// ordered run of ground" rather than two that could drift apart.
+/// Exactly one thing owns one of these: a [`ScheduleBar`](super::ScheduleBar)
+/// whose work is digging, and nothing else. The bar carries the name - it names
+/// the work whichever activity that work is - so a reclaim bar is named the
+/// same way without holding a dig order it would never use.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DigOrder {
-    pub(crate) name: String,
     #[serde(default)]
     pub(crate) members: Vec<DigBlockRef>,
 }
 
 impl DigOrder {
-    pub(crate) fn new(name: String) -> Self {
-        Self { name, members: Vec::new() }
-    }
-
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         &self.members
     }

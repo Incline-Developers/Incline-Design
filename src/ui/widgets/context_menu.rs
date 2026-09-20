@@ -380,3 +380,166 @@ fn menu_frame(style: &egui::Style) -> egui::Frame {
         .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
         .shadow(style.visuals.popup_shadow)
 }
+
+/// How far each level of a checklist's hierarchy is indented.
+const CHECKLIST_INDENT: f32 = 12.0;
+/// Width of the disclosure column a nested checklist reserves, so rows with a
+/// triangle and rows without share one left edge.
+const CHECKLIST_DISCLOSURE: f32 = 12.0;
+
+/// A checklist row's state. `Mixed` is its own answer: a group some of whose
+/// members are selected is not the same as one that is not selected, and a
+/// two-state box would have to pick one of those and be wrong about the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tick {
+    On,
+    Off,
+    Mixed,
+}
+
+impl Tick {
+    pub(crate) fn of(all: bool, any: bool) -> Self {
+        match (all, any) {
+            (true, _) => Self::On,
+            (false, true) => Self::Mixed,
+            (false, false) => Self::Off,
+        }
+    }
+}
+
+/// What a checklist row was just asked to do.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ChecklistResponse {
+    /// The box was clicked, or the label was - a row is one target, because
+    /// hitting a 13-pixel box is not how a list of twenty benches gets ticked.
+    pub(crate) toggled: bool,
+    /// The disclosure triangle was clicked. Never both: expanding a group and
+    /// selecting it are different decisions.
+    pub(crate) expanded: bool,
+}
+
+/// One checkable row of a [`checklist_popup`], optionally nested under the row
+/// above it and optionally carrying a disclosure triangle.
+pub(crate) struct ChecklistRow<'a> {
+    label: &'a str,
+    tick: Tick,
+    depth: usize,
+    /// `Some(open)` draws a triangle; `None` leaves its column blank so a leaf
+    /// still lines up with its siblings.
+    disclosure: Option<bool>,
+}
+
+impl<'a> ChecklistRow<'a> {
+    pub(crate) fn new(label: &'a str, tick: Tick) -> Self {
+        Self {
+            label,
+            tick,
+            depth: 0,
+            disclosure: None,
+        }
+    }
+
+    pub(crate) fn depth(mut self, depth: usize) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub(crate) fn disclosure(mut self, open: Option<bool>) -> Self {
+        self.disclosure = open;
+        self
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> ChecklistResponse {
+        let Self { label, tick, depth, disclosure } = self;
+        let indent = CHECKLIST_INDENT * depth as f32;
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let label_width = ui.painter().layout_no_wrap(label.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let natural = indent + CHECKLIST_DISCLOSURE + CHECK_COLUMN + label_width + f32::from(ROW_HORIZONTAL_PADDING) * 2.0;
+        super::menu::record_intrinsic_content_width(ui, natural);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
+        let triangle_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + f32::from(ROW_HORIZONTAL_PADDING) + indent, rect.top()),
+            egui::vec2(CHECKLIST_DISCLOSURE, rect.height()),
+        );
+        let box_left = triangle_rect.right() + 2.0;
+        let mut out = ChecklistResponse::default();
+        if response.clicked() {
+            if disclosure.is_some() && ui.input(|input| input.pointer.interact_pos()).is_some_and(|pos| triangle_rect.contains(pos)) {
+                out.expanded = true;
+            } else {
+                out.toggled = true;
+            }
+        }
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter().with_clip_rect(rect);
+            let visuals = ui.style().interact(&response);
+            if response.hovered() {
+                painter.rect_filled(rect, 1.0, visuals.bg_fill);
+            }
+            let text_color = visuals.fg_stroke.color;
+            if let Some(open) = disclosure {
+                let center = triangle_rect.center();
+                let points = if open {
+                    vec![center + egui::vec2(-3.5, -2.0), center + egui::vec2(3.5, -2.0), center + egui::vec2(0.0, 3.0)]
+                } else {
+                    vec![center + egui::vec2(-2.0, -3.5), center + egui::vec2(3.0, 0.0), center + egui::vec2(-2.0, 3.5)]
+                };
+                painter.add(egui::Shape::convex_polygon(points, ui.visuals().weak_text_color(), egui::Stroke::NONE));
+            }
+            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(11.0, 11.0));
+            painter.rect(
+                box_rect,
+                2.0,
+                if tick == Tick::Off {
+                    egui::Color32::TRANSPARENT
+                } else {
+                    ui.visuals().selection.bg_fill
+                },
+                egui::Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color),
+                egui::StrokeKind::Inside,
+            );
+            match tick {
+                Tick::Off => {}
+                Tick::On => {
+                    let center = box_rect.center();
+                    painter.add(egui::Shape::line(
+                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(-0.5, 2.0), center + egui::vec2(2.5, -2.5)],
+                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
+                    ));
+                }
+                Tick::Mixed => {
+                    let center = box_rect.center();
+                    painter.add(egui::Shape::line(
+                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(2.5, 0.0)],
+                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
+                    ));
+                }
+            }
+            painter.text(egui::pos2(box_rect.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font_id, text_color);
+        }
+        if rect.width() + 0.5 < natural {
+            response.on_hover_text(label.to_owned());
+        }
+        out
+    }
+}
+
+/// A multiple-selection popup opened by a widget the caller drew.
+///
+/// Unlike a command menu this stays open while rows are ticked - the whole
+/// point is choosing several - and closes on a click outside it.
+pub(crate) fn checklist_popup<R>(response: &egui::Response, title: impl Into<egui::WidgetText>, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let title = title.into();
+    egui::Popup::menu(response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+        .width(width)
+        .show(|ui| {
+            apply_compact_style(ui);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| draw_body(ui, &title, width, add_contents))
+                .inner
+        })
+        .map(|inner| inner.inner)
+}

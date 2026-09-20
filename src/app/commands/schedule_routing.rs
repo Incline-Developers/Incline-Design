@@ -30,7 +30,8 @@ use crate::{
     model::{
         Document, ReserveFieldId,
         schedule::{
-            DestinationId, DestinationKind, DispatchDestination, DispatchPortion, LoaderAgentId, PortionValue, RuleId, SourceScope, destinations, destinations::RoutingConfig,
+            DestinationId, DestinationKind, DispatchDestination, DispatchPortion, LoaderAgentId, PortionValue, RouteSource, RuleId, SourceScope, destinations,
+            destinations::RoutingConfig,
         },
     },
 };
@@ -162,7 +163,11 @@ pub(crate) fn prepare_block(
             .filter(|rule| {
                 rule.accepts(
                     loader,
-                    |scope: SourceScope| scope.covers(block.solid, bench, flitch),
+                    RouteSource::Ground {
+                        solid: block.solid,
+                        bench,
+                        flitch,
+                    },
                     |field| {
                         capture.position(field).map(|position| {
                             let value = portion.values[position];
@@ -180,7 +185,28 @@ pub(crate) fn prepare_block(
                     },
                 )
             })
-            .filter_map(|rule| table.iter().position(|entry| entry.id == rule.destination).map(|position| (position, rule.id)))
+            // One rule may list several destinations, tried in the order it
+            // lists them - the same resolution the rule order itself uses, one
+            // level down.
+            .flat_map(|rule| {
+                rule.destinations
+                    .iter()
+                    .filter_map(|destination| table.iter().position(|entry| entry.id == *destination).map(|position| (position, rule.id)))
+            })
+            .collect();
+        // Two rules may allow the same destination; the first mention is the
+        // one that decides where it sits in the order, and a repeat says
+        // nothing more.
+        let mut seen = Vec::with_capacity(routes.len());
+        let routes: Vec<(usize, RuleId)> = routes
+            .into_iter()
+            .filter(|(position, _)| {
+                let fresh = !seen.contains(position);
+                if fresh {
+                    seen.push(*position);
+                }
+                fresh
+            })
             .collect();
         if routes.is_empty() {
             problems.push(RoutingProblem::Unmatched {
