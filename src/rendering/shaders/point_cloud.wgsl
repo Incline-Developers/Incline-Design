@@ -1,6 +1,8 @@
 struct PointCloudStyle {
     color: vec4<f32>,
-    // x: screen-facing splat width in world units; y: selected flag.
+    // x: screen-facing splat width in world units; y: draw `color` in place of
+    // the instance's own colour (a selected cloud, or one whose colour channel
+    // holds classification colours while that view is off).
     options: vec4<f32>,
     // Fixed cloud origin relative to the current floating scene origin.
     origin: vec4<f32>,

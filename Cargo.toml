@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "3"
-members = [".", "crates/mineflow"]
+members = [".", "crates/mineflow", "crates/omf"]
 default-members = ["."]
 exclude = ["vendor/egui-winit"]
 
@@ -42,7 +42,7 @@ laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
 #mineflow = { path = "crates/mineflow" } # Crate is ready to be implemented
-omf = { git = "https://github.com/Incline-Developers/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
+omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 proj4rs = { version = "0.2.0", default-features = false, features = ["crs-definitions"] }
 crs-definitions = "0.5.0"

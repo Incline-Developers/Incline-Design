@@ -88,7 +88,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Crea triangolazione
-tri-create-help = Fai clic sugli oggetti nella vista per selezionarli o deselezionarli. Trascina per selezionare con un riquadro.
 tri-create-type-label = Tipo di triangolazione
 tri-create-type-help =
     La superficie aperta crea una maglia in stile terreno. Il solido crea una
@@ -98,7 +97,6 @@ tri-create-output-name-help = Nome assegnato alla triangolazione generata.
 tri-create-output-name-hint = nome della triangolazione
 tri-create-run = Triangola
 
-tri-selection-none = Nessun oggetto ancora selezionato.
 tri-selection-selected = { $summary } selezionati
 
 tri-type-open-surface = Superficie aperta

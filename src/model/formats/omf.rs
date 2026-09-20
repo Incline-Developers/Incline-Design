@@ -17,6 +17,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use glam::{DMat3, DVec3};
 use omf as omf_crate;
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::{
@@ -32,7 +33,7 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
-        point_cloud::{LoadedPointCloud, OpenPointCloud, finite_bounds, prepare_for_render},
+        point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -182,25 +183,62 @@ impl ImportBundle {
     }
 }
 
+/// How hard to compress an OMF container. Deflate's cost per level is steep and
+/// badly non-linear, so the level is worth choosing per destination instead of
+/// taking the library default of 6. Measured on a 7.8M-point survey cloud:
+///
+/// | level | time | size |
+/// |-------|-------|---------|
+/// | 1     | 0.50s | 83.3 MB |
+/// | 2     | 0.77s | 54.6 MB |
+/// | 3     | 0.97s | 51.8 MB |
+/// | 5     | 1.80s | 48.6 MB |
+/// | 6     | 4.34s | 48.1 MB |
+///
+/// Level 6 is a cliff - 2.4x the time of level 5 to shave a further 1% - and
+/// it was costing more CPU than every other part of a save put together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Compression {
+    /// A file the user keeps, syncs, or hands to another program. Level 5 is
+    /// the last point before the cliff: within about 1% of what level 6 would
+    /// have produced, so saved projects are no larger in any way that matters.
+    Archive,
+    /// A scratch spill this process wrote and only this process reads back,
+    /// deleted when the last handle to it drops. Level 2 gives up about a
+    /// tenth of the size for well over five times the speed. Going lower
+    /// (level 1 is another 1.5x faster) would inflate the spill by three
+    /// quarters, which defeats the point of unloading the data at all.
+    Scratch,
+}
+
+impl From<Compression> for omf_crate::file::Compression {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::Archive => Self::new(5),
+            Compression::Scratch => Self::new(2),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phase) -> Result<()> {
     crate::model::atomic_file::write_atomic(path, |file| {
-        write_to(snapshot, file, progress)?;
+        write_to(snapshot, file, Compression::Archive, progress)?;
         Ok(())
     })
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn to_bytes(snapshot: ProjectSnapshot, progress: &Phase) -> Result<Vec<u8>> {
-    let cursor = write_to(snapshot, Cursor::new(Vec::new()), progress)?;
+pub(crate) fn to_bytes(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<Vec<u8>> {
+    let cursor = write_to(snapshot, Cursor::new(Vec::new()), compression, progress)?;
     Ok(cursor.into_inner())
 }
 
-fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progress: &Phase) -> Result<W> {
+fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compression: Compression, progress: &Phase) -> Result<W> {
     if snapshot.is_empty() {
         bail!("There is no open Incline Design data to export");
     }
     let mut writer = omf_crate::file::Writer::new(output).context("create OMF writer")?;
+    writer.set_compression(compression.into());
     let total = snapshot.item_count().max(1) as u64;
     let mut complete = 0u64;
     let mut elements = Vec::with_capacity(snapshot.item_count());
@@ -524,6 +562,9 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             writer.array_colors(colors.iter().map(|color| Some(color.to_le_bytes())))?,
         ));
     }
+    if let Some(codes) = cloud.classifications.as_ref().filter(|codes| codes.len() == cloud.points.len()) {
+        element.attributes.push(write_point_classification(writer, codes)?);
+    }
     put(&mut element, META_KIND, "point_cloud");
     put_item_identity(
         &mut element,
@@ -539,6 +580,47 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     );
     Ok(element)
 }
+
+/// Write ASPRS point classifications as an OMF category attribute.
+///
+/// Only the codes the cloud actually uses become categories, so the indices
+/// stay narrow and the names list stays short. The ASPRS code itself travels in
+/// the same `Incline category code` sidecar the block-model writer uses, which
+/// is what lets a round-trip recover codes rather than category positions, and
+/// the gradient carries the colours the classification view draws so other
+/// applications show the same cloud.
+fn write_point_classification<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, codes: &[u8]) -> Result<omf_crate::Attribute> {
+    use crate::model::point_cloud::{classification_color, classification_name};
+
+    let used: Vec<u8> = codes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut lookup = [0u32; 256];
+    for (index, code) in used.iter().enumerate() {
+        lookup[usize::from(*code)] = index as u32;
+    }
+    let names = used
+        .iter()
+        .map(|code| classification_name(*code).map_or_else(|| format!("Class {code}"), str::to_owned))
+        .collect::<Vec<_>>();
+    let original_codes = omf_crate::Attribute::from_numbers(
+        "Incline category code",
+        omf_crate::Location::Categories,
+        writer.array_numbers(used.iter().map(|code| Some(i64::from(*code))))?,
+    );
+    let gradient = writer.array_gradient(used.iter().map(|code| classification_color(*code).to_le_bytes()))?;
+    let indices = writer.array_indices(codes.iter().map(|code| Some(lookup[usize::from(*code)])))?;
+    let names = writer.array_names(names)?;
+    Ok(omf_crate::Attribute::from_categories(
+        POINT_CLASSIFICATION_ATTRIBUTE,
+        omf_crate::Location::Vertices,
+        indices,
+        names,
+        Some(gradient),
+        [original_codes],
+    ))
+}
+
+/// Attribute name the classification column round-trips under.
+const POINT_CLASSIFICATION_ATTRIBUTE: &str = "Classification";
 
 /// Write a numeric attribute, carrying its colormap when it has one.
 ///
@@ -1292,7 +1374,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         path,
                         points: Arc::new(Vec::new()),
                         colors: None,
-                        prepared: Arc::new(prepare_for_render(&[], None, bounds)),
+                        classifications: None,
+                        prepared: Arc::new(prepare_for_render(&[], None, None, bounds)),
                         bounds,
                     },
                     color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
@@ -1531,7 +1614,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             omf_crate::Geometry::LineSet(lines) => {
                 let offset = self.project_origin + DVec3::from_array(lines.origin);
                 let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-                let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+                let segments = self.reader.array_segments_vec(&lines.segments)?;
                 for (points, closed) in line_strings(&vertices, &segments) {
                     let color = ObjectColor::Fixed(element_color(element, [1.0; 4]));
                     document.add_object(|id| Object::Polyline {
@@ -1560,7 +1643,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         // `generic_design` mutably at the same time.
         let offset = self.project_origin + DVec3::from_array(lines.origin);
         let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-        let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+        let segments = self.reader.array_segments_vec(&lines.segments)?;
         for (points, closed) in line_strings(&vertices, &segments) {
             self.generic_design.add_object(|id| Object::Polyline {
                 id,
@@ -1582,7 +1665,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .into_iter()
             .map(|point| Vertex::new(point.x + offset.x, point.y + offset.y, point.z + offset.z))
             .collect();
-        let faces = collect_results(self.reader.array_triangles(&surface.triangles)?)?;
+        let faces = self.reader.array_triangles_vec(&surface.triangles)?;
         self.push_triangulation(element, vertices, faces)
     }
 
@@ -1669,7 +1752,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn read_point_cloud(&mut self, element: &omf_crate::Element, points: &omf_crate::PointSet) -> Result<()> {
         let offset = self.project_origin + DVec3::from_array(points.origin);
-        let positions = self.read_vertices(&points.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
+        let mut positions = self.read_vertices(&points.vertices)?;
+        // Applying the offset and measuring the bounds are both full sweeps of
+        // an array that can run to gigabytes, so they share one pass.
+        let bounds = shift_and_measure(&mut positions, offset);
         if positions.is_empty() {
             self.bundle.warnings.push(format!("Skipped empty OMF point set '{}'", element.name));
             return Ok(());
@@ -1686,8 +1772,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .map(|colors| colors.into_iter().map(|color| color.unwrap_or([255; 4])).map(u32::from_le_bytes).collect::<Vec<_>>())
             })
             .transpose()?;
-        let bounds = finite_bounds(&positions).with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
-        let prepared = prepare_for_render(&positions, colors.as_deref(), bounds);
+        let classifications = self.read_point_classification(element, positions.len())?;
+        let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
+        let prepared = prepare_for_render(&positions, colors.as_deref(), classifications.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
         self.bundle.point_clouds.push(ImportedPointCloud {
             preferred_id: element_id(element),
@@ -1698,6 +1785,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 path: virtual_path(self.source_name, element_name(element), "pcd"),
                 points: Arc::new(positions),
                 colors: colors.map(Arc::new),
+                classifications: classifications.map(Arc::new),
                 prepared: Arc::new(prepared),
                 bounds,
             },
@@ -1707,6 +1795,64 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             point_size: style_f32(style, "point_size").unwrap_or(0.1),
         });
         Ok(())
+    }
+
+    /// Recover the ASPRS classification column written by
+    /// [`write_point_classification`].
+    ///
+    /// Anything that does not line up - a foreign file's own `Classification`
+    /// attribute, a missing code sidecar, a length that disagrees with the
+    /// point count - yields `None` rather than a guess: a wrong classification
+    /// silently changes which points a bare-earth surface is built from.
+    fn read_point_classification(&self, element: &omf_crate::Element, point_count: usize) -> Result<Option<Vec<u8>>> {
+        let Some((values, names, attributes)) = element.attributes.iter().find_map(|attribute| match (&attribute.location, &attribute.data) {
+            (omf_crate::Location::Vertices, omf_crate::AttributeData::Category { values, names, attributes, .. }) if attribute.name == POINT_CLASSIFICATION_ATTRIBUTE => {
+                Some((values, names, attributes))
+            }
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        let category_count = collect_results(self.reader.array_names(names)?)?.len();
+        let codes = attributes
+            .iter()
+            .find(|attribute| attribute.name == "Incline category code" && attribute.location == omf_crate::Location::Categories)
+            .and_then(|attribute| match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } => Some(values),
+                _ => None,
+            })
+            .map(|values| read_numbers(self.reader, values))
+            .transpose()?
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| {
+                        value
+                            .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=255.0).contains(value))
+                            .map(|value| value as u8)
+                    })
+                    .collect::<Option<Vec<u8>>>()
+            });
+        let Some(Some(codes)) = codes else {
+            return Ok(None);
+        };
+        if codes.len() != category_count {
+            return Ok(None);
+        }
+        let values = collect_results(self.reader.array_indices(values)?)?;
+        if values.len() != point_count {
+            return Ok(None);
+        }
+        Ok(Some(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .and_then(|index| codes.get(index as usize).copied())
+                        .unwrap_or(crate::model::point_cloud::CLASS_UNCLASSIFIED)
+                })
+                .collect(),
+        ))
     }
 
     fn read_block_model(&mut self, element: &omf_crate::Element, geometry: &omf_crate::BlockModel) -> Result<()> {
@@ -2176,9 +2322,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         Ok(())
     }
 
+    /// Vertex arrays are the bulk of an OMF file, so they go through the
+    /// reader's bulk path: whole Parquet column blocks instead of one
+    /// `Option<Result<f64>>` per coordinate, with row groups decoded in
+    /// parallel. `[f64; 3]` and `DVec3` share a layout, so the cast below
+    /// reuses the allocation rather than copying it.
     fn read_vertices(&self, array: &omf_crate::Array<omf_crate::array_type::Vertex>) -> Result<Vec<DVec3>> {
         ensure_items(array.item_count(), "vertices")?;
-        Ok(collect_results(self.reader.array_vertices(array)?)?.into_iter().map(DVec3::from_array).collect())
+        Ok(self.reader.array_vertices_vec(array)?.into_iter().map(DVec3::from_array).collect())
     }
 
     fn grid2_sizes(&self, grid: &omf_crate::Grid2) -> Result<[Vec<f64>; 2]> {
@@ -2243,6 +2394,27 @@ fn ensure_items(count: u64, description: &str) -> Result<usize> {
         bail!("OMF {description} count {count} exceeds Incline Design's import limit of {MAX_ARRAY_ITEMS}");
     }
     usize::try_from(count).with_context(|| format!("OMF {description} count exceeds addressable memory"))
+}
+
+/// Shift every point by `offset` in place and return the bounds of the finite
+/// ones, in a single parallel pass.
+fn shift_and_measure(positions: &mut [DVec3], offset: DVec3) -> Option<(DVec3, DVec3)> {
+    let (min, max) = positions
+        .par_iter_mut()
+        .map(|point| {
+            *point += offset;
+            *point
+        })
+        .filter(|point| point.is_finite())
+        .fold(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min, max), point| (min.min(point), max.max(point)),
+        )
+        .reduce(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
+        );
+    (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
 fn collect_results<T>(items: impl IntoIterator<Item = std::result::Result<T, omf_crate::error::Error>>) -> Result<Vec<T>> {

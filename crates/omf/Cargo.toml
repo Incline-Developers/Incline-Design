@@ -1,0 +1,38 @@
+[package]
+name = "omf"
+description = "File reader and writer for Open Mining Format."
+version = "0.2.0-beta.1"
+authors = ["Tim Evans <tim.evans@seequent.com>"]
+license = "MIT"
+edition = "2024"
+rust-version = "1.85.0"
+publish = false
+exclude = ["/docs"]
+
+[dependencies]
+bytes = { version = "1.12", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+flate2 = "1.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
+parquet = { version = "59.3", default-features = false, features = ["flate2", "flate2-rust_backend"], optional = true }
+rayon = "1.12"
+schemars = { version = "0.8", features = ["chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+thiserror = "2.0"
+zip = { version = "7", default-features = false }
+
+[dev-dependencies]
+bytes = "1.12"
+glam = "0.33"
+regex = "1.13"
+
+[features]
+default = ["image", "parquet", "omf1", "zlib-rs"]
+image = ["dep:image"]
+# Use the zlib-rs Deflate backend instead of miniz_oxide. Same output format, several times
+# faster to compress and roughly twice as fast to decompress. Disable to fall back to
+# miniz_oxide.
+zlib-rs = ["flate2/zlib-rs", "parquet?/flate2-zlib-rs"]
+parquet = ["dep:parquet", "dep:bytes"]
+omf1 = ["parquet"]

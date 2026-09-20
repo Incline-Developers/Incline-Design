@@ -294,24 +294,41 @@ struct TriNode {
     count: u32,
 }
 
-/// Temporary 40-byte node produced by the parallel recursive build before
-/// being compacted into depth-first `TriNode` layout.
-#[derive(Clone, Copy)]
-struct BuildNode {
-    min: [f32; 3],
-    max: [f32; 3],
-    left: u32,
-    right: u32,
-    start: u32,
-    count: u32,
+impl TriNode {
+    /// Fill for the freshly sized node array. Every slot is overwritten by the
+    /// build before anything reads it; an empty box is simply the value that
+    /// would prune rather than mislead if one ever were not.
+    const PLACEHOLDER: Self = Self {
+        min: [f32::INFINITY; 3],
+        max: [f32::NEG_INFINITY; 3],
+        right_child_or_start: 0,
+        count: 0,
+    };
 }
 
+/// One triangle's padded axis-aligned bounds, in the same local f32 space as
+/// `TriNode`. Kept apart from the centroids the split scans, so that scan walks
+/// 12 bytes per triangle instead of dragging the bounds through cache with it.
 #[derive(Clone, Copy)]
-struct BuildTriangleInfo {
+struct TriangleBox {
     min: [f32; 3],
     max: [f32; 3],
-    centroid: [f32; 3],
-    xy_bounds: TriangleXyBounds,
+}
+
+impl TriangleBox {
+    const EMPTY: Self = Self {
+        min: [f32::INFINITY; 3],
+        max: [f32::NEG_INFINITY; 3],
+    };
+
+    fn union(&self, other: &Self) -> Self {
+        let mut result = *self;
+        for axis in 0..3 {
+            result.min[axis] = result.min[axis].min(other.min[axis]);
+            result.max[axis] = result.max[axis].max(other.max[axis]);
+        }
+        result
+    }
 }
 
 impl TriangleBvh {
@@ -326,14 +343,24 @@ impl TriangleBvh {
             .map(|v| [(v.x - origin.x) as f32, (v.y - origin.y) as f32, (v.z - origin.z) as f32])
             .collect();
         let build_triangles: Vec<[u32; 3]> = mesh.face_vertex_indices_iter().map(|face| face.map(|i| i as u32)).collect();
-        let build_infos: Vec<BuildTriangleInfo> = build_triangles.iter().map(|triangle| build_triangle_info(*triangle, &build_vertices)).collect();
-        let xy_bounds = build_infos.iter().map(|info| info.xy_bounds).collect();
+        let (boxes, centroids): (Vec<TriangleBox>, Vec<[f32; 3]>) = build_triangles.iter().map(|triangle| build_triangle_info(*triangle, &build_vertices)).unzip();
+        let xy_bounds = boxes
+            .iter()
+            .map(|bounds| TriangleXyBounds {
+                min: [bounds.min[0], bounds.min[1]],
+                max: [bounds.max[0], bounds.max[1]],
+            })
+            .collect();
         let mut order: Vec<u32> = (0..build_triangles.len() as u32).collect();
         let nodes = if order.is_empty() {
             Vec::new()
         } else {
-            let wide = build_triangle_subtree(&mut order, 0, &build_infos);
-            flatten_to_dfs(&wide)
+            // The tree's shape follows from the triangle count alone, so the
+            // whole node array is sized and allocated once and the recursion
+            // fills disjoint slices of it in place.
+            let mut nodes = vec![TriNode::PLACEHOLDER; subtree_node_count(order.len())];
+            build_triangle_subtree(&mut order, 0, 0, &centroids, &boxes, &mut nodes);
+            nodes
         };
         Self { origin, xy_bounds, order, nodes }
     }
@@ -503,75 +530,63 @@ impl TriangleBvh {
     }
 }
 
-/// Convert the wide arbitrary-indexed `BuildNode` tree into the compact
-/// depth-first `TriNode` layout where left child = parent_index + 1.
-fn flatten_to_dfs(wide: &[BuildNode]) -> Vec<TriNode> {
-    let mut out = Vec::with_capacity(wide.len());
-    if !wide.is_empty() {
-        dfs_serialize(wide, 0, &mut out);
-    }
-    out
-}
-
-fn dfs_serialize(wide: &[BuildNode], idx: usize, out: &mut Vec<TriNode>) {
-    let node = wide[idx];
-    let my_idx = out.len();
-    if node.count > 0 {
-        out.push(TriNode {
-            min: node.min,
-            max: node.max,
-            right_child_or_start: node.start,
-            count: node.count,
-        });
-    } else {
-        out.push(TriNode {
-            min: node.min,
-            max: node.max,
-            right_child_or_start: 0,
-            count: 0,
-        });
-        dfs_serialize(wide, node.left as usize, out);
-        let right_idx = out.len() as u32;
-        out[my_idx].right_child_or_start = right_idx;
-        dfs_serialize(wide, node.right as usize, out);
-    }
-}
-
 /// Minimum subtree size to spawn a rayon parallel task. Below this threshold
 /// the recursion finishes serially to avoid thread-pool overhead on tiny slices.
 const PARALLEL_MIN_TRIANGLES: usize = 2048;
 
-/// Build a BVH subtree for `order` (a sub-slice of the global order array)
-/// and return a `Vec<BuildNode>` whose indices are self-contained (index 0 = root).
-///
-/// `order_start` is the offset of `order[0]` in the global order array, used
-/// to fill leaf `BuildNode::start` correctly.
-fn build_triangle_subtree(order: &mut [u32], order_start: usize, triangle_infos: &[BuildTriangleInfo]) -> Vec<BuildNode> {
-    let n = order.len();
+/// Triangles at or below which a subtree becomes one leaf.
+const MAX_LEAF_TRIANGLES: usize = 8;
 
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    let mut center_min = [f32::INFINITY; 3];
-    let mut center_max = [f32::NEG_INFINITY; 3];
-    for &idx in order.iter() {
-        let info = triangle_infos[idx as usize];
-        for i in 0..3 {
-            min[i] = min[i].min(info.min[i]);
-            max[i] = max[i].max(info.max[i]);
-            center_min[i] = center_min[i].min(info.centroid[i]);
-            center_max[i] = center_max[i].max(info.centroid[i]);
+/// How many nodes a subtree over `n` triangles occupies. The split is a median,
+/// so the tree's shape follows from the count alone - which is what lets the
+/// build hand each half a disjoint slice of one preallocated array and write
+/// nodes where they finally belong.
+fn subtree_node_count(n: usize) -> usize {
+    if n <= MAX_LEAF_TRIANGLES {
+        1
+    } else {
+        let middle = n / 2;
+        1 + subtree_node_count(middle) + subtree_node_count(n - middle)
+    }
+}
+
+/// Build a BVH subtree over `order` straight into `out`, which must be exactly
+/// `subtree_node_count(order.len())` long and is filled in depth-first layout:
+/// the subtree root first, then the whole left subtree, then the right.
+///
+/// `base` is `out`'s offset within the complete node array, because a node
+/// stores its right child as an absolute index. `order_start` is `order[0]`'s
+/// offset within the global order array, for leaf start offsets.
+///
+/// Returns the subtree's bounding box. A parent unions what its children
+/// return rather than rescanning their triangles, so the only per-level pass
+/// left is over centroids and the bounds work over the whole build is linear.
+fn build_triangle_subtree(order: &mut [u32], order_start: usize, base: u32, centroids: &[[f32; 3]], boxes: &[TriangleBox], out: &mut [TriNode]) -> TriangleBox {
+    let n = order.len();
+    debug_assert_eq!(out.len(), subtree_node_count(n));
+
+    if n <= MAX_LEAF_TRIANGLES {
+        let mut bounds = TriangleBox::EMPTY;
+        for &index in order.iter() {
+            bounds = bounds.union(&boxes[index as usize]);
         }
+        out[0] = TriNode {
+            min: bounds.min,
+            max: bounds.max,
+            right_child_or_start: order_start as u32,
+            count: n as u32,
+        };
+        return bounds;
     }
 
-    if n <= 8 {
-        return vec![BuildNode {
-            min,
-            max,
-            left: 0,
-            right: 0,
-            start: order_start as u32,
-            count: n as u32,
-        }];
+    let mut center_min = [f32::INFINITY; 3];
+    let mut center_max = [f32::NEG_INFINITY; 3];
+    for &index in order.iter() {
+        let centroid = centroids[index as usize];
+        for axis in 0..3 {
+            center_min[axis] = center_min[axis].min(centroid[axis]);
+            center_max[axis] = center_max[axis].max(centroid[axis]);
+        }
     }
 
     let extent = [center_max[0] - center_min[0], center_max[1] - center_min[1], center_max[2] - center_min[2]];
@@ -584,50 +599,33 @@ fn build_triangle_subtree(order: &mut [u32], order_start: usize, triangle_infos:
     };
 
     let middle = n / 2;
-    order.select_nth_unstable_by(middle, |a, b| {
-        triangle_infos[*a as usize].centroid[axis].total_cmp(&triangle_infos[*b as usize].centroid[axis])
-    });
+    order.select_nth_unstable_by(middle, |a, b| centroids[*a as usize][axis].total_cmp(&centroids[*b as usize][axis]));
 
     let (left_order, right_order) = order.split_at_mut(middle);
+    let (node, children) = out.split_at_mut(1);
+    let (left_out, right_out) = children.split_at_mut(subtree_node_count(middle));
+    let right_base = base + 1 + left_out.len() as u32;
 
-    let (mut left_nodes, mut right_nodes) = if n > PARALLEL_MIN_TRIANGLES * 2 {
+    let (left_bounds, right_bounds) = if n > PARALLEL_MIN_TRIANGLES * 2 {
         rayon::join(
-            || build_triangle_subtree(left_order, order_start, triangle_infos),
-            || build_triangle_subtree(right_order, order_start + middle, triangle_infos),
+            || build_triangle_subtree(left_order, order_start, base + 1, centroids, boxes, left_out),
+            || build_triangle_subtree(right_order, order_start + middle, right_base, centroids, boxes, right_out),
         )
     } else {
         (
-            build_triangle_subtree(left_order, order_start, triangle_infos),
-            build_triangle_subtree(right_order, order_start + middle, triangle_infos),
+            build_triangle_subtree(left_order, order_start, base + 1, centroids, boxes, left_out),
+            build_triangle_subtree(right_order, order_start + middle, right_base, centroids, boxes, right_out),
         )
     };
 
-    // Merge: parent at [0], left subtree at [1..], right subtree at [1+left.len()..].
-    let right_offset = 1 + left_nodes.len() as u32;
-    shift_build_node_indices(&mut left_nodes, 1);
-    shift_build_node_indices(&mut right_nodes, right_offset);
-
-    let mut result = Vec::with_capacity(1 + left_nodes.len() + right_nodes.len());
-    result.push(BuildNode {
-        min,
-        max,
-        left: 1,
-        right: right_offset,
-        start: order_start as u32,
+    let bounds = left_bounds.union(&right_bounds);
+    node[0] = TriNode {
+        min: bounds.min,
+        max: bounds.max,
+        right_child_or_start: right_base,
         count: 0,
-    });
-    result.extend(left_nodes);
-    result.extend(right_nodes);
-    result
-}
-
-fn shift_build_node_indices(nodes: &mut [BuildNode], offset: u32) {
-    for node in nodes.iter_mut() {
-        if node.count == 0 {
-            node.left += offset;
-            node.right += offset;
-        }
-    }
+    };
+    bounds
 }
 
 pub(crate) fn projected_box_overlaps(min: DVec3, max: DVec3, view_projection: &DMat4, screen: (f32, f32), cursor: DVec2, threshold: f64) -> bool {
@@ -660,7 +658,7 @@ pub(crate) fn projected_box_overlaps(min: DVec3, max: DVec3, view_projection: &D
     any && cursor.x >= screen_min.x - threshold && cursor.x <= screen_max.x + threshold && cursor.y >= screen_min.y - threshold && cursor.y <= screen_max.y + threshold
 }
 
-fn build_triangle_info(triangle: [u32; 3], vertices: &[[f32; 3]]) -> BuildTriangleInfo {
+fn build_triangle_info(triangle: [u32; 3], vertices: &[[f32; 3]]) -> (TriangleBox, [f32; 3]) {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     let mut sum = [0.0; 3];
@@ -679,15 +677,7 @@ fn build_triangle_info(triangle: [u32; 3], vertices: &[[f32; 3]]) -> BuildTriang
         min[axis] = min[axis].next_down();
         max[axis] = max[axis].next_up();
     }
-    BuildTriangleInfo {
-        min,
-        max,
-        centroid: [sum[0] / 3.0, sum[1] / 3.0, sum[2] / 3.0],
-        xy_bounds: TriangleXyBounds {
-            min: [min[0], min[1]],
-            max: [max[0], max[1]],
-        },
-    }
+    (TriangleBox { min, max }, [sum[0] / 3.0, sum[1] / 3.0, sum[2] / 3.0])
 }
 
 fn ray_box(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3, limit: f64) -> bool {

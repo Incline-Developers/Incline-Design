@@ -82,7 +82,6 @@ confirm-delete-product =
 ## Диалог «Создать триангуляцию»
 
 tri-create-title = Создать триангуляцию
-tri-create-help = Щёлкайте по объектам в области просмотра, чтобы выбрать или снять выбор. Для рамочного выбора протяните курсор.
 tri-create-type-label = Тип триангуляции
 tri-create-type-help =
     «Открытая поверхность» создаёт полотно рельефного типа. «Тело» создаёт
@@ -93,7 +92,6 @@ tri-create-output-name-help = Имя, присваиваемое созданн�
 tri-create-output-name-hint = имя триангуляции
 tri-create-run = Триангулировать
 
-tri-selection-none = Объекты ещё не выбраны.
 tri-selection-selected = Выбрано: { $summary }
 
 tri-type-open-surface = Открытая поверхность
