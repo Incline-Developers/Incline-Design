@@ -626,6 +626,8 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::SetCinematicEnabled(enabled) => self.set_cinematic_enabled(enabled),
             UiCommand::SetStandardView(view) => {
                 // The slice camera is derived from the slice state each frame,
                 // so a standard-view transition would silently queue and fire

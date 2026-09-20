@@ -42,6 +42,8 @@ use crate::{
 
 pub(crate) mod buffers;
 pub(crate) mod camera;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cinematic;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
@@ -313,6 +315,15 @@ pub(crate) struct Graphics<'a> {
     pub(super) block_model_volume_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_chunk_bind_group_layout: wgpu::BindGroupLayout,
+    /// Cinematic view's pipelines and shadow map, built the first time the
+    /// view is turned on and kept for the session. `None` until then, so a
+    /// session that never uses it pays nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic: Option<cinematic::CinematicPipelines>,
+    /// Its screen-sized attachments, retired and rebuilt on resize like the
+    /// block-model ones.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) render_pipeline: wgpu::RenderPipeline,
     pub(super) transparent_document_fill_pipeline: wgpu::RenderPipeline,
@@ -341,6 +352,11 @@ pub(crate) struct Graphics<'a> {
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
     pub(super) camera_bind_group: wgpu::BindGroup,
+    /// Kept so passes built after startup - the cinematic chain - can lay out
+    /// their pipelines against the very same layout the scene's use. That
+    /// chain is native-only, so nothing reads this in the browser build.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) camera_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) grid_buffer: wgpu::Buffer,
     pub(super) grid_bind_group: wgpu::BindGroup,
     pub(super) section_grid_buffer: wgpu::Buffer,

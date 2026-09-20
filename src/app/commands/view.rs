@@ -94,6 +94,18 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Turn the presentation shading on or off. Like the other view switches
+    /// this is per-session and unsaved; unlike them it changes what the scene
+    /// pass itself draws, so the cached scene image has to be thrown away.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_cinematic_enabled(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.editor.cinematic_enabled = enabled;
+        self.invalidate_geometry();
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set cinematic view = %enabled%", enabled = enabled));
+        Ok(())
+    }
+
     /// Show or hide the construction grid on the world XY plane.
     ///
     /// Deliberately not persisted: this is a per-session view toggle, shown
