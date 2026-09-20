@@ -14,7 +14,7 @@ pub(crate) use crate::model::point_cloud::{PointInstance, PointPosition};
 use crate::{
     model::{
         SceneEntityId,
-        point_cloud::{OpenPointCloud, POINT_CLOUD_LOD_LEVELS, PointCloudId, PreparedPointCloud},
+        point_cloud::{OpenPointCloud, POINT_CLOUD_LOD_LEVELS, PointCloudId, PointColorChannel, PreparedPointCloud, classification_color},
     },
     rendering::{
         camera::SectionSlab,
@@ -28,7 +28,8 @@ use crate::{
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PointCloudStyleUniform {
     color: [f32; 4],
-    /// x: screen-facing splat width in world units.
+    /// x: screen-facing splat width in world units; y: draw `color` in place of
+    /// the instances' own colour channel.
     options: [f32; 4],
     /// Cloud-local origin relative to the current floating scene origin.
     origin: [f32; 4],
@@ -78,6 +79,63 @@ pub(crate) struct CachedPointCloudGpu {
     prepared: Arc<PreparedPointCloud>,
     visible: bool,
     selected: bool,
+    /// Whether `color` is drawn in place of the instances' colour channel.
+    uniform_color: bool,
+    /// Whether the resident instances had classification colours staged over
+    /// the source RGB they were prepared with. Flipping this re-streams the
+    /// cloud, so it is settled per cloud in [`PointCloudGpuCache::sync`] and
+    /// read unchanged by the upload below.
+    staged_classification: bool,
+}
+
+/// Where a cloud's drawn colours come from this frame.
+///
+/// Only [`Self::StagedClassification`] touches the vertex buffer: the other two
+/// are a choice the style uniform makes, which is why the common classified
+/// cloud - one with no RGB of its own, whose prepared colours already are the
+/// classification colours - toggles for free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointColorView {
+    /// The colours baked into the prepared instances.
+    Prepared,
+    /// Classification colours staged over prepared source RGB.
+    StagedClassification,
+    /// The cloud's uniform colour, ignoring the instances' colour channel.
+    Uniform,
+}
+
+/// Resolve what a cloud draws with, given whether the classification view is
+/// asked for.
+fn color_view(prepared: &PreparedPointCloud, classify: bool) -> PointColorView {
+    match prepared.color_channel {
+        // Prepared as classification colours, and the view is off: the cloud
+        // falls back to the flat colour it is drawn in everywhere else.
+        PointColorChannel::Classification if !classify => PointColorView::Uniform,
+        PointColorChannel::Source if classify && prepared.chunk_classifications => PointColorView::StagedClassification,
+        _ => PointColorView::Prepared,
+    }
+}
+
+/// Rebuild one byte range of a chunk's instances with classification colours in
+/// place of the source RGB. `None` when the chunk has no codes to colour from,
+/// which leaves the prepared bytes to be uploaded untouched.
+fn stage_classification_instances(prepared: &crate::model::point_cloud::PreparedPointChunk, byte_start: usize, byte_end: usize) -> Option<Vec<PointInstance>> {
+    let instances = prepared.data.colored()?;
+    let codes = prepared.classifications.as_deref()?;
+    let stride = size_of::<PointInstance>();
+    let (first, last) = (byte_start / stride, byte_end / stride);
+    let instances = instances.get(first..last)?;
+    let codes = codes.get(first..last)?;
+    Some(
+        instances
+            .iter()
+            .zip(codes)
+            .map(|(instance, code)| PointInstance {
+                pos: instance.pos,
+                color: classification_color(*code),
+            })
+            .collect(),
+    )
 }
 
 #[derive(Default)]
@@ -259,13 +317,23 @@ impl PointCloudGpuCache {
         self.arenas.retain(|id, _| loaded.contains(id));
         self.rejected_chunks.retain(|key| loaded.contains(&key.cloud));
 
+        let classify = editor.colors_points_by_classification();
+
         for cloud in point_clouds {
             if !cloud.state.loaded {
                 continue;
             }
             let point_size = cloud.point_size.max(1.0e-6);
             let selected = editor.selected_handles.contains(&cloud.entity_id());
-            let replace = self.clouds.get(&cloud.id).is_some_and(|cached| !Arc::ptr_eq(&cached.prepared, &cloud.prepared));
+            let view = color_view(&cloud.prepared, classify);
+            let staged_classification = view == PointColorView::StagedClassification;
+            let uniform_color = selected || view == PointColorView::Uniform;
+            // Staging changes every resident byte, so the entry is rebuilt and
+            // re-streamed exactly as a replaced cloud is.
+            let replace = self
+                .clouds
+                .get(&cloud.id)
+                .is_some_and(|cached| !Arc::ptr_eq(&cached.prepared, &cloud.prepared) || cached.staged_classification != staged_classification);
             if replace {
                 // Return the stale entry's slots before dropping it, otherwise
                 // the reallocation leaks them for the arena's lifetime.
@@ -278,19 +346,25 @@ impl PointCloudGpuCache {
 
             if let Some(cached) = self.clouds.get_mut(&cloud.id) {
                 cached.visible = cloud.state.loaded;
-                if cached.color != cloud.color || cached.point_size != point_size || cached.scene_origin != scene_origin || cached.selected != selected {
-                    let style = style_uniform(cloud, point_size, scene_origin, selected);
+                if cached.color != cloud.color
+                    || cached.point_size != point_size
+                    || cached.scene_origin != scene_origin
+                    || cached.selected != selected
+                    || cached.uniform_color != uniform_color
+                {
+                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = cloud.color;
                     cached.point_size = point_size;
                     cached.scene_origin = scene_origin;
                     cached.origin_scene = (cloud.prepared.origin - scene_origin).as_vec3();
                     cached.selected = selected;
+                    cached.uniform_color = uniform_color;
                 }
                 continue;
             }
 
-            let style = style_uniform(cloud, point_size, scene_origin, selected);
+            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
             let style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Point Cloud Style Uniform"),
                 contents: bytemuck::bytes_of(&style),
@@ -318,6 +392,8 @@ impl PointCloudGpuCache {
                     chunks: std::iter::repeat_with(|| None).take(cloud.prepared.chunks.len()).collect(),
                     visible: cloud.state.loaded,
                     selected,
+                    uniform_color,
+                    staged_classification,
                 },
             );
         }
@@ -449,11 +525,17 @@ impl PointCloudGpuCache {
                     }
                 };
                 let upload_end = candidate.upload_offset + candidate.upload_bytes;
-                queue.write_buffer(
-                    dest_buffer,
-                    dest_offset + candidate.upload_offset as u64,
-                    &prepared.data.bytes()[candidate.upload_offset..upload_end],
-                );
+                // Only the frame's budgeted slice is restaged, so this stays a
+                // bounded copy however large the cloud is.
+                let staged = cloud
+                    .staged_classification
+                    .then(|| stage_classification_instances(prepared, candidate.upload_offset, upload_end))
+                    .flatten();
+                let payload: &[u8] = match staged.as_deref() {
+                    Some(instances) => bytemuck::cast_slice(instances),
+                    None => &prepared.data.bytes()[candidate.upload_offset..upload_end],
+                };
+                queue.write_buffer(dest_buffer, dest_offset + candidate.upload_offset as u64, payload);
                 (new_slot, prepared.level_counts, prepared.bounds_min, prepared.bounds_max, prepared.base_spacing)
             };
             let cloud = clouds.get_mut(&candidate.key.cloud).expect("residency candidate cloud disappeared");
@@ -575,11 +657,11 @@ fn projected_bounds_overlap(view_proj: &DMat4, screen: (f32, f32), point: DVec2,
     projected_any && point.x >= projected_min.x - padding && point.x <= projected_max.x + padding && point.y >= projected_min.y - padding && point.y <= projected_max.y + padding
 }
 
-fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool) -> PointCloudStyleUniform {
+fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool) -> PointCloudStyleUniform {
     let origin = (cloud.prepared.origin - scene_origin).as_vec3();
     PointCloudStyleUniform {
         color: if selected { crate::ui::SELECTION_COLOR_F32 } else { cloud.color },
-        options: [point_size, if selected { 1.0 } else { 0.0 }, 0.0, 0.0],
+        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, 0.0, 0.0],
         origin: [origin.x, origin.y, origin.z, 0.0],
     }
 }

@@ -57,7 +57,7 @@ ws-menubar-triangulation = Triangulation
 ws-menubar-raster = Raster
 ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
-ws-menubar-drillholes = Drillholes
+ws-menubar-drillholes = Drill Holes
 ws-menubar-active-layer = Layer:
 
 ## Menubars functions
@@ -88,7 +88,7 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Create Triangulation
-tri-create-help = Click objects in the viewport to select/deselect. Drag to box-select.
+tri-create-help = Triangulates the objects selected when this dialog opened. Close it to change the selection.
 tri-create-type-label = Triangulation type
 tri-create-type-help =
     Open surface creates a terrain-style sheet. Solid creates a fully enclosed
@@ -98,7 +98,7 @@ tri-create-output-name-help = Name assigned to the generated triangulation.
 tri-create-output-name-hint = triangulation name
 tri-create-run = Triangulate
 
-tri-selection-none = No objects selected yet.
+tri-selection-none = The selected objects are no longer available.
 tri-selection-selected = { $summary } selected
 
 tri-type-open-surface = Open surface
@@ -260,6 +260,7 @@ literal-color-7e85b996d38ae746 = Color:
 literal-colour-7e9d0b96d39e517d = Colour
 literal-colour-drillholes-7ccb9ef2779d0e8b = Colour Drillholes
 literal-colour-gpu-chunks-d6132652c2b280bb = Colour GPU chunks
+literal-colour-points-by-classification-9ddd5b68c0eace03 = Colour Points by Classification
 literal-colour-by-6a3a01b3fc8fd000 = Colour by...
 literal-colour-mapping-8883078f49b82d0b = Colour mapping
 literal-colour-scale-1e3620195219fcc7 = Colour scale
@@ -328,6 +329,7 @@ literal-drawing-number-1c2cbb8d01e045fe = Drawing number
 literal-drawn-by-210c873a1400c8b4 = Drawn by
 literal-drill-holes-cbdd3402cba56a59 = Drill Holes
 literal-drill-holes-0e49c3c00a13c639 = Drill Holes:
+literal-dropped-point-classifications-some-of-the-joined-clouds-are-unclassified-and-a-partly-classified-cloud-cannot-be-filtered-to-ground-3191c1becf4a63f0 = Dropped point classifications: some of the joined clouds are unclassified, and a partly classified cloud cannot be filtered to ground.
 literal-duplicate-fac15b89e0668996 = Duplicate
 literal-duplicate-layer-2d1130312e4d17cf = Duplicate Layer
 literal-easting-2e463538b853949c = Easting
@@ -339,6 +341,10 @@ literal-exit-application-206c61fdca9522f7 = Exit Application
 literal-exit-incline-design-b11cdc542f0e84ef = Exit Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Exit Without Saving
 literal-exit-slice-ec67c9da3a320e5f = Exit slice
+literal-ground-points-only-152bb7a2a7c1ee99 = Ground points only
+literal-off-302cbb19bf9a174a = Off
+literal-on-091d5807b5b33550 = On
+literal-reconstruct-from-the-points-classified-as-bare-earth-discarding-vegetation-buildings-plant-and-noise-turn-this-off-to-surface-every-point-in-the-cloud-e29aa29b670c9ad1 = Reconstruct from the points classified as bare earth, discarding vegetation, buildings, plant and noise. Turn this off to surface every point in the cloud.
 literal-set-section-grid-0317412c52213ca8 = Set Section Grid
 literal-hide-rl-grid-5777afd90dcfdfef = Hide RL Grid
 literal-show-rl-grid-87a5e28c30f9ca36 = Show RL Grid
@@ -383,6 +389,7 @@ literal-height-ffdadf0a576fd802 = Height
 literal-height-mode-490a33f56c7a9c4d = Height mode
 literal-hide-9df212d89cab196d = Hide
 literal-hide-all-15d259113e947092 = Hide All
+literal-hide-classification-b2482cf99903ace7 = Hide Classification
 literal-hide-selection-b83e537e7d9fcc13 = Hide Selection
 literal-hide-and-unload-sources-8047096fcc7ddb85 = Hide and unload sources
 literal-horizontal-width-of-each-flat-berm-between-successive-batters-a83e42804b968dbc = Horizontal width of each flat berm between successive batters.
@@ -464,6 +471,8 @@ literal-new-product-6c2124d5d6badd3a = New Product
 literal-new-project-cd084c5e5d3ea300 = New Project
 literal-new-layer-name-e4ea5292efa5d03f = New layer name
 literal-no-delay-product-to-tie-with-6d3f8682539b125f = No delay product to tie with
+literal-terrain-tin-filtered-to-ground-ground-points-of-total-1a1906f3c746c02d = Terrain TIN: filtered to %ground% ground points of %total%
+literal-this-cloud-carries-no-classifications-so-every-point-is-surfaced-import-a-las-laz-file-that-has-been-through-a-ground-filter-to-reconstruct-bare-earth-19d3f1ae982f8e16 = This cloud carries no classifications, so every point is surfaced. Import a LAS/LAZ file that has been through a ground filter to reconstruct bare earth.
 literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = right-click the Delay Palette heading to add one
 literal-no-matches-28d7266643f5992f = No matches
 literal-no-object-selected-d42da7912e4d01b6 = No object selected
@@ -593,6 +602,7 @@ literal-shape-2de969afacdaa7a6 = Shape
 literal-share-of-source-points-to-keep-fractions-such-as-0-125-are-allowed-4058d563973b7e80 = Share of source points to keep. Fractions such as 0.125% are allowed.
 literal-sheet-furniture-3b6e00f5ce64c49a = Sheet furniture
 literal-show-716a6024e3fe999c = Show
+literal-show-classification-e0573b9e00512e24 = Show Classification
 literal-show-console-f96fb178c28b11ad = Show Console
 literal-show-project-c2b1b6b657bed079 = Show Project
 literal-show-console-6db619aae4479e4d = Show console
@@ -1818,3 +1828,25 @@ literal-renamed-collection-before-to-after-812972b84754f385 = Renamed collection
 literal-saving-to-browser-storage-16db73c472ad85a7 = Saving to browser storage…
 literal-skipped-count-circle-s-the-offset-distance-is-larger-than-the-radius-56a2d23e63bb5014 = Skipped %count% circle(s): the offset distance is larger than the radius
 literal-that-collection-no-longer-exists-1f33420b706f5c20 = That collection no longer exists
+
+# Join Point Clouds dialog
+literal-count-cloud-s-selected-points-points-a45c4e563aee30df = %count% cloud(s) selected · %points% points
+literal-name-count-points-3ccfe5af59629e09 = %name% (%count% points)
+literal-name-count-cloud-s-fea765feba751c4f = %name% · %count% cloud(s)
+literal-all-f993bb199fefbe04 = All
+literal-combine-the-ticked-point-clouds-into-one-new-cloud-so-a-single-triangulation-can-be-built-across-all-of-them-per-point-colours-are-kept-a-cloud-without-them-contributes-its-display-colour-ba2d03354e0d8fd2 = Combine the ticked point clouds into one new cloud, so a single triangulation can be built across all of them. Per-point colours are kept; a cloud without them contributes its display colour.
+literal-delete-the-ticked-clouds-from-the-project-once-the-join-completes-freeing-the-memory-their-duplicate-copy-would-otherwise-hold-803f715377b45283 = Delete the ticked clouds from the project once the join completes, freeing the memory their duplicate copy would otherwise hold.
+literal-every-loaded-cloud-in-the-project-ticked-clouds-are-copied-into-the-joined-cloud-69c16f8d6cb0e962 = Every loaded cloud in the project. Ticked clouds are copied into the joined cloud.
+literal-failed-to-join-point-clouds-error-1864834f536d881b = Failed to join point clouds: %error%
+literal-join-6c6bf3ea2ad3d219 = Join
+literal-join-point-clouds-7854daa532961fcb = Join Point Clouds
+literal-join-8d0d37545165cbfd = Join...
+literal-joined-count-clouds-into-name-points-points-108cdf63cd231815 = Joined %count% clouds into %name% (%points% points)
+literal-joined-cloud-58abff743302d661 = Joined Cloud
+literal-joining-name-af1d6a7aca4a3392 = Joining %name%
+literal-name-assigned-to-the-joined-point-cloud-aed085780920206c = Name assigned to the joined point cloud.
+literal-no-point-clouds-are-loaded-import-them-via-file-import-first-987b60f8be314809 = No point clouds are loaded. Import them via File ▸ Import first.
+literal-point-clouds-daa4c5f978d933f1 = Point clouds
+literal-remove-sources-1d26959a5edd50b3 = Remove sources
+
+# Remaining source literals

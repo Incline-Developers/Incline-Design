@@ -1988,7 +1988,9 @@ impl<'a> App<'a> {
         // Encoding has to run on a worker: writing OMF reads back every item
         // the eviction pass unloaded, and only a worker may wait on that read.
         // The IndexedDB write stays here, with the event loop it reports to.
-        let compute = move |_cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0));
+        let compute = move |_cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
+            formats::omf::to_bytes(snapshot, formats::omf::Compression::Archive, &progress.phase(0.0, 1.0))
+        };
         let apply = move |_app: &mut App, encoded: Result<Vec<u8>>| {
             let record = encoded.map(|omf_bytes| crate::app::web_storage::BrowserProjectRecord {
                 id: project_id,

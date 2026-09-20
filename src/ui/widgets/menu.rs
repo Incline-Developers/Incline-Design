@@ -800,6 +800,22 @@ impl MenuField {
     }
 }
 
+/// A read-only row naming what a selection-driven tool was opened on.
+///
+/// These tools take their input from the scene selection rather than from a
+/// control inside the dialog, so the input reads as a stated fact. It keeps
+/// the label column and control width of the picker rows beside it, so a
+/// dialog that mixes the two still lines up.
+pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, value: impl Into<egui::WidgetText>, help_text: impl Into<egui::WidgetText>, width: f32) {
+    let value = value.into();
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
+        })
+        .response
+    });
+}
+
 /// A labelled file-picker row showing the selected file count/name and a choose button.
 pub(crate) struct MenuFieldFilePicker<'paths> {
     label: egui::WidgetText,

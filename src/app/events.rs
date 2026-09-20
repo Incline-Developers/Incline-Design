@@ -140,8 +140,7 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active =
-                self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -221,6 +220,7 @@ impl<'a> App<'a> {
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
                     self.refresh_intersection_availability();
+                    self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
                     self.refresh_object_edit_dialog();
@@ -554,7 +554,6 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
-                            || self.editor.tri_cut_poly_awaiting_pick
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
@@ -654,9 +653,7 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick)
-                        && hover_pick_due
-                    {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick) && hover_pick_due {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -882,7 +879,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -1129,7 +1126,7 @@ impl<'a> App<'a> {
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
-            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.tri_create_open {
+            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
                 let frozen = &self.editor.frozen_handles;
                 let picked = self.graphics.as_ref().and_then(|g| {
                     g.pick_scene_entity_at_cursor(
@@ -1382,11 +1379,6 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tri_hover_handles.clear();
                     self.invalidate_geometry();
-                } else if self.editor.tri_cut_poly_awaiting_pick {
-                    self.editor.tri_cut_poly_awaiting_pick = false;
-                    self.editor.viewport_pick_hover_label = None;
-                    self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
-                    self.invalidate_geometry();
                 } else if self.editor.drill_pattern_awaiting_shape_pick {
                     self.editor.drill_pattern_awaiting_shape_pick = false;
                     self.editor.viewport_pick_hover_label = None;
@@ -1517,11 +1509,6 @@ impl<'a> App<'a> {
             self.editor.triangulation_pick_target = None;
             self.editor.viewport_pick_hover_label = None;
             self.editor.tri_hover_handles.clear();
-            self.invalidate_geometry();
-        } else if self.editor.tri_cut_poly_awaiting_pick {
-            self.editor.tri_cut_poly_awaiting_pick = false;
-            self.editor.viewport_pick_hover_label = None;
-            self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
             self.invalidate_geometry();
         } else if self.editor.drill_pattern_awaiting_shape_pick {
             self.editor.drill_pattern_awaiting_shape_pick = false;

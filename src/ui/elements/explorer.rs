@@ -6,7 +6,7 @@ use crate::{
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
-        state::{ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiRasterTextureEntry},
+        state::{ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiRasterTextureEntry},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -176,7 +176,7 @@ fn draw_section_body<P: DragPayload, T: SectionEntry>(
     folders: &[Folder],
     items: &[T],
     commands: &mut Vec<UiCommand>,
-    row: impl Fn(&mut egui::Ui, &mut Vec<UiCommand>, &T),
+    mut row: impl FnMut(&mut egui::Ui, &mut Vec<UiCommand>, &T),
 ) {
     for folder in folders {
         folder_group::<P>(ui, section, folder, commands, |ui, commands| {
@@ -290,6 +290,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 ui.skip_ahead_auto_ids(1);
             }
 
+            // Every row records itself here as it is drawn, so a Shift-click
+            // can be resolved against the rows the user is looking at: see
+            // `EditorState::explorer_rows`.
+            let mut rows: Vec<ExplorerRow> = Vec::new();
             let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
@@ -349,6 +353,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 // sit: inside a folder, or loose at the root.
                                 let layer_row = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEntry| {
                                     let layer_id = layer.id;
+                                    rows.push(ExplorerRow::Layer(layer_id));
                                     let is_active = *active_layer == Some(layer_id);
                                     let layer_locked = locked_layers.contains(&layer_id);
                                     let layer_name = if layer.dirty { format!("{} *", layer.name) } else { layer.name.clone() };
@@ -381,6 +386,13 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     layer_resp.dnd_set_drag_payload(DesignLayerDrag(FolderMember::layer(layer.section, layer_id)));
                                     if layer_resp.dragged() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    }
+                                    // A layer stands for what is on it: clicking
+                                    // the row takes every object standing on it,
+                                    // and the modifiers run across the rest of the
+                                    // tree from here as they do anywhere else.
+                                    if layer_resp.clicked() {
+                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Layer(layer_id)));
                                     }
 
                                     context_menu_popup(&layer_resp, layer.name.as_str(), |ui| {
@@ -452,6 +464,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     }
                                     // Helper closure: render one tri entry row and attach its context menu.
                                     let render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, tri: &crate::ui::UiTriangulationEntry| {
+                                        rows.push(ExplorerRow::Entity(SceneEntityId::Triangulation(tri.id)));
                                         let source_suffix = tri
                                             .source_name
                                             .as_deref()
@@ -464,9 +477,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         let stats = format!("{}{}", tri.name, dirty_marker);
                                         let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
 
-                                        let tri_locked = frozen_handles.contains(&SceneEntityId::Triangulation(tri_id));
+                                        let tri_handle = SceneEntityId::Triangulation(tri_id);
+                                        let tri_locked = frozen_handles.contains(&tri_handle);
                                         let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
-                                            .selected(tri.is_active)
+                                            .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                             .draggable(rows_draggable)
                                             .toggles(EntryToggles {
                                                 visible: tri.is_loaded,
@@ -489,8 +503,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                         }
 
-                                        if response.clicked() && tri.is_loaded {
-                                            commands.push(UiCommand::ActivateTriangulation(tri_id));
+                                        if response.clicked() {
+                                            commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(tri_handle)));
                                         }
 
                                         let tri_loaded = tri.is_loaded;
@@ -609,6 +623,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         details
                                     };
                                     let raster_handle = SceneEntityId::Raster(raster.id);
+                                    rows.push(ExplorerRow::Entity(raster_handle));
                                     let raster_locked = locked_rasters.contains(&raster.id);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
                                         .selected(selected_handles.contains(&raster_handle))
@@ -634,7 +649,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                     }
                                     if response.clicked() {
-                                        commands.push(UiCommand::SelectRaster(raster.id));
+                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(raster_handle)));
                                     }
 
                                     context_menu_popup(&response, raster.name.as_str(), |ui| {
@@ -722,8 +737,11 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         count = point_cloud.point_count
                                     );
                                     let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
+                                    let cloud_handle = SceneEntityId::PointCloud(point_cloud.id);
+                                    rows.push(ExplorerRow::Entity(cloud_handle));
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
                                         .draggable(rows_draggable)
+                                        .selected(selected_handles.contains(&cloud_handle))
                                         .toggles(EntryToggles {
                                             visible: point_cloud.is_loaded,
                                             locked: cloud_locked,
@@ -743,6 +761,13 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     response.dnd_set_drag_payload(PointCloudDrag(FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id))));
                                     if response.dragged() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    }
+                                    // A cloud has no handles to click in the
+                                    // viewport at this zoom, so the tree is the
+                                    // practical way to select one for the tools
+                                    // that run on a selected cloud.
+                                    if response.clicked() {
+                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(cloud_handle)));
                                     }
 
                                     context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
@@ -809,7 +834,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     explorer_note(ui, tr!(literal = "No block models"));
                                 }
                                 let render_block_model_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, block_model: &UiBlockModelEntry| {
-                                    let is_selected = selected_handles.contains(&SceneEntityId::BlockModel(block_model.id));
+                                    let block_model_handle = SceneEntityId::BlockModel(block_model.id);
+                                    rows.push(ExplorerRow::Entity(block_model_handle));
+                                    let is_selected = selected_handles.contains(&block_model_handle);
                                     let dirty_marker = if block_model.dirty { " *" } else { "" };
                                     let label_text = format!("{}{dirty_marker}", block_model.name);
                                     let label = if block_model.is_loaded {
@@ -851,11 +878,11 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     if response.dragged() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                     }
-                                    if response.clicked() && block_model.is_loaded {
+                                    if response.clicked() {
                                         // Selecting here is what reveals the model's
                                         // viewport controls, the same as picking it in
                                         // the viewport does.
-                                        commands.push(UiCommand::SelectBlockModel(block_model.id));
+                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(block_model_handle)));
                                     }
 
                                     context_menu_popup(&response, block_model.name.as_str(), |ui| {
@@ -940,9 +967,12 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         holes = dataset.hole_count,
                                         fields = dataset.field_count
                                     );
-                                    let dataset_locked = frozen_handles.contains(&SceneEntityId::DrillHole(dataset.id));
+                                    let dataset_handle = SceneEntityId::DrillHole(dataset.id);
+                                    rows.push(ExplorerRow::Entity(dataset_handle));
+                                    let dataset_locked = frozen_handles.contains(&dataset_handle);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
                                         .draggable(rows_draggable)
+                                        .selected(selected_handles.contains(&dataset_handle))
                                         .toggles(EntryToggles {
                                             visible: dataset.is_loaded,
                                             locked: dataset_locked,
@@ -962,6 +992,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     response.dnd_set_drag_payload(DrillHoleDrag(FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id))));
                                     if response.dragged() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    }
+                                    if response.clicked() {
+                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(dataset_handle)));
                                     }
 
                                     context_menu_popup(&response, dataset.name.as_str(), |ui| {
@@ -1019,6 +1052,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 })
                 .response
                 .rect;
+            editor.explorer_rows = rows;
             (tree, products)
         });
 

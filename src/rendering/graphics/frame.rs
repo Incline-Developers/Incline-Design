@@ -61,6 +61,9 @@ struct EditorSceneState {
     /// Cinematic view changes what the scene pass draws and what happens to
     /// the image afterwards, so a cached frame from the other mode is wrong.
     cinematic_enabled: bool,
+    /// Survey draws classified point clouds in their class colours, which
+    /// `PointCloudGpuCache::sync` resolves from the editor at draw time.
+    colors_points_by_classification: bool,
 }
 
 impl EditorSceneState {
@@ -75,6 +78,7 @@ impl EditorSceneState {
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
             cinematic_enabled: editor.cinematic_enabled,
+            colors_points_by_classification: editor.colors_points_by_classification(),
         }
     }
 }
