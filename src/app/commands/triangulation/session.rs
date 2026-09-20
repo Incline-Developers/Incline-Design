@@ -229,7 +229,13 @@ impl<'a> App<'a> {
         }
         let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.active_triangulation = Some(id);
-        self.editor.selected_handles.clear();
+        // Ctrl or Shift extends, as it does in the viewport and on the other
+        // explorer rows: the surface tools that take two surfaces are reached
+        // by selecting both.
+        let extend = self.modifiers.shift_key() || self.modifiers.control_key();
+        if !extend {
+            self.editor.selected_handles.clear();
+        }
         self.editor.selected_handles.insert(handle);
         userspace_log!("{}", tr_format!(literal = "Activated triangulation '%name%'", name = tri.name));
         if cleared_object_selection {
@@ -290,7 +296,6 @@ impl<'a> App<'a> {
         if self.editor.tri_cut_poly_tri_id == Some(id) {
             self.editor.tri_cut_poly_tri_id = None;
             self.editor.tri_cut_poly_open = false;
-            self.editor.tri_cut_poly_awaiting_pick = false;
         }
         if self.editor.tri_cut_z_tri_id == Some(id) {
             self.editor.tri_cut_z_tri_id = None;

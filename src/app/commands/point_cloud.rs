@@ -243,12 +243,15 @@ impl<'a> App<'a> {
     /// Open the Join dialog, ticking every loaded cloud the first time and
     /// keeping a still-valid previous pick afterwards.
     pub(crate) fn open_point_cloud_join(&mut self) {
-        self.editor.point_cloud_join_open = true;
-        let loaded: Vec<PointCloudId> = self.point_clouds.iter().filter(|cloud| cloud.state.loaded).map(|cloud| cloud.id).collect();
-        self.editor.point_cloud_join_sources.retain(|id| loaded.contains(id));
-        if self.editor.point_cloud_join_sources.len() < 2 {
-            self.editor.point_cloud_join_sources = loaded;
+        // The clouds to join are chosen in the explorer or the viewport before
+        // the dialog opens, so it reports the set rather than offering one.
+        let sources = self.selected_point_clouds();
+        if sources.len() < 2 {
+            userspace_warn!("{}", tr!(literal = "Select two or more loaded point clouds before joining them"));
+            return;
         }
+        self.editor.point_cloud_join_open = true;
+        self.editor.point_cloud_join_sources = sources;
         if self.editor.point_cloud_join_name_input.trim().is_empty() {
             self.editor.point_cloud_join_name_input = tr!(literal = "Joined Cloud");
         }

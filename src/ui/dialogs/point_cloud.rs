@@ -30,51 +30,35 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .show(ui.ctx(), |ui| {
             menu::menu_note(
                 ui,
-                tr!(literal = "Combine the ticked point clouds into one new cloud, so a single \
+                tr!(literal = "Combine the selected point clouds into one new cloud, so a single \
                  triangulation can be built across all of them. Per-point colours are kept; a \
                  cloud without them contributes its display colour."),
             );
             ui.add_space(4.0);
 
-            if loaded.is_empty() {
-                menu::menu_note(ui, tr!(literal = "No point clouds are loaded. Import them via File ▸ Import first."));
-            } else {
-                MenuField::new(tr!(literal = "Point clouds"))
-                    .help_text(tr!(literal = "Every loaded cloud in the project. Ticked clouds are copied into the joined cloud."))
-                    .show(ui, |ui, _label_width, _field_width| {
-                        ui.horizontal(|ui| {
-                            if ui.add(MenuButton::new(tr!(literal = "All"))).clicked() {
-                                editor.point_cloud_join_sources = loaded.iter().map(|cloud| cloud.id).collect();
-                            }
-                            if ui.add(MenuButton::new(tr!(literal = "None"))).clicked() {
-                                editor.point_cloud_join_sources.clear();
-                            }
-                        });
-                    });
-                egui::ScrollArea::vertical()
-                    .id_salt("point_cloud_join_list")
-                    .max_height(JOIN_LIST_MAX_HEIGHT)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for cloud in &loaded {
-                            let mut ticked = editor.point_cloud_join_sources.contains(&cloud.id);
-                            let label = tr_format!(literal = "%name% (%count% points)", name = &cloud.name, count = cloud.point_count);
-                            if ui.add(egui::Checkbox::new(&mut ticked, label)).changed() {
-                                if ticked {
-                                    editor.point_cloud_join_sources.push(cloud.id);
-                                } else {
-                                    editor.point_cloud_join_sources.retain(|id| *id != cloud.id);
-                                }
-                            }
-                        }
-                    });
-            }
-
             // Clouds unloaded or removed since the dialog opened are no longer
-            // joinable, so they leave the tick list rather than block the run.
+            // joinable, so they leave the source list rather than block the run.
             editor.point_cloud_join_sources.retain(|id| loaded.iter().any(|cloud| cloud.id == *id));
             let selected: Vec<_> = loaded.iter().filter(|cloud| editor.point_cloud_join_sources.contains(&cloud.id)).collect();
             let total: usize = selected.iter().map(|cloud| cloud.point_count).sum();
+
+            // The clouds come from the selection the dialog opened with, so
+            // this states the set rather than offering one to tick through.
+            MenuField::new(tr!(literal = "Point clouds"))
+                .help_text(tr!(literal = "The selected clouds, copied into the joined cloud. Close the dialog to \
+                     join a different set."))
+                .show(ui, |ui, _row_height, _field_width| {
+                    ui.label(tr_format!(literal = "%count% selected · %points% points", count = selected.len(), points = total));
+                });
+            egui::ScrollArea::vertical()
+                .id_salt("point_cloud_join_list")
+                .max_height(JOIN_LIST_MAX_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for cloud in &selected {
+                        ui.weak(tr_format!(literal = "%name% (%count% points)", name = &cloud.name, count = cloud.point_count));
+                    }
+                });
 
             ui.add_space(4.0);
             ui.separator();
@@ -85,13 +69,9 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 .hint_text(tr!(literal = "Joined Cloud"))
                 .show(ui);
             MenuFieldBool::new(tr!(literal = "Remove sources"), &mut editor.point_cloud_join_remove_sources)
-                .help_text(tr!(literal = "Delete the ticked clouds from the project once the join completes, \
+                .help_text(tr!(literal = "Delete the selected clouds from the project once the join completes, \
                      freeing the memory their duplicate copy would otherwise hold."))
                 .show(ui);
-            menu::menu_note(
-                ui,
-                tr_format!(literal = "%count% cloud(s) selected · %points% points", count = selected.len(), points = total),
-            );
 
             menu::menu_actions(ui, |ui| {
                 let can_run = selected.len() >= 2 && !editor.point_cloud_join_name_input.trim().is_empty();

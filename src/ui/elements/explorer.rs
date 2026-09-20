@@ -251,7 +251,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                                         let tri_locked = frozen_handles.contains(&SceneEntityId::Triangulation(tri_id));
                                         let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
-                                            .selected(tri.is_active)
+                                            .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                             .toggles(EntryToggles {
                                                 visible: tri.is_loaded,
                                                 locked: tri_locked,
@@ -477,7 +477,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         count = point_cloud.point_count
                                     );
                                     let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
+                                    let cloud_handle = SceneEntityId::PointCloud(point_cloud.id);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
+                                        .selected(selected_handles.contains(&cloud_handle))
                                         .toggles(EntryToggles {
                                             visible: point_cloud.is_loaded,
                                             locked: cloud_locked,
@@ -494,6 +496,13 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                                     }
                                     let response = row.response.on_hover_text(&tooltip);
+                                    // A cloud has no handles to click in the
+                                    // viewport at this zoom, so the tree is the
+                                    // practical way to select one for the tools
+                                    // that run on a selected cloud.
+                                    if response.clicked() && point_cloud.is_loaded {
+                                        commands.push(UiCommand::SelectSceneEntity(cloud_handle));
+                                    }
 
                                     context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
                                         if ContextMenuAction::new(if cloud_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })

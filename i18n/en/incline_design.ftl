@@ -88,7 +88,7 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Create Triangulation
-tri-create-help = Click objects in the viewport to select/deselect. Drag to box-select.
+tri-create-help = Triangulates the objects selected when this dialog opened. Close it to change the selection.
 tri-create-type-label = Triangulation type
 tri-create-type-help =
     Open surface creates a terrain-style sheet. Solid creates a fully enclosed
@@ -98,7 +98,7 @@ tri-create-output-name-help = Name assigned to the generated triangulation.
 tri-create-output-name-hint = triangulation name
 tri-create-run = Triangulate
 
-tri-selection-none = No objects selected yet.
+tri-selection-none = The selected objects are no longer available.
 tri-selection-selected = { $summary } selected
 
 tri-type-open-surface = Open surface

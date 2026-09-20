@@ -79,7 +79,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Unda Utatuzi
-tri-create-help = Bofya vitu kwenye mwonekano ili kuchagua/kuacha kuchagua. Buruta ili kuchagua kwa sanduku.
 tri-create-type-label = Aina ya utatuzi
 tri-create-type-help =
     Uso wazi huunda karatasi ya mtindo wa ardhi. Kigumu huunda mfumo
@@ -89,7 +88,6 @@ tri-create-output-name-help = Jina litakalopewa utatuzi utakaozalishwa.
 tri-create-output-name-hint = jina la utatuzi
 tri-create-run = Tatua (Triangulate)
 
-tri-selection-none = Hakuna vitu vilivyochaguliwa bado.
 tri-selection-selected = { $summary } vimechaguliwa
 
 tri-type-open-surface = Uso wazi
