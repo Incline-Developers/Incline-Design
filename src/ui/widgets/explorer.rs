@@ -327,6 +327,12 @@ impl ExplorerHeader {
         self
     }
 
+    /// Whether the section stands open the first time it is drawn.
+    pub(crate) fn default_open(mut self, default_open: bool) -> Self {
+        self.default_open = default_open;
+        self
+    }
+
     pub(crate) fn show<R>(
         self,
         ui: &mut egui::Ui,
