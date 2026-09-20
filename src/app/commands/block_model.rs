@@ -9,7 +9,7 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        Command, ItemRef, ItemStyle, SceneEntityId,
+        Command, ItemRef, ItemStyle, MemberKind, SceneEntityId,
         block_model::{
             BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RegularBlockBounds, RenderableBlockIndices,
             compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
@@ -218,7 +218,7 @@ impl<'a> App<'a> {
         self.next_block_model_id += 1;
         let mut open_model = OpenBlockModel {
             id,
-            state: crate::model::project::ProjectItemState::dirty(loaded.source.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::BlockModel, loaded.source.path.file_name().map(|name| name.to_string_lossy().into_owned())),
             name,
             model: loaded.model,
             blocks: loaded.blocks,

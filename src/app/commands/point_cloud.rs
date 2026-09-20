@@ -15,7 +15,7 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        SceneEntityId,
+        MemberKind, SceneEntityId,
         point_cloud::{LoadedPointCloud, OpenPointCloud, PointCloudId, finite_bounds, prepare_for_render},
     },
     userspace_log, userspace_warn,
@@ -41,7 +41,8 @@ impl<'a> App<'a> {
         );
         self.point_clouds.push(OpenPointCloud {
             id,
-            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())).with_loaded(visible),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::PointCloud, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned()))
+                .with_loaded(visible),
             name,
             points: loaded.points,
             colors: loaded.colors,

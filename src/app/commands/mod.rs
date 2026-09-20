@@ -2,6 +2,7 @@ pub(crate) mod block_model;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
+pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for all six sections
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
@@ -112,6 +113,9 @@ impl<'a> App<'a> {
                 | UiCommand::BeginDrillPatternShapePick
                 | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
+                | UiCommand::CreateFolder(_)
+                | UiCommand::DeleteFolder { .. }
+                | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel(_)
                 | UiCommand::OpenCreateOreTriangulation
@@ -320,6 +324,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateLayer { name } => self.create_layer(name),
+            UiCommand::CreateFolder(section) => self.create_folder(section),
+            UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
+            UiCommand::MoveToFolder { member, folder } => {
+                self.move_to_folder(member, folder);
+                Ok(())
+            }
             UiCommand::AddDelayProduct { delay_ms, name, color } => {
                 self.add_delay_product(delay_ms, name, color);
                 Ok(())
@@ -370,6 +380,7 @@ impl<'a> App<'a> {
                         self.activate_project_for_layer(layer_id);
                         self.rename_layer(layer_id, new_name);
                     }
+                    crate::ui::state::RenameTarget::Folder(section, id) => self.rename_folder(section, id, new_name),
                     _ => self.rename_project_item(target, new_name),
                 }
                 self.editor.renaming_item = None;

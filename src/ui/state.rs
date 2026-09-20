@@ -17,7 +17,7 @@ use crate::{
     i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
-        Axis, FillStyle, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
+        Axis, FillStyle, FolderId, FolderMember, FolderRegistry, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
@@ -966,6 +966,7 @@ pub(crate) enum RenameTarget {
     PointCloud(PointCloudId),
     BlockModel(BlockModelId),
     DrillHole(DrillHoleId),
+    Folder(SectionKind, FolderId),
 }
 
 impl RenameTarget {
@@ -977,6 +978,7 @@ impl RenameTarget {
             Self::PointCloud(_) => tr!(literal = "Point Cloud"),
             Self::BlockModel(_) => tr!(literal = "Block Model"),
             Self::DrillHole(_) => tr!(literal = "Drill Holes"),
+            Self::Folder(..) => tr!(literal = "Folder"),
         }
     }
 
@@ -990,6 +992,7 @@ impl RenameTarget {
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
+            Self::Folder(section, id) => UiCommand::DeleteFolder { section, folder: id },
         }
     }
 }
@@ -3017,6 +3020,18 @@ pub(crate) enum UiCommand {
     CreateLayer {
         name: String,
     },
+    /// Create a folder under a section, named uniquely from "New Folder".
+    CreateFolder(SectionKind),
+    /// Remove a folder. The items it held return to the section root.
+    DeleteFolder {
+        section: SectionKind,
+        folder: FolderId,
+    },
+    /// Move an item into a folder, or back to the section root with `None`.
+    MoveToFolder {
+        member: FolderMember,
+        folder: Option<FolderId>,
+    },
     /// Add a product to the Drill & Blast palette, as the New Product dialog
     /// filled it in.
     AddDelayProduct {
@@ -3511,6 +3526,25 @@ impl UiCommand {
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
             Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
             Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
+            Self::CreateFolder(section) => report(
+                tr!(literal = "Create Folder"),
+                tr_format!(literal = "New folder under %section%", section = ExplorerSection::from_kind(*section).label()),
+            ),
+            Self::DeleteFolder { section, folder } => report(
+                tr!(literal = "Delete Folder"),
+                tr_format!(
+                    literal = "%folder% in %section%",
+                    folder = format!("{folder:?}"),
+                    section = ExplorerSection::from_kind(*section).label()
+                ),
+            ),
+            Self::MoveToFolder { member, folder } => report(
+                tr!(literal = "Move to Folder"),
+                match folder {
+                    Some(folder) => tr_format!(literal = "%member% into %folder%", member = format!("{member:?}"), folder = format!("{folder:?}")),
+                    None => tr_format!(literal = "%member% to root", member = format!("{member:?}")),
+                },
+            ),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
             Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
             Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
@@ -3701,6 +3735,10 @@ pub(crate) struct UiLayerEntry {
     /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
+    /// Folder the layer sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    /// Explorer section this item is shown under.
+    pub(crate) section: SectionKind,
 }
 
 /// The one open project shown in the explorer tree.
@@ -3780,6 +3818,32 @@ impl ExplorerSection {
             Self::DrillHoles => tr!(literal = "Drill Holes"),
         }
     }
+
+    /// The model-layer section this heading corresponds to, for commands
+    /// that address a section by [`SectionKind`] rather than by UI label.
+    pub(crate) fn kind(self) -> SectionKind {
+        match self {
+            Self::Designs => SectionKind::Designs,
+            Self::Triangulations => SectionKind::Triangulations,
+            Self::Rasters => SectionKind::Rasters,
+            Self::PointClouds => SectionKind::PointClouds,
+            Self::BlockModels => SectionKind::BlockModels,
+            Self::DrillHoles => SectionKind::DrillHoles,
+        }
+    }
+
+    /// Inverse of [`Self::kind`], for commands that carry a [`SectionKind`]
+    /// but need the heading's translated label.
+    pub(crate) fn from_kind(kind: SectionKind) -> Self {
+        match kind {
+            SectionKind::Designs => Self::Designs,
+            SectionKind::Triangulations => Self::Triangulations,
+            SectionKind::Rasters => Self::Rasters,
+            SectionKind::PointClouds => Self::PointClouds,
+            SectionKind::BlockModels => Self::BlockModels,
+            SectionKind::DrillHoles => Self::DrillHoles,
+        }
+    }
 }
 
 /// One project-owned point cloud shown in the explorer tree.
@@ -3791,6 +3855,9 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    /// Folder the point cloud sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -3805,6 +3872,9 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) source_size: [u32; 2],
     pub(crate) driver_name: String,
     pub(crate) projection: String,
+    /// Folder the raster sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -3817,6 +3887,9 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) dirty: bool,
     /// Face colour edited in the context menu.
     pub(crate) color: [f32; 4],
+    /// Folder the triangulation sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -3828,6 +3901,9 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
+    /// Folder the block model sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -3839,6 +3915,9 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
+    /// Folder the drill hole dataset sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -3865,6 +3944,8 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
+    /// Every explorer folder, across all six sections.
+    pub(crate) folders: FolderRegistry,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
