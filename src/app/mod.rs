@@ -406,6 +406,10 @@ pub(crate) struct App<'a> {
     /// project runtime and the run that produced it. Derived display data: it
     /// is never saved and never enters undo history.
     pub(crate) schedule_production_cache: Option<(u32, u64, std::sync::Arc<crate::model::schedule::PeriodProduction>)>,
+    /// The same, for what each destination received. Cached beside the loader
+    /// figures rather than with them so a project with routing off pays nothing
+    /// for it.
+    pub(crate) schedule_destination_cache: Option<(u32, u64, std::sync::Arc<crate::model::schedule::DestinationProduction>)>,
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
     pub(crate) schedule_run_serial: u64,
@@ -534,6 +538,7 @@ impl<'a> Default for App<'a> {
             schedule_report_cache: None,
             schedule_plan_revision_cache: std::cell::Cell::new(None),
             schedule_production_cache: None,
+            schedule_destination_cache: None,
             schedule_report_key_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
             schedule_animation: Default::default(),

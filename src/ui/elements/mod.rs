@@ -19,6 +19,7 @@ pub(crate) mod products;
 pub(crate) mod properties;
 pub(crate) mod schedule_animation;
 pub(crate) mod schedule_calendar;
+pub(crate) mod schedule_destinations;
 pub(crate) mod schedule_gantt;
 pub(crate) mod schedule_setup;
 pub(crate) mod solids_view;

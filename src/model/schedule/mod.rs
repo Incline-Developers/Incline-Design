@@ -14,13 +14,18 @@
 
 pub(crate) mod animation;
 pub(crate) mod calendar;
+pub(crate) mod destinations;
 pub(crate) mod dispatch;
 pub(crate) mod production;
 pub(crate) mod sequence;
 
 pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, SCHEDULE_PERIOD_H};
-pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput, DispatchOutcome, DispatchSchedule};
-pub(crate) use production::PeriodProduction;
+pub(crate) use destinations::{
+    Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, FieldCondition, LoaderSelection, PortionValue,
+    RoutingConfig, RuleId, SourceScope, SourceSelection, StandaloneDestinationId,
+};
+pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchDestination, DispatchError, DispatchInput, DispatchOutcome, DispatchPortion, DispatchSchedule};
+pub(crate) use production::{DestinationProduction, PeriodProduction};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 
 /// A pick of one dig block, as the 3D editor submits it: a block of *this*
@@ -213,6 +218,37 @@ pub(crate) enum ScheduleError {
     InvalidBarHeight,
     /// A stored reference whose numbers could not describe any ground.
     MalformedReference,
+    /// A capacity that is negative or not a finite number. Blank is a
+    /// legitimate answer and never reaches this; zero is a real capacity.
+    InvalidCapacity,
+    /// An id that names no destination in this plan.
+    UnknownDestination,
+    /// An id that names no routing rule in this plan.
+    UnknownRule,
+    /// A destination still named by the listed rules. Deletion never
+    /// cascades into the rule list.
+    DestinationInUse(Vec<String>),
+    /// A crusher setting addressed to a destination that is not a crusher.
+    NotACrusher,
+    /// A loader or source selection that lists nothing. "Only these, and
+    /// there are none" matches nothing and is not what "All" means.
+    EmptyRuleSelection,
+    /// A source scope whose band is not a finite, non-empty elevation range.
+    InvalidSourceScope,
+    /// A condition that restricts nothing: no category values, or a numerical
+    /// range with neither bound.
+    EmptyCondition,
+    /// A bound that is not a finite number.
+    InvalidBound,
+    /// Bounds describing an interval no value can be in.
+    EmptyInterval,
+    /// Two conditions on one field within a rule. They would be ANDed, and a
+    /// single condition can already express any interval or value set.
+    DuplicateCondition(ReserveFieldId),
+    /// One category value listed twice in one condition.
+    DuplicateConditionValue(String),
+    /// A rule already at the top or bottom of the priority order.
+    RuleAtEnd,
 }
 
 impl ScheduleError {
@@ -238,6 +274,19 @@ impl ScheduleError {
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
             Self::InvalidWindow => tr!("schedule-error-invalid-window"),
             Self::InvalidBarHeight => tr!("schedule-error-invalid-bar-height"),
+            Self::InvalidCapacity => tr!("destination-error-invalid-capacity"),
+            Self::UnknownDestination => tr!("destination-error-unknown"),
+            Self::UnknownRule => tr!("destination-error-unknown-rule"),
+            Self::DestinationInUse(rules) => tr!("destination-error-in-use", rules = rules.join(", ")),
+            Self::NotACrusher => tr!("destination-error-not-a-crusher"),
+            Self::EmptyRuleSelection => tr!("destination-error-empty-selection"),
+            Self::InvalidSourceScope => tr!("destination-error-invalid-scope"),
+            Self::EmptyCondition => tr!("destination-error-empty-condition"),
+            Self::InvalidBound => tr!("destination-error-invalid-bound"),
+            Self::EmptyInterval => tr!("destination-error-empty-interval"),
+            Self::DuplicateCondition(_) => tr!("destination-error-duplicate-condition"),
+            Self::DuplicateConditionValue(value) => tr!("destination-error-duplicate-value", value = value.clone()),
+            Self::RuleAtEnd => tr!("destination-error-rule-at-end"),
         }
     }
 }
@@ -290,6 +339,12 @@ pub(crate) struct SchedulePlan {
     /// Height of a dig-sequence bar in the Gantt, in logical UI points.
     #[serde(default = "default_bar_height")]
     bar_height: f32,
+    /// Destinations, their capacities and the ordered routing rules; see
+    /// [`destinations`]. Default-empty and default-off, so a project saved
+    /// before routing existed opens with the dig-only behaviour it was
+    /// authored against.
+    #[serde(default)]
+    routing: RoutingConfig,
 }
 
 impl Default for SchedulePlan {
@@ -304,6 +359,7 @@ impl Default for SchedulePlan {
             next_bar_id: 0,
             tonnage_field: None,
             bar_height: DEFAULT_BAR_HEIGHT,
+            routing: RoutingConfig::default(),
         }
     }
 }
@@ -337,7 +393,13 @@ fn checked_rate(rate: f64) -> ScheduleResult<f64> {
 
 impl SchedulePlan {
     pub(crate) fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.classes.is_empty() && self.agents.is_empty() && self.bars.is_empty() && self.tonnage_field.is_none() && self.bar_height == DEFAULT_BAR_HEIGHT
+        self.name.is_empty()
+            && self.classes.is_empty()
+            && self.agents.is_empty()
+            && self.bars.is_empty()
+            && self.tonnage_field.is_none()
+            && self.bar_height == DEFAULT_BAR_HEIGHT
+            && self.routing.is_pristine()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -360,6 +422,18 @@ impl SchedulePlan {
         self.next_class_id = self.next_class_id.max(other.next_class_id);
         self.next_agent_id = self.next_agent_id.max(other.next_agent_id);
         self.next_bar_id = self.next_bar_id.max(other.next_bar_id);
+        self.routing.raise_allocator_to(&other.routing);
+    }
+
+    pub(crate) fn routing(&self) -> &RoutingConfig {
+        &self.routing
+    }
+
+    /// Edit the routing configuration. Every caller goes through
+    /// [`crate::model::Command::SetSchedulePlan`] like the rest of the plan,
+    /// so one committed routing edit is one undo step.
+    pub(crate) fn routing_mut(&mut self) -> &mut RoutingConfig {
+        &mut self.routing
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -820,6 +894,7 @@ impl SchedulePlan {
             }
             bar.order.check_loaded()?;
         }
+        self.routing.validate_loaded()?;
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -865,6 +940,7 @@ impl SchedulePlan {
         }
         self.tonnage_field.hash(hasher);
         self.bar_height.to_bits().hash(hasher);
+        self.routing.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.order.name.hash(hasher);
@@ -911,6 +987,7 @@ impl SchedulePlan {
                 .iter()
                 .map(|bar| size_of::<ScheduleBar>() + bar.name().len() + size_of_val(bar.members()))
                 .sum::<usize>()
+            + self.routing.estimated_bytes()
     }
 }
 

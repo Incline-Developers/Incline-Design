@@ -150,7 +150,7 @@ pub(crate) enum GridNumber<'a> {
 /// `depth` marks a row as belonging to the one above it - a bench height
 /// under the RL it starts at, a pattern under the flitch it styles - which is
 /// the whole of how these lists show their nesting.
-fn grid_named_row(ui: &mut egui::Ui, label: &str, depth: usize) -> (egui::Rect, egui::Response) {
+pub(crate) fn grid_named_row(ui: &mut egui::Ui, label: &str, depth: usize) -> (egui::Rect, egui::Response) {
     let height = grid_row_height(ui);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
     let (fill, stroke, label_color) = {
@@ -221,6 +221,16 @@ pub(crate) fn grid_value_row(
         }
     }
     (response, changed)
+}
+
+/// One named flag, checked or not. Returns whether it was just toggled.
+pub(crate) fn grid_checkbox_row(ui: &mut egui::Ui, label: &str, value: &mut bool, depth: usize) -> bool {
+    let (cell, _) = grid_named_row(ui, label, depth);
+    if !cell.is_positive() {
+        return false;
+    }
+    let box_rect = egui::Rect::from_min_max(cell.min, egui::pos2((cell.left() + 24.0).min(cell.right()), cell.bottom()));
+    ui.put(box_rect, egui::Checkbox::without_text(value)).changed()
 }
 
 /// One named colour swatch.

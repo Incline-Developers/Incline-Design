@@ -232,10 +232,11 @@ pub(crate) fn draw_configuration(
     .then(|| crate::model::schedule::ScheduleError::InvalidBarHeight.message());
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
-    // Header + schedule name + scheduling quantity, plus the explanatory
-    // empty-field row when the project has no reserve schema. The header is a
-    // table row too; omitting it from this count clips the quantity combo.
-    let rows = 4 + usize::from(no_fields);
+    // Header + schedule name + bar height + scheduling quantity + destination
+    // routing, plus the explanatory empty-field row when the project has no
+    // reserve schema. The header is a table row too; omitting it from this
+    // count clips the quantity combo.
+    let rows = 5 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
     PropertyTable::new("schedule_configuration", table_rect, &tr!("planning-configuration")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -266,6 +267,14 @@ pub(crate) fn draw_configuration(
         );
         if response.changed() && tonnage != plan.tonnage_field() {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetTonnageField(tonnage)));
+        }
+        // Routing is opt-in and stays opt-in: configuring destinations and
+        // writing rules changes nothing until this is switched on, so a project
+        // that has never seen this page keeps the dig-only behaviour it was
+        // authored against.
+        let mut routing = plan.routing().enabled;
+        if rows.checkbox(&tr!("destination-routing-enabled"), &mut routing).changed() {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetRoutingEnabled(routing)));
         }
         if no_fields {
             rows.readonly("", &tr!("schedule-tonnage-field-no-fields"), None, None);

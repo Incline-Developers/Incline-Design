@@ -180,11 +180,16 @@ impl crate::app::App<'_> {
         };
         let plan_revision = self.schedule_plan_revision();
         let reports = self.schedule_reports();
+        // The same snapshot the reports were measured against, because routing
+        // reads what each block is made of and that has to be the run readiness
+        // reported on.
+        let snapshot = self.schedule_snapshot();
         let built = {
             let Some(document) = self.workspace.active_document() else {
                 return;
             };
-            dispatch_input(document.schedule(), &reports, inputs.generation, horizon_limit_h)
+            let blocks = snapshot.as_ref().map(|snapshot| snapshot.blocks.as_slice()).unwrap_or_default();
+            dispatch_input(document, &reports, blocks, inputs.generation, horizon_limit_h)
         };
         let input = match built {
             Ok(input) => input,
@@ -303,6 +308,28 @@ impl crate::app::App<'_> {
         }
     }
 
+    /// Replace the evaluator's `#id` placeholders with the project's own names.
+    ///
+    /// The evaluator is handed ids and never names, so a reason it produced
+    /// spells a destination as `#3`. Resolving it here keeps the model free of
+    /// presentation and means a renamed destination reads correctly in a message
+    /// that was composed before the rename.
+    fn named_destinations(&self, reason: &str) -> String {
+        let Some(document) = self.workspace.active_document() else {
+            return reason.to_owned();
+        };
+        let routing = document.schedule().routing();
+        let mut named = reason.to_owned();
+        for entry in crate::model::schedule::destinations::available(document.solids(), routing) {
+            let placeholder = match entry.id {
+                crate::model::schedule::DestinationId::Solid(solid) => format!("#{}", solid.0),
+                crate::model::schedule::DestinationId::Standalone(standalone) => format!("#{}", standalone.0),
+            };
+            named = named.replace(&placeholder, &entry.name);
+        }
+        named
+    }
+
     /// Per-period production for the held result, aggregated once per run.
     ///
     /// Coverage is what the run was *asked* for, not merely what it found: a
@@ -323,6 +350,26 @@ impl crate::app::App<'_> {
         Some(production)
     }
 
+    /// Per-period destination receipts for the held result, aggregated once per
+    /// run, and only when the run actually routed anything.
+    fn schedule_destinations(&mut self) -> Option<Arc<crate::model::schedule::DestinationProduction>> {
+        let calculation = self.schedule_calculation.as_ref()?;
+        if calculation.schedule.movements.is_empty() && calculation.schedule.destination_balances.is_empty() {
+            return None;
+        }
+        let (runtime, run) = (calculation.inputs.runtime, calculation.run);
+        if let Some((cached_runtime, cached_run, received)) = self.schedule_destination_cache.as_ref()
+            && *cached_runtime == runtime
+            && *cached_run == run
+        {
+            return Some(received.clone());
+        }
+        let coverage_end_h = calculation.horizon_limit_h.unwrap_or(calculation.schedule.horizon_h);
+        let received = Arc::new(crate::model::schedule::DestinationProduction::aggregate(&calculation.schedule, coverage_end_h));
+        self.schedule_destination_cache = Some((runtime, run, received.clone()));
+        Some(received)
+    }
+
     /// Copy the held result into the editor state the Gantt draws from - but
     /// only while it is current.
     ///
@@ -335,6 +382,7 @@ impl crate::app::App<'_> {
         let running = self.pending_schedule_run.is_some();
         let dispatch = current.then(|| self.schedule_calculation.as_ref().expect("current calculation exists").schedule.clone());
         let production = current.then(|| self.schedule_production()).flatten();
+        let received = current.then(|| self.schedule_destinations()).flatten();
         let status = match (running, self.schedule_calculation.as_ref()) {
             (true, _) => tr!("schedule-run-working"),
             (false, None) => match self.schedule_run_inputs() {
@@ -344,10 +392,18 @@ impl crate::app::App<'_> {
             (false, Some(calculation)) if !current => tr!("schedule-run-stale", run = calculation.run.to_string()),
             (false, Some(calculation)) => {
                 let run = calculation.run.to_string();
-                match calculation.schedule.outcome {
+                match &calculation.schedule.outcome {
                     DispatchOutcome::Exhausted => tr!("schedule-run-complete", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
                     DispatchOutcome::Limited => tr!("schedule-run-truncated", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
                     DispatchOutcome::Stranded => tr!("schedule-run-stranded", run = run, horizon = format!("{:.2}", calculation.schedule.horizon_h)),
+                    // The evaluator names the destination by id; the project's
+                    // own name for it is resolved here, where the document is.
+                    DispatchOutcome::CapacityBlocked { reason } => tr!(
+                        "schedule-run-capacity-blocked",
+                        run = run,
+                        horizon = format!("{:.2}", calculation.schedule.horizon_h),
+                        reason = self.named_destinations(reason.as_str())
+                    ),
                 }
             }
         };
@@ -363,8 +419,14 @@ impl crate::app::App<'_> {
             (None, None) => true,
             _ => false,
         };
+        let same_received = match (&self.editor.schedule_received, &received) {
+            (Some(held), Some(current)) => Arc::ptr_eq(held, current),
+            (None, None) => true,
+            _ => false,
+        };
         if !same_dispatch
             || !same_production
+            || !same_received
             || self.editor.schedule_run_status != status
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running
@@ -372,6 +434,7 @@ impl crate::app::App<'_> {
         {
             self.editor.schedule_dispatch = dispatch;
             self.editor.schedule_production = production;
+            self.editor.schedule_received = received;
             self.editor.schedule_run_status = status;
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running;

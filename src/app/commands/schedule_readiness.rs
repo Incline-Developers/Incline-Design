@@ -222,6 +222,11 @@ pub(crate) struct ScheduleRunProblem {
 /// unchanged frame neither recollects blocks nor resolves references again.
 pub(crate) struct ScheduleReportCache {
     key: u64,
+    /// The source scopes and category values a routing rule can name, derived
+    /// from the same snapshot the reports were measured against. Built lazily -
+    /// only the Destinations page asks for them - and then held for as long as
+    /// the cache stands.
+    routing_choices: Option<Arc<RoutingChoices>>,
     snapshot: Option<Arc<PlanningSnapshot>>,
     ground: Arc<Vec<BlockGround>>,
     index: Arc<GroundIndex>,
@@ -251,12 +256,18 @@ enum TonnageField {
 /// evaluated: the gate that let this be calculated named one run, and a
 /// schedule assembled from two of them would describe ground that was never
 /// all there at once.
+/// `blocks` is the same run's dig-block records, which is where the material
+/// behind each block's tonnage comes from. Routing needs them; a dig-only run
+/// reads nothing from them, and both take the same path so there is one place a
+/// bar becomes work.
 pub(crate) fn dispatch_input(
-    plan: &crate::model::schedule::SchedulePlan,
+    document: &Document,
     reports: &[BarReport],
+    blocks: &[DigBlockRecord],
     expected: u64,
     horizon_limit_h: Option<f64>,
 ) -> Result<DispatchInput, Vec<ScheduleRunProblem>> {
+    let plan = document.schedule();
     let mut problems = Vec::new();
     // A bar holding no blocks is not work, so it is not a fault either: it
     // describes nothing to dig, contributes nothing to the schedule, and the
@@ -326,31 +337,104 @@ pub(crate) fn dispatch_input(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let bars = scheduled()
-        .map(|(bar, report)| DispatchBar {
+    // Destinations and routing. Off, the table is still built and the portions
+    // are left empty: the evaluator then has nothing to route and behaves
+    // exactly as it did before routing existed.
+    let routing = plan.routing();
+    let enabled = routing.enabled;
+    let destinations = super::schedule_routing::destination_table(document);
+    let tonnage_field = match tonnage_field_of(document) {
+        TonnageField::Chosen(field) => field,
+        _ => {
+            problems.push(ScheduleRunProblem {
+                bars: Vec::new(),
+                message: tr!("schedule-stage-no-tonnage-field"),
+            });
+            return Err(problems);
+        }
+    };
+    let mut dispatch_bars = Vec::new();
+    for (bar, report) in scheduled() {
+        let agent = bar.agent.expect("checked above");
+        let loader_name = plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent"));
+        let mut dispatch_blocks = Vec::new();
+        for (block, member) in bar.members().iter().copied().zip(&report.members) {
+            let resolved = member.resolved.expect("ready members resolve");
+            let tonnes = member.tonnes.expect("ready members have tonnes");
+            let portions = if !enabled {
+                Vec::new()
+            } else {
+                let Some(record) = blocks.iter().find(|record| record.id == resolved) else {
+                    problems.push(ScheduleRunProblem {
+                        bars: vec![bar.id],
+                        message: tr!("schedule-dispatch-generation-changed"),
+                    });
+                    continue;
+                };
+                match super::schedule_routing::prepare_block(record, tonnes, agent, &loader_name, tonnage_field, routing, &destinations) {
+                    Ok(prepared) => super::schedule_routing::dispatch_portions(prepared),
+                    Err(reasons) => {
+                        problems.extend(reasons.into_iter().map(|reason| ScheduleRunProblem {
+                            bars: vec![bar.id],
+                            message: reason.message(),
+                        }));
+                        continue;
+                    }
+                }
+            };
+            dispatch_blocks.push(DispatchBlock {
+                block,
+                resolved,
+                tonnes,
+                portions,
+            });
+        }
+        dispatch_bars.push(DispatchBar {
             bar: bar.id,
-            agent: bar.agent.expect("checked above"),
+            agent,
             priority: bar.priority,
             window: bar.window,
-            blocks: bar
-                .members()
-                .iter()
-                .copied()
-                .zip(&report.members)
-                .map(|(block, member)| DispatchBlock {
-                    block,
-                    resolved: member.resolved.expect("ready members resolve"),
-                    tonnes: member.tonnes.expect("ready members have tonnes"),
-                })
-                .collect(),
-        })
-        .collect();
+            blocks: dispatch_blocks,
+        });
+    }
+    // Source scopes the run cannot place: a rule that no longer restricts what
+    // it was written to restrict is a configuration error, not a rule that
+    // quietly widened.
+    if enabled {
+        for rule in routing.rules.iter().filter(|rule| rule.enabled) {
+            if let crate::model::schedule::SourceSelection::Only(scopes) = &rule.sources
+                && let Some(_) = scopes.iter().find(|scope| !super::schedule_routing::scope_is_placeable(**scope, blocks))
+            {
+                problems.push(ScheduleRunProblem {
+                    bars: Vec::new(),
+                    message: tr!("routing-problem-scope-unplaced", rule = rule.name.clone()),
+                });
+            }
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
     Ok(DispatchInput {
         generation: expected,
         horizon_limit_h,
         agents,
-        bars,
+        bars: dispatch_bars,
+        routing: enabled,
+        destinations,
     })
+}
+
+/// The project's tonnage field, or what is wrong with the choice.
+fn tonnage_field_of(document: &Document) -> TonnageField {
+    let Some(chosen) = document.schedule().tonnage_field() else {
+        return TonnageField::None;
+    };
+    match document.reserve_fields().iter().find(|field| field.id == chosen) {
+        None => TonnageField::Missing,
+        Some(field) if field.aggregation != ReserveAggregation::Sum => TonnageField::NotSum(field.name.clone()),
+        Some(_) => TonnageField::Chosen(chosen),
+    }
 }
 
 /// Turn one evaluator refusal into something the Gantt can say, against the
@@ -369,10 +453,16 @@ pub(crate) fn dispatch_problem(plan: &crate::model::schedule::SchedulePlan, erro
             bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent)).map(|bar| bar.id).collect(),
             message: tr!("schedule-dispatch-invalid-input"),
         },
-        DispatchError::InconsistentTonnes { .. } | DispatchError::IterationCap => ScheduleRunProblem {
-            bars: Vec::new(),
+        DispatchError::UnknownDestination { bar, .. } | DispatchError::UnbalancedPortions { bar, .. } => ScheduleRunProblem {
+            bars: vec![bar],
             message: tr!("schedule-dispatch-invalid-input"),
         },
+        DispatchError::InvalidCapacity(_) | DispatchError::InconsistentPortions { .. } | DispatchError::InconsistentTonnes { .. } | DispatchError::IterationCap => {
+            ScheduleRunProblem {
+                bars: Vec::new(),
+                message: tr!("schedule-dispatch-invalid-input"),
+            }
+        }
     }
 }
 
@@ -477,6 +567,7 @@ impl crate::app::App<'_> {
         let Some(document) = self.workspace.active_document() else {
             self.schedule_report_cache = Some(ScheduleReportCache {
                 key,
+                routing_choices: None,
                 snapshot: None,
                 ground: Arc::default(),
                 index: Arc::new(GroundIndex::build(&[])),
@@ -511,6 +602,7 @@ impl crate::app::App<'_> {
         let report_count = reports.len();
         self.schedule_report_cache = Some(ScheduleReportCache {
             key,
+            routing_choices: None,
             snapshot,
             ground,
             index,
@@ -523,6 +615,14 @@ impl crate::app::App<'_> {
             "schedule report cache rebuilt {block_count} blocks / {report_count} bars in {:?}",
             rebuild_started.elapsed()
         );
+    }
+
+    /// The cached snapshot the reports were measured against, so run
+    /// preparation reads the *same* ground the reports did rather than
+    /// collecting it a second time.
+    pub(crate) fn schedule_snapshot(&mut self) -> Option<Arc<PlanningSnapshot>> {
+        self.ensure_schedule_report_cache();
+        self.schedule_report_cache.as_ref().and_then(|cache| cache.snapshot.clone())
     }
 
     /// Every bar measured against one cached, coherent ground snapshot.
@@ -551,7 +651,8 @@ impl crate::app::App<'_> {
             } else {
                 let dropped = self.editor.schedule_dispatch.take().is_some();
                 let dropped_production = self.editor.schedule_production.take().is_some();
-                if dropped || dropped_production {
+                let dropped_received = self.editor.schedule_received.take().is_some();
+                if dropped || dropped_production || dropped_received {
                     self.redraw_requested = true;
                 }
             }
@@ -1157,5 +1258,137 @@ fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, Re
             value: f64::INFINITY,
         }),
         None => Err(unmeasured(tr!("sequence-material-unmapped"))),
+    }
+}
+
+/// What a routing rule can be written against, as the completed Solids run
+/// describes it.
+///
+/// Derived from one snapshot, so the bands a rule may name and the category
+/// values its conditions may test come from the same run the reports did.
+/// Nothing here is stored: a rerun that re-benches a solid changes the list,
+/// and a scope the list no longer offers is still kept in whatever rule holds
+/// it - and reported.
+#[derive(Default)]
+pub(crate) struct RoutingChoices {
+    pub(crate) sources: Arc<Vec<crate::ui::state::SourceScopeView>>,
+    pub(crate) categories: Arc<std::collections::BTreeMap<ReserveFieldId, Vec<String>>>,
+}
+
+impl crate::app::App<'_> {
+    /// The source scopes and category values the Destinations page offers.
+    ///
+    /// Built once per report cache and held, so opening the page does not walk
+    /// every block of every solid on each frame.
+    fn routing_choices(&mut self) -> Arc<RoutingChoices> {
+        self.ensure_schedule_report_cache();
+        if let Some(cache) = self.schedule_report_cache.as_ref()
+            && let Some(choices) = cache.routing_choices.as_ref()
+        {
+            return choices.clone();
+        }
+        let choices = Arc::new(match self.schedule_report_cache.as_ref().and_then(|cache| cache.snapshot.clone()) {
+            None => RoutingChoices::default(),
+            Some(snapshot) => {
+                let names: std::collections::HashMap<crate::model::SolidId, String> = snapshot.blocks.iter().map(|block| (block.solid, block.solid_name.clone())).collect();
+                let rl = crate::ui::elements::solids_view::format_rl;
+                // Distinct bands in the order the blocks list them, so the
+                // page reads bottom-up per solid exactly as the Solids tree
+                // does rather than in a hashed order.
+                let mut sources: Vec<crate::ui::state::SourceScopeView> = Vec::new();
+                let mut seen_solids: Vec<crate::model::SolidId> = Vec::new();
+                let mut seen_benches: Vec<(crate::model::SolidId, u64, u64)> = Vec::new();
+                let mut seen_flitches: Vec<(crate::model::SolidId, u64, u64)> = Vec::new();
+                let bits = |value: f64| if value == 0.0 { 0.0_f64.to_bits() } else { value.to_bits() };
+                for block in &snapshot.blocks {
+                    let name = names.get(&block.solid).cloned().unwrap_or_default();
+                    if !seen_solids.contains(&block.solid) {
+                        seen_solids.push(block.solid);
+                        sources.push(crate::ui::state::SourceScopeView {
+                            scope: crate::model::schedule::SourceScope::Pit(block.solid),
+                            label: name.clone(),
+                            depth: 0,
+                        });
+                    }
+                    let bench = (block.solid, bits(block.bench.base), bits(block.bench.top));
+                    if !seen_benches.contains(&bench) {
+                        seen_benches.push(bench);
+                        sources.push(crate::ui::state::SourceScopeView {
+                            scope: crate::model::schedule::SourceScope::Bench {
+                                solid: block.solid,
+                                base: block.bench.base,
+                                top: block.bench.top,
+                            },
+                            label: rl(block.bench.base),
+                            depth: 1,
+                        });
+                    }
+                    let flitch = (block.solid, bits(block.flitch.base), bits(block.flitch.top));
+                    if !seen_flitches.contains(&flitch) {
+                        seen_flitches.push(flitch);
+                        sources.push(crate::ui::state::SourceScopeView {
+                            scope: crate::model::schedule::SourceScope::Flitch {
+                                solid: block.solid,
+                                base: block.flitch.base,
+                                top: block.flitch.top,
+                            },
+                            label: rl(block.flitch.base),
+                            depth: 2,
+                        });
+                    }
+                }
+                // The values the models actually map, gathered off the measured
+                // totals rather than off a column: a condition should offer what
+                // this project's blocks hold.
+                let mut categories: std::collections::BTreeMap<ReserveFieldId, Vec<String>> = std::collections::BTreeMap::new();
+                for block in &snapshot.blocks {
+                    let MaterialState::Measured(totals) = &block.material else { continue };
+                    for (field, groups) in &totals.categories {
+                        let values = categories.entry(*field).or_default();
+                        for label in groups.keys() {
+                            if !values.iter().any(|existing| existing == label) {
+                                values.push(label.clone());
+                            }
+                        }
+                    }
+                }
+                for values in categories.values_mut() {
+                    values.sort();
+                }
+                RoutingChoices {
+                    sources: Arc::new(sources),
+                    categories: Arc::new(categories),
+                }
+            }
+        });
+        if let Some(cache) = self.schedule_report_cache.as_mut() {
+            cache.routing_choices = Some(choices.clone());
+        }
+        choices
+    }
+
+    /// Mirror the routing choices into the editor state the Destinations page
+    /// reads, and take them off every other page.
+    ///
+    /// Off the page they are dropped for the same reason the Gantt's reports
+    /// are: a list of bands that outlived the run it came from would offer a
+    /// rule ground that is not there.
+    pub(crate) fn mirror_routing_choices(&mut self) {
+        if !self.editor.is_schedule_destinations() {
+            let dropped = !self.editor.schedule_routing_sources.is_empty() || !self.editor.schedule_category_values.is_empty();
+            if dropped {
+                self.editor.schedule_routing_sources = Default::default();
+                self.editor.schedule_category_values = Default::default();
+                self.redraw_requested = true;
+            }
+            return;
+        }
+        let choices = self.routing_choices();
+        let same = Arc::ptr_eq(&self.editor.schedule_routing_sources, &choices.sources) && Arc::ptr_eq(&self.editor.schedule_category_values, &choices.categories);
+        if !same {
+            self.editor.schedule_routing_sources = choices.sources.clone();
+            self.editor.schedule_category_values = choices.categories.clone();
+            self.redraw_requested = true;
+        }
     }
 }

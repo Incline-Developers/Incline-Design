@@ -250,6 +250,12 @@ pub(crate) struct ReserveProduct {
     totals: Vec<crate::model::solid_reserves::ReserveTotals>,
     resolution: Option<crate::model::solid_reserves::ReserveResolution>,
     availability: ReserveAvailability,
+    /// What each piece is made of, when the scan was asked to retain it - the
+    /// dig-block scan is, and the bench scan beside it is not. Shared rather
+    /// than cloned: the records that carry it to a scheduler are rebuilt
+    /// whenever the snapshot is, and a capture is the size of the model's
+    /// intersections with the partition.
+    material: Option<Arc<crate::model::solid_reserves::MaterialCapture>>,
 }
 
 /// Why a completed reserve measurement holds the totals it does.
@@ -515,6 +521,7 @@ impl ViewSolid {
                     totals: vec![Default::default(); benches.max(blocks)],
                     resolution: None,
                     availability: ReserveAvailability::Measured,
+                    material: None,
                 });
             }
         }
@@ -529,6 +536,7 @@ impl ViewSolid {
             totals: Vec::new(),
             resolution: None,
             availability: ReserveAvailability::CapacityOnly,
+            material: None,
         });
     }
 
@@ -2002,6 +2010,7 @@ impl crate::app::App<'_> {
                     totals: vec![Default::default(); slots],
                     resolution: None,
                     availability: ReserveAvailability::NoSchema,
+                    material: None,
                 });
                 continue;
             }
@@ -2032,6 +2041,7 @@ impl crate::app::App<'_> {
                     totals: vec![Default::default(); slots],
                     resolution: None,
                     availability: ReserveAvailability::CapacityOnly,
+                    material: None,
                 });
                 continue;
             }
@@ -2052,10 +2062,14 @@ impl crate::app::App<'_> {
                 continue;
             };
             let fields = fields.clone();
+            let capture_material = scope == ReserveScope::Dig;
             self.spawn_job_reporting_progress(
                 crate::i18n::tr!("planning-computing-reserves"),
                 vec![artifact_job(id, scope.artifact(), token)],
-                move |cancel, progress| crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, cancel, progress),
+                // Routing needs to know what each dig block is made of, which
+                // its totals cannot say; whole benches are reported, never
+                // routed, so theirs is not retained.
+                move |cancel, progress| crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress),
                 move |app, result: anyhow::Result<ReserveOutcome>| {
                     if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
                         return;
@@ -2066,6 +2080,7 @@ impl crate::app::App<'_> {
                             totals: outcome.totals,
                             resolution: Some(outcome.resolution),
                             availability: ReserveAvailability::Measured,
+                            material: outcome.material.map(Arc::new),
                         }),
                         Err(error) => stage.fail(format!("{error:#}")),
                     }
@@ -2245,6 +2260,28 @@ pub(crate) struct DigBlockRecord {
     /// finished" are different answers, and a scheduler must not read either
     /// as an absent tonnage.
     pub(crate) material: MaterialState,
+    /// What the block is *made of*: the contributing block-model rows' own
+    /// mapped values, grouped, as the scan retained them. `None` for a block
+    /// nothing was measured against - a capacity-only solid, or a project with
+    /// no reserve schema - which is not the same as a block made of nothing.
+    pub(crate) portions: Option<BlockPortions>,
+}
+
+/// One dig block's share of its solid's material capture.
+///
+/// Holds the whole solid's capture and the block's slot in it rather than a
+/// copy of that slot: a snapshot is rebuilt whenever the report cache is, and a
+/// capture is the size of the model's intersections with the partition.
+#[derive(Clone)]
+pub(crate) struct BlockPortions {
+    pub(crate) capture: Arc<crate::model::solid_reserves::MaterialCapture>,
+    pub(crate) slot: usize,
+}
+
+impl BlockPortions {
+    pub(crate) fn portions(&self) -> &[crate::model::solid_reserves::MaterialPortion] {
+        self.capture.portions.get(self.slot).map_or(&[][..], Vec::as_slice)
+    }
 }
 
 /// What a completed run can say about one block's contents.
@@ -2334,6 +2371,11 @@ impl crate::app::App<'_> {
                     anchor: block.key.anchor(),
                     volume: part.volume,
                     replaces: block.replaces.clone(),
+                    portions: cache
+                        .reserves
+                        .product()
+                        .and_then(|product| product.material.clone())
+                        .map(|capture| BlockPortions { capture, slot }),
                     material: match cache.reserves.product().map(|product| product.availability) {
                         Some(ReserveAvailability::CapacityOnly) => MaterialState::CapacityOnly,
                         Some(ReserveAvailability::NoSchema) => MaterialState::NoSchema,

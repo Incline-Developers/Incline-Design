@@ -203,6 +203,15 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
     }
 
+    /// Whether the Schedule Setup page is showing the Destinations step, the
+    /// one page whose choices are drawn from the Solids run's own bands.
+    pub(crate) fn is_schedule_destinations(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Schedule
+            && self.schedule_subpage == PlanningSubpage::Setup
+            && self.schedule_setup_step == ScheduleStep::Destinations
+    }
+
     pub(crate) fn is_schedule_animation(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Animate
     }
@@ -2273,6 +2282,28 @@ pub(crate) struct EditorState {
     pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
     pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
     pub(crate) schedule_bar_height_draft: Option<ScheduleBarHeightDraft>,
+    /// The selected row on the Stockpiles, Dumps and Crushers pages, and the
+    /// capacity being typed into it. One selection across the three pages: a
+    /// destination is one thing whichever page it is listed on.
+    pub(crate) schedule_selected_destination: Option<crate::model::schedule::DestinationId>,
+    pub(crate) schedule_destination_draft: Option<ScheduleDestinationDraft>,
+    /// The selected routing rule and the cells being typed into its editor.
+    pub(crate) schedule_selected_rule: Option<crate::model::schedule::RuleId>,
+    pub(crate) schedule_rule_draft: Option<ScheduleRuleDraft>,
+    /// The condition being added or edited in the rule editor, while one is
+    /// being edited. Held apart from the rule's committed conditions so a
+    /// half-typed bound is never a routing decision.
+    pub(crate) schedule_condition_draft: Option<ScheduleConditionDraft>,
+    /// The source scopes a rule can name, as the last completed Solids run
+    /// describes them: every pit, its benches, and their flitches. Mirrored
+    /// out of the run rather than read from the document, because which bands
+    /// exist is the run's answer and not the benching plan's.
+    pub(crate) schedule_routing_sources: std::sync::Arc<Vec<SourceScopeView>>,
+    /// The category values each categorical field was actually measured
+    /// holding, per field, so a condition offers what the models map rather
+    /// than free text. A saved selection that no longer occurs is still shown -
+    /// see [`crate::model::schedule::ConditionTest::Category`].
+    pub(crate) schedule_category_values: std::sync::Arc<std::collections::BTreeMap<crate::model::ReserveFieldId, Vec<String>>>,
     /// The selected Gantt bar, the selected place in its dig order, and the
     /// name being typed into it. The selected member is a position rather
     /// than a block reference: the order is what is being edited, and two
@@ -2305,6 +2336,10 @@ pub(crate) struct EditorState {
     /// Per-period tonnes for the mirrored result, present only while that
     /// result is current. Derived display data, mirrored rather than authored.
     pub(crate) schedule_production: Option<std::sync::Arc<crate::model::schedule::PeriodProduction>>,
+    /// What each destination received per period, off the same held result.
+    /// `None` when the run routed nothing, which is not the same as every
+    /// destination receiving zero.
+    pub(crate) schedule_received: Option<std::sync::Arc<crate::model::schedule::DestinationProduction>>,
     /// What the Gantt's own run controls say: which run is on screen, that it
     /// is out of date, or why one cannot be started.
     pub(crate) schedule_run_status: String,
@@ -2360,6 +2395,11 @@ pub(crate) struct EditorState {
     pub(crate) new_loader_agent_open: bool,
     pub(crate) new_loader_agent_name: String,
     pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
+    /// The New Destination dialog: whether it is open, and its draft. The kind
+    /// comes from the page it was opened on, so there is no kind to choose.
+    pub(crate) new_destination_open: bool,
+    pub(crate) new_destination_name: String,
+    pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
     pub(crate) schedule_calendar: ScheduleCalendarView,
@@ -2643,6 +2683,15 @@ impl EditorState {
         self.schedule_agent_draft = None;
         self.schedule_name_draft = None;
         self.schedule_bar_height_draft = None;
+        self.schedule_selected_destination = None;
+        self.schedule_destination_draft = None;
+        self.schedule_selected_rule = None;
+        self.schedule_rule_draft = None;
+        self.schedule_condition_draft = None;
+        self.schedule_routing_sources = Default::default();
+        self.schedule_category_values = Default::default();
+        self.new_destination_open = false;
+        self.new_destination_name.clear();
         self.schedule_selected_bar = None;
         self.schedule_selected_member = None;
         self.bar_name_dialog = None;
@@ -2651,6 +2700,7 @@ impl EditorState {
         self.schedule_bar_reports.clear();
         self.schedule_dispatch = None;
         self.schedule_production = None;
+        self.schedule_received = None;
         self.schedule_run_status.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
@@ -3214,6 +3264,13 @@ impl EditorState {
             schedule_selected_class: None,
             schedule_selected_agent: None,
             schedule_class_draft: None,
+            schedule_selected_destination: None,
+            schedule_destination_draft: None,
+            schedule_selected_rule: None,
+            schedule_rule_draft: None,
+            schedule_condition_draft: None,
+            schedule_routing_sources: Default::default(),
+            schedule_category_values: Default::default(),
             schedule_agent_draft: None,
             schedule_name_draft: None,
             schedule_bar_height_draft: None,
@@ -3225,6 +3282,7 @@ impl EditorState {
             schedule_bar_reports: Vec::new(),
             schedule_dispatch: None,
             schedule_production: None,
+            schedule_received: None,
             schedule_run_status: String::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
@@ -3252,6 +3310,9 @@ impl EditorState {
             new_loader_agent_open: false,
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
+            new_destination_open: false,
+            new_destination_name: String::new(),
+            new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
@@ -4242,6 +4303,16 @@ impl UiCommand {
                 // Applying a sequence edit is a deliberate, single act on a
                 // whole dig order, unlike the per-block edits below it.
                 ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
+                ScheduleEdit::SetRoutingEnabled(enabled) => report(
+                    tr!("destination-routing-toggle"),
+                    if *enabled { tr!("destination-routing-on") } else { tr!("destination-routing-off") },
+                ),
+                ScheduleEdit::AddDestination { name, kind } => report(tr!("destination-new"), format!("{name} · {}", kind.label())),
+                ScheduleEdit::DeleteDestination(id) => report(tr!("destination-delete"), format!("{id:?}")),
+                ScheduleEdit::AddRule { name, .. } => report(tr!("destination-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::SetName(_)
                 | ScheduleEdit::RenameClass { .. }
                 | ScheduleEdit::SetClassRate { .. }
@@ -4263,7 +4334,19 @@ impl UiCommand {
                 // would bury the log once a bar is picked out of a viewport.
                 | ScheduleEdit::AddMember { .. }
                 | ScheduleEdit::RemoveMember { .. }
-                | ScheduleEdit::MoveMember { .. } => None,
+                | ScheduleEdit::MoveMember { .. }
+                // Routing cell edits: the rule table and its editor show the
+                // result in place, and a line per keystroke-commit would bury
+                // the log the same way a rename would.
+                | ScheduleEdit::RenameDestination { .. }
+                | ScheduleEdit::SetDestinationCapacity { .. }
+                | ScheduleEdit::RenameRule { .. }
+                | ScheduleEdit::SetRuleEnabled { .. }
+                | ScheduleEdit::SetRuleDestination { .. }
+                | ScheduleEdit::SetRuleLoaders { .. }
+                | ScheduleEdit::SetRuleSources { .. }
+                | ScheduleEdit::SetRuleConditions { .. }
+                | ScheduleEdit::MoveRule { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
@@ -4762,12 +4845,30 @@ pub(crate) enum ScheduleStep {
     Configuration,
     LoaderClasses,
     LoaderAgents,
+    Stockpiles,
+    Dumps,
+    Crushers,
+    Destinations,
     Readiness,
 }
 
 impl ScheduleStep {
     /// Every step, in the order the step tree lists them.
-    pub(crate) const ALL: [Self; 4] = [Self::Configuration, Self::LoaderClasses, Self::LoaderAgents, Self::Readiness];
+    ///
+    /// Destinations comes after the three places a destination can be defined
+    /// and before Readiness: a rule names a destination, so the lists it
+    /// chooses from have to be checked first, and the ground its source scopes
+    /// name is only known once Readiness has the Solids run.
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Configuration,
+        Self::LoaderClasses,
+        Self::LoaderAgents,
+        Self::Stockpiles,
+        Self::Dumps,
+        Self::Crushers,
+        Self::Destinations,
+        Self::Readiness,
+    ];
 
     pub(crate) fn index(self) -> usize {
         Self::ALL.iter().position(|step| *step == self).expect("every step is in ALL")
@@ -4778,6 +4879,10 @@ impl ScheduleStep {
             Self::Configuration => tr!("planning-configuration"),
             Self::LoaderClasses => tr!("schedule-loader-classes"),
             Self::LoaderAgents => tr!("schedule-loader-agents"),
+            Self::Stockpiles => tr!("planning-stockpiles"),
+            Self::Dumps => tr!("planning-dumps"),
+            Self::Crushers => tr!("destination-crushers"),
+            Self::Destinations => tr!("destination-destinations"),
             Self::Readiness => tr!("schedule-readiness-step"),
         }
     }
@@ -4787,6 +4892,10 @@ impl ScheduleStep {
             Self::Configuration => "schedule_configuration",
             Self::LoaderClasses => "schedule_loader_classes",
             Self::LoaderAgents => "schedule_loader_agents",
+            Self::Stockpiles => "schedule_stockpiles",
+            Self::Dumps => "schedule_dumps",
+            Self::Crushers => "schedule_crushers",
+            Self::Destinations => "schedule_destinations",
             Self::Readiness => "schedule_readiness",
         }
     }
@@ -4814,6 +4923,62 @@ pub(crate) struct ScheduleStageView {
     pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
     /// The earlier step that has to run first, when this one cannot.
     pub(crate) blocked_by: Option<ScheduleStep>,
+}
+
+/// One piece of ground a routing rule may name, as the run describes it.
+///
+/// Derived from the completed Solids run each time the run changes, never
+/// stored: which benches and flitches exist is the run's answer.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SourceScopeView {
+    pub(crate) scope: crate::model::schedule::SourceScope,
+    pub(crate) label: String,
+    /// 0 for a whole pit, 1 for a bench of it, 2 for a flitch of that bench.
+    pub(crate) depth: usize,
+}
+
+/// One destination's capacity as it is being typed.
+///
+/// Text, not a number: "" is unlimited and "0" is a destination that can
+/// receive nothing, and a numeric draft could not hold the difference while
+/// the field is being edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleDestinationDraft {
+    pub(crate) id: crate::model::schedule::DestinationId,
+    /// What the project held when this draft was seeded, so an edit made
+    /// elsewhere replaces the draft rather than being overwritten by it.
+    pub(crate) source: (String, Option<f64>, Option<f64>),
+    pub(crate) name: String,
+    pub(crate) capacity: String,
+    /// A crusher's default daily budget, blank for unlimited.
+    pub(crate) crusher_default: String,
+}
+
+/// One routing rule's cells as they are being typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleRuleDraft {
+    pub(crate) id: crate::model::schedule::RuleId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// One field condition as it is being written.
+///
+/// Both ends of a range are kept as text and both inclusivity flags are
+/// explicit: `60 < Fe < 70` is what the user typed and is stored as exactly
+/// that, so nothing here may quietly close an endpoint.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleConditionDraft {
+    pub(crate) rule: crate::model::schedule::RuleId,
+    /// The condition being replaced, or `None` while a new one is being added.
+    pub(crate) replacing: Option<crate::model::ReserveFieldId>,
+    pub(crate) field: Option<crate::model::ReserveFieldId>,
+    /// Selected category values, for a categorical field.
+    pub(crate) values: Vec<String>,
+    pub(crate) lower: String,
+    pub(crate) lower_inclusive: bool,
+    pub(crate) upper: String,
+    pub(crate) upper_inclusive: bool,
 }
 
 /// The cells of one loader class as they are being typed.
@@ -4985,6 +5150,72 @@ pub(crate) enum ScheduleEdit {
         bar: crate::model::schedule::BarId,
         expected: Vec<crate::model::schedule::DigBlockRef>,
         members: Vec<DraftMember>,
+    },
+    /// Switch destination routing on or off for this project. Off means the
+    /// dig-only behaviour every project had before routing existed; nothing
+    /// else on these pages turns it on.
+    SetRoutingEnabled(bool),
+    /// Add a destination with no geometry behind it - a crusher, or a
+    /// stockpile or dump nobody has drawn.
+    AddDestination {
+        name: String,
+        kind: crate::model::schedule::DestinationKind,
+    },
+    RenameDestination {
+        destination: crate::model::schedule::StandaloneDestinationId,
+        name: String,
+    },
+    /// Delete a standalone destination. Refused, with the rules named, while
+    /// any rule still delivers to it.
+    DeleteDestination(crate::model::schedule::StandaloneDestinationId),
+    /// Set a stockpile's or dump's maximum tonnes, or clear it for unlimited.
+    /// Addressed by destination id, so it reaches a solid-backed destination
+    /// and a standalone one the same way.
+    SetDestinationCapacity {
+        destination: crate::model::schedule::DestinationId,
+        capacity_t: Option<f64>,
+    },
+    /// Apply one atomic crusher-budget edit, or one rectangular paste or clear.
+    SetCrusherCells {
+        edits: Vec<crate::model::schedule::CrusherCellEdit>,
+    },
+    /// Add a routing rule at the end of the priority order.
+    AddRule {
+        name: String,
+        destination: crate::model::schedule::DestinationId,
+    },
+    /// Copy a rule into an independent one directly below it.
+    DuplicateRule(crate::model::schedule::RuleId),
+    DeleteRule(crate::model::schedule::RuleId),
+    RenameRule {
+        rule: crate::model::schedule::RuleId,
+        name: String,
+    },
+    SetRuleEnabled {
+        rule: crate::model::schedule::RuleId,
+        enabled: bool,
+    },
+    SetRuleDestination {
+        rule: crate::model::schedule::RuleId,
+        destination: crate::model::schedule::DestinationId,
+    },
+    SetRuleLoaders {
+        rule: crate::model::schedule::RuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetRuleSources {
+        rule: crate::model::schedule::RuleId,
+        sources: crate::model::schedule::SourceSelection,
+    },
+    /// Replace one rule's whole condition list, validated as a set.
+    SetRuleConditions {
+        rule: crate::model::schedule::RuleId,
+        conditions: Vec<crate::model::schedule::FieldCondition>,
+    },
+    /// Move a rule one place along the priority order. `later` is down.
+    MoveRule {
+        rule: crate::model::schedule::RuleId,
+        later: bool,
     },
 }
 
@@ -5329,22 +5560,66 @@ pub(crate) struct ScheduleBarHeightDraft {
 pub(crate) enum CalendarRow {
     Input(crate::model::schedule::CalendarField),
     Tonnes,
+    /// A crusher's maximum tonnes for the period, the one destination input the
+    /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
+    /// figure for the whole calculation, not for a day of it.
+    CrusherLimit,
+    /// What a destination received in the period. For a crusher this is also
+    /// what it processed, because nothing is buffered in this increment.
+    Received,
+    /// What a destination holds at the end of the period: a stockpile's
+    /// scheduled inventory, a dump's cumulative deposit.
+    Cumulative,
 }
 
 impl CalendarRow {
     pub(crate) fn field(self) -> Option<crate::model::schedule::CalendarField> {
         match self {
             Self::Input(field) => Some(field),
-            Self::Tonnes => None,
+            Self::Tonnes | Self::CrusherLimit | Self::Received | Self::Cumulative => None,
         }
     }
+
+    /// Whether this row is read back off a calculated result rather than
+    /// authored. A calculated row is selectable, so it can be copied, and
+    /// nothing more.
+    pub(crate) fn is_calculated(self) -> bool {
+        matches!(self, Self::Tonnes | Self::Received | Self::Cumulative)
+    }
+}
+
+/// Whose calendar group a row belongs to.
+///
+/// One address type for both halves of the grid: the selection, the clipboard
+/// rectangle and the keyboard all measure rows the same way whether they are a
+/// loader's settings or a destination's receipts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CalendarOwner {
+    Loader(crate::model::schedule::LoaderAgentId),
+    Destination(crate::model::schedule::DestinationId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CalendarCellAddress {
-    pub(crate) agent: crate::model::schedule::LoaderAgentId,
+    pub(crate) owner: CalendarOwner,
     pub(crate) row: CalendarRow,
     pub(crate) cell: crate::model::schedule::CalendarCell,
+}
+
+impl CalendarCellAddress {
+    pub(crate) fn agent(self) -> Option<crate::model::schedule::LoaderAgentId> {
+        match self.owner {
+            CalendarOwner::Loader(agent) => Some(agent),
+            CalendarOwner::Destination(_) => None,
+        }
+    }
+
+    pub(crate) fn destination(self) -> Option<crate::model::schedule::DestinationId> {
+        match self.owner {
+            CalendarOwner::Destination(destination) => Some(destination),
+            CalendarOwner::Loader(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5368,7 +5643,7 @@ pub(crate) struct ScheduleCalendarView {
     pub(crate) visible_days: u32,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
-    pub(crate) collapsed: std::collections::HashSet<crate::model::schedule::LoaderAgentId>,
+    pub(crate) collapsed: std::collections::HashSet<CalendarOwner>,
     pub(crate) selection: Option<CalendarSelection>,
     pub(crate) draft: Option<CalendarCellDraft>,
     pub(crate) error: Option<String>,

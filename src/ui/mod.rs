@@ -571,7 +571,7 @@ fn draw_ui(
             // rounded off as one region.
             elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_calendar() {
-            elements::schedule_calendar::draw_details(root_ui, editor, project, commands)
+            elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
         } else {
             planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
             planning_layout.rect

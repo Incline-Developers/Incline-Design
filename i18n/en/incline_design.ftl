@@ -1835,6 +1835,136 @@ schedule-error-duplicate-member = That dig block is already in this bar's dig or
 schedule-error-invalid-window = A work window needs a start at or after the schedule origin and an end after it
 schedule-error-invalid-bar-height = Bar height must be a number from 20 to 160 pixels.
 
+# Destinations and routing: where calculated production goes.
+#
+# Capacity is always in the schedule's nominated tonnes field. Blank means
+# unlimited; zero is a real capacity that can receive nothing.
+destination-stage-retained = { $count ->
+        [one] 1 capacity is kept for a solid that is no longer a stockpile or dump
+       *[other] { $count } capacities are kept for solids that are no longer stockpiles or dumps
+    }
+destination-stage-routing-off = Destination routing is off, so these rules are not used
+destination-stage-no-rules = Destination routing is on but no rule is enabled
+destination-stage-rule-loader-missing = Names a loader that is no longer in the fleet
+destination-stage-field-missing = Names a field that is no longer in the Field List
+destination-stage-field-kind = ⁨{ $field }⁩ no longer aggregates the way this condition reads it
+destination-unlimited = Unlimited
+destination-select = Select a destination
+destination-select-rule = Select a rule
+destination-edit-in-solids = Renamed and deleted in Solids
+destination-linked-solid = Name and type
+destination-linked-note = From the solid, edited in Solids
+destination-type = Type
+destination-type-fixed = Type: { $kind }
+destination-capacity = Maximum tonnes
+destination-daily-limit = Maximum tonnes per day
+destination-new-crusher = New Crusher…
+destination-default-stockpile = Stockpile
+destination-default-dump = Dump
+destination-default-crusher = Crusher
+destination-no-stockpiles = No stockpiles. Draw one in Solids, or add one here.
+destination-no-dumps = No dumps. Draw one in Solids, or add one here.
+destination-no-crushers = No crushers. Add one to set a daily limit.
+destination-rule = Rule
+destination-rule-order = Order
+destination-rule-default = Rule
+destination-rule-enabled = Enabled
+destination-rule-target = Delivers to
+destination-rule-disabled = Disabled: this rule takes no part in routing
+destination-rule-loaders = Loaders
+destination-rule-all-loaders = All loaders
+destination-rule-sources = Sources
+destination-rule-all-sources = All sources
+destination-rule-conditions = Conditions
+destination-routing-off-note = Destination routing is off. Switch it on in Configuration to use these rules.
+destination-no-rules = No rules. Every rule names one destination and the material allowed to reach it.
+destination-no-sources = The last Solids run produced no ground to choose from.
+destination-source-unplaced = One source is not in the last Solids run
+destination-no-conditions = No conditions: any material this rule's loaders dig from its sources.
+destination-unresolved = Unresolved destination
+destination-add-condition = Add Condition…
+destination-edit-condition = Edit Condition…
+destination-delete-condition = Delete Condition
+destination-condition = Condition
+destination-condition-field = Field
+destination-condition-pick-field = Choose a field
+destination-condition-no-values = No values measured for this field yet
+destination-condition-absent = not measured
+destination-condition-values = Values
+destination-condition-range = Range
+destination-condition-open = Open
+destination-condition-lower-inclusive = Lower bound is inclusive
+destination-condition-upper-inclusive = Upper bound is inclusive
+destination-condition-lower = Lower bound
+destination-condition-upper = Upper bound
+destination-condition-inclusive = Inclusive
+# Said on demand rather than on the page: what a condition is compared against
+# is the contributing block-model row's own value, never the dig block's average
+# of it and never the tonnes that row contributed.
+destination-condition-note-sum = Compared against the contributing block's own mapped value, not the tonnes it contributes
+destination-condition-note-average = Compared against the contributing block's own value, not the dig block's weighted average
+destination-condition-note-category = Matches when the contributing block's mapped value is one of the chosen values
+destination-move-rule-up = Move Up
+destination-move-rule-down = Move Down
+common-apply = Apply
+common-create = Create
+routing-problem-no-capture = ⁨{ $block }⁩: the last run did not retain what this block is made of, so it cannot be routed
+routing-problem-tonnage = ⁨{ $block }⁩: the field read as tonnes was not measured on this block's material
+routing-problem-unreconciled = ⁨{ $block }⁩: its material adds up to { $portions } t but it was measured at { $total } t
+routing-problem-unmatched = ⁨{ $block }⁩: no rule accepts { $tonnes } t of what ⁨{ $loader }⁩ would dig from it
+routing-problem-scope-unplaced = ⁨{ $rule }⁩ names ground the last Solids run did not produce
+# Why a run stopped with work left that it could otherwise have done. The
+# destination is named by the caller, which knows the project's own names.
+dispatch-blocked-full = ⁨{ $destination }⁩ is full
+dispatch-blocked-crusher = ⁨{ $destination }⁩ daily limit reached
+dispatch-blocked-unrouted = Material with no destination
+# Calendar rows for destinations. "Scheduled inventory" rather than stock on
+# hand: nothing is reclaimed in this increment, and no opening inventory is
+# modelled, so the figure is what this schedule put there and nothing else.
+destination-calendar-limit = Maximum tonnes
+destination-calendar-received = Received
+destination-calendar-processed = Processed
+destination-calendar-inventory = Scheduled inventory
+destination-calendar-deposited = Deposited
+destination-calendar-inherited = the default
+destination-calendar-default-hover = Periods with no figure of their own use this. Type a number of tonnes, or Unlimited.
+destination-routing-enabled = Destination routing
+destination-routing-toggle = Destination Routing
+destination-routing-on = On: extracted material is routed to destinations
+destination-routing-off = Off: the schedule digs without routing
+destination-new = New Destination
+destination-delete = Delete Destination
+destination-new-rule = New Rule
+destination-duplicate-rule = Duplicate Rule
+destination-delete-rule = Delete Rule
+destination-crusher-edit = Edit crusher limits
+destination-crushers = Crushers
+destination-destinations = Destinations
+destination-kind-stockpile = Stockpile
+destination-kind-dump = Dump
+destination-kind-crusher = Crusher
+destination-error-invalid-capacity = Capacity must be a number of tonnes that is not negative. Leave it blank for unlimited.
+destination-error-unknown = That destination is no longer in the schedule
+destination-error-unknown-rule = That routing rule is no longer in the schedule
+destination-error-in-use = Still used by ⁨{ $rules }⁩. Change or delete those rules first
+destination-error-not-a-crusher = Only a crusher has a daily tonnage limit
+destination-error-empty-selection = Select at least one entry, or choose All
+destination-error-invalid-scope = A source must name a finite, non-empty elevation range
+destination-error-empty-condition = A condition needs at least one value or bound
+destination-error-invalid-bound = A bound must be a finite number
+destination-error-empty-interval = Those bounds describe a range no value can be in
+destination-error-duplicate-condition = One field can carry only one condition in a rule
+destination-error-duplicate-value = ⁨{ $value }⁩ is listed twice
+destination-error-rule-at-end = That rule is already at the end of the order
+destination-problem-solid-missing = ⁨{ $rule }⁩ delivers to a solid that is no longer in the project
+destination-problem-solid-kind = ⁨{ $rule }⁩ delivers to a solid that is no longer a stockpile or dump
+destination-problem-missing = ⁨{ $rule }⁩ delivers to a destination that is no longer in the schedule
+destination-rule-matches-all = All material
+destination-rule-sources-count = { $count ->
+        [one] 1 source
+       *[other] { $count } sources
+    }
+
 # Run Schedule - the Gantt's own explicit run
 schedule-run-period = Run Period
 schedule-run-period-note = Calculate one more day of the schedule
@@ -1848,6 +1978,7 @@ schedule-run-blocked = Cannot run: { $reason }
 schedule-run-cancelled = Schedule run cancelled. The last calculated schedule is unchanged.
 schedule-run-superseded = The schedule changed while it was being calculated. That run was discarded; run it again.
 schedule-run-finished = Schedule run { $run } calculated to hour { $horizon }
+schedule-run-capacity-blocked = Schedule run { $run } stopped at hour { $horizon }: { $reason }
 schedule-run-complete = Run { $run } · complete to hour { $horizon }
 schedule-run-truncated = Run { $run } · calculated to hour { $horizon }, more work remains
 schedule-run-stranded = Run { $run } · calculated to hour { $horizon }, material remains outside available work windows

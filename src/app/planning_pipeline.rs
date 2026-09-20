@@ -368,6 +368,7 @@ impl crate::app::App<'_> {
             self.mirror_planning_stages();
             self.sync_schedule_pipeline();
             self.mirror_schedule_reports();
+            self.mirror_routing_choices();
             return;
         };
         if self.planning_pipeline.as_ref().is_none_or(|pipeline| pipeline.runtime != runtime) {
@@ -423,6 +424,7 @@ impl crate::app::App<'_> {
         // in the other order would fingerprint it against last frame's state.
         self.sync_schedule_pipeline();
         self.mirror_schedule_reports();
+        self.mirror_routing_choices();
     }
 
     /// Copy the pipeline's status into the editor state the panels read.

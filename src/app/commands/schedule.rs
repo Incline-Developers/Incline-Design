@@ -70,6 +70,114 @@ impl crate::app::App<'_> {
             ScheduleEdit::RemoveMember { bar, position } => self.remove_bar_member(bar, position),
             ScheduleEdit::MoveMember { bar, from, to } => self.move_bar_member(bar, from, to),
             ScheduleEdit::SetBarMembers { bar, expected, members } => self.set_bar_members(bar, &expected, &members),
+            ScheduleEdit::SetRoutingEnabled(enabled) => self.set_routing_enabled(enabled),
+            ScheduleEdit::AddDestination { name, kind } => self.add_destination(name, kind),
+            ScheduleEdit::RenameDestination { destination, name } => self.edit_routing(|routing| routing.rename_standalone(destination, &name)),
+            ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
+            ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
+            ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
+            ScheduleEdit::AddRule { name, destination } => self.add_destination_rule(name, destination),
+            ScheduleEdit::DuplicateRule(rule) => self.duplicate_destination_rule(rule),
+            ScheduleEdit::DeleteRule(rule) => self.delete_destination_rule(rule),
+            ScheduleEdit::RenameRule { rule, name } => self.edit_routing(|routing| routing.rename_rule(rule, &name)),
+            ScheduleEdit::SetRuleEnabled { rule, enabled } => self.edit_routing(|routing| routing.set_rule_enabled(rule, enabled)),
+            ScheduleEdit::SetRuleDestination { rule, destination } => self.edit_routing(|routing| routing.set_rule_destination(rule, destination)),
+            ScheduleEdit::SetRuleLoaders { rule, loaders } => self.edit_routing(|routing| routing.set_rule_loaders(rule, loaders)),
+            ScheduleEdit::SetRuleSources { rule, sources } => self.edit_routing(|routing| routing.set_rule_sources(rule, sources)),
+            ScheduleEdit::SetRuleConditions { rule, conditions } => self.edit_routing(|routing| routing.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::MoveRule { rule, later } => self.edit_routing(|routing| routing.move_rule(rule, later)),
+        }
+    }
+
+    /// Apply one routing edit as a single undo step.
+    ///
+    /// The same whole-plan snapshot every other edit here takes: routing lives
+    /// in the plan, so one committed rule edit is one Ctrl-Z and the ids an
+    /// undo puts back are the ids the rules still name.
+    fn edit_routing(&mut self, edit: impl FnOnce(&mut crate::model::schedule::RoutingConfig) -> ScheduleResult) {
+        self.edit_schedule(|plan| edit(plan.routing_mut()));
+    }
+
+    fn set_routing_enabled(&mut self, enabled: bool) {
+        self.edit_schedule(|plan| {
+            plan.routing_mut().set_enabled(enabled);
+            Ok(())
+        });
+    }
+
+    fn add_destination(&mut self, name: String, kind: crate::model::schedule::DestinationKind) {
+        let mut added = None;
+        self.edit_routing(|routing| {
+            added = Some(routing.add_standalone(&name, kind)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_destination = Some(crate::model::schedule::DestinationId::Standalone(id));
+        }
+    }
+
+    /// Delete a standalone destination, and take the selection off it.
+    ///
+    /// Refused while a rule still delivers to it, which the config reports with
+    /// those rules named: deletion never edits the rule list on the user's
+    /// behalf.
+    fn delete_destination(&mut self, destination: crate::model::schedule::StandaloneDestinationId) {
+        let mut removed = false;
+        self.edit_routing(|routing| {
+            routing.remove_standalone(destination)?;
+            removed = true;
+            Ok(())
+        });
+        if removed && self.editor.schedule_selected_destination == Some(crate::model::schedule::DestinationId::Standalone(destination)) {
+            self.editor.schedule_selected_destination = None;
+        }
+    }
+
+    fn set_destination_capacity(&mut self, destination: crate::model::schedule::DestinationId, capacity_t: Option<f64>) {
+        self.edit_routing(|routing| match destination {
+            crate::model::schedule::DestinationId::Solid(solid) => routing.set_solid_capacity(solid, capacity_t),
+            crate::model::schedule::DestinationId::Standalone(id) => routing.set_standalone_capacity(id, capacity_t),
+        });
+    }
+
+    fn add_destination_rule(&mut self, name: String, destination: crate::model::schedule::DestinationId) {
+        let mut added = None;
+        self.edit_routing(|routing| {
+            added = Some(routing.add_rule(&name, destination)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_rule = Some(id);
+        }
+    }
+
+    fn duplicate_destination_rule(&mut self, rule: crate::model::schedule::RuleId) {
+        let Some(document) = self.workspace.active_document() else { return };
+        let routing = document.schedule().routing();
+        let Some(source) = routing.rule(rule) else {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::UnknownRule.message());
+            return;
+        };
+        let name = crate::model::schedule::suggested_name(&source.name, routing.rules.iter().map(|rule| rule.name.clone()));
+        let mut added = None;
+        self.edit_routing(|routing| {
+            added = Some(routing.duplicate_rule(rule, &name)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_rule = Some(id);
+        }
+    }
+
+    fn delete_destination_rule(&mut self, rule: crate::model::schedule::RuleId) {
+        let mut removed = false;
+        self.edit_routing(|routing| {
+            routing.remove_rule(rule)?;
+            removed = true;
+            Ok(())
+        });
+        if removed && self.editor.schedule_selected_rule == Some(rule) {
+            self.editor.schedule_selected_rule = None;
         }
     }
 

@@ -141,6 +141,82 @@ impl ReserveTotals {
     }
 }
 
+/// One field whose per-row mapped values a scan retained, and how to read them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CapturedField {
+    pub(crate) field: ReserveFieldId,
+    /// A categorical field's captured value is an index into
+    /// [`MaterialCapture::labels`]; a numerical one's is the mapped number.
+    pub(crate) categorical: bool,
+}
+
+/// One group of contributing block-model rows that agree on every captured
+/// value, and how much of them a piece holds.
+///
+/// The *row's own* values, before any spatial proration - which is the whole
+/// point of capturing them. A dig block's average grade cannot say whether a
+/// particular category and a particular grade occur in the same material, and
+/// the marginal category breakdowns in [`ReserveTotals`] cannot either. This
+/// can: every value here was read off one row.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MaterialPortion {
+    /// One value per entry of [`MaterialCapture::fields`], in that order. A
+    /// value that was missing or not finite is `NaN` and fails every test - it
+    /// is never read as zero.
+    pub(crate) values: Vec<f64>,
+    /// The intersection fractions of the rows in this group, summed. Tonnes are
+    /// deliberately *not* stored: multiplying this by the group's own mapped
+    /// value of whichever field a schedule reads as tonnes gives them, so the
+    /// capture owes nothing to a schedule's configuration and does not have to
+    /// be recomputed when that choice changes.
+    pub(crate) fraction: f64,
+}
+
+/// Every piece's material composition, as one scan measured it.
+///
+/// Grouped by identical captured values, so a project whose rules turn on a
+/// rock type keeps one portion per rock type per dig block rather than one per
+/// contributing row. A project whose fields are all continuous grades collapses
+/// nothing, which is correct and is bounded by the intersections the scan
+/// already walked.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MaterialCapture {
+    pub(crate) fields: Vec<CapturedField>,
+    /// Category labels, referenced by index from a portion's values.
+    pub(crate) labels: Vec<String>,
+    /// Per result slot, its portions in first-seen row order.
+    pub(crate) portions: Vec<Vec<MaterialPortion>>,
+}
+
+impl MaterialCapture {
+    /// Where one field's value sits in every portion's value list.
+    pub(crate) fn position(&self, field: ReserveFieldId) -> Option<usize> {
+        self.fields.iter().position(|entry| entry.field == field)
+    }
+
+    pub(crate) fn is_categorical(&self, position: usize) -> bool {
+        self.fields.get(position).is_some_and(|entry| entry.categorical)
+    }
+
+    /// The label a captured categorical value names, or `None` when the value
+    /// was missing or names no label.
+    pub(crate) fn label(&self, value: f64) -> Option<&str> {
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        self.labels.get(value as usize).map(String::as_str)
+    }
+}
+
+/// Groups being accumulated for one slot while a scan runs.
+#[derive(Default)]
+struct SlotPortions {
+    /// Value tuples as raw bits, so two rows that agree are one group and a
+    /// `NaN` groups with other `NaN`s rather than with nothing.
+    index: HashMap<Vec<u64>, usize>,
+    portions: Vec<MaterialPortion>,
+}
+
 /// One closed piece of ground within a band: a whole flitch, a blast's share
 /// of one, or a single dig block.
 pub(crate) struct ReservePiece {
@@ -245,6 +321,8 @@ impl ReserveResolution {
 pub(crate) struct ReserveOutcome {
     pub(crate) totals: Vec<ReserveTotals>,
     pub(crate) resolution: ReserveResolution,
+    /// What each piece is made of, when the scan was asked to retain it.
+    pub(crate) material: Option<MaterialCapture>,
 }
 
 /// Resolve one field's mapping onto a model's own columns, reporting why it
@@ -302,12 +380,25 @@ fn weight_issue(fields: &[ReserveField], weight_field: ReserveFieldId) -> Option
     }
 }
 
+/// Compute one partition's reserves, and optionally retain what each piece is
+/// made of.
+///
+/// `capture` asks for [`MaterialCapture`]: the per-row mapped values behind
+/// every piece's totals, which is what destination routing needs and what the
+/// totals themselves cannot reconstruct. It roughly doubles what one scan keeps,
+/// so it is asked for by the scope that needs it - dig blocks - and not by the
+/// bench scan beside it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one scan's whole input: the model, its geometry, the mapping, the schema, the partition, the capture flag, and the two job handles"
+)]
 pub(crate) fn compute(
     model: &BlockModelData,
     blocks: &BlockBoundsSource,
     mapping: &[ReserveFieldMapping],
     fields: &[ReserveField],
     partition: &ReservePartition,
+    capture: bool,
     cancel: &crate::app::jobs::CancelFlag,
     progress: &super::progress::Progress,
 ) -> anyhow::Result<ReserveOutcome> {
@@ -384,8 +475,26 @@ pub(crate) fn compute(
         };
         partition.slots
     ];
+    // The captured value list: every numerical field the scan resolved, then
+    // every categorical one, in the order they will be read back from.
+    let captured_fields: Vec<CapturedField> = numeric
+        .iter()
+        .map(|field| CapturedField {
+            field: field.id,
+            categorical: false,
+        })
+        .chain(categories.iter().map(|field| CapturedField {
+            field: field.id,
+            categorical: true,
+        }))
+        .collect();
+    let mut material = capture.then(|| MaterialCapture {
+        fields: captured_fields.clone(),
+        labels: Vec::new(),
+        portions: vec![Vec::new(); partition.slots],
+    });
     if partition.is_empty() {
-        return Ok(ReserveOutcome { totals, resolution });
+        return Ok(ReserveOutcome { totals, resolution, material });
     }
 
     let mut counters = Counters::default();
@@ -394,6 +503,17 @@ pub(crate) fn compute(
     // missing value rather than one per piece.
     let mut counted: Vec<bool> = vec![false; numeric.len()];
     let mut contributing_blocks = 0u64;
+    // Portion accumulators, and the interned label table they index into. Kept
+    // beside the totals rather than derived afterwards: the row values are only
+    // in hand while the row is being accumulated.
+    let mut slots: Vec<SlotPortions> = if capture {
+        (0..partition.slots).map(|_| SlotPortions::default()).collect()
+    } else {
+        Vec::new()
+    };
+    let mut label_index: HashMap<String, usize> = HashMap::new();
+    let mut row_values: Vec<f64> = vec![f64::NAN; captured_fields.len()];
+    let mut row_key: Vec<u64> = vec![0; captured_fields.len()];
 
     // Measured in parallel, added up in block order.
     //
@@ -448,6 +568,41 @@ pub(crate) fn compute(
             let mut assigned = 0.0;
             let mut touched = 0usize;
             counted.iter_mut().for_each(|flag| *flag = false);
+            // This row's own mapped values, read once however many pieces it
+            // touches. A categorical value is interned into a label index; a
+            // numerical one is kept as it was mapped, and a missing or
+            // non-finite one stays `NaN` so it fails every test.
+            if capture {
+                for (position, field) in numeric.iter().enumerate() {
+                    row_values[position] = field.values.at(index);
+                }
+                for (offset, field) in categories.iter().enumerate() {
+                    let position = numeric.len() + offset;
+                    let value = field.values.at(index);
+                    row_values[position] = match category_label(&field.labels, value) {
+                        None => f64::NAN,
+                        Some(label) => {
+                            let next = label_index.len();
+                            let slot = *label_index.entry(label.clone()).or_insert(next);
+                            if slot == next
+                                && let Some(material) = material.as_mut()
+                            {
+                                material.labels.push(label);
+                            }
+                            slot as f64
+                        }
+                    };
+                }
+                for (position, value) in row_values.iter().enumerate() {
+                    row_key[position] = if value.is_nan() {
+                        f64::NAN.to_bits()
+                    } else if *value == 0.0 {
+                        0.0_f64.to_bits()
+                    } else {
+                        value.to_bits()
+                    };
+                }
+            }
             for (slot, fraction) in hits {
                 touched += 1;
                 assigned += fraction;
@@ -455,6 +610,19 @@ pub(crate) fn compute(
                     assigned <= 1.0 + OVERLAP_FLOOR + OVERLAP_PER_PIECE * touched as f64,
                     "Block overlap exceeds its volume across planning pieces; the partition overlaps itself"
                 );
+                if capture {
+                    let accumulator = &mut slots[slot];
+                    match accumulator.index.get(&row_key) {
+                        Some(position) => accumulator.portions[*position].fraction += fraction,
+                        None => {
+                            accumulator.index.insert(row_key.clone(), accumulator.portions.len());
+                            accumulator.portions.push(MaterialPortion {
+                                values: row_values.clone(),
+                                fraction,
+                            });
+                        }
+                    }
+                }
                 let total = &mut totals[slot];
                 add(&mut total.all, &numeric, index, fraction, block_volume, Some((&mut counted, &mut counters)));
                 for field in &categories {
@@ -506,7 +674,30 @@ pub(crate) fn compute(
     resolution.missing_values = counters.missing_values;
     resolution.unusable_weights = counters.unusable_weights;
     resolution.unmapped_labels = counters.unmapped_labels;
-    Ok(ReserveOutcome { totals, resolution })
+    if let Some(material) = material.as_mut() {
+        material.portions = slots.into_iter().map(|slot| slot.portions).collect();
+    }
+    Ok(ReserveOutcome { totals, resolution, material })
+}
+
+/// The label one categorical value names, or `None` when there is no value.
+///
+/// A value that is not a finite number has no label here, which is *not* how
+/// the totals treat it: there it joins an explicit empty-category group so the
+/// breakdown adds up. A routing condition has to be able to fail on it, so the
+/// capture keeps the absence rather than a name for it.
+///
+/// A finite value with no entry in the model's dictionary keeps its own number
+/// as its label, exactly as the totals spell it, so the two agree on what a
+/// value is called wherever there is one.
+fn category_label(labels: &BTreeMap<u32, String>, value: f64) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
+        return Some(labels.get(&(value as u32)).cloned().unwrap_or_else(|| value.to_string()));
+    }
+    Some(value.to_string())
 }
 
 /// Per-block data-quality tallies gathered during one scan.

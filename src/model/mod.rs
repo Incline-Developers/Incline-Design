@@ -171,7 +171,7 @@ impl ReserveFieldIssue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SolidId(pub(crate) u64);
 
 /// Stable identity for one derived dig block.

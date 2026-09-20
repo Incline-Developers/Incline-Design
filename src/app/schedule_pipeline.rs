@@ -16,6 +16,10 @@
 //! | Configuration | The schedule's name and the field read as tonnes | A field that can be read as tonnes |
 //! | Loader Classes | Each class's dig rate | Rates the evaluator can use |
 //! | Loader Agents | Each machine's class | A fleet with an effective rate each |
+//! | Stockpiles | The stockpile solids and standalone stockpiles, and their capacities | Destinations that can receive |
+//! | Dumps | The same, for dumps | Destinations that can receive |
+//! | Crushers | Each crusher's daily budget and its overrides | Budgets the evaluator can spend |
+//! | Destinations | The ordered routing rules | Rules whose destinations and fields resolve |
 //! | Scheduling Readiness | Everything above, and the Solids run | [`ScheduleRunInputs`] |
 //!
 //! Three rules separate what is authored from what is derived, and they are
@@ -365,6 +369,7 @@ impl crate::app::App<'_> {
             // not outlive the project it was calculated for.
             self.schedule_calculation = None;
             self.schedule_production_cache = None;
+            self.schedule_destination_cache = None;
             self.pending_schedule_run = None;
             self.schedule_run_diagnostics = None;
             self.mirror_schedule_stages();
@@ -466,15 +471,95 @@ impl crate::app::App<'_> {
             .collect();
         let agents_step = hash_of((classes_step, agents));
 
+        // Destinations are fingerprinted in the three groups the pages edit,
+        // each chained onto the last, so editing a crusher's budget does not
+        // retire the stockpile step - and the solids the stockpile and dump
+        // pages *expose* are part of their inputs, because a solid renamed or
+        // retyped in Solids changes what those pages list.
+        let routing = plan.routing();
+        let solid_destinations: Vec<_> = document
+            .solids()
+            .iter()
+            .filter_map(|solid| {
+                crate::model::schedule::DestinationKind::of_solid(solid.kind).map(|kind| {
+                    (
+                        solid.id.0,
+                        solid.name.clone(),
+                        kind,
+                        routing.capacity_t(crate::model::schedule::DestinationId::Solid(solid.id)).map(f64::to_bits),
+                    )
+                })
+            })
+            .collect();
+        let standalone = |kind: crate::model::schedule::DestinationKind| {
+            routing
+                .standalone
+                .iter()
+                .filter(move |entry| entry.kind == kind)
+                .map(|entry| (entry.id.0, entry.name.clone(), entry.capacity_t.map(f64::to_bits)))
+                .collect::<Vec<_>>()
+        };
+        let by_kind = |kind: crate::model::schedule::DestinationKind| solid_destinations.iter().filter(|(_, _, solid_kind, _)| *solid_kind == kind).cloned().collect::<Vec<_>>();
+        let stockpiles_step = hash_of((
+            agents_step,
+            routing.enabled,
+            by_kind(crate::model::schedule::DestinationKind::Stockpile),
+            standalone(crate::model::schedule::DestinationKind::Stockpile),
+        ));
+        let dumps_step = hash_of((
+            stockpiles_step,
+            by_kind(crate::model::schedule::DestinationKind::Dump),
+            standalone(crate::model::schedule::DestinationKind::Dump),
+        ));
+        let crushers: Vec<_> = routing
+            .standalone
+            .iter()
+            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Crusher)
+            .map(|entry| {
+                let periods: Vec<_> = entry.crusher.periods.iter().map(|(period, value)| (period.0, value.tonnes().map(f64::to_bits))).collect();
+                (entry.id.0, entry.name.clone(), entry.crusher.default_tpd.map(f64::to_bits), periods)
+            })
+            .collect();
+        let crushers_step = hash_of((dumps_step, crushers));
+        let rules = {
+            let mut hasher = DefaultHasher::new();
+            crushers_step.hash(&mut hasher);
+            // The rules' own content hash, which already covers every field a
+            // match depends on, including the fields the conditions name.
+            for rule in &routing.rules {
+                let mut rule_hasher = DefaultHasher::new();
+                rule.hash_content_public(&mut rule_hasher);
+                rule_hasher.finish().hash(&mut hasher);
+            }
+            // A condition reads a field through its definition, so
+            // re-aggregating or deleting one is an input change.
+            for field in document.reserve_fields() {
+                field.id.0.hash(&mut hasher);
+                field.name.hash(&mut hasher);
+                format!("{:?}", field.aggregation).hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let destinations_step = rules;
+
         // Where the Solids run stands, not what it produced: a status is
         // cheap, and it moves exactly when a schedule's ground does.
         let solids = match self.planning_snapshot_status() {
             Ok(generation) => (0_u8, generation, String::new()),
             Err(reason) => (1, 0, reason.describe()),
         };
-        let readiness_step = hash_of((agents_step, solids));
+        let readiness_step = hash_of((destinations_step, solids));
 
-        [configuration, classes_step, agents_step, readiness_step]
+        [
+            configuration,
+            classes_step,
+            agents_step,
+            stockpiles_step,
+            dumps_step,
+            crushers_step,
+            destinations_step,
+            readiness_step,
+        ]
     }
 
     /// Where the Solids pipeline stands, without collecting its dig blocks.
@@ -673,6 +758,10 @@ impl crate::app::App<'_> {
             ScheduleStep::Configuration => self.evaluate_schedule_configuration(),
             ScheduleStep::LoaderClasses => self.evaluate_loader_classes(),
             ScheduleStep::LoaderAgents => self.evaluate_loader_agents(),
+            ScheduleStep::Stockpiles => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Stockpile),
+            ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
+            ScheduleStep::Crushers => self.evaluate_crushers(),
+            ScheduleStep::Destinations => self.evaluate_destination_rules(),
             ScheduleStep::Readiness => self.evaluate_schedule_readiness(),
         }
     }
@@ -782,6 +871,192 @@ impl crate::app::App<'_> {
         StageOutcome::Settled {
             diagnostics,
             entities: plan.agents().len(),
+        }
+    }
+
+    /// The stockpiles or dumps this project can deliver to: the solids of that
+    /// kind, plus the standalone destinations of it.
+    ///
+    /// Capacities are validated on the way in, so what is left to say here is
+    /// about references rather than numbers: a capacity stored against a solid
+    /// that is no longer a stockpile is *kept* - the solid change is undoable -
+    /// and reported as a note, because a setting that is being preserved and
+    /// one that is being applied should not look alike.
+    fn evaluate_destination_kind(&self, kind: crate::model::schedule::DestinationKind) -> StageOutcome {
+        use crate::model::schedule::destinations;
+
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let plan = document.schedule();
+        let routing = plan.routing();
+        let available = destinations::available(document.solids(), routing);
+        let mut diagnostics = Vec::new();
+        let mut entities = 0;
+        for entry in available.iter().filter(|entry| entry.kind == kind) {
+            entities += 1;
+            match entry.capacity_t {
+                None => {}
+                Some(capacity) if capacity.is_finite() && capacity >= 0.0 => {}
+                Some(_) => diagnostics.push(StageDiagnostic {
+                    entity: Some(entry.name.clone()),
+                    message: crate::model::schedule::ScheduleError::InvalidCapacity.message(),
+                    blocking: true,
+                }),
+            }
+        }
+        // Retained settings whose solid is gone or has been retyped. Not
+        // blocking: nothing routes to them, and the rules that named them are
+        // where the blocking problem is reported. Counted on the first of the
+        // two pages only, so one retained setting is not reported twice.
+        let orphans = if kind == crate::model::schedule::DestinationKind::Stockpile {
+            routing
+                .solids
+                .iter()
+                .filter(|entry| {
+                    document
+                        .solid(entry.solid)
+                        .and_then(|solid| crate::model::schedule::DestinationKind::of_solid(solid.kind))
+                        .is_none()
+                })
+                .count()
+        } else {
+            0
+        };
+        if orphans > 0 {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("destination-stage-retained", count = orphans.to_string()),
+                blocking: false,
+            });
+        }
+        StageOutcome::Settled { diagnostics, entities }
+    }
+
+    /// Each crusher's daily budget: the default and every override it carries.
+    fn evaluate_crushers(&self) -> StageOutcome {
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let routing = document.schedule().routing();
+        let crushers: Vec<_> = routing
+            .standalone
+            .iter()
+            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Crusher)
+            .collect();
+        let mut diagnostics = Vec::new();
+        for crusher in &crushers {
+            if let Err(error) = crusher.crusher.validate() {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(crusher.name.clone()),
+                    message: error.message(),
+                    blocking: true,
+                });
+            }
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: crushers.len(),
+        }
+    }
+
+    /// The routing rules: does each one name a destination that still exists,
+    /// and fields that can carry the conditions written against them.
+    ///
+    /// Source scopes are deliberately *not* checked here. A scope names ground,
+    /// and which ground exists is the Solids run's answer - so an unplaceable
+    /// scope is a readiness problem, reported against the run that could not
+    /// place it.
+    ///
+    /// A disabled rule is skipped entirely: it is switched off, not broken.
+    fn evaluate_destination_rules(&self) -> StageOutcome {
+        use crate::model::{
+            ReserveAggregation as Aggregation,
+            schedule::{ConditionTest, destinations},
+        };
+
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let plan = document.schedule();
+        let routing = plan.routing();
+        let mut diagnostics = Vec::new();
+        // Routing switched off is a complete answer: the rules are
+        // configuration nothing reads, and an unfinished one must not block a
+        // dig-only run.
+        if !routing.enabled {
+            if !routing.rules.is_empty() {
+                diagnostics.push(StageDiagnostic {
+                    entity: None,
+                    message: tr!("destination-stage-routing-off"),
+                    blocking: false,
+                });
+            }
+            return StageOutcome::Settled {
+                diagnostics,
+                entities: routing.rules.len(),
+            };
+        }
+        if routing.rules.iter().all(|rule| !rule.enabled) {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("destination-stage-no-rules"),
+                blocking: true,
+            });
+        }
+        for rule in routing.rules.iter().filter(|rule| rule.enabled) {
+            if let Err(problem) = destinations::resolve(rule.destination, document.solids(), routing) {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(rule.name.clone()),
+                    message: problem.message(&rule.name),
+                    blocking: true,
+                });
+            }
+            if let crate::model::schedule::LoaderSelection::Only(agents) = &rule.loaders
+                && agents.iter().any(|agent| plan.agent(*agent).is_none())
+            {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(rule.name.clone()),
+                    message: tr!("destination-stage-rule-loader-missing"),
+                    blocking: true,
+                });
+            }
+            for condition in &rule.conditions {
+                let Some(field) = document.reserve_fields().iter().find(|field| field.id == condition.field) else {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(rule.name.clone()),
+                        message: tr!("destination-stage-field-missing"),
+                        blocking: true,
+                    });
+                    continue;
+                };
+                // A condition is written against a field's kind. Re-aggregating
+                // a category field into a weighted average does not make its
+                // value set a range, so the mismatch is a configuration error
+                // rather than a condition that quietly stops matching.
+                let categorical = field.aggregation == Aggregation::Category;
+                let wants_category = matches!(condition.test, ConditionTest::Category { .. });
+                if categorical != wants_category {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(rule.name.clone()),
+                        message: tr!("destination-stage-field-kind", field = field.name.clone()),
+                        blocking: true,
+                    });
+                }
+            }
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: routing.rules.len(),
         }
     }
 

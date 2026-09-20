@@ -1670,6 +1670,32 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_setup::draw_agent_properties(ui, rect, editor, &plan, session, commands)
             });
         }
+        // The three destination pages share one shape: the list of that kind on
+        // the left, the selected row's cells in the middle. They are separate
+        // steps rather than one page with a filter because each is a thing that
+        // can be marked Complete, Stale or Failed on its own.
+        ScheduleStep::Stockpiles | ScheduleStep::Dumps | ScheduleStep::Crushers => {
+            let kind = match editor.schedule_setup_step {
+                ScheduleStep::Stockpiles => crate::model::schedule::DestinationKind::Stockpile,
+                ScheduleStep::Dumps => crate::model::schedule::DestinationKind::Dump,
+                _ => crate::model::schedule::DestinationKind::Crusher,
+            };
+            island(ui, layout, "schedule_destination_list_island", 320.0, |ui, rect| {
+                super::schedule_destinations::draw_destination_list(ui, rect, editor, &plan, document, kind, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands)
+            });
+            super::schedule_destinations::draw_new_destination_dialog(ui, editor, &plan, session, commands);
+        }
+        ScheduleStep::Destinations => {
+            island(ui, layout, "schedule_rule_list_island", 380.0, |ui, rect| {
+                super::schedule_destinations::draw_rule_list(ui, rect, editor, &plan, document, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_destinations::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
+            });
+        }
         ScheduleStep::Readiness => {
             central_island(ui, layout, |ui, rect| super::schedule_setup::draw_readiness(ui, rect, editor, &plan, document));
         }
