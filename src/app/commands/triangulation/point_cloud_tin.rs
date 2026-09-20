@@ -42,6 +42,10 @@ pub(crate) struct TerrainTinParams {
     /// Bridge (fill) holes and boundary concavities narrower than this distance;
     /// wider gaps stay open. Zero fills only sub-cell scan gaps.
     pub(crate) hole_fill_distance: f64,
+    /// Reconstruct from the points a ground filter classified as bare earth,
+    /// discarding vegetation, buildings, plant and noise. Ignored by a cloud
+    /// that carries no classifications.
+    pub(crate) ground_only: bool,
 }
 
 /// Resolve a budget specification to an absolute vertex target.
@@ -66,8 +70,20 @@ impl<'a> App<'a> {
             .find(|cloud| cloud.id == cloud_id)
             .ok_or_else(|| anyhow::anyhow!("The selected point cloud is no longer loaded"))?;
         let points = cloud.points.clone();
+        // Filtering runs on the worker with the reconstruction rather than here:
+        // bare earth is a fraction of a delivery, but the scan that finds it is
+        // still a pass over every point.
+        let classifications = params.ground_only.then(|| cloud.classifications.clone()).flatten();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulation> {
-            reconstruct_terrain_tin_from_point_cloud(&points, &params, cancel, progress)
+            let ground;
+            let points: &[DVec3] = match classifications.as_deref() {
+                Some(codes) => {
+                    ground = ground_points(&points, codes)?;
+                    &ground
+                }
+                None => &points,
+            };
+            reconstruct_terrain_tin_from_point_cloud(points, &params, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation(generated),
@@ -78,6 +94,36 @@ impl<'a> App<'a> {
         self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
         Ok(())
     }
+}
+
+/// Keep only the points a ground filter classified as bare earth.
+///
+/// Surveyors do this before anything else touches a delivery: canopy, plant and
+/// blunders would otherwise be averaged into the surface, and the adaptive
+/// sampler would spend its budget resolving trees, which are the roughest thing
+/// in a scene and so the greediest for vertices.
+fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>> {
+    if classifications.len() != points.len() {
+        anyhow::bail!("The point cloud's classifications do not match its points");
+    }
+    let ground: Vec<DVec3> = points
+        .par_iter()
+        .zip(classifications.par_iter())
+        .filter(|(_, code)| **code == crate::model::point_cloud::CLASS_GROUND)
+        .map(|(point, _)| *point)
+        .collect();
+    if ground.len() < 3 {
+        anyhow::bail!("The point cloud classifies fewer than 3 points as ground; turn off 'Ground points only' to use every point");
+    }
+    userspace_log!(
+        "{}",
+        tr_format!(
+            literal = "Terrain TIN: filtered to %ground% ground points of %total%",
+            ground = ground.len(),
+            total = points.len()
+        )
+    );
+    Ok(ground)
 }
 
 /// Selects how the point budget is distributed before triangulation.

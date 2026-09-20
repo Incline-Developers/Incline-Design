@@ -47,6 +47,7 @@ impl<'a> App<'a> {
             name,
             points: loaded.points,
             colors: loaded.colors,
+            classifications: loaded.classifications,
             prepared: loaded.prepared,
             bounds: loaded.bounds,
             color,
@@ -78,14 +79,16 @@ impl<'a> App<'a> {
                     .bounds
                     .or_else(|| finite_bounds(&data.points))
                     .with_context(|| format!("Point cloud {} contains no finite points", input.source.name))?;
-                let prepared = prepare_for_render(&data.points, data.colors.as_deref(), (min, max));
+                let prepared = prepare_for_render(&data.points, data.colors.as_deref(), data.classifications.as_deref(), (min, max));
                 let colors = data.colors.map(std::sync::Arc::new);
+                let classifications = data.classifications.map(std::sync::Arc::new);
                 progress.set_fraction(1.0);
                 Ok(LoadedPointCloud {
                     name,
                     path: display_path,
                     points: std::sync::Arc::new(data.points),
                     colors,
+                    classifications,
                     prepared: std::sync::Arc::new(prepared),
                     bounds: (min, max),
                 })
@@ -145,14 +148,16 @@ impl<'a> App<'a> {
                         .bounds
                         .or_else(|| finite_bounds(&data.points))
                         .with_context(|| format!("Point cloud {} contains no finite points", path.display()))?;
-                    let prepared = prepare_for_render(&data.points, data.colors.as_deref(), (min, max));
+                    let prepared = prepare_for_render(&data.points, data.colors.as_deref(), data.classifications.as_deref(), (min, max));
                     let colors = data.colors.map(std::sync::Arc::new);
+                    let classifications = data.classifications.map(std::sync::Arc::new);
                     progress.set_fraction(1.0);
                     Ok(LoadedPointCloud {
                         name,
                         path,
                         points: std::sync::Arc::new(data.points),
                         colors,
+                        classifications,
                         prepared: std::sync::Arc::new(prepared),
                         bounds: (min, max),
                     })
@@ -268,6 +273,7 @@ impl<'a> App<'a> {
             sources.push(JoinSource {
                 points: cloud.points.clone(),
                 colors: cloud.colors.clone(),
+                classifications: cloud.classifications.clone(),
                 color: cloud.color,
                 bounds: cloud.bounds,
             });
@@ -302,6 +308,7 @@ impl<'a> App<'a> {
 struct JoinSource {
     points: std::sync::Arc<Vec<DVec3>>,
     colors: Option<std::sync::Arc<Vec<u32>>>,
+    classifications: Option<std::sync::Arc<Vec<u8>>>,
     color: [f32; 4],
     bounds: (DVec3, DVec3),
 }
@@ -327,9 +334,25 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
     // the uniform colour they were drawn with, so the tiles stay tellable
     // apart rather than all turning grey.
     let colored = sources.iter().any(|source| source.colors.is_some());
+    // Classifications, unlike colours, are all or nothing. Padding an
+    // unclassified tile out to "unclassified" would leave a bare-earth filter
+    // silently deleting that whole tile, so a mixed join keeps none of them and
+    // says so.
+    let classified = sources.iter().all(|source| source.classifications.is_some());
+    if !classified && sources.iter().any(|source| source.classifications.is_some()) {
+        userspace_warn!(
+            "{}",
+            tr!(literal = "Dropped point classifications: some of the joined clouds are unclassified, and a partly classified cloud cannot be filtered to ground.")
+        );
+    }
     let mut points = try_vec_with_capacity::<DVec3>(total, "joined point cloud")?;
     let mut colors = if colored {
         Some(try_vec_with_capacity::<u32>(total, "joined point cloud colours")?)
+    } else {
+        None
+    };
+    let mut classifications = if classified {
+        Some(try_vec_with_capacity::<u8>(total, "joined point cloud classifications")?)
     } else {
         None
     };
@@ -348,6 +371,13 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
             }
             colors.resize(colors.len() + source.points.len() - matched, packed_uniform_color(source.color));
         }
+        if let Some(classifications) = classifications.as_mut() {
+            // Padded the same way and for the same reason as the colours.
+            let codes = source.classifications.as_deref().expect("a classified join has every source classified");
+            let matched = codes.len().min(source.points.len());
+            classifications.extend_from_slice(&codes[..matched]);
+            classifications.resize(classifications.len() + source.points.len() - matched, crate::model::point_cloud::CLASS_UNCLASSIFIED);
+        }
         copied += source.points.len();
         progress.set_fraction(JOIN_COPY_SHARE * copied as f32 / total as f32);
     }
@@ -361,7 +391,7 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
         .filter(|(min, max)| min.is_finite() && max.is_finite())
         .or_else(|| finite_bounds(&points))
         .ok_or_else(|| anyhow::anyhow!("The selected point clouds contain no finite points"))?;
-    let prepared = prepare_for_render(&points, colors.as_deref(), bounds);
+    let prepared = prepare_for_render(&points, colors.as_deref(), classifications.as_deref(), bounds);
     progress.set_fraction(1.0);
     userspace_log!(
         "{}",
@@ -378,6 +408,7 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
         path: std::path::PathBuf::new(),
         points: std::sync::Arc::new(points),
         colors: colors.map(std::sync::Arc::new),
+        classifications: classifications.map(std::sync::Arc::new),
         prepared: std::sync::Arc::new(prepared),
         bounds,
     })

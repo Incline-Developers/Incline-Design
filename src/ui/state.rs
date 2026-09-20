@@ -1036,6 +1036,12 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
+    /// Draw classified point clouds in their ASPRS class colours. Survey's
+    /// reading of a cloud - what a delivery's ground filter decided - so the
+    /// switch appears there and the renderer honours it there only. On by
+    /// default: a classified cloud arrives to be checked, and a flat one hides
+    /// the vegetation and noise that check is looking for.
+    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -1583,6 +1589,10 @@ pub(crate) struct EditorState {
     pub(crate) point_cloud_tin_candidate_mult: u32,
     /// Bridge holes and boundary concavities narrower than this (0 = only gaps).
     pub(crate) point_cloud_tin_hole_fill: f64,
+    /// Reconstruct the terrain from classified ground points alone. On by
+    /// default, and honoured only by a classified cloud: a delivery that has
+    /// been through a ground filter is meant to be used through it.
+    pub(crate) point_cloud_tin_ground_only: bool,
     pub(crate) point_cloud_join_open: bool,
     /// Clouds ticked for joining, in the order the explorer lists them.
     pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
@@ -2227,6 +2237,7 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
+            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -2513,6 +2524,7 @@ impl EditorState {
             point_cloud_tin_sampler: crate::app::commands::triangulation::TerrainSampler::Adaptive,
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
+            point_cloud_tin_ground_only: true,
             point_cloud_join_open: false,
             point_cloud_join_sources: Vec::new(),
             point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
@@ -2689,6 +2701,17 @@ impl EditorState {
     /// same rule for drawing them, so nothing is ever pickable unseen.
     pub(crate) fn shows_tie_ins(&self) -> bool {
         self.active_workspace == Workspace::DrillAndBlast
+    }
+
+    /// Whether classified point clouds draw in their ASPRS class colours.
+    ///
+    /// Survey's reading of a cloud - what a delivery's ground filter decided -
+    /// rather than a property of the cloud, so it applies in that workspace
+    /// alone. Read by the renderer at draw time rather than pushed to it, so
+    /// it is also part of `EditorSceneState` - the editor state a cached scene
+    /// image is only valid for.
+    pub(crate) fn colors_points_by_classification(&self) -> bool {
+        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3055,6 +3078,7 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
+    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -3544,6 +3568,10 @@ impl UiCommand {
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
             Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
+            Self::SetPointCloudClassificationColors(enabled) => report(
+                tr!(literal = "Colour Points by Classification"),
+                if *enabled { tr!(literal = "On") } else { tr!(literal = "Off") },
+            ),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
@@ -3816,6 +3844,9 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    /// Whether the cloud carries ASPRS classification codes, which is what
+    /// offers the bare-earth filter and the classification view.
+    pub(crate) is_classified: bool,
 }
 
 #[derive(Clone, Debug)]

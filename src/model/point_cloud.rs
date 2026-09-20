@@ -16,6 +16,8 @@ pub(crate) struct LoadedPointCloud {
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, when the input provides them.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
+    /// Source-order ASPRS classification codes, when the input provides them.
+    pub(crate) classifications: Option<Arc<Vec<u8>>>,
     /// Spatially ordered, cloud-local render data prepared by the loader.
     pub(crate) prepared: Arc<PreparedPointCloud>,
     pub(crate) bounds: (DVec3, DVec3),
@@ -29,6 +31,10 @@ pub(crate) struct OpenPointCloud {
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, retained for lossless interchange.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
+    /// Source-order ASPRS classification codes. Their presence is what offers
+    /// the bare-earth filter and the Survey classification view; a cloud whose
+    /// file never classified anything carries `None`.
+    pub(crate) classifications: Option<Arc<Vec<u8>>>,
     pub(crate) prepared: Arc<PreparedPointCloud>,
     pub(crate) bounds: (DVec3, DVec3),
     /// Uniform colour used when the file carries no per-point colours.
@@ -41,6 +47,84 @@ impl OpenPointCloud {
     pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
         crate::model::SceneEntityId::PointCloud(self.id)
     }
+
+    /// Whether the cloud has been through a ground filter, and so can be drawn
+    /// by class or reduced to bare earth.
+    pub(crate) fn is_classified(&self) -> bool {
+        self.classifications.is_some()
+    }
+}
+
+/// ASPRS LAS classification codes Incline names. Everything outside this range
+/// is reserved or user-definable and draws in the fallback colour.
+pub(crate) const CLASS_NEVER_CLASSIFIED: u8 = 0;
+pub(crate) const CLASS_UNCLASSIFIED: u8 = 1;
+pub(crate) const CLASS_GROUND: u8 = 2;
+
+/// Display name for an ASPRS classification code, or `None` where the standard
+/// reserves the code or leaves it to the producer.
+pub(crate) fn classification_name(code: u8) -> Option<&'static str> {
+    Some(match code {
+        CLASS_NEVER_CLASSIFIED => "Created, never classified",
+        CLASS_UNCLASSIFIED => "Unclassified",
+        CLASS_GROUND => "Ground",
+        3 => "Low vegetation",
+        4 => "Medium vegetation",
+        5 => "High vegetation",
+        6 => "Building",
+        7 => "Low point (noise)",
+        9 => "Water",
+        10 => "Rail",
+        11 => "Road surface",
+        13 => "Wire - guard",
+        14 => "Wire - conductor",
+        15 => "Transmission tower",
+        16 => "Wire-structure connector",
+        17 => "Bridge deck",
+        18 => "High noise",
+        19 => "Overhead structure",
+        20 => "Ignored ground",
+        21 => "Snow",
+        22 => "Temporal exclusion",
+        _ => return None,
+    })
+}
+
+/// Packed RGBA8 (red in the low byte) for an ASPRS classification code, in the
+/// layout [`PointInstance::color`] is read with.
+///
+/// The palette follows what survey software has long drawn these classes in -
+/// bare earth tan, vegetation greening with height, noise a colour that occurs
+/// nowhere in terrain - so a classified cloud reads the same here as it did in
+/// whatever filtered it.
+pub(crate) fn classification_color(code: u8) -> u32 {
+    let rgb: u32 = match code {
+        CLASS_NEVER_CLASSIFIED => 0x9aa0a6,
+        CLASS_UNCLASSIFIED => 0xc8cdd2,
+        CLASS_GROUND => 0xb08050,
+        3 => 0xa8d08d,
+        4 => 0x6aae4f,
+        5 => 0x2e7d32,
+        6 => 0xe06c4f,
+        7 | 18 => 0xff3ddc,
+        9 => 0x3f8fd1,
+        10 => 0x8e6fbf,
+        11 => 0x6e6e6e,
+        12 => 0xb9a54b,
+        13 => 0xe8c547,
+        14 => 0xf2a93b,
+        15 => 0xc08a2e,
+        16 => 0xd9b45b,
+        17 => 0x9c6b3f,
+        19 => 0xb0729a,
+        20 => 0x7a6046,
+        21 => 0xe8f1f8,
+        22 => 0x8891a0,
+        _ => 0x7f8a99,
+    };
+    // Stored red-in-the-low-byte to match the packed RGBA8 vertex format.
+    let [_, r, g, b] = rgb.to_be_bytes();
+    u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16) | 0xff00_0000
 }
 
 /// Position-only instance used by clouds without per-point colours.
@@ -97,6 +181,15 @@ impl PreparedPointData {
             Self::Colored(points) => points.get(index).map(|point| point.pos),
         }
     }
+
+    /// The instances behind a coloured layout, which is the only one whose
+    /// colour channel can be restaged.
+    pub(crate) fn colored(&self) -> Option<&[PointInstance]> {
+        match self {
+            Self::Colored(points) => Some(points),
+            Self::Uncolored(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -125,12 +218,41 @@ pub(crate) struct PreparedPointChunk {
     /// Small Morton-coherent ranges used for CPU visibility queries without
     /// scanning an entire 256k-point render chunk on every snap poll.
     pub(crate) pick_groups: Vec<PointPickGroup>,
+    /// Classification codes in the same order as `data`, carried only when the
+    /// colour channel already holds the file's own RGB and so has no room for
+    /// the classification colours - see [`PointColorChannel`]. The renderer
+    /// stages colours from these when the Survey classification view is on.
+    pub(crate) classifications: Option<Vec<u8>>,
+}
+
+/// What a prepared cloud's instance colour channel holds, which decides how the
+/// classification view is served.
+///
+/// A cloud with classifications but no RGB bakes the classification colours
+/// straight into the channel, because the view it toggles back to is the
+/// cloud's own uniform colour - which the shader applies without touching the
+/// vertex buffer. A cloud that also carries RGB has to keep that in the
+/// channel and stage the classification colours over it, which is the one case
+/// that costs a re-upload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointColorChannel {
+    /// No colour channel at all: 12-byte instances drawn in the uniform colour.
+    None,
+    /// The file's own per-point RGB.
+    Source,
+    /// ASPRS classification colours.
+    Classification,
 }
 
 pub(crate) struct PreparedPointCloud {
     pub(crate) origin: DVec3,
     pub(crate) chunks: Vec<PreparedPointChunk>,
     pub(crate) colored: bool,
+    pub(crate) color_channel: PointColorChannel,
+    /// Whether the chunks carry classification codes to stage colours from.
+    /// Settled here rather than scanned per frame: the renderer asks this of
+    /// every cloud every frame, and the chunk list runs to hundreds.
+    pub(crate) chunk_classifications: bool,
 }
 
 const POINTS_PER_SPATIAL_CHUNK: usize = 256 * 1024;
@@ -149,7 +271,7 @@ struct MortonPointIndex {
 
 /// Convert source doubles into a spatially coherent, render-ready hierarchy.
 /// This is called by the point-cloud loader, never by the render thread.
-pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, bounds: (DVec3, DVec3)) -> PreparedPointCloud {
+pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, classifications: Option<&[u8]>, bounds: (DVec3, DVec3)) -> PreparedPointCloud {
     let origin = (bounds.0 + bounds.1) * 0.5;
     let extent = (bounds.1 - bounds.0).max(DVec3::splat(f64::EPSILON));
 
@@ -183,24 +305,52 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, bound
     // place the point in its LOD prefix and nine more inside the
     // nearest-neighbour window scan. Doing it once leaves everything downstream
     // walking chunk-local slices that stay in cache.
-    if let Some(colors) = colors {
-        let instances = gather_instances(&sorted, |point| PointInstance {
-            pos: (points[point.source_index] - origin).as_vec3().to_array(),
-            color: colors.get(point.source_index).copied().unwrap_or(0xffff_ffff),
-        });
-        PreparedPointCloud {
-            origin,
-            chunks: build_chunks(&sorted, &instances, PreparedPointData::Colored),
-            colored: true,
+    match (colors, classifications) {
+        (Some(colors), _) => {
+            let instances = gather_instances(&sorted, |point| PointInstance {
+                pos: (points[point.source_index] - origin).as_vec3().to_array(),
+                color: colors.get(point.source_index).copied().unwrap_or(0xffff_ffff),
+            });
+            // Only worth carrying when both channels exist: with RGB in the
+            // instances there is nowhere else for the codes to live.
+            let codes = classifications.map(|codes| {
+                sorted
+                    .par_iter()
+                    .map(|point| codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED))
+                    .collect::<Vec<u8>>()
+            });
+            PreparedPointCloud {
+                origin,
+                chunk_classifications: codes.is_some(),
+                chunks: build_chunks(&sorted, &instances, codes.as_deref(), PreparedPointData::Colored),
+                colored: true,
+                color_channel: PointColorChannel::Source,
+            }
         }
-    } else {
-        let instances = gather_instances(&sorted, |point| PointPosition {
-            pos: (points[point.source_index] - origin).as_vec3().to_array(),
-        });
-        PreparedPointCloud {
-            origin,
-            chunks: build_chunks(&sorted, &instances, PreparedPointData::Uncolored),
-            colored: false,
+        (None, Some(codes)) => {
+            let instances = gather_instances(&sorted, |point| PointInstance {
+                pos: (points[point.source_index] - origin).as_vec3().to_array(),
+                color: classification_color(codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED)),
+            });
+            PreparedPointCloud {
+                origin,
+                chunks: build_chunks(&sorted, &instances, None, PreparedPointData::Colored),
+                colored: true,
+                color_channel: PointColorChannel::Classification,
+                chunk_classifications: false,
+            }
+        }
+        (None, None) => {
+            let instances = gather_instances(&sorted, |point| PointPosition {
+                pos: (points[point.source_index] - origin).as_vec3().to_array(),
+            });
+            PreparedPointCloud {
+                origin,
+                chunks: build_chunks(&sorted, &instances, None, PreparedPointData::Uncolored),
+                colored: false,
+                color_channel: PointColorChannel::None,
+                chunk_classifications: false,
+            }
         }
     }
 }
@@ -209,20 +359,27 @@ fn gather_instances<T: RenderPoint>(sorted: &[MortonPointIndex], instance: impl 
     sorted.par_iter().map(instance).collect()
 }
 
-fn build_chunks<T: RenderPoint>(sorted: &[MortonPointIndex], instances: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> Vec<PreparedPointChunk> {
+fn build_chunks<T: RenderPoint>(sorted: &[MortonPointIndex], instances: &[T], codes: Option<&[u8]>, wrap: fn(Vec<T>) -> PreparedPointData) -> Vec<PreparedPointChunk> {
     sorted
         .par_chunks(POINTS_PER_SPATIAL_CHUNK)
         .zip(instances.par_chunks(POINTS_PER_SPATIAL_CHUNK))
-        .map(|(keys, chunk)| build_chunk(keys, chunk, wrap))
+        .enumerate()
+        .map(|(index, (keys, chunk))| {
+            let start = index * POINTS_PER_SPATIAL_CHUNK;
+            build_chunk(keys, chunk, codes.map(|codes| &codes[start..start + keys.len()]), wrap)
+        })
         .collect()
 }
 
-fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> PreparedPointChunk {
+fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], codes: Option<&[u8]>, wrap: fn(Vec<T>) -> PreparedPointData) -> PreparedPointChunk {
     // Measured while the chunk is still in Morton order, and by walking it
     // forwards, before the LOD permutation below scrambles it.
     let base_spacing = chunk_base_spacing(chunk);
     let (indices, level_counts) = density_aware_prefix_indices(keys);
-    let ordered = indices.into_iter().map(|index| chunk[index]).collect::<Vec<_>>();
+    let ordered = indices.iter().map(|&index| chunk[index]).collect::<Vec<_>>();
+    // Permuted alongside the instances so a classification colour staged for
+    // instance `i` is the class of the point drawn at `i`.
+    let classifications = codes.map(|codes| indices.iter().map(|&index| codes[index]).collect::<Vec<u8>>());
     let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(T::pos));
     let pick_groups = build_pick_groups(&ordered, level_counts, T::pos);
     PreparedPointChunk {
@@ -232,6 +389,7 @@ fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], wrap: fn(
         bounds_min,
         bounds_max,
         pick_groups,
+        classifications,
     }
 }
 

@@ -97,7 +97,8 @@ impl OpenItem {
                 };
                 item.points = Arc::new(Vec::new());
                 item.colors = None;
-                item.prepared = Arc::new(super::point_cloud::prepare_for_render(&[], None, item.bounds));
+                item.classifications = None;
+                item.prepared = Arc::new(super::point_cloud::prepare_for_render(&[], None, None, item.bounds));
                 summary
             }
             Self::Raster(item) => {
@@ -146,6 +147,7 @@ impl OpenItem {
                 let data = bundle.point_clouds.pop().context("backing contains no point cloud")?.loaded;
                 item.points = data.points;
                 item.colors = data.colors;
+                item.classifications = data.classifications;
                 item.prepared = data.prepared;
                 item.bounds = data.bounds;
             }

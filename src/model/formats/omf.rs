@@ -562,6 +562,9 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             writer.array_colors(colors.iter().map(|color| Some(color.to_le_bytes())))?,
         ));
     }
+    if let Some(codes) = cloud.classifications.as_ref().filter(|codes| codes.len() == cloud.points.len()) {
+        element.attributes.push(write_point_classification(writer, codes)?);
+    }
     put(&mut element, META_KIND, "point_cloud");
     put_item_identity(
         &mut element,
@@ -577,6 +580,47 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     );
     Ok(element)
 }
+
+/// Write ASPRS point classifications as an OMF category attribute.
+///
+/// Only the codes the cloud actually uses become categories, so the indices
+/// stay narrow and the names list stays short. The ASPRS code itself travels in
+/// the same `Incline category code` sidecar the block-model writer uses, which
+/// is what lets a round-trip recover codes rather than category positions, and
+/// the gradient carries the colours the classification view draws so other
+/// applications show the same cloud.
+fn write_point_classification<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, codes: &[u8]) -> Result<omf_crate::Attribute> {
+    use crate::model::point_cloud::{classification_color, classification_name};
+
+    let used: Vec<u8> = codes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut lookup = [0u32; 256];
+    for (index, code) in used.iter().enumerate() {
+        lookup[usize::from(*code)] = index as u32;
+    }
+    let names = used
+        .iter()
+        .map(|code| classification_name(*code).map_or_else(|| format!("Class {code}"), str::to_owned))
+        .collect::<Vec<_>>();
+    let original_codes = omf_crate::Attribute::from_numbers(
+        "Incline category code",
+        omf_crate::Location::Categories,
+        writer.array_numbers(used.iter().map(|code| Some(i64::from(*code))))?,
+    );
+    let gradient = writer.array_gradient(used.iter().map(|code| classification_color(*code).to_le_bytes()))?;
+    let indices = writer.array_indices(codes.iter().map(|code| Some(lookup[usize::from(*code)])))?;
+    let names = writer.array_names(names)?;
+    Ok(omf_crate::Attribute::from_categories(
+        POINT_CLASSIFICATION_ATTRIBUTE,
+        omf_crate::Location::Vertices,
+        indices,
+        names,
+        Some(gradient),
+        [original_codes],
+    ))
+}
+
+/// Attribute name the classification column round-trips under.
+const POINT_CLASSIFICATION_ATTRIBUTE: &str = "Classification";
 
 /// Write a numeric attribute, carrying its colormap when it has one.
 ///
@@ -1330,7 +1374,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         path,
                         points: Arc::new(Vec::new()),
                         colors: None,
-                        prepared: Arc::new(prepare_for_render(&[], None, bounds)),
+                        classifications: None,
+                        prepared: Arc::new(prepare_for_render(&[], None, None, bounds)),
                         bounds,
                     },
                     color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
@@ -1727,8 +1772,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .map(|colors| colors.into_iter().map(|color| color.unwrap_or([255; 4])).map(u32::from_le_bytes).collect::<Vec<_>>())
             })
             .transpose()?;
+        let classifications = self.read_point_classification(element, positions.len())?;
         let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
-        let prepared = prepare_for_render(&positions, colors.as_deref(), bounds);
+        let prepared = prepare_for_render(&positions, colors.as_deref(), classifications.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
         self.bundle.point_clouds.push(ImportedPointCloud {
             preferred_id: element_id(element),
@@ -1739,6 +1785,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 path: virtual_path(self.source_name, element_name(element), "pcd"),
                 points: Arc::new(positions),
                 colors: colors.map(Arc::new),
+                classifications: classifications.map(Arc::new),
                 prepared: Arc::new(prepared),
                 bounds,
             },
@@ -1748,6 +1795,64 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             point_size: style_f32(style, "point_size").unwrap_or(0.1),
         });
         Ok(())
+    }
+
+    /// Recover the ASPRS classification column written by
+    /// [`write_point_classification`].
+    ///
+    /// Anything that does not line up - a foreign file's own `Classification`
+    /// attribute, a missing code sidecar, a length that disagrees with the
+    /// point count - yields `None` rather than a guess: a wrong classification
+    /// silently changes which points a bare-earth surface is built from.
+    fn read_point_classification(&self, element: &omf_crate::Element, point_count: usize) -> Result<Option<Vec<u8>>> {
+        let Some((values, names, attributes)) = element.attributes.iter().find_map(|attribute| match (&attribute.location, &attribute.data) {
+            (omf_crate::Location::Vertices, omf_crate::AttributeData::Category { values, names, attributes, .. }) if attribute.name == POINT_CLASSIFICATION_ATTRIBUTE => {
+                Some((values, names, attributes))
+            }
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        let category_count = collect_results(self.reader.array_names(names)?)?.len();
+        let codes = attributes
+            .iter()
+            .find(|attribute| attribute.name == "Incline category code" && attribute.location == omf_crate::Location::Categories)
+            .and_then(|attribute| match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } => Some(values),
+                _ => None,
+            })
+            .map(|values| read_numbers(self.reader, values))
+            .transpose()?
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| {
+                        value
+                            .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=255.0).contains(value))
+                            .map(|value| value as u8)
+                    })
+                    .collect::<Option<Vec<u8>>>()
+            });
+        let Some(Some(codes)) = codes else {
+            return Ok(None);
+        };
+        if codes.len() != category_count {
+            return Ok(None);
+        }
+        let values = collect_results(self.reader.array_indices(values)?)?;
+        if values.len() != point_count {
+            return Ok(None);
+        }
+        Ok(Some(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .and_then(|index| codes.get(index as usize).copied())
+                        .unwrap_or(crate::model::point_cloud::CLASS_UNCLASSIFIED)
+                })
+                .collect(),
+        ))
     }
 
     fn read_block_model(&mut self, element: &omf_crate::Element, geometry: &omf_crate::BlockModel) -> Result<()> {

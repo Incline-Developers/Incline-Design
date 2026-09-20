@@ -1649,6 +1649,7 @@ impl<'a> App<'a> {
             cloud.name.hash(&mut hasher);
             cloud.state.loaded.hash(&mut hasher);
             cloud.points.len().hash(&mut hasher);
+            cloud.is_classified().hash(&mut hasher);
             cloud.state.revision().hash(&mut hasher);
         }
 
@@ -1812,6 +1813,7 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
+                is_classified: cloud.is_classified(),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();

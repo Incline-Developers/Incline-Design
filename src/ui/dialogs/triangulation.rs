@@ -1380,27 +1380,46 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             );
             ui.add_space(4.0);
 
-            let loaded: Vec<(PointCloudId, &str, usize)> = project
+            let loaded: Vec<(PointCloudId, &str, usize, bool)> = project
                 .point_clouds
                 .iter()
                 .filter(|cloud| cloud.is_loaded)
-                .map(|cloud| (cloud.id, cloud.name.as_str(), cloud.point_count))
+                .map(|cloud| (cloud.id, cloud.name.as_str(), cloud.point_count, cloud.is_classified))
                 .collect();
             if loaded.is_empty() {
                 tool_help_panel(ui, tr!(literal = "No point clouds are loaded. Import one via File ▸ Import first."));
             }
             let selected = editor.point_cloud_tin_cloud_id.and_then(|id| loaded.iter().find(|(lid, ..)| *lid == id).copied());
-            let cloud_label = selected.map(|(_, name, _)| name.to_owned()).unwrap_or_else(|| tr!(literal = "Select…"));
+            let cloud_label = selected.map(|(_, name, ..)| name.to_owned()).unwrap_or_else(|| tr!(literal = "Select…"));
             MenuFieldCombo::new(
                 "point_cloud_tin_cloud",
                 tr!(literal = "Point cloud"),
                 &mut editor.point_cloud_tin_cloud_id,
                 cloud_label,
-                loaded.iter().map(|(id, name, _)| (Some(*id), (*name).into())),
+                loaded.iter().map(|(id, name, ..)| (Some(*id), (*name).into())),
             )
             .help_text(tr!(literal = "The loaded point cloud whose points will be reconstructed into a terrain surface."))
             .width(220.0)
             .show(ui);
+
+            // Bare earth is the surveyor's first move on a delivery, so it is
+            // offered right under the cloud it applies to and left on. A cloud
+            // that never went through a ground filter has nothing to offer, and
+            // says so rather than showing a switch that would change nothing.
+            let classified = selected.is_some_and(|(.., classified)| classified);
+            let mut ground_only = classified && editor.point_cloud_tin_ground_only;
+            ui.add_enabled_ui(classified, |ui| {
+                let field = MenuFieldBool::new(tr!(literal = "Ground points only"), &mut ground_only).help_text(if classified {
+                    tr!(literal = "Reconstruct from the points classified as bare earth, discarding vegetation, \
+                         buildings, plant and noise. Turn this off to surface every point in the cloud.")
+                } else {
+                    tr!(literal = "This cloud carries no classifications, so every point is surfaced. Import a \
+                         LAS/LAZ file that has been through a ground filter to reconstruct bare earth.")
+                });
+                if field.show(ui).changed() {
+                    editor.point_cloud_tin_ground_only = ground_only;
+                }
+            });
 
             let sampler_label = match editor.point_cloud_tin_sampler {
                 TerrainSampler::Adaptive => tr!(literal = "Adaptive (quadtree)"),
@@ -1463,7 +1482,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             } else {
                 TerrainBudget::Count(editor.point_cloud_tin_limit as usize)
             };
-            if let Some((.., point_count)) = selected {
+            if let Some((_, _, point_count, _)) = selected {
                 let target = terrain_budget_target(point_count, budget);
                 let percent = if point_count > 0 { target as f64 * 100.0 / point_count as f64 } else { 0.0 };
                 tool_help_panel(
@@ -1490,7 +1509,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             // Estimated transient memory, so an over-ambitious budget can be
             // caught before it risks the process rather than after.
             let mut memory_ok = true;
-            if let Some((.., point_count)) = selected {
+            if let Some((_, _, point_count, _)) = selected {
                 const WARN_BYTES: u64 = 6 * 1024 * 1024 * 1024;
                 const HARD_BYTES: u64 = 48 * 1024 * 1024 * 1024;
                 let target = terrain_budget_target(point_count, budget);
@@ -1557,6 +1576,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                             sampler: editor.point_cloud_tin_sampler,
                             candidate_multiplier: editor.point_cloud_tin_candidate_mult,
                             hole_fill_distance: editor.point_cloud_tin_hole_fill,
+                            ground_only,
                         },
                     });
                     editor.point_cloud_tin_open = false;

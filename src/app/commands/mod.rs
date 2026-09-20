@@ -611,6 +611,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
+            UiCommand::SetPointCloudClassificationColors(enabled) => {
+                self.editor.point_cloud_classification_colors = enabled;
+                self.redraw_requested = true;
+                Ok(())
+            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
