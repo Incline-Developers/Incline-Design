@@ -45,7 +45,7 @@ use crate::userspace_error;
 use crate::{
     app::commands::file::PendingFileDialog,
     model::{
-        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
+        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
         block_model::{BlockModelSource, OpenBlockModel},
         drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
@@ -913,6 +913,7 @@ impl<'a> App<'a> {
         let project = self.workspace.projects.get_mut(index)?;
         let mut target = EditTarget {
             document: &mut project.project.document,
+            folders: &mut project.project.folders,
             content: &mut project.content,
             triangulations: &mut self.triangulations,
             block_models: &mut self.block_models,
@@ -1098,6 +1099,7 @@ impl<'a> App<'a> {
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
         SaveToken {
+            folders: Box::new(self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default()),
             triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             block_models: self.block_models.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
@@ -1602,10 +1604,11 @@ impl<'a> App<'a> {
             project.project.document.revision().hash(&mut hasher);
             project.savepoint_revision().hash(&mut hasher);
             for layer in project.project.document.layers() {
-                layer.id.hash(&mut hasher);
-                layer.name.hash(&mut hasher);
-                layer.loaded.hash(&mut hasher);
+                layer.hash_row(&mut hasher);
             }
+            // All six sections at once: the registry is shared project
+            // content, not just the Designs tree's.
+            project.project.folders.hash_into(&mut hasher);
         }
 
         self.active_triangulation.hash(&mut hasher);
@@ -1615,45 +1618,40 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
-            triangulation.state.loaded.hash(&mut hasher);
-            triangulation.state.revision().hash(&mut hasher);
+            triangulation.state.hash_row(&mut hasher);
         }
 
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);
-            model.state.loaded.hash(&mut hasher);
             model.renderable_block_indices.len().hash(&mut hasher);
             model.model.color_variables().into_iter().filter(|variable| !variable.special).count().hash(&mut hasher);
-            model.state.revision().hash(&mut hasher);
+            model.state.hash_row(&mut hasher);
         }
 
         for dataset in &self.drill_holes {
             dataset.id.hash(&mut hasher);
             dataset.name.hash(&mut hasher);
-            dataset.state.loaded.hash(&mut hasher);
             dataset.dataset.holes.len().hash(&mut hasher);
             dataset.dataset.fields.len().hash(&mut hasher);
-            dataset.state.revision().hash(&mut hasher);
+            dataset.state.hash_row(&mut hasher);
         }
 
         for cloud in &self.point_clouds {
             cloud.id.hash(&mut hasher);
             cloud.name.hash(&mut hasher);
-            cloud.state.loaded.hash(&mut hasher);
             cloud.points.len().hash(&mut hasher);
             cloud.is_classified().hash(&mut hasher);
-            cloud.state.revision().hash(&mut hasher);
+            cloud.state.hash_row(&mut hasher);
         }
 
         for raster in &self.raster_textures {
             raster.id.hash(&mut hasher);
             raster.name.hash(&mut hasher);
-            raster.state.loaded.hash(&mut hasher);
             raster.source_size.hash(&mut hasher);
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
-            raster.state.revision().hash(&mut hasher);
+            raster.state.hash_row(&mut hasher);
         }
         hasher.finish()
     }
@@ -1677,7 +1675,7 @@ impl<'a> App<'a> {
                     runtime_id: project.runtime_id,
                     name: project.project.metadata.name.clone(),
                     dirty: project_dirty,
-                    designs_dirty: project.designs_dirty(),
+                    designs_dirty: project.designs_dirty(&self.project_asset_baseline.folders),
                     lossy_save_warnings: project.lossy_save_warnings.clone(),
                     is_active: self.workspace.active_index == Some(index),
                     #[cfg(target_arch = "wasm32")]
@@ -1693,6 +1691,8 @@ impl<'a> App<'a> {
                             name: layer.name.clone(),
                             is_loaded: layer.loaded,
                             dirty: dirty_layers.contains(&layer.id),
+                            folder: layer.folder,
+                            section: layer.section,
                         })
                         .collect(),
                 }
@@ -1760,6 +1760,8 @@ impl<'a> App<'a> {
                 is_loaded: tri.state.loaded,
                 dirty: tri.state.is_dirty(),
                 color: tri.color,
+                folder: tri.state.folder,
+                section: tri.state.section,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1777,6 +1779,8 @@ impl<'a> App<'a> {
                     .as_ref()
                     .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                folder: model.state.folder,
+                section: model.state.section,
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1794,6 +1798,8 @@ impl<'a> App<'a> {
                     .summary
                     .as_ref()
                     .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
+                folder: dataset.state.folder,
+                section: dataset.state.section,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1806,6 +1812,8 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
+                folder: cloud.state.folder,
+                section: cloud.state.section,
                 is_classified: cloud.is_classified(),
             })
             .collect::<Vec<_>>();
@@ -1823,6 +1831,8 @@ impl<'a> App<'a> {
                 source_size: raster.source_size,
                 driver_name: raster.driver_name.clone(),
                 projection: raster.projection.clone(),
+                folder: raster.state.folder,
+                section: raster.state.section,
             })
             .collect::<Vec<_>>();
 
@@ -1848,20 +1858,32 @@ impl<'a> App<'a> {
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
+        // A section's item membership can stay byte-identical while its
+        // folder list changes - a folder created and left empty, say - so
+        // the heading needs this on top of `same_membership`: an empty
+        // folder touches no item's epoch, and would otherwise never read as
+        // unsaved work.
+        let section_folders_dirty = |section: SectionKind| {
+            self.workspace
+                .active_project()
+                .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
+        };
         let triangulations_membership_dirty = !same_membership(
             &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.triangulations,
-        );
+        ) || section_folders_dirty(SectionKind::Triangulations);
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
-        );
-        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes);
+        ) || section_folders_dirty(SectionKind::BlockModels);
+        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
+            || section_folders_dirty(SectionKind::DrillHoles);
         let point_clouds_membership_dirty = !same_membership(
             &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.point_clouds,
-        );
-        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters);
+        ) || section_folders_dirty(SectionKind::PointClouds);
+        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+            || section_folders_dirty(SectionKind::Rasters);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
@@ -1882,6 +1904,7 @@ impl<'a> App<'a> {
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
+            folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
         view

@@ -143,6 +143,7 @@ pub(crate) struct ExplorerEntry {
     reserve_toggle_gutter: bool,
     toggles: Option<EntryToggles>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
+    draggable: bool,
 }
 
 impl ExplorerEntry {
@@ -154,6 +155,7 @@ impl ExplorerEntry {
             reserve_toggle_gutter: false,
             toggles: None,
             leading_icon: None,
+            draggable: false,
         }
     }
 
@@ -168,6 +170,16 @@ impl ExplorerEntry {
     /// one row of a list this way does not shift the others' labels.
     pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
         self.leading_icon = Some((icon, color));
+        self
+    }
+
+    /// Let the row be picked up and dropped somewhere else in the tree.
+    ///
+    /// The label senses dragging as well as clicking, so the caller can hang a
+    /// drag payload on the returned response while a plain click still does
+    /// whatever the row does when clicked.
+    pub(crate) fn draggable(mut self, draggable: bool) -> Self {
+        self.draggable = draggable;
         self
     }
 
@@ -189,6 +201,7 @@ impl ExplorerEntry {
             reserve_toggle_gutter,
             toggles,
             leading_icon,
+            draggable,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -228,6 +241,7 @@ impl ExplorerEntry {
                                 .left_text(title)
                                 .frame(false)
                                 .selected(selected)
+                                .sense(if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() })
                                 .min_size(egui::vec2(label_width, height)),
                         )
                     })
