@@ -249,6 +249,10 @@ impl<'a> App<'a> {
             let Some(obj) = self.scene_document.get_object(*id) else {
                 continue;
             };
+            if !matches!(obj, Object::Polyline { .. }) {
+                rejected += 1;
+                continue;
+            }
             match obj.tessellated_path() {
                 Some((points, closed)) if points.len() >= if closed { 3 } else { 2 } => {
                     paths.push(BreaklinePath { points, closed });

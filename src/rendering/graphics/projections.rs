@@ -543,12 +543,9 @@ impl<'a> Graphics<'a> {
 
         if editor.offset_awaiting_side_pick {
             let vp = self.view_proj();
-            // One entry per source vertex: a clipped vertex must keep its
-            // slot so guide pairing and preview ranges stay index-aligned.
-            editor.offset_source_screen_px = editor.offset_source_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
+            // A clipped vertex must keep its slot so preview ranges stay index-aligned.
             editor.offset_preview_screen_px = editor.offset_preview_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
         } else {
-            editor.offset_source_screen_px.clear();
             editor.offset_preview_screen_px.clear();
             editor.offset_preview_ranges.clear();
         }

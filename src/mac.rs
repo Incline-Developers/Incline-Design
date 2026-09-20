@@ -35,6 +35,7 @@ struct MenuState {
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
     has_design_selection: bool,
+    has_polyline_selection: bool,
     has_selection_intersections: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
@@ -603,6 +604,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_ore_triangulation: !project.block_models.is_empty(),
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+        has_polyline_selection: editor.selection_has_polylines,
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
@@ -635,15 +637,11 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
     // The Design menu only acts on selected design objects.
-    for action in [
-        MacMenuAction::OpenInsertPointAtElevation,
-        MacMenuAction::OpenMoveToX,
-        MacMenuAction::OpenMoveToY,
-        MacMenuAction::OpenMoveToZ,
-    ] {
+    for action in [MacMenuAction::OpenMoveToX, MacMenuAction::OpenMoveToY, MacMenuAction::OpenMoveToZ] {
         set_enabled(&root, action, state.has_design_selection);
     }
     // Inserting at intersections additionally needs two polylines that cross.
+    set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);

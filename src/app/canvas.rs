@@ -3,7 +3,6 @@ use crate::{
     i18n::{tr, tr_format},
     model::{Command, Object, SceneEntityId},
     ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
-    userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -611,24 +610,16 @@ impl<'a> App<'a> {
         // uses - see `tool_accepts_pick`. Offering a circle and then dropping
         // it at apply time would let the user build a selection the tool was
         // never going to honour.
-        let mut refused = 0usize;
         candidates.retain(|handle| match (self.editor.drape_phase, handle) {
             (DrapePhase::Designs, SceneEntityId::Object(id)) => {
                 if !active_object_ids.contains(id) {
                     return false;
                 }
-                let accepted = self.active_document().get_object(*id).is_some_and(is_drapeable);
-                refused += usize::from(!accepted);
-                accepted
+                self.active_document().get_object(*id).is_some_and(is_drapeable)
             }
             (DrapePhase::Topologies, SceneEntityId::Triangulation(_)) => true,
             _ => false,
         });
-        // A deliberate click on one circle says why nothing happened; a
-        // marquee that swept some up stays quiet rather than scolding.
-        if refused > 0 && !dragged {
-            userspace_warn!("{}", tr!(literal = "A circle cannot be draped: laying it over topography would make it a polyline"));
-        }
 
         if candidates.is_empty() {
             if !self.modifiers.shift_key() && !self.modifiers.control_key() {
@@ -754,7 +745,7 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
 }
 
 pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
-    obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
+    matches!(obj, Object::Polyline { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
 }
 
 fn is_drill_pattern_boundary(object: &Object) -> bool {

@@ -1242,6 +1242,8 @@ pub(crate) struct EditorState {
     /// `App::refresh_intersection_availability` before each frame's UI. Gates
     /// Design > Insert Point > At intersection.
     pub(crate) selection_has_intersections: bool,
+    /// Whether Insert Point has a selected polyline to act on; circles are excluded.
+    pub(crate) selection_has_polylines: bool,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
@@ -1322,16 +1324,11 @@ pub(crate) struct EditorState {
     pub(crate) offset_collide_with_triangulation: bool,
     /// Preview polyline vertices in world coordinates.
     pub(crate) offset_preview_world: Vec<DVec3>,
-    /// Source vertices matching `offset_preview_world`, used for offset guide connectors.
-    pub(crate) offset_source_world: Vec<DVec3>,
     /// Preview polyline vertices projected to physical-pixel screen
-    /// coordinates this frame. One entry per source vertex; `None` marks a
+    /// coordinates this frame. One entry per preview vertex; `None` marks a
     /// vertex outside the camera depth range so indexed consumers stay
     /// aligned with `offset_preview_world`.
     pub(crate) offset_preview_screen_px: Vec<Option<(f32, f32)>>,
-    /// Source vertices projected to physical-pixel screen coordinates this
-    /// frame; index-aligned with `offset_source_world` (`None` = clipped).
-    pub(crate) offset_source_screen_px: Vec<Option<(f32, f32)>>,
     /// Preview screen ranges as `(start, end, closed)` so multiple offset
     /// previews are drawn independently.
     pub(crate) offset_preview_ranges: Vec<(usize, usize, bool)>,
@@ -1978,9 +1975,7 @@ impl EditorState {
         self.offset_awaiting_side_pick = false;
         self.offset_project_to_rl = None;
         self.offset_preview_world.clear();
-        self.offset_source_world.clear();
         self.offset_preview_screen_px.clear();
-        self.offset_source_screen_px.clear();
         self.offset_preview_ranges.clear();
 
         self.relimit_dialog_open = false;
@@ -2228,6 +2223,7 @@ impl EditorState {
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
+            selection_has_polylines: false,
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
@@ -2269,9 +2265,7 @@ impl EditorState {
             offset_project_to_rl: None,
             offset_collide_with_triangulation: false,
             offset_preview_world: Vec::new(),
-            offset_source_world: Vec::new(),
             offset_preview_screen_px: Vec::new(),
-            offset_source_screen_px: Vec::new(),
             offset_preview_ranges: Vec::new(),
             offset_preview_closed: false,
             relimit_dialog_open: false,

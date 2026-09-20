@@ -207,7 +207,6 @@ impl<'a> App<'a> {
         };
         let cursor_world_xy = graphics.cursor_world(0.0).map(|w| glam::DVec2::new(w.x, w.y)).unwrap_or(glam::DVec2::ZERO);
 
-        let mut source_world = Vec::new();
         let mut preview_world = Vec::new();
         let mut ranges = Vec::new();
         let mut first_closed = false;
@@ -221,10 +220,10 @@ impl<'a> App<'a> {
             };
             let preview = match self.offset_circle_result(object, cursor_world_xy) {
                 Some((center, radius)) => crate::model::geometry::tessellate_circle(center, radius),
+                None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => continue,
                 None => self.compute_offset_result(&src_verts, closed, cursor_world_xy),
             };
             let start = preview_world.len();
-            source_world.extend(src_verts);
             preview_world.extend(preview);
             ranges.push((start, preview_world.len(), closed));
             if ranges.len() == 1 {
@@ -233,7 +232,6 @@ impl<'a> App<'a> {
         }
 
         if self.editor.offset_preview_world != preview_world || self.editor.offset_preview_ranges != ranges {
-            self.editor.offset_source_world = source_world;
             self.editor.offset_preview_world = preview_world;
             self.editor.offset_preview_ranges = ranges;
             self.editor.offset_preview_closed = first_closed;
@@ -372,9 +370,7 @@ impl<'a> App<'a> {
         self.editor.offset_awaiting_side_pick = false;
         self.editor.offset_project_to_rl = None;
         self.editor.offset_preview_world.clear();
-        self.editor.offset_source_world.clear();
         self.editor.offset_preview_screen_px.clear();
-        self.editor.offset_source_screen_px.clear();
         self.editor.offset_preview_ranges.clear();
         self.editor.tool_highlight_id = None;
         self.editor.active_tool = ActiveTool::None;
