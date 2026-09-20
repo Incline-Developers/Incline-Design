@@ -14,17 +14,31 @@ use crate::{
     userspace_log, userspace_warn,
 };
 
+fn unique_collection_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_owned();
+    }
+    let mut number = 2_u64;
+    loop {
+        let name = format!("{base} ({number})");
+        if !taken(&name) {
+            return name;
+        }
+        number += 1;
+    }
+}
+
 impl<'a> App<'a> {
     pub(crate) fn create_folder(&mut self, section: SectionKind) -> Result<()> {
         let Some(project) = self.workspace.active_project_mut() else {
             return Ok(());
         };
         let registry = &mut project.project.folders;
-        let name = super::layer::unique_name(&tr!(literal = "New Folder"), |candidate| registry.has_name(section, candidate));
+        let name = unique_collection_name(&tr!(literal = "Collection"), |candidate| registry.has_name(section, candidate));
         let id = registry.allocate_id();
         let folder = Folder { id, name: name.clone() };
         self.execute_edit(Command::AddFolder { section, folder });
-        userspace_log!("{}", tr_format!(literal = "Created folder '%name%'", name = name));
+        userspace_log!("{}", tr_format!(literal = "Created collection '%name%'", name = name));
         Ok(())
     }
 
@@ -48,7 +62,7 @@ impl<'a> App<'a> {
             layers,
             items,
         });
-        userspace_log!("{}", tr_format!(literal = "Deleted folder '%name%'", name = name));
+        userspace_log!("{}", tr_format!(literal = "Deleted collection '%name%'", name = name));
         Ok(())
     }
 
@@ -84,7 +98,7 @@ impl<'a> App<'a> {
             return;
         }
         if registry.has_name(section, &requested) {
-            userspace_warn!("{}", tr_format!(literal = "A folder named '%name%' already exists", name = requested));
+            userspace_warn!("{}", tr_format!(literal = "A collection named '%name%' already exists", name = requested));
             return;
         }
         self.execute_edit(Command::RenameFolder {
@@ -93,7 +107,7 @@ impl<'a> App<'a> {
             before: before.clone(),
             after: requested.clone(),
         });
-        userspace_log!("{}", tr_format!(literal = "Renamed folder '%before%' to '%after%'", before = before, after = requested));
+        userspace_log!("{}", tr_format!(literal = "Renamed collection '%before%' to '%after%'", before = before, after = requested));
     }
 
     /// Move a layer or a project item into `folder`, or back to the root of
@@ -118,7 +132,7 @@ impl<'a> App<'a> {
         if let Some(id) = folder
             && !project.project.folders.contains(section, id)
         {
-            userspace_warn!("{}", tr!(literal = "That folder no longer exists"));
+            userspace_warn!("{}", tr!(literal = "That collection no longer exists"));
             return;
         }
         let folder_name = folder.and_then(|id| project.project.folders.name(section, id)).map(ToOwned::to_owned);
@@ -136,7 +150,7 @@ impl<'a> App<'a> {
         userspace_log!(
             "{}",
             match &folder_name {
-                Some(name) => tr_format!(literal = "Moved item into folder '%name%'", name = name),
+                Some(name) => tr_format!(literal = "Moved item into collection '%name%'", name = name),
                 None => tr!(literal = "Moved item to root"),
             }
         );

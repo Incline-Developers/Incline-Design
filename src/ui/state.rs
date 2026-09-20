@@ -978,7 +978,7 @@ impl RenameTarget {
             Self::PointCloud(_) => tr!(literal = "Point Cloud"),
             Self::BlockModel(_) => tr!(literal = "Block Model"),
             Self::DrillHole(_) => tr!(literal = "Drill Holes"),
-            Self::Folder(..) => tr!(literal = "Folder"),
+            Self::Folder(..) => tr!(literal = "Collection"),
         }
     }
 
@@ -3020,7 +3020,7 @@ pub(crate) enum UiCommand {
     CreateLayer {
         name: String,
     },
-    /// Create a folder under a section, named uniquely from "New Folder".
+    /// Create a collection under a section, named Collection, Collection (2), etc.
     CreateFolder(SectionKind),
     /// Remove a folder. The items it held return to the section root.
     DeleteFolder {
@@ -3527,11 +3527,11 @@ impl UiCommand {
             Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
             Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
             Self::CreateFolder(section) => report(
-                tr!(literal = "Create Folder"),
-                tr_format!(literal = "New folder under %section%", section = ExplorerSection::from_kind(*section).label()),
+                tr!(literal = "Create Collection"),
+                tr_format!(literal = "New collection under %section%", section = ExplorerSection::from_kind(*section).label()),
             ),
             Self::DeleteFolder { section, folder } => report(
-                tr!(literal = "Delete Folder"),
+                tr!(literal = "Delete Collection"),
                 tr_format!(
                     literal = "%folder% in %section%",
                     folder = format!("{folder:?}"),
@@ -3539,7 +3539,7 @@ impl UiCommand {
                 ),
             ),
             Self::MoveToFolder { member, folder } => report(
-                tr!(literal = "Move to Folder"),
+                tr!(literal = "Move to Collection"),
                 match folder {
                     Some(folder) => tr_format!(literal = "%member% into %folder%", member = format!("{member:?}"), folder = format!("{folder:?}")),
                     None => tr_format!(literal = "%member% to root", member = format!("{member:?}")),

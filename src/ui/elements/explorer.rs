@@ -161,7 +161,7 @@ fn folder_group<P: DragPayload>(ui: &mut egui::Ui, section: SectionKind, folder:
         context_menu_separator(ui);
         // Deleting a folder is not deleting what is in it: its members return
         // to the section root.
-        if ContextMenuAction::new(tr!(literal = "Delete Folder")).show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "Delete Collection")).show(ui).clicked() {
             commands.push(UiCommand::DeleteFolder { section, folder: folder.id });
             ui.close();
         }
@@ -182,7 +182,7 @@ fn draw_section_body<P: DragPayload, T: SectionEntry>(
         folder_group::<P>(ui, section, folder, commands, |ui, commands| {
             let mut in_folder = shown_in(items, section, Some(folder.id), folders).peekable();
             if in_folder.peek().is_none() {
-                explorer_note(ui, tr!(literal = "Empty folder"));
+                explorer_note(ui, tr!(literal = "Empty collection"));
             }
             for item in in_folder {
                 row(ui, commands, item);
@@ -207,8 +207,8 @@ fn attach_header_drop<P: DragPayload>(ui: &egui::Ui, row: &egui::Response, secti
 /// "No Folder" plus one entry per folder, ticked on whichever the row is
 /// currently in.
 fn move_to_folder_submenu(ui: &mut egui::Ui, folders: &[Folder], current: Option<FolderId>, member: FolderMember, commands: &mut Vec<UiCommand>) {
-    context_submenu(ui, &tr!(literal = "Move to Folder"), !folders.is_empty(), |ui| {
-        if ContextMenuAction::new(tr!(literal = "No Folder")).checked(current.is_none()).show(ui).clicked() {
+    context_submenu(ui, &tr!(literal = "Move to Collection"), !folders.is_empty(), |ui| {
+        if ContextMenuAction::new(tr!(literal = "No Collection")).checked(current.is_none()).show(ui).clicked() {
             commands.push(UiCommand::MoveToFolder { member, folder: None });
             ui.close();
         }
@@ -230,7 +230,7 @@ fn move_to_folder_submenu(ui: &mut egui::Ui, folders: &[Folder], current: Option
 fn section_heading_menu(response: &egui::Response, section: ExplorerSection, item_count: usize, commands: &mut Vec<UiCommand>) {
     context_menu_popup(response, section.label(), |ui| {
         let enabled = item_count > 0;
-        if ContextMenuAction::new(tr!(literal = "New Folder")).show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "New Collection")).show(ui).clicked() {
             commands.push(UiCommand::CreateFolder(section.kind()));
             ui.close();
         }
