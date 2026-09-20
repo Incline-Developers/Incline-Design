@@ -33,7 +33,7 @@ impl<'a> App<'a> {
                         .workspace
                         .active_document()
                         .and_then(|document| document.get_object(*id))
-                        .is_some_and(|object| matches!(object, Object::Polyline { .. })) =>
+                        .is_some_and(|object| matches!(object, Object::Polyline { .. } | Object::Circle { .. })) =>
                 {
                     Some(*id)
                 }
@@ -51,7 +51,7 @@ impl<'a> App<'a> {
             .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
         if let Some((SceneEntityId::Object(id), _)) = picked
             && self.activate_project_for_object(id)
-            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. }))
+            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. } | Object::Circle { .. }))
         {
             self.editor.offset_target_id = Some(id);
             self.editor.offset_target_ids = vec![id];
@@ -76,7 +76,7 @@ impl<'a> App<'a> {
         }
         let target_ids: Vec<ObjectId> = object_ids
             .into_iter()
-            .filter(|id| matches!(self.active_document().get_object(*id), Some(Object::Polyline { .. })))
+            .filter(|id| matches!(self.active_document().get_object(*id), Some(Object::Polyline { .. } | Object::Circle { .. })))
             .collect();
         if target_ids.is_empty() {
             return;
@@ -89,11 +89,36 @@ impl<'a> App<'a> {
         self.editor.offset_collide_with_triangulation = collide_with_triangulation;
         self.editor.offset_dialog_open = false;
         self.editor.offset_awaiting_side_pick = true;
-        let closed = matches!(
-            self.active_document().get_object(self.editor.offset_target_ids[0]),
-            Some(Object::Polyline { closed: true, .. })
-        );
+        let closed = self
+            .active_document()
+            .get_object(self.editor.offset_target_ids[0])
+            .and_then(Object::string_geometry)
+            .is_some_and(|(_, closed)| closed);
         self.editor.offset_preview_closed = closed;
+    }
+
+    /// The offset of a circle is a concentric circle, so it is computed
+    /// rather than tessellated: `r ± d`, with the centre restated in z.
+    ///
+    /// Returns `None` when the circle would collapse to nothing, and when
+    /// colliding with triangulations is on - a ring stopped by topography at
+    /// different distances around its sweep genuinely is not a circle, so that
+    /// case falls back to the general polyline path.
+    fn offset_circle_result(&self, object: &Object, cursor_world_xy: glam::DVec2) -> Option<(glam::DVec3, f64)> {
+        if self.editor.offset_collide_with_triangulation {
+            return None;
+        }
+        let (center, radius) = object.circle()?;
+        let outward = (cursor_world_xy - center.truncate()).length() >= radius;
+        let (horiz_dist, result_z) = match self.editor.offset_project_to_rl {
+            Some((tan_angle, target_rl)) => {
+                let dist = if tan_angle.abs() < 1e-9 { 0.0 } else { ((target_rl - center.z) / tan_angle).abs() };
+                (dist, target_rl)
+            }
+            None => (self.editor.offset_horiz_dist.abs(), center.z + self.editor.offset_z_delta),
+        };
+        let radius = if outward { radius + horiz_dist } else { radius - horiz_dist };
+        (radius > 1.0e-9).then_some((glam::DVec3::new(center.x, center.y, result_z), radius))
     }
 
     /// Compute the offset result geometry for the current side-pick settings,
@@ -182,19 +207,23 @@ impl<'a> App<'a> {
         };
         let cursor_world_xy = graphics.cursor_world(0.0).map(|w| glam::DVec2::new(w.x, w.y)).unwrap_or(glam::DVec2::ZERO);
 
-        let mut source_world = Vec::new();
         let mut preview_world = Vec::new();
         let mut ranges = Vec::new();
         let mut first_closed = false;
 
         for object_id in object_ids {
-            let (src_verts, closed) = match self.active_document().get_object(object_id) {
-                Some(Object::Polyline { verts, closed, .. }) => (crate::model::geometry::tessellate_polyline_bulges(verts, *closed), *closed),
-                _ => continue,
+            let Some(object) = self.active_document().get_object(object_id) else {
+                continue;
             };
-            let preview = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
+            let Some((src_verts, closed)) = object.tessellated_path() else {
+                continue;
+            };
+            let preview = match self.offset_circle_result(object, cursor_world_xy) {
+                Some((center, radius)) => crate::model::geometry::tessellate_circle(center, radius),
+                None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => continue,
+                None => self.compute_offset_result(&src_verts, closed, cursor_world_xy),
+            };
             let start = preview_world.len();
-            source_world.extend(src_verts);
             preview_world.extend(preview);
             ranges.push((start, preview_world.len(), closed));
             if ranges.len() == 1 {
@@ -203,7 +232,6 @@ impl<'a> App<'a> {
         }
 
         if self.editor.offset_preview_world != preview_world || self.editor.offset_preview_ranges != ranges {
-            self.editor.offset_source_world = source_world;
             self.editor.offset_preview_world = preview_world;
             self.editor.offset_preview_ranges = ranges;
             self.editor.offset_preview_closed = first_closed;
@@ -228,24 +256,64 @@ impl<'a> App<'a> {
 
         let cursor_world_xy = graphics.cursor_world(0.0).map(|w| glam::DVec2::new(w.x, w.y)).unwrap_or(glam::DVec2::ZERO);
 
+        /// What an offset produces: a circle stays a circle, everything else
+        /// is a string of straight vertices.
+        enum OffsetShape {
+            Circle { center: glam::DVec3, radius: f64 },
+            Polyline { verts: Vec<PolyVertex>, closed: bool },
+        }
+
         let mut offset_specs = Vec::new();
+        let mut collapsed_circles = 0usize;
         for object_id in object_ids {
-            let Some(Object::Polyline {
-                verts,
-                closed,
-                layer,
-                color,
-                fill,
-                line_weight,
-                ..
-            }) = self.active_document().get_object(object_id)
-            else {
+            let Some(object) = self.active_document().get_object(object_id) else {
                 continue;
             };
-            let src_verts = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
-            let new_positions = self.compute_offset_result(&src_verts, *closed, cursor_world_xy);
-            let new_verts: Vec<PolyVertex> = new_positions.into_iter().map(PolyVertex::straight).collect();
-            offset_specs.push((*layer, new_verts, *closed, *color, *fill, *line_weight));
+            let (layer, color) = (object.layer(), object.color());
+            let (Some(fill), Some(line_weight)) = (object.fill(), object.line_weight()) else {
+                continue;
+            };
+            let shape = if object.circle().is_some() {
+                match self.offset_circle_result(object, cursor_world_xy) {
+                    Some((center, radius)) => OffsetShape::Circle { center, radius },
+                    // Only a collapse lands here when collision is off; with
+                    // collision on the general path below is the right answer.
+                    None if !self.editor.offset_collide_with_triangulation => {
+                        collapsed_circles += 1;
+                        continue;
+                    }
+                    None => {
+                        let Some((src_verts, closed)) = object.tessellated_path() else {
+                            continue;
+                        };
+                        let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
+                        OffsetShape::Polyline {
+                            verts: new_positions.into_iter().map(PolyVertex::straight).collect(),
+                            closed,
+                        }
+                    }
+                }
+            } else {
+                let Some((src_verts, closed)) = object.tessellated_path() else {
+                    continue;
+                };
+                let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
+                OffsetShape::Polyline {
+                    verts: new_positions.into_iter().map(PolyVertex::straight).collect(),
+                    closed,
+                }
+            };
+            offset_specs.push((layer, shape, color, fill, line_weight));
+        }
+
+        if collapsed_circles > 0 {
+            userspace_warn!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "Skipped %count% circle(s): the offset distance is larger than the radius",
+                    count = collapsed_circles
+                )
+            );
         }
 
         let offset_count = offset_specs.len();
@@ -257,16 +325,27 @@ impl<'a> App<'a> {
             let doc = &mut project.project.document;
             let commands = offset_specs
                 .into_iter()
-                .map(|(layer, verts, closed, color, fill, line_weight)| {
+                .map(|(layer, shape, color, fill, line_weight)| {
                     let id = doc.allocate_object_id();
-                    Command::AddObject(Object::Polyline {
-                        id,
-                        layer,
-                        verts,
-                        closed,
-                        color,
-                        fill,
-                        line_weight,
+                    Command::AddObject(match shape {
+                        OffsetShape::Circle { center, radius } => Object::Circle {
+                            id,
+                            layer,
+                            center,
+                            radius,
+                            color,
+                            fill,
+                            line_weight,
+                        },
+                        OffsetShape::Polyline { verts, closed } => Object::Polyline {
+                            id,
+                            layer,
+                            verts,
+                            closed,
+                            color,
+                            fill,
+                            line_weight,
+                        },
                     })
                 })
                 .collect();
@@ -291,9 +370,7 @@ impl<'a> App<'a> {
         self.editor.offset_awaiting_side_pick = false;
         self.editor.offset_project_to_rl = None;
         self.editor.offset_preview_world.clear();
-        self.editor.offset_source_world.clear();
         self.editor.offset_preview_screen_px.clear();
-        self.editor.offset_source_screen_px.clear();
         self.editor.offset_preview_ranges.clear();
         self.editor.tool_highlight_id = None;
         self.editor.active_tool = ActiveTool::None;

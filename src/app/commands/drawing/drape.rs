@@ -24,6 +24,9 @@ impl<'a> App<'a> {
 
         match self.editor.drape_phase {
             DrapePhase::Designs => {
+                // Whatever the tool cannot drape was never selectable in the
+                // first place - see `is_drapeable` - so this takes the
+                // selection as it stands.
                 let active_object_ids = self.active_project_object_ids();
                 let object_ids: Vec<_> = self
                     .editor
@@ -152,6 +155,9 @@ fn drape_object(object: &mut Object, surfaces: &[&OpenTriangulation]) -> (usize,
 
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => drape_point(pos),
+        // Refused before it gets here; a circle has no vertices to drape and
+        // draping its centre alone would move the shape, not lay it down.
+        Object::Circle { .. } => {}
         Object::Polyline { verts, .. } => {
             for vertex in verts {
                 drape_point(&mut vertex.pos);

@@ -81,31 +81,6 @@ pub(crate) fn compact_circle(verts: &[PolyVertex], closed: bool) -> Option<Circl
     Some(CircleSpec { center, radius })
 }
 
-/// Write a new centre and radius back onto a compact circle's two vertices,
-/// keeping their bearing and winding direction. Returns whether it applied.
-pub(crate) fn set_compact_circle(verts: &mut [PolyVertex], center: DVec3, radius: f64) -> bool {
-    if !center.is_finite() || !radius.is_finite() || radius <= f64::EPSILON {
-        return false;
-    }
-    let [first, second] = verts else {
-        return false;
-    };
-    let old_center = (first.pos + second.pos) * 0.5;
-    let offset_dir = first.pos.truncate() - old_center.truncate();
-    let bearing = if offset_dir.is_finite() && offset_dir.length_squared() > f64::EPSILON {
-        offset_dir.normalize()
-    } else {
-        DVec2::X
-    };
-    let sign = if first.bulge.is_sign_negative() { -1.0 } else { 1.0 };
-    let offset = DVec3::new(bearing.x * radius, bearing.y * radius, 0.0);
-    first.pos = center + offset;
-    second.pos = center - offset;
-    first.bulge = sign;
-    second.bulge = sign;
-    true
-}
-
 /// Insert a vertex after `index`, splitting that segment. Returns the new
 /// vertex's row.
 ///
@@ -316,6 +291,15 @@ pub(crate) fn validate_object(object: &Object) -> Option<ObjectEditIssue> {
                 }
             }
             if !line_weight.is_finite() {
+                return Some(ObjectEditIssue::NonFiniteValue);
+            }
+            None
+        }
+        Object::Circle { center, radius, line_weight, .. } => {
+            if !center.is_finite() {
+                return Some(ObjectEditIssue::NonFiniteVertex(0));
+            }
+            if !radius.is_finite() || *radius <= 0.0 || !line_weight.is_finite() {
                 return Some(ObjectEditIssue::NonFiniteValue);
             }
             None

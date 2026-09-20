@@ -44,6 +44,9 @@ use crate::{
 const META_KIND: &str = "incline:kind";
 const META_NAME: &str = "incline:name";
 const META_OBJECT: &str = "incline:object";
+/// Ring resolution for a circle's native OMF geometry, which has no arcs. Only
+/// readers that ignore `incline:object` metadata ever see this approximation.
+const CIRCLE_EXPORT_SEGMENTS: u32 = 64;
 const META_LAYER: &str = "incline:layer";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
@@ -436,6 +439,23 @@ fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
                 omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
             )
         }
+        // OMF has no arc primitive, so the native geometry is a tessellated
+        // ring. The exact centre and radius travel in `incline:object`
+        // metadata below; this is what other OMF tools - and older Incline
+        // builds, which cannot decode the metadata - fall back to. Writing the
+        // two-semicircle encoding here instead would hand them a bare diameter
+        // line, which is what happened before circles had a variant.
+        Object::Circle { center, radius, .. } => {
+            let vertices = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| {
+                let angle = std::f64::consts::TAU * (f64::from(step) / f64::from(CIRCLE_EXPORT_SEGMENTS));
+                [center.x + radius * angle.cos(), center.y + radius * angle.sin(), center.z]
+            });
+            let segments = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| [step, (step + 1) % CIRCLE_EXPORT_SEGMENTS]);
+            (
+                format!("Circle {local_id}"),
+                omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
+            )
+        }
         Object::Text { pos, content, .. } => (
             if content.trim().is_empty() { format!("Text {local_id}") } else { content.clone() },
             omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into(),
@@ -449,6 +469,7 @@ fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         match object {
             Object::Point { .. } => "design_point",
             Object::Polyline { .. } => "design_polyline",
+            Object::Circle { .. } => "design_circle",
             Object::Text { .. } => "design_text",
         },
     );
@@ -1473,6 +1494,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 self.append_design_geometry(&mut document, layer_id, object_element)?;
             }
         }
+        // Files written before circles were their own variant store them as
+        // closed two-vertex bulged polylines. Upgrade on load so no tool
+        // downstream has to recognise the old encoding.
+        document.promote_compact_circles();
         document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
         let unloaded: Vec<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
         for id in unloaded {

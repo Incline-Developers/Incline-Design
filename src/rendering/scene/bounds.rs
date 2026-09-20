@@ -84,6 +84,10 @@ fn for_each_visible_object_aabb(
                     include(corner);
                 }
             }
+            Object::Circle { center, radius, .. } => {
+                include(*center - DVec3::new(*radius, *radius, 0.0));
+                include(*center + DVec3::new(*radius, *radius, 0.0));
+            }
             Object::Polyline { verts, closed, .. } => {
                 if let Some((verts_min, verts_max)) = polyline_bulge_bounds(verts, *closed) {
                     include(verts_min);

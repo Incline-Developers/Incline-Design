@@ -67,16 +67,7 @@ impl<'a> App<'a> {
                 .as_ref()
                 .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
             {
-                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|object| {
-                    matches!(
-                        object,
-                        Object::Polyline {
-                            closed: true,
-                            verts,
-                            ..
-                        } if verts.len() >= 3
-                    )
-                });
+                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(Object::encloses_area);
                 if is_closed_poly {
                     let name = self
                         .scene_document
@@ -211,18 +202,25 @@ impl<'a> App<'a> {
         let pattern_picker = self.editor.drill_pattern_awaiting_shape_pick;
         let (next_highlight, next_label) = match raw_hover {
             Some(SceneEntityId::Object(id)) if !pattern_picker || active_object_ids.contains(&id) => match self.scene_document.get_object(id) {
-                Some(object @ Object::Polyline { verts, closed, .. })
-                    if if pattern_picker {
-                        is_drill_pattern_boundary(object)
-                    } else {
-                        *closed && verts.len() >= 3
-                    } =>
-                {
+                Some(object) if if pattern_picker { is_drill_pattern_boundary(object) } else { object.encloses_area() } => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
-                    (
-                        Some(id),
-                        Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = verts.len())),
-                    )
+                    match object {
+                        Object::Circle { radius, .. } => (
+                            Some(id),
+                            Some(tr_format!(
+                                literal = "Circle | Layer: %layer% | radius %radius%",
+                                layer = layer,
+                                radius = format!("{radius:.3}")
+                            )),
+                        ),
+                        _ => {
+                            let count = object.string_geometry().map_or(0, |(verts, _)| verts.len());
+                            (
+                                Some(id),
+                                Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = count)),
+                            )
+                        }
+                    }
                 }
                 _ => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
             },
@@ -608,8 +606,17 @@ impl<'a> App<'a> {
         };
 
         let active_object_ids = self.active_project_object_ids();
+        // Drape selects only what it can drape, the same rule its apply step
+        // uses - see `tool_accepts_pick`. Offering a circle and then dropping
+        // it at apply time would let the user build a selection the tool was
+        // never going to honour.
         candidates.retain(|handle| match (self.editor.drape_phase, handle) {
-            (DrapePhase::Designs, SceneEntityId::Object(id)) => active_object_ids.contains(id),
+            (DrapePhase::Designs, SceneEntityId::Object(id)) => {
+                if !active_object_ids.contains(id) {
+                    return false;
+                }
+                self.active_document().get_object(*id).is_some_and(is_drapeable)
+            }
             (DrapePhase::Topologies, SceneEntityId::Triangulation(_)) => true,
             _ => false,
         });
@@ -738,20 +745,17 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
 }
 
 pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
-    matches!(
-        obj,
-        Object::Polyline {
-            verts,
-            closed,
-            ..
-        } if verts.len() >= if *closed { 3 } else { 2 }
-    )
+    matches!(obj, Object::Polyline { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
 }
 
 fn is_drill_pattern_boundary(object: &Object) -> bool {
-    matches!(
-        object,
-        Object::Polyline { verts, closed: true, .. }
-            if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
-    )
+    object.encloses_area()
+}
+
+/// Whether the Drape tool will take this object.
+///
+/// A circle laid over topography is no longer a circle - draping it would have
+/// to hand back a polyline - so the tool does not offer one.
+fn is_drapeable(object: &Object) -> bool {
+    !matches!(object, Object::Circle { .. })
 }
