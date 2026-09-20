@@ -57,7 +57,7 @@ ws-menubar-triangulation = Triangulation
 ws-menubar-raster = Raster
 ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
-ws-menubar-drillholes = Drillholes
+ws-menubar-drillholes = Drill Holes
 ws-menubar-active-layer = Layer:
 
 ## Menubars functions

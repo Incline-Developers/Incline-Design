@@ -38,7 +38,11 @@ struct MenuState {
     one_surface_selected: bool,
     /// Clipping additionally needs the one closed polyline to clip against.
     can_clip_by_polyline: bool,
+    /// Whether exactly one loaded drill-hole collection is selected, which is
+    /// what block-model estimation runs on.
     can_create_block_model: bool,
+    /// Whether exactly one loaded block model is selected, which is what ore
+    /// thresholding runs on.
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
     has_design_selection: bool,
@@ -614,8 +618,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_triangulation: editor.selection_counts.triangulation_sources > 0,
         one_surface_selected: editor.selection_counts.triangulations == 1,
         can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
-        can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
-        can_create_ore_triangulation: !project.block_models.is_empty(),
+        can_create_block_model: editor.selection_counts.drill_holes == 1,
+        can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_polyline_selection: editor.selection_has_polylines,
@@ -648,12 +652,12 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenPointCloudJoin, state.can_join_point_clouds);
-    set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
-    set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
     // Select first, then act: these run on the scene selection they were
     // opened with rather than on a pick list filled inside their dialog.
     set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
+    set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
+    set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);
     }

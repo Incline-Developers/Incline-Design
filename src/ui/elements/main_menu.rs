@@ -568,9 +568,12 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         }
 
         if editor.active_workspace == Workspace::Geology {
-            MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
+            // Thresholding runs on the block model, so - like the entry below
+            // it - the menu is the input's own and the one selected model is
+            // what the tool opens on.
+            MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
                 if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
-                    .enabled(!project.block_models.is_empty())
+                    .enabled(editor.selection_counts.block_models == 1)
                     .show(ui)
                     .clicked()
                 {
@@ -579,10 +582,16 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
             });
 
-            MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-                let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
-                if ContextMenuAction::new(tr!(literal = "Create Block Model...")).enabled(has_loaded_holes).show(ui).clicked() {
-                    commands.push(UiCommand::OpenCreateBlockModel(None));
+            // Estimation runs on the drill holes, so the entry lives under
+            // them and takes the one selected collection as its input, the
+            // way the other select-first tools do.
+            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+                if ContextMenuAction::new(tr!(literal = "Create Block Model..."))
+                    .enabled(editor.selection_counts.drill_holes == 1)
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenCreateBlockModel);
                     ui.close();
                 }
             });

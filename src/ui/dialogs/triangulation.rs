@@ -6,7 +6,7 @@ use crate::{
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, selected_source_field},
     },
 };
 
@@ -222,22 +222,6 @@ fn triangulation_picker_field_with_width(
         .response
     });
     pick_clicked
-}
-
-/// A read-only row naming what a selection-driven tool was opened on.
-///
-/// These tools take their input from the scene selection rather than from a
-/// control inside the dialog, so the input reads as a stated fact. It keeps
-/// the label column and control width of the picker rows beside it, so a
-/// dialog that mixes the two still lines up.
-fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, value: impl Into<egui::WidgetText>, help_text: impl Into<egui::WidgetText>, width: f32) {
-    let value = value.into();
-    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
-        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
-        })
-        .response
-    });
 }
 
 /// Name of a loaded surface, or a stand-in if it went away while the dialog

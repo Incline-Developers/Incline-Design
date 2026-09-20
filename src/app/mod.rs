@@ -46,7 +46,7 @@ use crate::{
     app::commands::file::PendingFileDialog,
     model::{
         Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
-        block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
+        block_model::{BlockModelSource, OpenBlockModel},
         drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
@@ -338,7 +338,6 @@ pub(crate) struct App<'a> {
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
     block_models: Vec<OpenBlockModel>,
-    active_block_model: Option<BlockModelId>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
     next_drill_hole_id: u64,
@@ -476,7 +475,6 @@ impl<'a> Default for App<'a> {
             active_triangulation: None,
             next_triangulation_id: 0,
             block_models: Vec::new(),
-            active_block_model: None,
             next_block_model_id: 0,
             drill_holes: Vec::new(),
             next_drill_hole_id: 0,
@@ -577,7 +575,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
-            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
+            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1018,9 +1016,6 @@ impl<'a> App<'a> {
         if self.active_triangulation.is_some_and(|id| !self.triangulations.iter().any(|item| item.id == id)) {
             self.active_triangulation = None;
         }
-        if self.active_block_model.is_some_and(|id| !self.block_models.iter().any(|item| item.id == id)) {
-            self.active_block_model = None;
-        }
         if self.editor.active_drill_hole.is_some_and(|id| !self.drill_holes.iter().any(|item| item.id == id)) {
             self.editor.active_drill_hole = None;
         }
@@ -1215,7 +1210,6 @@ impl<'a> App<'a> {
         self.active_triangulation = None;
         self.block_models.clear();
         self.next_block_model_id = 0;
-        self.active_block_model = None;
         self.drill_holes.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
@@ -1625,7 +1619,6 @@ impl<'a> App<'a> {
             triangulation.state.revision().hash(&mut hasher);
         }
 
-        self.active_block_model.hash(&mut hasher);
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);

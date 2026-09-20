@@ -162,11 +162,19 @@ impl EditorState {
     /// Whether a tool that runs on the selection is open on a snapshot of it.
     ///
     /// These tools take their inputs when they open and cannot be re-pointed
-    /// from inside, so the viewport stops taking selection while one is up: a
-    /// click that appeared to add or drop an input would not reach the run.
-    /// Changing the inputs means closing the tool, selecting, and reopening.
+    /// from inside, so the viewport and the explorer tree both stop taking
+    /// selection while one is up: a click that appeared to add or drop an
+    /// input would not reach the run. Changing the inputs means closing the
+    /// tool, selecting, and reopening.
     pub(crate) fn selection_locked_by_tool(&self) -> bool {
-        self.tri_create_open || self.tri_cut_poly_open || self.tri_cut_z_open || self.tri_contour_open || self.point_cloud_tin_open || self.point_cloud_join_open
+        self.tri_create_open
+            || self.tri_cut_poly_open
+            || self.tri_cut_z_open
+            || self.tri_contour_open
+            || self.point_cloud_tin_open
+            || self.point_cloud_join_open
+            || self.block_model_create_open
+            || self.ore_triangulation_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -272,9 +280,10 @@ pub(crate) enum ContourOutputLayer {
 
 /// What the current scene selection offers the tools that run on it.
 ///
-/// Create Triangulation, the terrain tools and the point-cloud tools act on
-/// whatever was selected when they were opened, so their menu entries have to
-/// know every frame whether the selection can feed them. Counting here rather
+/// Create Triangulation, the terrain tools, the point-cloud tools and the
+/// estimation tools act on whatever was selected when they were opened, so
+/// their menu entries have to know every frame whether the selection can feed
+/// them. Counting here rather
 /// than at each menu keeps the document out of the menu code and the scan off
 /// the frame: `App::refresh_selection_counts` fills this in once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -288,6 +297,11 @@ pub(crate) struct SelectionCounts {
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
     pub(crate) point_clouds: usize,
+    /// Selected drill-hole datasets that are loaded, and so have intervals to
+    /// estimate from.
+    pub(crate) drill_holes: usize,
+    /// Selected block models that are loaded, and so have blocks to work on.
+    pub(crate) block_models: usize,
 }
 
 /// A triangulation selector temporarily being filled from a viewport click.
@@ -1021,6 +1035,19 @@ impl RenameTarget {
     }
 }
 
+/// One selectable row in the explorer tree.
+///
+/// A design layer is not a scene entity - it is a container - but it selects
+/// like one: clicking it takes everything standing on it. Carrying both
+/// shapes in the row list lets a Shift-click run across the two without the
+/// tree having to know what each row stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ExplorerRow {
+    Entity(SceneEntityId),
+    /// A design layer, which stands for every object on it.
+    Layer(LayerId),
+}
+
 /// Central mutable editor state.
 ///
 /// Shared between the render pipeline and every UI draw call. Fields are grouped
@@ -1028,6 +1055,18 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
+    /// Every selectable row the explorer tree drew this frame, in the order it
+    /// drew them, with collapsed sections left out.
+    ///
+    /// A Shift-click selects the run of rows between the last click and this
+    /// one, which is a question only the tree can answer: it alone knows which
+    /// sections are open and how the rows read down the panel. It is rebuilt
+    /// each time the tree is drawn, so the click that reads it is always
+    /// resolved against the rows the user was looking at.
+    pub(crate) explorer_rows: Vec<ExplorerRow>,
+    /// The row a Shift-click measures its run from: the last row clicked
+    /// without Shift.
+    pub(crate) explorer_anchor: Option<ExplorerRow>,
     /// Individually selected drill holes, which the Drill & Blast workspace
     /// works in place of whole datasets - see [`DrillHoleRef`]. Production
     /// selects the dataset into [`Self::selected_handles`] and leaves this
@@ -2251,6 +2290,8 @@ impl EditorState {
     pub(crate) fn new() -> Self {
         Self {
             selected_handles: HashSet::new(),
+            explorer_rows: Vec::new(),
+            explorer_anchor: None,
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             hidden_handles: HashSet::new(),
@@ -3123,14 +3164,12 @@ pub(crate) enum UiCommand {
     /// Mark one saved system as the site's mine coordinate system, or the
     /// reference frame with `None`.
     SetSurveyLocalSystem(Option<String>),
-    /// Select or deselect one raster from its explorer row - the only place a
-    /// raster can be picked on its own, since it has no geometry in the scene.
-    SelectRaster(crate::model::raster::RasterTextureId),
-    /// Select or deselect one scene entity from its explorer row, following
-    /// the viewport's rules: a plain click replaces the selection, Ctrl or
-    /// Shift extends it, and clicking a selected row drops it. The tools that
-    /// run on a selection are reached this way as well as from the viewport.
-    SelectSceneEntity(SceneEntityId),
+    /// Select one explorer row. Every row in the tree sends this, whatever it
+    /// names, and `App` reads the modifiers to decide whether the click
+    /// replaces the selection, adds the row to it or takes the run between
+    /// two. The tools that run on a selection are reached this way as well as
+    /// from the viewport.
+    SelectExplorerRow(ExplorerRow),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3142,8 +3181,6 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
-    /// Select a block model and show its viewport filter controls.
-    SelectBlockModel(BlockModelId),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -3193,7 +3230,6 @@ pub(crate) enum UiCommand {
     /// Lock or unlock every loaded item in one explorer section.
     SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
-    ActivateTriangulation(TriangulationId),
     CloseTriangulation(TriangulationId),
     /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
@@ -3254,7 +3290,10 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
     },
-    OpenCreateBlockModel(Option<DrillHoleId>),
+    /// Open Create Block Model on the selected drill holes. Like the other
+    /// select-first tools it takes its input from the scene selection, so the
+    /// command carries nothing.
+    OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
         variables: Vec<String>,
@@ -3476,12 +3515,10 @@ impl UiCommand {
             | Self::SaveSurveyDefinition { .. }
             | Self::DeleteSurveyDefinition(_)
             | Self::SetSurveyLocalSystem(_)
-            | Self::SelectRaster(_)
-            | Self::SelectSceneEntity(_)
+            | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
-            | Self::SelectBlockModel(_)
             | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
@@ -3492,7 +3529,7 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
-            | Self::OpenCreateBlockModel(_)
+            | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
             | Self::OpenRelimitDialog
@@ -3643,7 +3680,6 @@ impl UiCommand {
                 tr_format!(literal = "%section% section", section = section.label()),
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
-            Self::ActivateTriangulation(id) => report(tr!(literal = "Set Current Triangulation"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report(

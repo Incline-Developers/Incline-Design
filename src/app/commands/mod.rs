@@ -114,7 +114,7 @@ impl<'a> App<'a> {
                 | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::OpenCreateTriangulation
-                | UiCommand::OpenCreateBlockModel(_)
+                | UiCommand::OpenCreateBlockModel
                 | UiCommand::OpenCreateOreTriangulation
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -525,8 +525,15 @@ impl<'a> App<'a> {
                 self.set_drill_hole_category_colors(id, categories);
                 Ok(())
             }
-            UiCommand::OpenCreateBlockModel(preferred) => {
-                self.open_create_block_model_dialog(preferred);
+            UiCommand::OpenCreateBlockModel => {
+                // One dataset is estimated at a time, so the selection has to
+                // name exactly which one before the dialog opens on it.
+                let selected = self.selected_drill_hole_datasets();
+                let [drill_hole_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded drill hole collection before creating a block model from it"));
+                    return Ok(());
+                };
+                self.open_create_block_model_dialog(drill_hole_id);
                 Ok(())
             }
             UiCommand::ExecuteCreateBlockModel {
@@ -549,9 +556,16 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenCreateOreTriangulation => {
+                // One model is thresholded at a time, so the selection has to
+                // name exactly which one before the dialog opens on it.
+                let selected = self.selected_block_models();
+                let [block_model_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded block model before creating an ore triangulation from it"));
+                    return Ok(());
+                };
                 self.editor.ore_triangulation_open = true;
-                self.editor.ore_block_model_id = self.active_block_model.or_else(|| self.block_models.first().map(|model| model.id));
-                if let Some(model) = self.editor.ore_block_model_id.and_then(|id| self.block_models.iter().find(|model| model.id == id)) {
+                self.editor.ore_block_model_id = Some(block_model_id);
+                if let Some(model) = self.block_models.iter().find(|model| model.id == block_model_id) {
                     self.editor.ore_variable = model
                         .active_color_variable
                         .clone()
@@ -678,12 +692,8 @@ impl<'a> App<'a> {
                 }
                 result
             }
-            UiCommand::SelectRaster(id) => {
-                self.select_from_explorer_row(crate::model::SceneEntityId::Raster(id));
-                Ok(())
-            }
-            UiCommand::SelectSceneEntity(handle) => {
-                self.select_from_explorer_row(handle);
+            UiCommand::SelectExplorerRow(row) => {
+                self.select_from_explorer_row(row);
                 Ok(())
             }
             UiCommand::SetSurveyLocalSystem(system) => {
@@ -722,16 +732,8 @@ impl<'a> App<'a> {
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
-            UiCommand::SelectBlockModel(id) => {
-                self.select_block_model(id);
-                Ok(())
-            }
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
-                Ok(())
-            }
-            UiCommand::ActivateTriangulation(id) => {
-                self.activate_triangulation(id);
                 Ok(())
             }
             UiCommand::CloseTriangulation(id) => {
