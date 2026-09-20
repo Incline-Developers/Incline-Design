@@ -1788,3 +1788,7 @@ relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolu
 browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }
 literal-no-rasters-ffe3e01615f7276c = No rasters
 literal-the-data-ticked-in-the-export-checklist-b5a9058e6f00002a = The data ticked in the export checklist
+literal-cinematic-view-ae588fed4e18bea3 = Cinematic View
+literal-disable-cinematic-view-4b21438b1a35405f = Disable Cinematic View
+literal-set-cinematic-view-826deb0d9fbe84df = Set Cinematic View
+literal-set-cinematic-view-enabled-906e4f2493f6cf03 = Set cinematic view = %enabled%

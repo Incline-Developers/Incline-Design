@@ -470,13 +470,37 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
-/// The three switches saying how the scene's geometry is drawn: the vertices of
-/// its lines, the wireframes on its meshes, the grid it is drawn over. None of
-/// them is a tool, and none of them is saved.
+/// The switches saying how the scene's geometry is drawn: the vertices of its
+/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// presentation shading laid over the lot. None of them is a tool, and none of
+/// them is saved.
 ///
-/// Added grid first because the layout runs right to left - see
+/// Added cinematic first because the layout runs right to left - see
 /// [`draw_scene_modes`], which they follow along the bar.
 fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    // Sits against the grid button, on its right: both say how the scene is
+    // presented rather than what is in it. Native only - the post chain's extra
+    // screen-sized targets are more GPU memory than the browser build can spare.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let cinematic = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(unthemed_icon!("cinematic.svg")),
+                if editor.cinematic_enabled {
+                    tr!(literal = "Disable Cinematic View")
+                } else {
+                    tr!(literal = "Cinematic View")
+                },
+            )
+            .id_salt("cinematic")
+            .button_side(side)
+            .selected(editor.cinematic_enabled),
+        );
+        if cinematic.clicked() {
+            commands.push(UiCommand::SetCinematicEnabled(!editor.cinematic_enabled));
+        }
+    }
+
     // One grid button: the RL grid in a section, the XY grid in plan; which one
     // is the app's call (`set_grid_shown`).
     let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };

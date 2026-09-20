@@ -76,9 +76,21 @@ impl<'a> Graphics<'a> {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // An export is one of the places the cinematic view earns its keep, so
+        // it runs the whole chain rather than exporting the flat scene. The
+        // graded image goes to the scene cache, as it does for a displayed
+        // frame - the camera and viewport are the same, so that is the image
+        // the cache should be holding anyway - and the overlay pass below
+        // picks it up from there.
+        #[cfg(not(target_arch = "wasm32"))]
+        let cinematic_view = if editor.cinematic_enabled { self.cinematic_scene_view() } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let cinematic_view: Option<wgpu::TextureView> = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let scene_cache_view = self.scene_cache.view.clone();
         self.render_scene_pass(
             encoder,
-            &view,
+            cinematic_view.as_ref().unwrap_or(&view),
             self.viewport_rect,
             editor,
             triangulations,
@@ -88,10 +100,15 @@ impl<'a> Graphics<'a> {
             rasters,
             true,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        if cinematic_view.is_some() {
+            self.render_cinematic_post(encoder, &scene_cache_view);
+        }
         // The export is the viewport as the user sees it, so it carries the
-        // live overlay too. The scene was just rendered into the multisample
-        // target, so there is nothing to restore from the cache first.
-        self.render_editor_overlay_pass(encoder, &view, self.viewport_rect, editor, false);
+        // live overlay too. Without the cinematic chain the scene was just
+        // rendered into the multisample target and there is nothing to restore
+        // from the cache; with it, the cache is where the finished image is.
+        self.render_editor_overlay_pass(encoder, &view, self.viewport_rect, editor, cinematic_view.is_some());
 
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
