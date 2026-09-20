@@ -183,25 +183,62 @@ impl ImportBundle {
     }
 }
 
+/// How hard to compress an OMF container. Deflate's cost per level is steep and
+/// badly non-linear, so the level is worth choosing per destination instead of
+/// taking the library default of 6. Measured on a 7.8M-point survey cloud:
+///
+/// | level | time | size |
+/// |-------|-------|---------|
+/// | 1     | 0.50s | 83.3 MB |
+/// | 2     | 0.77s | 54.6 MB |
+/// | 3     | 0.97s | 51.8 MB |
+/// | 5     | 1.80s | 48.6 MB |
+/// | 6     | 4.34s | 48.1 MB |
+///
+/// Level 6 is a cliff - 2.4x the time of level 5 to shave a further 1% - and
+/// it was costing more CPU than every other part of a save put together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Compression {
+    /// A file the user keeps, syncs, or hands to another program. Level 5 is
+    /// the last point before the cliff: within about 1% of what level 6 would
+    /// have produced, so saved projects are no larger in any way that matters.
+    Archive,
+    /// A scratch spill this process wrote and only this process reads back,
+    /// deleted when the last handle to it drops. Level 2 gives up about a
+    /// tenth of the size for well over five times the speed. Going lower
+    /// (level 1 is another 1.5x faster) would inflate the spill by three
+    /// quarters, which defeats the point of unloading the data at all.
+    Scratch,
+}
+
+impl From<Compression> for omf_crate::file::Compression {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::Archive => Self::new(5),
+            Compression::Scratch => Self::new(2),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phase) -> Result<()> {
     crate::model::atomic_file::write_atomic(path, |file| {
-        write_to(snapshot, file, progress)?;
+        write_to(snapshot, file, Compression::Archive, progress)?;
         Ok(())
     })
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn to_bytes(snapshot: ProjectSnapshot, progress: &Phase) -> Result<Vec<u8>> {
-    let cursor = write_to(snapshot, Cursor::new(Vec::new()), progress)?;
+pub(crate) fn to_bytes(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<Vec<u8>> {
+    let cursor = write_to(snapshot, Cursor::new(Vec::new()), compression, progress)?;
     Ok(cursor.into_inner())
 }
 
-fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progress: &Phase) -> Result<W> {
+fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compression: Compression, progress: &Phase) -> Result<W> {
     if snapshot.is_empty() {
         bail!("There is no open Incline Design data to export");
     }
     let mut writer = omf_crate::file::Writer::new(output).context("create OMF writer")?;
+    writer.set_compression(compression.into());
     let total = snapshot.item_count().max(1) as u64;
     let mut complete = 0u64;
     let mut elements = Vec::with_capacity(snapshot.item_count());

@@ -539,7 +539,7 @@ impl<'a> App<'a> {
                     if cancel.is_cancelled() {
                         anyhow::bail!("Cancelled");
                     }
-                    omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))
+                    omf::to_bytes(snapshot, omf::Compression::Archive, &progress.phase(0.0, 1.0))
                 },
                 move |_app, result| match result {
                     Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),

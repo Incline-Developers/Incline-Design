@@ -51,7 +51,7 @@ impl OpenItem {
             Self::PointCloud(item) => snapshot.point_clouds.push((**item).clone()),
             Self::Raster(item) => snapshot.rasters.push((**item).clone()),
         }
-        let bytes = omf::to_bytes(snapshot, progress)?;
+        let bytes = omf::to_bytes(snapshot, omf::Compression::Scratch, progress)?;
         let backing = Backing::write(&bytes)?;
         self.state_mut().deferred = Some(DeferredAsset { backing, element_path: vec![0] });
         self.release_payload();
