@@ -75,7 +75,7 @@ impl<W: Write + Seek> Builder<W> {
         if let Some(pre) = pre_release {
             _ = write!(&mut comment, "-{pre}");
         }
-        self.zip_writer.set_comment(comment);
+        self.zip_writer.set_comment(comment)?;
         Ok(self.zip_writer.finish()?)
     }
 }
@@ -107,12 +107,16 @@ pub(crate) struct FileSpan {
     pub size: u64,
 }
 
-impl<'a, R: Read> From<ZipFile<'a, R>> for FileSpan {
-    fn from(f: ZipFile<'a, R>) -> Self {
-        Self {
-            offset: f.data_start(),
+impl<'a, R: Read> TryFrom<ZipFile<'a, R>> for FileSpan {
+    type Error = Error;
+
+    fn try_from(f: ZipFile<'a, R>) -> Result<Self, Error> {
+        Ok(Self {
+            offset: f
+                .data_start()
+                .ok_or_else(|| Error::ZipError("member data offset is unavailable".into()))?,
             size: f.compressed_size(),
-        }
+        })
     }
 }
 
@@ -134,7 +138,7 @@ impl<R: ReadAt> Archive<R> {
                 return Err(Error::ZipError("members may not be compressed".into()));
             }
             index_found = index_found || f.name() == INDEX_NAME;
-            members.insert(f.name().into(), f.into());
+            members.insert(f.name().into(), FileSpan::try_from(f)?);
         }
         if !index_found {
             return Err(Error::ZipMemberMissing(INDEX_NAME.to_owned()));

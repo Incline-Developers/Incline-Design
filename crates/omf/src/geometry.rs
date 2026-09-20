@@ -111,6 +111,7 @@ impl From<Composite> for Geometry {
 ///
 /// - [`Vertices`](crate::Location::Vertices) puts attribute values on the points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct PointSet {
     /// Origin of the points relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -147,6 +148,7 @@ impl PointSet {
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the line segments.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct LineSet {
     /// Origin of the lines relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -194,6 +196,7 @@ impl LineSet {
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the triangles.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct Surface {
     /// Origin of the surface relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -245,6 +248,7 @@ impl Surface {
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the grid cells.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct GridSurface {
     /// Position and orientation of the surface.
     pub orient: Orient2,
@@ -279,6 +283,7 @@ impl GridSurface {
 ///
 /// - [`Elements`](crate::Location::Elements) puts attribute values on elements.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct Composite {
     #[serde(default)]
     pub elements: Vec<Element>,

@@ -5,7 +5,7 @@ version = "0.2.0-beta.1"
 authors = ["Tim Evans <tim.evans@seequent.com>"]
 license = "MIT"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 publish = false
 exclude = ["/docs"]
 
@@ -14,13 +14,13 @@ bytes = { version = "1.12", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["serde"] }
 flate2 = "1.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
-parquet = { version = "59.3", default-features = false, features = ["flate2", "flate2-rust_backend"], optional = true }
+parquet = { version = "60.0", default-features = false, features = ["flate2", "flate2-rust_backend"], optional = true }
 rayon = "1.12"
-schemars = { version = "0.8", features = ["chrono"] }
+schemars = { version = "1.2.2", features = ["chrono04"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 thiserror = "2.0"
-zip = { version = "7", default-features = false }
+zip = { version = "8.6", default-features = false }
 
 [dev-dependencies]
 bytes = "1.12"

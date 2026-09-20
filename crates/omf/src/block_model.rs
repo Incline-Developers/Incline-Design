@@ -35,6 +35,7 @@ use crate::{
 ///   To have attribute values on undivided parent blocks in this mode there must be a sub-block
 ///   that covers the whole parent block.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct BlockModel {
     /// Orientation of the block model.
     pub orient: Orient3,
