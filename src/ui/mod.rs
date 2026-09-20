@@ -433,7 +433,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!(literal = "Select designs")),
         ActiveTool::DrapeToTopology => ViewportMessage::text(tr!(literal = "Select topologies")),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!(literal = "Choose relimit side")),
-        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!(literal = "Select line to relimit to")),
+        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
         ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!(literal = "Select line to relimit")),
         ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!(literal = "Select the endpoint to join")),
         ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!(literal = "Select the next line to fuse")),
@@ -989,28 +989,14 @@ fn draw_ui(
     if editor.offset_awaiting_side_pick && !editor.offset_preview_screen_px.is_empty() {
         let ppp = root_ui.ctx().pixels_per_point();
         // Entries stay index-aligned with the world arrays; a clipped vertex
-        // is `None` so guides pair the right endpoints and preview ranges
-        // never shift onto different vertices.
+        // is `None` so preview ranges never shift onto different vertices.
         let pts: Vec<Option<egui::Pos2>> = editor
             .offset_preview_screen_px
             .iter()
             .map(|point| point.map(|(x, y)| egui::pos2(x / ppp, y / ppp)))
             .collect();
-        let src_pts: Vec<Option<egui::Pos2>> = editor
-            .offset_source_screen_px
-            .iter()
-            .map(|point| point.map(|(x, y)| egui::pos2(x / ppp, y / ppp)))
-            .collect();
         let painter = root_ui.painter().with_clip_rect(canvas_rect);
         let yellow = egui::Color32::from_rgb(255, 220, 0);
-        let guide = egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(255, 230, 40, 220));
-        for (from, to) in src_pts.iter().zip(pts.iter()) {
-            if let (Some(from), Some(to)) = (from, to) {
-                for seg in dashed_line_segments(*from, *to, 6.0, 4.0) {
-                    painter.line_segment(seg, guide);
-                }
-            }
-        }
         let stroke = egui::Stroke::new(2.0, yellow);
         for &(start, end, closed) in &editor.offset_preview_ranges {
             if start >= end || end > pts.len() {

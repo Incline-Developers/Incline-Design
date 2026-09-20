@@ -116,6 +116,11 @@ tri-count-strings =
         [one] { $count } string
        *[other] { $count } strings
     }
+tri-count-circles =
+    { $count ->
+        [one] { $count } circle
+       *[other] { $count } circles
+    }
 tri-count-points =
     { $count ->
         [one] { $count } point
@@ -1773,6 +1778,12 @@ survey-name-exists = A coordinate system with that name already exists. Select i
 
 preferences-ui-size = UI size
 preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+
+relimit-select-boundary = Select polyline or circle to relimit to
+
+relimit-click-boundary = Click the polyline or circle to intersect with…
+
+relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolute sets the final line length. Relative adds or subtracts length.
 
 browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }
 literal-no-rasters-ffe3e01615f7276c = No rasters

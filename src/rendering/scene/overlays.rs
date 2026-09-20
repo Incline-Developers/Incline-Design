@@ -4,10 +4,7 @@ use glam::{DMat4, DVec3};
 
 use crate::{
     Size,
-    model::{
-        Document, Object, ObjectPoint,
-        geometry::{circle_polyline_vertices, compact_circle_center},
-    },
+    model::{Document, Object, ObjectPoint, geometry::circle_polyline_vertices},
     rendering::{
         StrokeVertex, Vertex,
         geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, tessellate_polyline_stroke},
@@ -211,10 +208,8 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         && let Some(obj) = document.get_object(target_id)
     {
         match (obj, editor.move_vertex_target.map(|(_, point)| point)) {
-            (Object::Polyline { verts, closed, .. }, Some(ObjectPoint::Center)) => {
-                if let Some(center) = compact_circle_center(verts, *closed) {
-                    draw_screen_point_marker_sized(&mut overlay, center, 11.0, ACTIVE_POINT_COLOR);
-                }
+            (Object::Circle { center, .. }, Some(ObjectPoint::Center)) => {
+                draw_screen_point_marker_sized(&mut overlay, *center, 11.0, ACTIVE_POINT_COLOR);
             }
             (Object::Polyline { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
                 for (index, v) in verts.iter().enumerate() {

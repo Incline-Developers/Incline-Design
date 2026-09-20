@@ -107,7 +107,7 @@ pub(crate) fn draw_selection_appearance(
     for handle in &editor.selected_handles {
         let kind = match handle {
             SceneEntityId::Object(id) => match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. }) => 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => 0,
                 Some(crate::model::Object::Point { .. }) => 1,
                 Some(crate::model::Object::Text { .. }) => 2,
                 None => continue,
@@ -126,7 +126,7 @@ pub(crate) fn draw_selection_appearance(
             .iter()
             .copied()
             .filter(|id| match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. }) => kind == 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => kind == 0,
                 Some(crate::model::Object::Point { .. }) => kind == 1,
                 Some(crate::model::Object::Text { .. }) => kind == 2,
                 None => false,
@@ -583,26 +583,36 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         return;
     }
 
-    let (first_closed, first_fill, first_line_weight) = match context.polylines.first().and_then(|&id| document.get_object(id)) {
-        Some(crate::model::Object::Polyline { closed, fill, line_weight, .. }) => (*closed, *fill, *line_weight),
-        _ => (false, FillStyle::Clear, 1.0),
-    };
+    // Circles share this group - they carry fill and line weight - so read
+    // those through the accessors rather than naming the polyline variant.
+    let first_object = context.polylines.first().and_then(|&id| document.get_object(id));
+    let first_closed = first_object.and_then(crate::model::Object::string_geometry).is_some_and(|(_, closed)| closed);
+    let first_fill = first_object.and_then(crate::model::Object::fill).unwrap_or(FillStyle::Clear);
+    let first_line_weight = first_object.and_then(crate::model::Object::line_weight).unwrap_or(1.0);
 
-    let closed_label = tr!(literal = "Closed");
-    let open_label = tr!(literal = "Open");
-    let mut closed = first_closed;
-    MenuFieldCombo::new(
-        "design_shape",
-        tr!(literal = "Shape"),
-        &mut closed,
-        if first_closed { closed_label.clone() } else { open_label.clone() },
-        [(true, closed_label.into()), (false, open_label.into())],
-    )
-    .width(FIELD_WIDTH)
-    .show(ui);
-    if closed != first_closed {
-        commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
-        *geometry_dirty = true;
+    // A circle is closed by definition, so the Shape row appears only when the
+    // selection holds something that can actually be opened.
+    let any_openable = context
+        .polylines
+        .iter()
+        .any(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })));
+    if any_openable {
+        let closed_label = tr!(literal = "Closed");
+        let open_label = tr!(literal = "Open");
+        let mut closed = first_closed;
+        MenuFieldCombo::new(
+            "design_shape",
+            tr!(literal = "Shape"),
+            &mut closed,
+            if first_closed { closed_label.clone() } else { open_label.clone() },
+            [(true, closed_label.into()), (false, open_label.into())],
+        )
+        .width(FIELD_WIDTH)
+        .show(ui);
+        if closed != first_closed {
+            commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
+            *geometry_dirty = true;
+        }
     }
 
     let mut fill = first_fill;

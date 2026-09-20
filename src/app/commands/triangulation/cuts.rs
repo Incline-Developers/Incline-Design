@@ -14,9 +14,9 @@ impl<'a> App<'a> {
             (tri.mesh.clone(), tri.name.clone())
         };
 
-        let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id) {
-            Some(Object::Polyline { verts, closed: true, .. }) => crate::model::geometry::tessellate_polyline_bulges(verts, true),
-            _ => anyhow::bail!("Selected object is not a closed polyline"),
+        let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary) {
+            Some(points) => points,
+            None => anyhow::bail!("Selected object is not a closed polyline or circle"),
         };
         if poly_verts.len() < 3 {
             anyhow::bail!("Selected polyline has fewer than 3 boundary points");

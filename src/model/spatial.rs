@@ -221,6 +221,7 @@ fn object_bbox(object: &Object) -> (DVec3, DVec3) {
         Object::Text {
             pos, content, height, rotation, ..
         } => points_bbox(&text_bounds_corners(*pos, content, *height, *rotation)),
+        Object::Circle { center, radius, .. } => (*center - DVec3::new(*radius, *radius, 0.0), *center + DVec3::new(*radius, *radius, 0.0)),
         Object::Polyline { verts, closed, .. } => polyline_bulge_bounds(verts, *closed).unwrap_or((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY))),
     }
 }

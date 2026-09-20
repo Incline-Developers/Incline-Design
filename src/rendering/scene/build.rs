@@ -62,8 +62,14 @@ impl PolylineFillCache {
     }
 
     fn retain_document(&mut self, document: &Document) {
-        self.entries
-            .retain(|id, _| matches!(document.get_object(*id), Some(Object::Polyline { closed: true, fill, .. }) if *fill != FillStyle::Clear));
+        // Anything that encloses an area and is actually hatched keeps its
+        // cached mesh. Naming only the polyline variant here would evict every
+        // filled circle on each rebuild and re-triangulate it from scratch.
+        self.entries.retain(|id, _| {
+            document
+                .get_object(*id)
+                .is_some_and(|object| object.encloses_area() && object.fill().is_some_and(|fill| fill != FillStyle::Clear))
+        });
     }
 
     fn mesh(&mut self, id: ObjectId, verts: &[PolyVertex]) -> Option<&PolylineFillMesh> {
@@ -199,13 +205,16 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 Object::Point { pos, .. } => {
                     draw_screen_cross(&mut draw_ctx, *pos, 6.0, DOC_LINE_WIDTH, rgba);
                 }
-                Object::Polyline {
-                    verts, closed, fill, line_weight, ..
-                } => {
+                // A circle draws exactly as the closed bulged string it is
+                // equivalent to, so both variants share one path through
+                // `string_geometry` rather than duplicating stroke and hatch.
+                Object::Polyline { fill, line_weight, .. } | Object::Circle { fill, line_weight, .. } => {
                     let line_rgba = rgba;
                     let fill_rgba = document.object_fill_rgba(object);
-                    tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, line_rgba);
-                    if *closed
+                    let geometry = object.string_geometry();
+                    let (verts, closed) = geometry.as_ref().map_or((&[][..], false), |(verts, closed)| (verts.as_ref(), *closed));
+                    tessellate_polyline_stroke(&mut draw_ctx, verts, closed, *line_weight, line_rgba);
+                    if closed
                         && verts.len() >= 2
                         && *fill != crate::model::FillStyle::Clear
                         && let Some(fill_mesh) = fill_cache.mesh(object.id(), verts)
@@ -380,6 +389,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
 fn object_center(object: &Object) -> DVec3 {
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
+        Object::Circle { center, .. } => *center,
         Object::Polyline { verts, .. } => average_positions(verts.iter().map(|vertex| vertex.pos)),
     }
 }

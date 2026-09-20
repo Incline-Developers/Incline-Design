@@ -4,12 +4,7 @@ use glam::{DMat4, DVec2, DVec3};
 
 use crate::{
     Size,
-    model::{
-        Document, Object, SceneEntityId,
-        geometry::{compact_circle_center, tessellate_bulge_segment},
-        spatial::ObjectSnapIndex,
-        triangulation::OpenTriangulation,
-    },
+    model::{Document, Object, SceneEntityId, geometry::tessellate_bulge_segment, spatial::ObjectSnapIndex, triangulation::OpenTriangulation},
     rendering::{
         camera::SectionSlab,
         pick::{closest_t_on_segment, perspective_correct_segment_point, slab_clipped_segment, world_to_screen, world_to_screen_unclipped_depth},
@@ -138,24 +133,23 @@ pub(crate) fn snap_cursor(
             CursorMode::SnapToSurface => {}
             CursorMode::SnapToPoint => match object {
                 Object::Point { pos, .. } => nearest.consider_point(&view, *pos),
-                Object::Polyline { verts, closed, .. } => {
-                    let circle_center = compact_circle_center(verts, *closed);
-                    let points = circle_center
-                        .iter()
-                        .copied()
-                        .chain(circle_center.is_none().then_some(()).into_iter().flat_map(|()| verts.iter().map(|v| v.pos)));
-                    for point in points {
-                        nearest.consider_point(&view, point);
+                // A circle's only point is its centre.
+                Object::Circle { center, .. } => nearest.consider_point(&view, *center),
+                Object::Polyline { verts, .. } => {
+                    for vertex in verts {
+                        nearest.consider_point(&view, vertex.pos);
                     }
                 }
                 _ => {}
             },
 
             CursorMode::SnapToLine => {
-                let (verts, closed) = match object {
-                    Object::Polyline { verts, closed, .. } => (verts.as_slice(), *closed),
-                    _ => continue,
+                // Line snapping walks the geometry view, so a circle's ring
+                // snaps like any other closed string.
+                let Some((geometry, closed)) = object.string_geometry() else {
+                    continue;
                 };
+                let verts = geometry.as_ref();
                 let n = verts.len();
                 if n < 2 {
                     continue;
