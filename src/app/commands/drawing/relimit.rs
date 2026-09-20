@@ -69,7 +69,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Phase 1: pick the second line (only when dialog is closed).
+        // Phase 1: pick the target boundary (only when dialog is closed).
         if !self.editor.relimit_waiting_for_pick {
             userspace_warn!("{}", tr!(literal = "Relimit: click ignored, tool is not currently waiting for a target pick"));
             return;
@@ -92,63 +92,8 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Both must be open polylines with at least 1 segment. Relimiting modifies
-        // existing objects, so neither is restricted to the active layer.
-        let (src_verts, tgt_verts) = {
-            let src = match self.active_document().get_object(source_id) {
-                Some(Object::Polyline { verts, closed: false, .. }) if verts.len() >= 2 => verts.clone(),
-                _ => {
-                    userspace_warn!(
-                        "{}",
-                        tr_format!(
-                            literal = "Relimit: source object %source_id% is no longer a valid open polyline",
-                            source_id = format!("{source_id:?}")
-                        )
-                    );
-                    return;
-                }
-            };
-            let tgt = match self.active_document().get_object(second_id) {
-                Some(Object::Polyline { verts, closed, .. }) if verts.len() >= 2 => (verts.clone(), *closed),
-                Some(Object::Polyline { verts, .. }) => {
-                    userspace_warn!(
-                        "{}",
-                        tr_format!(
-                            literal = "Relimit: clicked polyline %second_id% has only %count% vertex/vertices, need at least 2",
-                            second_id = format!("{second_id:?}"),
-                            count = verts.len()
-                        )
-                    );
-                    return;
-                }
-                Some(other) => {
-                    userspace_warn!(
-                        "{}",
-                        tr_format!(
-                            literal = "Relimit: clicked object %second_id% is not a polyline (it's a %kind%)",
-                            second_id = format!("{second_id:?}"),
-                            kind = other.kind_name()
-                        )
-                    );
-                    return;
-                }
-                None => {
-                    userspace_warn!(
-                        "{}",
-                        tr_format!(literal = "Relimit: clicked object %second_id% no longer exists", second_id = format!("{second_id:?}"))
-                    );
-                    return;
-                }
-            };
-            (src, tgt)
-        };
-        let (tgt_verts, tgt_closed) = tgt_verts;
-
-        // Each end continues its own terminal segment. Using the first-to-last
-        // chord here makes every bent polyline relimit in the wrong direction.
-        let world_candidates = relimit_world_candidates(&src_verts, &tgt_verts, tgt_closed);
+        let world_candidates = self.relimit_target_candidates(second_id);
         if world_candidates.is_empty() {
-            userspace_warn!("{}", tr!(literal = "Relimit: neither terminal segment crosses the selected target line in plan view"));
             return;
         }
 
@@ -170,7 +115,30 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
-    /// Highlight the line that the current Relimit pick phase would accept.
+    /// Use the same geometric eligibility for hover feedback and target clicks.
+    fn relimit_target_candidates(&self, target_id: ObjectId) -> Vec<RelimitWorldCandidate> {
+        let Some(source_id) = self.editor.relimit_source_id else {
+            return Vec::new();
+        };
+        if target_id == source_id {
+            return Vec::new();
+        }
+        let Some(Object::Polyline { verts, closed: false, .. }) = self.active_document().get_object(source_id) else {
+            return Vec::new();
+        };
+        let target = match self.active_document().get_object(target_id) {
+            Some(Object::Polyline { verts, closed, .. }) if verts.len() >= 2 => RelimitBoundary::Polyline {
+                points: crate::model::geometry::tessellate_polyline_bulges(verts, *closed),
+                closed: *closed,
+            },
+            Some(Object::Circle { center, radius, .. }) => RelimitBoundary::Circle { center: *center, radius: *radius },
+            _ => return Vec::new(),
+        };
+        // Each end continues its own terminal segment, including its slope.
+        relimit_world_candidates(verts, &target)
+    }
+
+    /// Highlight the object that the current Relimit pick phase would accept.
     pub(crate) fn update_relimit_hover_line(&mut self) {
         let picked = self.graphics.as_ref().and_then(|graphics| {
             graphics.pick_at_cursor(
@@ -187,16 +155,7 @@ impl<'a> App<'a> {
             {
                 Some(id)
             }
-            SceneEntityId::Object(id)
-                if self.editor.relimit_waiting_for_pick
-                    && Some(id) != self.editor.relimit_source_id
-                    && matches!(
-                        self.active_document().get_object(id),
-                        Some(Object::Polyline { verts, .. }) if verts.len() >= 2
-                    ) =>
-            {
-                Some(id)
-            }
+            SceneEntityId::Object(id) if self.editor.relimit_waiting_for_pick && !self.relimit_target_candidates(id).is_empty() => Some(id),
             _ => None,
         });
         if candidate != self.editor.tool_highlight_id {
@@ -352,37 +311,69 @@ struct RelimitWorldCandidate {
     is_extension: bool,
 }
 
-/// Find trim/extend candidates along the source's first and last segments.
-/// The target is tessellated first so a bulged target is not reduced to its
-/// stored endpoint chords.
-fn relimit_world_candidates(source: &[PolyVertex], target: &[PolyVertex], target_closed: bool) -> Vec<RelimitWorldCandidate> {
-    if source.len() < 2 || target.len() < 2 {
-        return Vec::new();
-    }
-    let target_points = crate::model::geometry::tessellate_polyline_bulges(target, target_closed);
-    if target_points.len() < 2 {
-        return Vec::new();
-    }
+enum RelimitBoundary {
+    Polyline { points: Vec<DVec3>, closed: bool },
+    Circle { center: DVec3, radius: f64 },
+}
 
-    let target_edge_count = if target_closed { target_points.len() } else { target_points.len() - 1 };
-    let crossings = |a: DVec3, b: DVec3| -> Vec<(f64, DVec3)> {
-        if (b - a).truncate().length_squared() <= f64::EPSILON {
+impl RelimitBoundary {
+    fn crossings(&self, a: DVec3, b: DVec3) -> Vec<(f64, DVec3)> {
+        let dir = (b - a).truncate();
+        let length = dir.length();
+        if !length.is_finite() || length * length <= f64::EPSILON {
             return Vec::new();
         }
-        (0..target_edge_count)
-            .filter_map(|i| {
-                let c = target_points[i];
-                let d = target_points[(i + 1) % target_points.len()];
-                line_line_intersect_t(a.truncate(), b.truncate(), c.truncate(), d.truncate()).map(|t| (t, a + t * (b - a)))
-            })
-            .collect()
-    };
+        match self {
+            Self::Polyline { points, closed } => {
+                if points.len() < 2 {
+                    return Vec::new();
+                }
+                let edge_count = if *closed { points.len() } else { points.len() - 1 };
+                (0..edge_count)
+                    .filter_map(|i| {
+                        line_line_intersect_t(a.truncate(), b.truncate(), points[i].truncate(), points[(i + 1) % points.len()].truncate()).map(|t| (t, a + t * (b - a)))
+                    })
+                    .collect()
+            }
+            Self::Circle { center, radius } => {
+                if !center.is_finite() || !radius.is_finite() || *radius <= 0.0 {
+                    return Vec::new();
+                }
+                // Work relative to the source in XY, and retain its interpolated
+                // elevation. Analytic intersections avoid tessellation error.
+                let unit = dir / length;
+                let offset = (*center - a).truncate();
+                let along = offset.dot(unit);
+                let distance = offset.perp_dot(unit).abs();
+                let slack = 16.0 * f64::EPSILON * offset.length().max(*radius).max(1.0);
+                if distance > radius + slack {
+                    return Vec::new();
+                }
+                let half_chord = ((radius - distance).max(0.0) * (radius + distance)).sqrt();
+                let hit = |distance: f64| {
+                    let t = distance / length;
+                    (t, a + t * (b - a))
+                };
+                if half_chord == 0.0 {
+                    vec![hit(along)]
+                } else {
+                    vec![hit(along - half_chord), hit(along + half_chord)]
+                }
+            }
+        }
+    }
+}
 
+/// Find trim/extend candidates along the source's first and last segments.
+fn relimit_world_candidates(source: &[PolyVertex], target: &RelimitBoundary) -> Vec<RelimitWorldCandidate> {
+    if source.len() < 2 {
+        return Vec::new();
+    }
     let mut candidates = Vec::with_capacity(4);
     let start_a = source[0].pos;
     let start_b = source[1].pos;
     let start_touch = crate::model::kernel::XY_TOL / (start_b - start_a).truncate().length().max(crate::model::kernel::XY_TOL);
-    let start_crossings = crossings(start_a, start_b);
+    let start_crossings = target.crossings(start_a, start_b);
     if let Some(&(_, target)) = start_crossings.iter().filter(|(t, _)| *t < -start_touch).max_by(|(a, _), (b, _)| a.total_cmp(b)) {
         candidates.push(RelimitWorldCandidate {
             end: TrimEnd::Start,
@@ -406,7 +397,7 @@ fn relimit_world_candidates(source: &[PolyVertex], target: &[PolyVertex], target
     let end_a = source[last - 1].pos;
     let end_b = source[last].pos;
     let end_touch = crate::model::kernel::XY_TOL / (end_b - end_a).truncate().length().max(crate::model::kernel::XY_TOL);
-    let end_crossings = crossings(end_a, end_b);
+    let end_crossings = target.crossings(end_a, end_b);
     if let Some(&(_, target)) = end_crossings
         .iter()
         .filter(|(t, _)| *t > 0.0 && *t <= 1.0 + end_touch)

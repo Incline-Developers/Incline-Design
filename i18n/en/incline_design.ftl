@@ -1790,3 +1790,9 @@ survey-name-exists = A coordinate system with that name already exists. Select i
 
 preferences-ui-size = UI size
 preferences-ui-size-help = Scales text and controls relative to the monitor resolution, using 2560 × 1440 as the reference. Resizing the window keeps their size unchanged.
+
+relimit-select-boundary = Select polyline or circle to relimit to
+
+relimit-click-boundary = Click the polyline or circle to intersect with…
+
+relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolute sets the final line length. Relative adds or subtracts length.

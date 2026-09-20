@@ -1043,9 +1043,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
             // Mode tabs
             let previous_mode = editor.relimit_mode;
             MenuField::new(tr!(literal = "Mode"))
-                .help_text(tr!(
-                    literal = "Intersect moves one endpoint to another line. Absolute sets the final line length. Relative adds or subtracts length."
-                ))
+                .help_text(tr!("relimit-mode-help"))
                 .show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
                         ui.selectable_value(
@@ -1078,7 +1076,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
             match editor.relimit_mode {
                 RelimitMode::Intersect => {
                     if editor.relimit_waiting_for_pick {
-                        ui.label(tr!(literal = "Click the line to intersect with…"));
+                        ui.label(tr!("relimit-click-boundary"));
                     } else if editor.relimit_confirming_end {
                         ui.label(tr!(literal = "Hover to choose which end to move, then click to confirm."));
                         ui.colored_label(

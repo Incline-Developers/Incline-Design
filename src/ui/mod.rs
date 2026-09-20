@@ -414,7 +414,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!(literal = "Select designs")),
         ActiveTool::DrapeToTopology => ViewportMessage::text(tr!(literal = "Select topologies")),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!(literal = "Choose relimit side")),
-        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!(literal = "Select line to relimit to")),
+        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
         ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!(literal = "Select line to relimit")),
         ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!(literal = "Select the endpoint to join")),
         ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!(literal = "Select the next line to fuse")),
