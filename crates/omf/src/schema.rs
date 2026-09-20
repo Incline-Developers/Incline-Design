@@ -1,33 +1,24 @@
 use std::fmt::Write;
 
 use schemars::{
-    JsonSchema,
-    r#gen::SchemaSettings,
-    schema::{
-        InstanceType, Metadata, RootSchema, Schema, SchemaObject, SingleOrVec, SubschemaValidation,
-    },
-    visit::{Visitor, visit_schema_object},
+    JsonSchema, Schema,
+    generate::SchemaSettings,
+    transform::{Transform, transform_subschemas},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{Project, format_full_name};
 
-fn simple_enum_variant(outer_schema: &Schema) -> Option<(String, String)> {
-    if let Schema::Object(schema) = outer_schema {
-        let Some([Value::String(variant)]) = schema.enum_values.as_deref() else {
-            return None;
-        };
-        let Some(Metadata {
-            description: Some(descr),
-            ..
-        }) = schema.metadata.as_deref()
-        else {
-            return None;
-        };
-        Some((variant.clone(), descr.clone()))
-    } else {
-        None
-    }
+fn simple_enum_variant(schema: &Value) -> Option<(String, String)> {
+    let variant = schema
+        .get("const")
+        .or_else(|| {
+            let values = schema.get("enum")?.as_array()?;
+            (values.len() == 1).then(|| &values[0])
+        })?
+        .as_str()?;
+    let description = schema.get("description")?.as_str()?;
+    Some((variant.to_owned(), description.to_owned()))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -35,84 +26,92 @@ struct TweakSchema {
     remove_descr: bool,
 }
 
-impl Visitor for TweakSchema {
-    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
-        // Add a maximum for uint8 values.
-        if schema.format.as_deref() == Some("uint8") {
-            schema.number().maximum = Some(255.0);
+impl Transform for TweakSchema {
+    fn transform(&mut self, schema: &mut Schema) {
+        // Preserve the published schema's ordering and numeric representation.
+        if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+            required.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+        }
+        for key in ["minimum", "maximum"] {
+            if let Some(value) = schema.get_mut(key)
+                && let Some(number) = value.as_f64()
+            {
+                *value = json!(number);
+            }
+        }
+        // Keep the published OMF schema's single-value enums.
+        if let Some(value) = schema.remove("const") {
+            schema.insert("enum".into(), json!([value]));
+        }
+        if schema.get("format").and_then(Value::as_str) == Some("uint8") {
+            schema.insert("maximum".into(), json!(255.0));
         }
         // Move descriptions of simple enum values into the parent.
-        if let Some(SubschemaValidation {
-            one_of: Some(variants),
-            ..
-        }) = schema.subschemas.as_deref()
+        if let Some(variants) = schema
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .map(simple_enum_variant)
+                    .collect::<Option<Vec<_>>>()
+            })
         {
-            if let Some(v) = variants
-                .iter()
-                .map(simple_enum_variant)
-                .collect::<Option<Vec<_>>>()
-            {
-                schema.subschemas = None;
-                schema.enum_values = Some(v.iter().map(|(name, _)| (&name[..]).into()).collect());
-                schema.instance_type = Some(SingleOrVec::Single(Box::new(InstanceType::String)));
-                let mut descr = schema.metadata().description.clone().unwrap_or_default();
-                descr += "\n\n### Values\n\n";
-                for (n, d) in v {
-                    let body = d.replace("\n\n", "\n\n    ");
-                    write!(&mut descr, "`{n}`\n:   {body}\n\n").unwrap();
-                }
-                schema.metadata().description = Some(descr);
+            schema.remove("oneOf");
+            schema.insert(
+                "enum".into(),
+                variants
+                    .iter()
+                    .map(|(name, _)| Value::from(name.clone()))
+                    .collect(),
+            );
+            schema.insert("type".into(), json!("string"));
+            let mut descr = schema
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            descr += "\n\n### Values\n\n";
+            for (name, description) in variants {
+                let body = description.replace("\n", "\n    ");
+                write!(&mut descr, "`{name}`\n:   {body}\n\n").unwrap();
             }
+            schema.insert("description".into(), descr.into());
         }
-        // Optionally remove descriptions. These get transformed into the documentation,
-        // they're a bit too complex to be readable in the schema itself.
         if self.remove_descr {
-            let mut empty = false;
-            if let Some(m) = schema.metadata.as_deref_mut() {
-                m.description = None;
-                empty = m == &Metadata::default();
-            }
-            if empty {
-                schema.metadata = None;
-            }
+            schema.remove("description");
         }
-        // Change references to the generics Array_for_* to just Array.
-        if let Some(r) = schema.reference.as_mut() {
-            if r.starts_with("#/definitions/Array_for_") {
-                "#/definitions/Array".clone_into(r);
-            }
-        }
-        // Then delegate to default implementation to visit any subschemas.
-        visit_schema_object(self, schema);
+        transform_subschemas(self, schema);
     }
 }
 
-pub(crate) fn schema_for<T: JsonSchema>(remove_descr: bool) -> RootSchema {
+// Keep the OMF 2 schema dialect and reference paths stable across Schemars
+// upgrades. Geometry payloads opt into inline schemas to retain tagged variants.
+pub(crate) fn schema_for<T: JsonSchema>(remove_descr: bool) -> Schema {
     SchemaSettings::draft2019_09()
-        .with_visitor(TweakSchema { remove_descr })
+        .with(|settings| settings.definitions_path = "/definitions".into())
+        .with_transform(TweakSchema { remove_descr })
         .into_generator()
         .into_root_schema_for::<T>()
 }
 
-pub(crate) fn project_schema(remove_descr: bool) -> RootSchema {
+pub(crate) fn project_schema(remove_descr: bool) -> Schema {
     let mut root = schema_for::<Project>(remove_descr);
-    root.schema.metadata().title = Some(format_full_name());
-    root.schema.metadata().id =
-        Some("https://github.com/gmggroup/omf-rust/blob/main/omf.schema.json".to_owned());
-    let array_def = root.definitions.get("Array_for_Boolean").unwrap().clone();
-    root.definitions
-        .retain(|name, _| !name.starts_with("Array_for"));
-    root.definitions.insert("Array".to_owned(), array_def);
+    root.insert("title".into(), format_full_name().into());
+    root.insert(
+        "$id".into(),
+        "https://github.com/gmggroup/omf-rust/blob/main/omf.schema.json".into(),
+    );
     root
 }
 
-pub fn json_schema() -> RootSchema {
+pub fn json_schema() -> Schema {
     project_schema(true)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use schemars::schema::RootSchema;
+    use schemars::Schema;
 
     use crate::schema::json_schema;
 
@@ -142,7 +141,7 @@ pub(crate) mod tests {
     #[test]
     fn schema() {
         let schema = json_schema();
-        let expected: RootSchema =
+        let expected: Schema =
             serde_json::from_reader(std::fs::File::open(SCHEMA).unwrap()).unwrap();
         assert!(schema == expected, "schema has changed");
     }
