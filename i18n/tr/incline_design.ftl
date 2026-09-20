@@ -87,7 +87,6 @@ confirm-delete-product =
 ## Üçgenleme Oluştur iletişim kutusu
 
 tri-create-title = Üçgenleme Oluştur
-tri-create-help = Seçmek/seçimi kaldırmak için görüntü alanındaki nesnelere tıklayın. Kutu seçimi için sürükleyin.
 tri-create-type-label = Üçgenleme türü
 tri-create-type-help =
     Açık yüzey, arazi tarzı bir levha oluşturur. Katı, tam kapalı bir ağ
@@ -97,7 +96,6 @@ tri-create-output-name-help = Oluşturulan üçgenlemeye atanacak ad.
 tri-create-output-name-hint = üçgenleme adı
 tri-create-run = Üçgenle
 
-tri-selection-none = Henüz nesne seçilmedi.
 tri-selection-selected = { $summary } seçildi
 
 tri-type-open-surface = Açık yüzey

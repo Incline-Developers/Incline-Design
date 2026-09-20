@@ -87,7 +87,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Tạo lưới tam giác
-tri-create-help = Nhấp vào các đối tượng trong khung nhìn để chọn/bỏ chọn. Kéo để chọn theo khung.
 tri-create-type-label = Loại lưới tam giác
 tri-create-type-help =
     Mặt hở tạo ra một tấm bề mặt kiểu địa hình. Khối đặc tạo ra một lưới
@@ -97,7 +96,6 @@ tri-create-output-name-help = Tên gán cho lưới tam giác được tạo ra.
 tri-create-output-name-hint = tên lưới tam giác
 tri-create-run = Tạo lưới tam giác
 
-tri-selection-none = Chưa chọn đối tượng nào.
 tri-selection-selected = Đã chọn { $summary }
 
 tri-type-open-surface = Mặt hở

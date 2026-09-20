@@ -159,6 +159,24 @@ impl EditorState {
         }
     }
 
+    /// Whether a tool that runs on the selection is open on a snapshot of it.
+    ///
+    /// These tools take their inputs when they open and cannot be re-pointed
+    /// from inside, so the viewport and the explorer tree both stop taking
+    /// selection while one is up: a click that appeared to add or drop an
+    /// input would not reach the run. Changing the inputs means closing the
+    /// tool, selecting, and reopening.
+    pub(crate) fn selection_locked_by_tool(&self) -> bool {
+        self.tri_create_open
+            || self.tri_cut_poly_open
+            || self.tri_cut_z_open
+            || self.tri_contour_open
+            || self.point_cloud_tin_open
+            || self.point_cloud_join_open
+            || self.block_model_create_open
+            || self.ore_triangulation_open
+    }
+
     /// Lock or unlock one scene entity by name. Layer locks go through
     /// [`Self::locked_layers`] instead, and both are folded into
     /// `frozen_handles` by `App::invalidate_geometry`.
@@ -260,20 +278,43 @@ pub(crate) enum ContourOutputLayer {
     Existing(LayerId),
 }
 
+/// What the current scene selection offers the tools that run on it.
+///
+/// Create Triangulation, the terrain tools, the point-cloud tools and the
+/// estimation tools act on whatever was selected when they were opened, so
+/// their menu entries have to know every frame whether the selection can feed
+/// them. Counting here rather
+/// than at each menu keeps the document out of the menu code and the scan off
+/// the frame: `App::refresh_selection_counts` fills this in once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectionCounts {
+    /// Selected design objects able to contribute an edge to a triangulation.
+    pub(crate) triangulation_sources: usize,
+    /// Selected design objects that enclose an area, and so can serve as a
+    /// clipping boundary.
+    pub(crate) clip_boundaries: usize,
+    /// Selected triangulations that are loaded, and so have a mesh to work on.
+    pub(crate) triangulations: usize,
+    /// Selected point clouds that are loaded, and so have points to work on.
+    pub(crate) point_clouds: usize,
+    /// Selected drill-hole datasets that are loaded, and so have intervals to
+    /// estimate from.
+    pub(crate) drill_holes: usize,
+    /// Selected block models that are loaded, and so have blocks to work on.
+    pub(crate) block_models: usize,
+}
+
 /// A triangulation selector temporarily being filled from a viewport click.
 /// Keeping one shared mode prevents overlapping dialogs from competing for a
 /// click and lets Escape cancel the pick without closing the owning tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TriangulationPickTarget {
-    ClipSurface,
-    SliceSurface,
     TrimTopology,
     TrimSurface,
     CutPitTopology,
     CutPitShell,
     IncludeTopology,
     IncludeShape,
-    ContourSurface,
 }
 
 impl TriangulationPickTarget {
@@ -282,7 +323,7 @@ impl TriangulationPickTarget {
             Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!(literal = "Click the topology in the viewport."),
             Self::CutPitShell => tr!(literal = "Click the pit shell in the viewport."),
             Self::IncludeShape => tr!(literal = "Click the pit or stockpile solid in the viewport."),
-            Self::ClipSurface | Self::SliceSurface | Self::TrimSurface | Self::ContourSurface => tr!(literal = "Click the surface in the viewport."),
+            Self::TrimSurface => tr!(literal = "Click the surface in the viewport."),
         }
     }
 }
@@ -994,6 +1035,19 @@ impl RenameTarget {
     }
 }
 
+/// One selectable row in the explorer tree.
+///
+/// A design layer is not a scene entity - it is a container - but it selects
+/// like one: clicking it takes everything standing on it. Carrying both
+/// shapes in the row list lets a Shift-click run across the two without the
+/// tree having to know what each row stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ExplorerRow {
+    Entity(SceneEntityId),
+    /// A design layer, which stands for every object on it.
+    Layer(LayerId),
+}
+
 /// Central mutable editor state.
 ///
 /// Shared between the render pipeline and every UI draw call. Fields are grouped
@@ -1001,6 +1055,18 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
+    /// Every selectable row the explorer tree drew this frame, in the order it
+    /// drew them, with collapsed sections left out.
+    ///
+    /// A Shift-click selects the run of rows between the last click and this
+    /// one, which is a question only the tree can answer: it alone knows which
+    /// sections are open and how the rows read down the panel. It is rebuilt
+    /// each time the tree is drawn, so the click that reads it is always
+    /// resolved against the rows the user was looking at.
+    pub(crate) explorer_rows: Vec<ExplorerRow>,
+    /// The row a Shift-click measures its run from: the last row clicked
+    /// without Shift.
+    pub(crate) explorer_anchor: Option<ExplorerRow>,
     /// Individually selected drill holes, which the Drill & Blast workspace
     /// works in place of whole datasets - see [`DrillHoleRef`]. Production
     /// selects the dataset into [`Self::selected_handles`] and leaves this
@@ -1036,6 +1102,12 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
+    /// Draw classified point clouds in their ASPRS class colours. Survey's
+    /// reading of a cloud - what a delivery's ground filter decided - so the
+    /// switch appears there and the renderer honours it there only. On by
+    /// default: a classified cloud arrives to be checked, and a flat one hides
+    /// the vegetation and noise that check is looking for.
+    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -1244,6 +1316,11 @@ pub(crate) struct EditorState {
     pub(crate) selection_has_intersections: bool,
     /// Whether Insert Point has a selected polyline to act on; circles are excluded.
     pub(crate) selection_has_polylines: bool,
+    /// How much of the scene selection each selection-driven tool can act on,
+    /// refreshed by `App::refresh_selection_counts` before each frame's UI.
+    /// The menus decide their own availability from this, and never see the
+    /// document the counts are derived from.
+    pub(crate) selection_counts: SelectionCounts,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
@@ -1511,13 +1588,11 @@ pub(crate) struct EditorState {
 
     // Cut Triangulation by Polyline
     pub(crate) tri_cut_poly_open: bool,
-    pub(crate) tri_cut_poly_awaiting_pick: bool,
     pub(crate) tri_cut_poly_tri_id: Option<TriangulationId>,
     pub(crate) tri_cut_poly_object_id: Option<ObjectId>,
     pub(crate) tri_cut_poly_object_name: String,
     pub(crate) tri_cut_poly_mode: TriPolylineClipMode,
     pub(crate) tri_cut_poly_name_input: String,
-    pub(crate) tri_cut_poly_name_auto: bool,
 
     // Cut Triangulation by Z Range
     pub(crate) tri_cut_z_open: bool,
@@ -1525,7 +1600,6 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_z_min_input: f64,
     pub(crate) tri_cut_z_max_input: f64,
     pub(crate) tri_cut_z_name_input: String,
-    pub(crate) tri_cut_z_name_auto: bool,
 
     // Trim Surface to Topology
     pub(crate) tri_cut_surface_open: bool,
@@ -1583,6 +1657,16 @@ pub(crate) struct EditorState {
     pub(crate) point_cloud_tin_candidate_mult: u32,
     /// Bridge holes and boundary concavities narrower than this (0 = only gaps).
     pub(crate) point_cloud_tin_hole_fill: f64,
+    /// Reconstruct the terrain from classified ground points alone. On by
+    /// default, and honoured only by a classified cloud: a delivery that has
+    /// been through a ground filter is meant to be used through it.
+    pub(crate) point_cloud_tin_ground_only: bool,
+    pub(crate) point_cloud_join_open: bool,
+    /// Clouds ticked for joining, in the order the explorer lists them.
+    pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
+    pub(crate) point_cloud_join_name_input: String,
+    /// Remove the sources once the joined cloud is in the project.
+    pub(crate) point_cloud_join_remove_sources: bool,
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
@@ -1891,11 +1975,7 @@ impl EditorState {
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some()
-            || self.tri_cut_poly_awaiting_pick
-            || self.drill_pattern_awaiting_shape_pick
-            || self.canvas_context_menu_open
-            || self.text_editing_enabled
+        self.triangulation_pick_target.is_some() || self.drill_pattern_awaiting_shape_pick || self.canvas_context_menu_open || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -1935,6 +2015,7 @@ impl EditorState {
             || self.tri_include_solid_open
             || self.tri_contour_open
             || self.point_cloud_tin_open
+            || self.point_cloud_join_open
             || self.block_model_create_open
             || self.ore_triangulation_open
             || {
@@ -2162,7 +2243,6 @@ impl EditorState {
         self.triangulation_pick_target = None;
         self.viewport_pick_hover_label = None;
         self.tri_cut_poly_open = false;
-        self.tri_cut_poly_awaiting_pick = false;
         self.tri_cut_poly_object_id = None;
         self.tri_cut_poly_object_name.clear();
     }
@@ -2210,6 +2290,8 @@ impl EditorState {
     pub(crate) fn new() -> Self {
         Self {
             selected_handles: HashSet::new(),
+            explorer_rows: Vec::new(),
+            explorer_anchor: None,
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             hidden_handles: HashSet::new(),
@@ -2220,6 +2302,7 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
+            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -2324,6 +2407,7 @@ impl EditorState {
             move_to_axis_dialog: None,
             selection_has_intersections: false,
             selection_has_polylines: false,
+            selection_counts: SelectionCounts::default(),
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
@@ -2453,19 +2537,16 @@ impl EditorState {
             triangulation_pick_target: None,
             viewport_pick_hover_label: None,
             tri_cut_poly_open: false,
-            tri_cut_poly_awaiting_pick: false,
             tri_cut_poly_tri_id: None,
             tri_cut_poly_object_id: None,
             tri_cut_poly_object_name: String::new(),
             tri_cut_poly_mode: TriPolylineClipMode::KeepInside,
             tri_cut_poly_name_input: String::new(),
-            tri_cut_poly_name_auto: true,
             tri_cut_z_open: false,
             tri_cut_z_tri_id: None,
             tri_cut_z_min_input: 0.0,
             tri_cut_z_max_input: 100.0,
             tri_cut_z_name_input: String::new(),
-            tri_cut_z_name_auto: true,
             tri_cut_surface_open: false,
             tri_cut_surface_target_id: None,
             tri_cut_surface_reference_id: None,
@@ -2506,6 +2587,11 @@ impl EditorState {
             point_cloud_tin_sampler: crate::app::commands::triangulation::TerrainSampler::Adaptive,
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
+            point_cloud_tin_ground_only: true,
+            point_cloud_join_open: false,
+            point_cloud_join_sources: Vec::new(),
+            point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
+            point_cloud_join_remove_sources: false,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
             rotation_centre: None,
@@ -2678,6 +2764,17 @@ impl EditorState {
     /// same rule for drawing them, so nothing is ever pickable unseen.
     pub(crate) fn shows_tie_ins(&self) -> bool {
         self.active_workspace == Workspace::DrillAndBlast
+    }
+
+    /// Whether classified point clouds draw in their ASPRS class colours.
+    ///
+    /// Survey's reading of a cloud - what a delivery's ground filter decided -
+    /// rather than a property of the cloud, so it applies in that workspace
+    /// alone. Read by the renderer at draw time rather than pushed to it, so
+    /// it is also part of `EditorSceneState` - the editor state a cached scene
+    /// image is only valid for.
+    pub(crate) fn colors_points_by_classification(&self) -> bool {
+        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3044,6 +3141,7 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
+    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -3066,9 +3164,12 @@ pub(crate) enum UiCommand {
     /// Mark one saved system as the site's mine coordinate system, or the
     /// reference frame with `None`.
     SetSurveyLocalSystem(Option<String>),
-    /// Select or deselect one raster from its explorer row - the only place a
-    /// raster can be picked on its own, since it has no geometry in the scene.
-    SelectRaster(crate::model::raster::RasterTextureId),
+    /// Select one explorer row. Every row in the tree sends this, whatever it
+    /// names, and `App` reads the modifiers to decide whether the click
+    /// replaces the selection, adds the row to it or takes the run between
+    /// two. The tools that run on a selection are reached this way as well as
+    /// from the viewport.
+    SelectExplorerRow(ExplorerRow),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3080,8 +3181,6 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
-    /// Select a block model and show its viewport filter controls.
-    SelectBlockModel(BlockModelId),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -3131,7 +3230,6 @@ pub(crate) enum UiCommand {
     /// Lock or unlock every loaded item in one explorer section.
     SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
-    ActivateTriangulation(TriangulationId),
     CloseTriangulation(TriangulationId),
     /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
@@ -3192,7 +3290,10 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
     },
-    OpenCreateBlockModel(Option<DrillHoleId>),
+    /// Open Create Block Model on the selected drill holes. Like the other
+    /// select-first tools it takes its input from the scene selection, so the
+    /// command carries nothing.
+    OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
         variables: Vec<String>,
@@ -3290,12 +3391,20 @@ pub(crate) enum UiCommand {
         cloud_id: PointCloudId,
         params: crate::app::commands::triangulation::TerrainTinParams,
     },
+    /// Open the "Join Point Clouds" dialog (Point Cloud menu).
+    OpenPointCloudJoin,
+    /// Concatenate several loaded clouds into one new cloud.
+    ExecutePointCloudJoin {
+        cloud_ids: Vec<PointCloudId>,
+        name: String,
+        /// Delete the sources from the project once the join lands.
+        remove_sources: bool,
+    },
     /// User confirmed deletion of all selected objects via the confirm dialog.
     ConfirmDeleteSelection,
     /// Open the "Cut Triangulation by Polyline" dialog.
     OpenCutTriangulationByPolyline,
     /// Enter polyline-pick mode for the cut-by-polyline tool.
-    BeginCutPolyPick,
     /// Execute the clip against the polyline boundary in XY.
     ExecuteCutTriangulationByPolyline {
         tri_id: TriangulationId,
@@ -3406,11 +3515,10 @@ impl UiCommand {
             | Self::SaveSurveyDefinition { .. }
             | Self::DeleteSurveyDefinition(_)
             | Self::SetSurveyLocalSystem(_)
-            | Self::SelectRaster(_)
+            | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
-            | Self::SelectBlockModel(_)
             | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
@@ -3421,7 +3529,7 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
-            | Self::OpenCreateBlockModel(_)
+            | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
             | Self::OpenRelimitDialog
@@ -3432,8 +3540,8 @@ impl UiCommand {
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
+            | Self::OpenPointCloudJoin
             | Self::OpenCutTriangulationByPolyline
-            | Self::BeginCutPolyPick
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
             | Self::OpenCutTopologyByPitShell
@@ -3523,6 +3631,10 @@ impl UiCommand {
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
             Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
+            Self::SetPointCloudClassificationColors(enabled) => report(
+                tr!(literal = "Colour Points by Classification"),
+                if *enabled { tr!(literal = "On") } else { tr!(literal = "Off") },
+            ),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
@@ -3568,7 +3680,6 @@ impl UiCommand {
                 tr_format!(literal = "%section% section", section = section.label()),
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
-            Self::ActivateTriangulation(id) => report(tr!(literal = "Set Current Triangulation"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
@@ -3631,6 +3742,10 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %count% object(s)", name = name, count = object_ids.len()),
             ),
             Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!(literal = "Create Point Cloud TIN"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
+                tr!(literal = "Join Point Clouds"),
+                tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
+            ),
             Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
             Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(
@@ -3791,6 +3906,9 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    /// Whether the cloud carries ASPRS classification codes, which is what
+    /// offers the bare-earth filter and the classification view.
+    pub(crate) is_classified: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -86,7 +86,6 @@ confirm-delete-product =
 ## Dialog „Triangulation erstellen“
 
 tri-create-title = Triangulation erstellen
-tri-create-help = Klicken Sie Objekte im Ansichtsfenster an, um sie aus-/abzuwählen. Ziehen Sie für eine Rahmenauswahl.
 tri-create-type-label = Triangulationstyp
 tri-create-type-help =
     Eine offene Oberfläche erzeugt ein geländeartiges Blatt. Ein Volumenkörper
@@ -97,7 +96,6 @@ tri-create-output-name-help = Name, der der erzeugten Triangulation zugewiesen w
 tri-create-output-name-hint = Triangulationsname
 tri-create-run = Triangulieren
 
-tri-selection-none = Noch keine Objekte ausgewählt.
 tri-selection-selected = { $summary } ausgewählt
 
 tri-type-open-surface = Offene Oberfläche

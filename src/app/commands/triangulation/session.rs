@@ -215,30 +215,6 @@ impl<'a> App<'a> {
         self.pending_triangulation_loads = still_pending;
     }
 
-    pub(crate) fn activate_triangulation(&mut self, id: TriangulationId) {
-        let Some(tri) = self.triangulations.iter().find(|tri| tri.id == id) else {
-            return;
-        };
-        let handle = tri.entity_id();
-        if self.active_triangulation == Some(id) && self.editor.selected_handles.contains(&handle) {
-            self.active_triangulation = None;
-            self.editor.selected_handles.remove(&handle);
-            userspace_log!("{}", tr_format!(literal = "Deselected triangulation '%name%'", name = tri.name));
-            self.request_topology_redraw();
-            return;
-        }
-        let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
-        self.active_triangulation = Some(id);
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(handle);
-        userspace_log!("{}", tr_format!(literal = "Activated triangulation '%name%'", name = tri.name));
-        if cleared_object_selection {
-            self.invalidate_geometry();
-        } else {
-            self.request_topology_redraw();
-        }
-    }
-
     pub(crate) fn close_triangulation(&mut self, id: TriangulationId) {
         self.set_item_loaded(crate::model::ItemRef::Triangulation(id), false);
     }
@@ -290,7 +266,6 @@ impl<'a> App<'a> {
         if self.editor.tri_cut_poly_tri_id == Some(id) {
             self.editor.tri_cut_poly_tri_id = None;
             self.editor.tri_cut_poly_open = false;
-            self.editor.tri_cut_poly_awaiting_pick = false;
         }
         if self.editor.tri_cut_z_tri_id == Some(id) {
             self.editor.tri_cut_z_tri_id = None;

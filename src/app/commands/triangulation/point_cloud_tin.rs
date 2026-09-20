@@ -42,6 +42,10 @@ pub(crate) struct TerrainTinParams {
     /// Bridge (fill) holes and boundary concavities narrower than this distance;
     /// wider gaps stay open. Zero fills only sub-cell scan gaps.
     pub(crate) hole_fill_distance: f64,
+    /// Reconstruct from the points a ground filter classified as bare earth,
+    /// discarding vegetation, buildings, plant and noise. Ignored by a cloud
+    /// that carries no classifications.
+    pub(crate) ground_only: bool,
 }
 
 /// Resolve a budget specification to an absolute vertex target.
@@ -66,8 +70,20 @@ impl<'a> App<'a> {
             .find(|cloud| cloud.id == cloud_id)
             .ok_or_else(|| anyhow::anyhow!("The selected point cloud is no longer loaded"))?;
         let points = cloud.points.clone();
+        // Filtering runs on the worker with the reconstruction rather than here:
+        // bare earth is a fraction of a delivery, but the scan that finds it is
+        // still a pass over every point.
+        let classifications = params.ground_only.then(|| cloud.classifications.clone()).flatten();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulation> {
-            reconstruct_terrain_tin_from_point_cloud(&points, &params, cancel, progress)
+            let ground;
+            let points: &[DVec3] = match classifications.as_deref() {
+                Some(codes) => {
+                    ground = ground_points(&points, codes)?;
+                    &ground
+                }
+                None => &points,
+            };
+            reconstruct_terrain_tin_from_point_cloud(points, &params, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation(generated),
@@ -78,6 +94,36 @@ impl<'a> App<'a> {
         self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
         Ok(())
     }
+}
+
+/// Keep only the points a ground filter classified as bare earth.
+///
+/// Surveyors do this before anything else touches a delivery: canopy, plant and
+/// blunders would otherwise be averaged into the surface, and the adaptive
+/// sampler would spend its budget resolving trees, which are the roughest thing
+/// in a scene and so the greediest for vertices.
+fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>> {
+    if classifications.len() != points.len() {
+        anyhow::bail!("The point cloud's classifications do not match its points");
+    }
+    let ground: Vec<DVec3> = points
+        .par_iter()
+        .zip(classifications.par_iter())
+        .filter(|(_, code)| **code == crate::model::point_cloud::CLASS_GROUND)
+        .map(|(point, _)| *point)
+        .collect();
+    if ground.len() < 3 {
+        anyhow::bail!("The point cloud classifies fewer than 3 points as ground; turn off 'Ground points only' to use every point");
+    }
+    userspace_log!(
+        "{}",
+        tr_format!(
+            literal = "Terrain TIN: filtered to %ground% ground points of %total%",
+            ground = ground.len(),
+            total = points.len()
+        )
+    );
+    Ok(ground)
 }
 
 /// Selects how the point budget is distributed before triangulation.
@@ -322,7 +368,8 @@ fn spatial_grid_subsample_terrain(
     }
 
     let cell_size = choose_terrain_cell_size(points, min, area, max_points, finite_count, cancel)?;
-    let cells = bin_terrain_cells(points, min, cell_size, cancel)?;
+    let grid = CellGrid::new(min, extent, cell_size, points.len());
+    let cells = bin_terrain_cells(points, &grid, cancel)?;
     let occupancy = OccupancyGrid {
         cells: cells.keys().copied().collect(),
         min,
@@ -330,7 +377,10 @@ fn spatial_grid_subsample_terrain(
         dilation: hole_fill_dilation(hole_fill_distance, cell_size),
     };
 
-    let mut sampled: Vec<DVec3> = cells.into_par_iter().filter_map(|(_, (sum, count))| (count > 0).then(|| sum.mean(count))).collect();
+    let mut sampled: Vec<DVec3> = cells
+        .into_par_iter()
+        .filter_map(|(key, (sum, count))| (count > 0).then(|| grid.mean(key, &sum, count)))
+        .collect();
     if sampled.len() > max_points {
         sampled.par_sort_unstable_by(|a, b| spatial_hash(a).cmp(&spatial_hash(b)).then_with(|| a.x.total_cmp(&b.x)).then_with(|| a.y.total_cmp(&b.y)));
         sampled.truncate(max_points);
@@ -342,50 +392,105 @@ fn spatial_grid_subsample_terrain(
 /// f64 in parallel is non-associative, so the resulting mean - and thus the
 /// truncation order and Delaunay topology built from it - varied run to run.
 /// Quantising each coordinate to fixed-point integers before summing makes the
-/// total order-independent and the whole TIN reproducible. `SCALE` is finer than
-/// the survey's own quantisation, so no meaningful precision is lost, and i128
-/// cannot overflow for any realistic point count.
+/// total order-independent and the whole TIN reproducible.
+///
+/// Offsets are quantised relative to the point's own cell in x and y, and to
+/// the cloud's floor in z, which keeps every magnitude inside an i64. Width is
+/// the point: binning a large cloud is bound by how much of the cell map stays
+/// in cache, and a 24-byte accumulator keeps the map's value at 32 bytes where
+/// an i128 one would need 16-byte alignment and 64.
 #[derive(Clone, Copy, Default)]
 struct CellSum {
-    x: i128,
-    y: i128,
-    z: i128,
+    x: i64,
+    y: i64,
+    z: i64,
 }
 
-/// Fixed-point units per metre (micrometres): well below survey precision.
-const CELL_SUM_SCALE: f64 = 1.0e6;
-
 impl CellSum {
-    fn add(&mut self, point: &DVec3) {
-        self.x += (point.x * CELL_SUM_SCALE).round() as i128;
-        self.y += (point.y * CELL_SUM_SCALE).round() as i128;
-        self.z += (point.z * CELL_SUM_SCALE).round() as i128;
-    }
-
     fn merge(&mut self, other: &Self) {
         self.x += other.x;
         self.y += other.y;
         self.z += other.z;
     }
+}
 
-    fn mean(&self, count: u64) -> DVec3 {
-        let divisor = count as f64 * CELL_SUM_SCALE;
-        DVec3::new(self.x as f64 / divisor, self.y as f64 / divisor, self.z as f64 / divisor)
+/// The quantisation a cell map was binned with: enough to turn a point into a
+/// cell key, fold it into that cell's accumulator, and turn the accumulated
+/// sum back into a mean. Binning and reading back must agree on all of it, so
+/// it travels as one value rather than as loose parameters.
+#[derive(Clone, Copy)]
+struct CellGrid {
+    min: DVec3,
+    cell_size: f64,
+    /// Fixed-point units per metre.
+    scale: f64,
+}
+
+/// Fixed-point units per metre (micrometres): well below survey precision.
+const CELL_SUM_SCALE: f64 = 1.0e6;
+
+impl CellGrid {
+    fn new(min: DVec3, extent: DVec3, cell_size: f64, point_count: usize) -> Self {
+        // The largest offset one point can contribute: within its own cell in x
+        // and y, from the cloud floor in z.
+        let max_offset = cell_size.max(extent.z.abs()).max(1.0);
+        // Cap the scale so that even every point landing in a single cell cannot
+        // overflow the accumulator. With a kilometre of relief the cap only
+        // starts to bind past ~9e9 points, so real clouds quantise at the full
+        // micrometre; beyond that, resolution degrades smoothly instead of the
+        // sum wrapping. The 1.0 floor is a last stop at metre resolution, and
+        // is unreachable short of ~9e15 points - some 200,000 TB of input.
+        let headroom = i64::MAX as f64 / (max_offset * point_count.max(1) as f64);
+        Self {
+            min,
+            cell_size,
+            scale: headroom.clamp(1.0, CELL_SUM_SCALE),
+        }
+    }
+
+    fn key(&self, point: &DVec3) -> (i64, i64) {
+        (
+            ((point.x - self.min.x) / self.cell_size).floor() as i64,
+            ((point.y - self.min.y) / self.cell_size).floor() as i64,
+        )
+    }
+
+    fn cell_origin(&self, key: (i64, i64)) -> (f64, f64) {
+        (self.min.x + key.0 as f64 * self.cell_size, self.min.y + key.1 as f64 * self.cell_size)
+    }
+
+    fn add(&self, sum: &mut CellSum, key: (i64, i64), point: &DVec3) {
+        let (origin_x, origin_y) = self.cell_origin(key);
+        sum.x += ((point.x - origin_x) * self.scale).round() as i64;
+        sum.y += ((point.y - origin_y) * self.scale).round() as i64;
+        sum.z += ((point.z - self.min.z) * self.scale).round() as i64;
+    }
+
+    fn mean(&self, key: (i64, i64), sum: &CellSum, count: u64) -> DVec3 {
+        let (origin_x, origin_y) = self.cell_origin(key);
+        let divisor = count as f64 * self.scale;
+        DVec3::new(origin_x + sum.x as f64 / divisor, origin_y + sum.y as f64 / divisor, self.min.z + sum.z as f64 / divisor)
     }
 }
 
-type CellMap = HashMap<(i64, i64), (CellSum, u64)>;
+/// Cell keys are dense small integers straight out of a grid index, which
+/// SipHash charges far more to mix than the table lookup itself costs. These
+/// maps are process-local and never exposed to untrusted input, so the
+/// HashDoS-resistant default buys nothing here.
+type CellMap = HashMap<(i64, i64), (CellSum, u64), foldhash::fast::RandomState>;
+type CellSet = HashSet<(i64, i64), foldhash::fast::RandomState>;
 
-fn terrain_cell_key(point: &DVec3, min: DVec3, cell_size: f64) -> (i64, i64) {
-    (((point.x - min.x) / cell_size).floor() as i64, ((point.y - min.y) / cell_size).floor() as i64)
-}
+/// Points per parallel work item. Small enough that the cancel check between
+/// items stays responsive and rayon can balance the tail, large enough that the
+/// per-item overhead disappears against the binning itself.
+const TERRAIN_BIN_CHUNK: usize = 16_384;
 
 /// Which grid cells actually contain survey points, used to reject triangles
 /// that a convex-hull Delaunay would otherwise bridge across concave
 /// boundaries and interior voids. Cells are the sampler's own bins, so at that
 /// resolution genuine terrain is densely occupied while gaps read as empty.
 struct OccupancyGrid {
-    cells: HashSet<(i64, i64)>,
+    cells: CellSet,
     min: DVec3,
     cell_size: f64,
     /// Neighbourhood radius (cells) treated as covered. One rejects only genuine
@@ -470,19 +575,32 @@ fn choose_terrain_cell_size(points: &[DVec3], min: DVec3, area: f64, target: usi
     } else {
         base
     };
+    // The probe only needs cell keys, so it borrows the grid's indexing with a
+    // nominal accumulator scale - nothing here accumulates.
+    let probe_grid = CellGrid {
+        min,
+        cell_size: probe_size,
+        scale: 1.0,
+    };
     let occupied = points
-        .par_iter()
+        .par_chunks(TERRAIN_BIN_CHUNK)
         .enumerate()
-        .try_fold(HashSet::<(i64, i64)>::new, |mut occupied, (index, point)| -> Result<_> {
-            if index % 262_144 == 0 && cancel.is_cancelled() {
+        .try_fold(CellSet::default, |mut occupied, (chunk_index, chunk)| -> Result<_> {
+            if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
-            if index.is_multiple_of(stride) && point.is_finite() {
-                occupied.insert(terrain_cell_key(point, min, probe_size));
+            // `par_chunks` yields full-width chunks except the last, so the
+            // global index of each point is exact and the stride stays aligned
+            // with the serial walk it replaced.
+            let base = chunk_index * TERRAIN_BIN_CHUNK;
+            for (offset, point) in chunk.iter().enumerate() {
+                if (base + offset).is_multiple_of(stride) && point.is_finite() {
+                    occupied.insert(probe_grid.key(point));
+                }
             }
             Ok(occupied)
         })
-        .try_reduce(HashSet::new, |mut left, mut right| -> Result<_> {
+        .try_reduce(CellSet::default, |mut left, mut right| -> Result<_> {
             // Union both partials, extending the larger for fewer inserts.
             // Returning either alone would drop the other's cells and make
             // the occupied count depend on the reduce tree shape.
@@ -516,23 +634,24 @@ fn merge_terrain_cells(mut destination: CellMap, source: CellMap) -> Result<Cell
 /// Bin every finite point into fixed-point cell accumulators. Shared by the grid
 /// and adaptive samplers; the fixed-point sums keep the resulting means
 /// reproducible regardless of parallel accumulation order.
-fn bin_terrain_cells(points: &[DVec3], min: DVec3, cell_size: f64, cancel: &crate::app::jobs::CancelFlag) -> Result<CellMap> {
+fn bin_terrain_cells(points: &[DVec3], grid: &CellGrid, cancel: &crate::app::jobs::CancelFlag) -> Result<CellMap> {
     points
-        .par_iter()
-        .enumerate()
-        .try_fold(CellMap::new, |mut cells, (index, point)| -> Result<CellMap> {
-            if index % 262_144 == 0 && cancel.is_cancelled() {
+        .par_chunks(TERRAIN_BIN_CHUNK)
+        .try_fold(CellMap::default, |mut cells, chunk| -> Result<CellMap> {
+            if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
-            if point.is_finite() {
-                let key = terrain_cell_key(point, min, cell_size);
-                let entry = cells.entry(key).or_insert((CellSum::default(), 0));
-                entry.0.add(point);
-                entry.1 += 1;
+            for point in chunk {
+                if point.is_finite() {
+                    let key = grid.key(point);
+                    let entry = cells.entry(key).or_default();
+                    grid.add(&mut entry.0, key, point);
+                    entry.1 += 1;
+                }
             }
             Ok(cells)
         })
-        .try_reduce(CellMap::new, |left, right| -> Result<CellMap> {
+        .try_reduce(CellMap::default, |left, right| -> Result<CellMap> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
@@ -863,7 +982,8 @@ fn adaptive_quadtree_subsample_terrain(
     // cloud into more cells.
     let candidate_target = max_points.saturating_mul(candidate_multiplier.max(1) as usize).max(4);
     let fine_size = choose_terrain_cell_size(points, min, area, candidate_target, finite_count, cancel)?;
-    let cells = bin_terrain_cells(points, min, fine_size, cancel)?;
+    let grid = CellGrid::new(min, extent, fine_size, points.len());
+    let cells = bin_terrain_cells(points, &grid, cancel)?;
     if cancel.is_cancelled() {
         anyhow::bail!("Terrain TIN reconstruction cancelled");
     }
@@ -881,7 +1001,7 @@ fn adaptive_quadtree_subsample_terrain(
     let mut leaves: Vec<(u64, PlaneMoments, DVec3, bool)> = cells
         .par_iter()
         .map(|(&key, &(sum, count))| {
-            let rebased = sum.mean(count) - min;
+            let rebased = grid.mean(key, &sum, count) - min;
             let boundary = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| !occupied.contains(&(key.0 + dx, key.1 + dy)));
             (morton_code(key.0, key.1), PlaneMoments::from_point(rebased), rebased, boundary)
         })
