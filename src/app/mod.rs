@@ -576,6 +576,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
+            MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),

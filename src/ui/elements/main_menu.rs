@@ -557,6 +557,12 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenPointCloudTin);
                     ui.close();
                 }
+                // Joining needs two clouds to join.
+                let can_join = project.point_clouds.iter().filter(|cloud| cloud.is_loaded).count() >= 2;
+                if ContextMenuAction::new(tr!(literal = "Join...")).enabled(can_join).show(ui).clicked() {
+                    commands.push(UiCommand::OpenPointCloudJoin);
+                    ui.close();
+                }
             });
             return;
         }

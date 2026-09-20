@@ -336,7 +336,7 @@ fn las_record_color(record: &[u8], rgb_at: usize) -> [u16; 3] {
     ]
 }
 
-fn try_vec_with_capacity<T>(count: usize, label: &'static str) -> Result<Vec<T>> {
+pub(crate) fn try_vec_with_capacity<T>(count: usize, label: &'static str) -> Result<Vec<T>> {
     let allocation_bytes = count
         .checked_mul(size_of::<T>())
         .with_context(|| format!("{label} allocation size overflows addressable memory"))?;

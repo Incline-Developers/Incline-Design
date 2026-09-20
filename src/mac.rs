@@ -31,6 +31,7 @@ struct MenuState {
     can_save: bool,
     has_project: bool,
     can_create_terrain_tin: bool,
+    can_join_point_clouds: bool,
     can_create_block_model: bool,
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
@@ -76,6 +77,7 @@ pub(crate) enum MacMenuAction {
     OpenIncludeSolidInTopology,
     OpenContourTriangulation,
     OpenPointCloudTin,
+    OpenPointCloudJoin,
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
     OpenSurveyDefinitions,
@@ -142,6 +144,7 @@ impl MacMenuAction {
         Self::OpenIncludeSolidInTopology,
         Self::OpenContourTriangulation,
         Self::OpenPointCloudTin,
+        Self::OpenPointCloudJoin,
         Self::OpenCreateBlockModel,
         Self::OpenCreateOreTriangulation,
         Self::OpenSurveyDefinitions,
@@ -492,6 +495,7 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(&point_cloud_menu, &tr!(literal = "Join..."), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
     app.setMainMenu(Some(&root));
@@ -600,6 +604,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
+        can_join_point_clouds: project.point_clouds.iter().filter(|cloud| cloud.is_loaded).count() >= 2,
         can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
         can_create_ore_triangulation: !project.block_models.is_empty(),
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
@@ -633,6 +638,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
     set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
+    set_enabled(&root, MacMenuAction::OpenPointCloudJoin, state.can_join_point_clouds);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);

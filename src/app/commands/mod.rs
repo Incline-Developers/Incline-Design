@@ -925,6 +925,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExecutePointCloudTin { cloud_id, params } => self.run_point_cloud_tin(cloud_id, params),
+            UiCommand::OpenPointCloudJoin => {
+                self.open_point_cloud_join();
+                Ok(())
+            }
+            UiCommand::ExecutePointCloudJoin { cloud_ids, name, remove_sources } => self.run_point_cloud_join(cloud_ids, name, remove_sources),
             UiCommand::OpenCutTriangulationByPolyline => {
                 self.editor.tri_cut_poly_open = true;
                 self.editor.tri_cut_poly_name_auto = true;

@@ -1583,6 +1583,12 @@ pub(crate) struct EditorState {
     pub(crate) point_cloud_tin_candidate_mult: u32,
     /// Bridge holes and boundary concavities narrower than this (0 = only gaps).
     pub(crate) point_cloud_tin_hole_fill: f64,
+    pub(crate) point_cloud_join_open: bool,
+    /// Clouds ticked for joining, in the order the explorer lists them.
+    pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
+    pub(crate) point_cloud_join_name_input: String,
+    /// Remove the sources once the joined cloud is in the project.
+    pub(crate) point_cloud_join_remove_sources: bool,
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
@@ -1935,6 +1941,7 @@ impl EditorState {
             || self.tri_include_solid_open
             || self.tri_contour_open
             || self.point_cloud_tin_open
+            || self.point_cloud_join_open
             || self.block_model_create_open
             || self.ore_triangulation_open
             || {
@@ -2506,6 +2513,10 @@ impl EditorState {
             point_cloud_tin_sampler: crate::app::commands::triangulation::TerrainSampler::Adaptive,
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
+            point_cloud_join_open: false,
+            point_cloud_join_sources: Vec::new(),
+            point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
+            point_cloud_join_remove_sources: false,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
             rotation_centre: None,
@@ -3290,6 +3301,15 @@ pub(crate) enum UiCommand {
         cloud_id: PointCloudId,
         params: crate::app::commands::triangulation::TerrainTinParams,
     },
+    /// Open the "Join Point Clouds" dialog (Point Cloud menu).
+    OpenPointCloudJoin,
+    /// Concatenate several loaded clouds into one new cloud.
+    ExecutePointCloudJoin {
+        cloud_ids: Vec<PointCloudId>,
+        name: String,
+        /// Delete the sources from the project once the join lands.
+        remove_sources: bool,
+    },
     /// User confirmed deletion of all selected objects via the confirm dialog.
     ConfirmDeleteSelection,
     /// Open the "Cut Triangulation by Polyline" dialog.
@@ -3432,6 +3452,7 @@ impl UiCommand {
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
+            | Self::OpenPointCloudJoin
             | Self::OpenCutTriangulationByPolyline
             | Self::BeginCutPolyPick
             | Self::OpenCutTriangulationByZ
@@ -3631,6 +3652,10 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %count% object(s)", name = name, count = object_ids.len()),
             ),
             Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!(literal = "Create Point Cloud TIN"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
+                tr!(literal = "Join Point Clouds"),
+                tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
+            ),
             Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
             Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(

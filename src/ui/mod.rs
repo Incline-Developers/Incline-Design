@@ -1306,6 +1306,9 @@ fn draw_global_dialogs(
     if editor.point_cloud_tin_open {
         dialogs::triangulation::draw_point_cloud_tin_dialog(root_ui, editor, project, commands);
     }
+    if editor.point_cloud_join_open {
+        dialogs::point_cloud::draw_point_cloud_join_dialog(root_ui, editor, project, commands);
+    }
     if editor.triangulation_pick_target.is_some() {
         dialogs::triangulation::draw_triangulation_pick_prompt(root_ui, editor);
     }
