@@ -1232,6 +1232,7 @@ literal-edit-this-category-colour-753bbf976e0a8807 = Edit this category colour
 literal-blank-05d9e0598fc96cf6 = (blank)
 literal-empty-hidden-9912adc75a8db73a =  (empty · hidden)
 literal-empty-0cb58b957b951fb5 =  (empty)
+literal-empty-collection-75ead98c9c09263a = Empty collection
 literal-no-data-for-this-variable-d4d3a88884dd02d1 = No data for this variable
 literal-drag-to-move-right-click-to-remove-middle-click-toggles-487f64ad1eafa437 = Drag to move · Right-click to remove · Middle-click toggles ≤
 literal-drag-to-move-middle-click-toggles-51333dbee702d1c2 = Drag to move · Middle-click toggles ≤
@@ -1803,6 +1804,31 @@ literal-disable-cinematic-view-4b21438b1a35405f = Disable Cinematic View
 literal-set-cinematic-view-826deb0d9fbe84df = Set Cinematic View
 literal-set-cinematic-view-enabled-906e4f2493f6cf03 = Set cinematic view = %enabled%
 
+literal-a-circle-cannot-be-exploded-it-is-a-single-shape-not-a-series-of-segments-2f06a4a0200607ca = A circle cannot be exploded: it is a single shape, not a series of segments
+literal-a-collection-named-name-already-exists-84365ba8896df978 = A collection named '%name%' already exists
+literal-a-save-of-this-project-is-already-running-save-again-when-it-finishes-b88b7f1483eb6744 = A save of this project is already running; save again when it finishes
+literal-circle-layer-layer-radius-radius-f3406b05fca7af8b = Circle | Layer: %layer% | radius %radius%
+literal-create-collection-866c12ab4f3d1c87 = Create Collection
+literal-created-collection-name-2814f26a9a1e6bfc = Created collection '%name%'
+literal-delete-collection-317006269d0d1476 = Delete Collection
+literal-deleted-collection-name-13874b0a5e6614ed = Deleted collection '%name%'
+literal-element-name-names-an-unknown-section-section-3d551261187a6ca7 = Element '%name%' names an unknown section '%section%'
+literal-element-name-names-section-section-which-cannot-show-this-kind-of-item-in-this-build-6b63c2b91e769490 = Element '%name%' names section '%section%' which cannot show this kind of item in this build
+literal-collection-a7eea45fe1e4d231 = Collection
+literal-folder-in-section-7f5f75d432d5b51f = %folder% in %section%
+literal-member-into-folder-63bacf30f64f0a89 = %member% into %folder%
+literal-member-to-root-979632107456396a = %member% to root
+literal-move-to-collection-b69ed2c63ee91b2f = Move to Collection
+literal-moved-item-into-collection-name-15018f1d9861d45c = Moved item into collection '%name%'
+literal-moved-item-to-root-7b7e3de780898644 = Moved item to root
+literal-new-collection-c02cbf6ebf0b6cdb = New Collection
+literal-new-collection-under-section-4dfc7a54b46862e8 = New collection under %section%
+literal-no-collection-e29ea461a8d9e7e6 = No Collection
+literal-renamed-collection-before-to-after-812972b84754f385 = Renamed collection '%before%' to '%after%'
+literal-saving-to-browser-storage-16db73c472ad85a7 = Saving to browser storage…
+literal-skipped-count-circle-s-the-offset-distance-is-larger-than-the-radius-56a2d23e63bb5014 = Skipped %count% circle(s): the offset distance is larger than the radius
+literal-that-collection-no-longer-exists-1f33420b706f5c20 = That collection no longer exists
+
 # Join Point Clouds dialog
 literal-count-cloud-s-selected-points-points-a45c4e563aee30df = %count% cloud(s) selected · %points% points
 literal-name-count-points-3ccfe5af59629e09 = %name% (%count% points)
@@ -1824,8 +1850,3 @@ literal-point-clouds-daa4c5f978d933f1 = Point clouds
 literal-remove-sources-1d26959a5edd50b3 = Remove sources
 
 # Remaining source literals
-literal-a-circle-cannot-be-exploded-it-is-a-single-shape-not-a-series-of-segments-2f06a4a0200607ca = A circle cannot be exploded: it is a single shape, not a series of segments
-literal-a-save-of-this-project-is-already-running-save-again-when-it-finishes-b88b7f1483eb6744 = A save of this project is already running; save again when it finishes
-literal-circle-layer-layer-radius-radius-f3406b05fca7af8b = Circle | Layer: %layer% | radius %radius%
-literal-saving-to-browser-storage-16db73c472ad85a7 = Saving to browser storage…
-literal-skipped-count-circle-s-the-offset-distance-is-larger-than-the-radius-56a2d23e63bb5014 = Skipped %count% circle(s): the offset distance is larger than the radius

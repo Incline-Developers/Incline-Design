@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     i18n::tr,
-    model::{Document, LayerId},
+    model::{Document, FolderId, FolderRegistry, Layer, LayerId, MemberKind, SectionKind},
 };
 
 /// Persistence state shared by every project-owned dataset. The source name
@@ -30,17 +30,30 @@ pub(crate) struct ProjectItemState {
     pub(crate) loaded: bool,
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
     pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
+    /// Explorer folder this item sits in, or `None` for its section root.
+    ///
+    /// One field here covers all five item kinds, each already carrying a
+    /// `ProjectItemState`; a move goes through `touch` like any other edit,
+    /// so undo can take it back. Not serialized - the id is meaningless
+    /// outside the open project; a file records the folder's name instead.
+    pub(crate) folder: Option<FolderId>,
+    /// Explorer section this item is shown under.
+    ///
+    /// A tag on the item, not a consequence of which collection holds it,
+    /// so a section may show items of more than one kind. Unlike `folder`,
+    /// the value means the same thing in every project, so a file records it.
+    pub(crate) section: SectionKind,
     revision: u64,
     epoch: u64,
     saved_epoch: u64,
 }
 
 impl ProjectItemState {
-    pub(crate) fn dirty(source_name: Option<String>) -> Self {
-        Self::dirty_with_format(source_name, None)
+    pub(crate) fn dirty(kind: MemberKind, source_name: Option<String>) -> Self {
+        Self::dirty_with_format(kind, source_name, None)
     }
 
-    pub(crate) fn dirty_with_format(source_name: Option<String>, source_format: Option<String>) -> Self {
+    pub(crate) fn dirty_with_format(kind: MemberKind, source_name: Option<String>, source_format: Option<String>) -> Self {
         let source_name = provenance_filename(source_name);
         let source_format = provenance_format(source_format).or_else(|| {
             source_name
@@ -55,6 +68,8 @@ impl ProjectItemState {
             loaded: true,
             deferred: None,
             summary: None,
+            folder: None,
+            section: SectionKind::natural_for(kind),
             revision: 1,
             epoch: 1,
             saved_epoch: 0,
@@ -72,6 +87,26 @@ impl ProjectItemState {
     pub(crate) fn with_loaded(mut self, loaded: bool) -> Self {
         self.loaded = loaded;
         self
+    }
+
+    pub(crate) fn with_folder(mut self, folder: Option<FolderId>) -> Self {
+        self.folder = folder;
+        self
+    }
+
+    /// Show the item under `section` rather than where its kind would put it.
+    pub(crate) fn with_section(mut self, section: SectionKind) -> Self {
+        self.section = section;
+        self
+    }
+
+    /// Fold what the explorer tree draws of this item into a view key.
+    pub(crate) fn hash_row(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.loaded.hash(hasher);
+        self.revision.hash(hasher);
+        self.folder.hash(hasher);
+        self.section.hash(hasher);
     }
 
     /// Record that the item's content changed, giving it an epoch no earlier
@@ -180,6 +215,14 @@ fn provenance_format(source_format: Option<String>) -> Option<String> {
 /// still reads as saved, because it restores the same epoch.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SaveToken {
+    /// The folder names each section held when the snapshot was taken. A
+    /// section's heading is dirty while its folders differ from this, which
+    /// is how an empty folder - unmentioned by any item's epoch - still
+    /// reads as unsaved work.
+    ///
+    /// Boxed to keep this variant no bigger than it has to be: it rides
+    /// inside a pending-save enum next to much smaller fields.
+    pub(crate) folders: Box<FolderRegistry>,
     pub(crate) triangulations: Vec<(u64, u64)>,
     pub(crate) block_models: Vec<(u64, u64)>,
     pub(crate) drill_holes: Vec<(u64, u64)>,
@@ -217,6 +260,13 @@ pub(crate) struct ProjectFile {
     pub(crate) format_version: u32,
     pub(crate) document: Document,
     pub(crate) metadata: ProjectMetadata,
+    /// Every explorer folder in the project, for all six sections.
+    ///
+    /// Beside the document: five of the six sections hold items the `App`
+    /// owns, not layers, so there's nowhere else to save their empty
+    /// folders from.
+    #[serde(default)]
+    pub(crate) folders: FolderRegistry,
 }
 
 #[derive(Clone, Debug)]
@@ -311,7 +361,12 @@ impl OpenProject {
         self.project.metadata.coordinate_reference_system.hash(&mut hasher);
         self.project.metadata.units.hash(&mut hasher);
         self.content.epoch().hash(&mut hasher);
-        self.project.document.content_hash(&mut self.content_hash_cache.borrow_mut()).hash(&mut hasher);
+        // Folder names, so an empty folder still counts as unsaved work.
+        self.project.folders.hash_into(&mut hasher);
+        self.project
+            .document
+            .content_hash(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
+            .hash(&mut hasher);
         hasher.finish()
     }
 
@@ -329,7 +384,7 @@ impl OpenProject {
     /// [`Self::current_content_hash`] when an asynchronous saver snapshots the
     /// project.
     pub(crate) fn current_layer_hashes(&self) -> HashMap<u64, u64> {
-        self.project.document.layer_content_hashes(&mut self.content_hash_cache.borrow_mut())
+        self.project.document.layer_content_hashes(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
     }
 
     /// Record the exact snapshot written by an asynchronous saver. If edits
@@ -388,7 +443,10 @@ impl OpenProject {
     /// Whether the Designs collection itself differs from the save baseline.
     /// Comparing the complete layer-hash maps catches deleted layers after
     /// their explorer rows have disappeared.
-    pub(crate) fn designs_dirty(&self) -> bool {
+    pub(crate) fn designs_dirty(&self, saved_folders: &FolderRegistry) -> bool {
+        if self.project.folders.names(SectionKind::Designs) != saved_folders.names(SectionKind::Designs) {
+            return true;
+        }
         match &self.saved_layer_hashes {
             None => !self.project.document.layers().is_empty(),
             Some(saved) => self.current_layer_hashes() != *saved,
@@ -547,6 +605,18 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
             name: project_name(path.as_deref(), &tr!(literal = "Untitled")),
             ..Default::default()
         },
+        folders: FolderRegistry::default(),
+    }
+}
+
+impl ProjectFile {
+    /// Drop design-layer memberships the registry cannot resolve.
+    ///
+    /// `EditTarget::heal_folders` heals item memberships, since it can see
+    /// the `App`-owned collections; this half covers the document, wherever
+    /// it arrives without its folder list.
+    pub(crate) fn heal_folders(&mut self) -> bool {
+        self.document.heal_layers(&self.folders)
     }
 }
 
@@ -558,18 +628,88 @@ pub(crate) fn validate(project: &mut ProjectFile) -> Result<()> {
     // out-of-range ids would otherwise silently alias distinct records once
     // ids are masked into the 32-bit local namespace.
     project.document.validate().context("invalid project document")?;
+    project.folders.validate().context("invalid project folders")?;
     // Serialized counters are advisory only; derive them from the actual ids.
     project.document.recompute_id_counters();
+    project.folders.recompute_next_id();
     project.document.rebuild_object_index();
+    // Healed, not rejected - a missing folder doesn't invalidate the layer.
+    project.heal_folders();
     Ok(())
 }
 
-pub(crate) fn merge_document(target: &mut Document, imported: &Document) -> usize {
+/// How an incoming folder list meets the one already in the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FolderMergeMode {
+    /// A folder of the same name in the same section is the same folder.
+    /// What native Open wants, so reopening a project doesn't double folders.
+    Reuse,
+    /// Every incoming folder becomes a new one, its name suffixed until it is
+    /// free, matching the treatment its layers and items already get.
+    Distinct,
+}
+
+/// Bring `imported`'s folders into `target`, for every section at once, and
+/// report which target folder each imported id became. Sections are merged
+/// independently, so a "Pit" under Triangulations can never absorb one under
+/// Designs.
+pub(crate) fn merge_folders(target: &mut FolderRegistry, imported: &FolderRegistry, mode: FolderMergeMode) -> HashMap<FolderId, FolderId> {
+    let mut map = HashMap::new();
+    for section in SectionKind::ALL {
+        for folder in imported.folders(section) {
+            let merged = match mode {
+                FolderMergeMode::Reuse => target.ensure(section, &folder.name),
+                FolderMergeMode::Distinct => {
+                    let name = unique_item_name(folder.name.clone(), target.folders(section).iter().map(|folder| folder.name.as_str()));
+                    target.add(section, name)
+                }
+            };
+            if let Some(merged) = merged {
+                map.insert(folder.id, merged);
+            }
+        }
+    }
+    map
+}
+
+/// Membership for one incoming member: the target folder its imported folder
+/// became, or `None` for a member that was at the root or whose folder did not
+/// survive the merge.
+pub(crate) fn merged_folder(folders: &HashMap<FolderId, FolderId>, imported: Option<FolderId>) -> Option<FolderId> {
+    imported.and_then(|folder| folders.get(&folder).copied())
+}
+
+/// Give a freshly merged layer the placement its imported twin had: the
+/// section it is shown under, then the folder within that section.
+///
+/// The tag goes first because moving sections clears the folder, and a
+/// folder tied to a section this layer no longer sits in is dropped too.
+fn carry_layer_placement(target: &mut Document, id: LayerId, imported: &Layer, folders: &HashMap<FolderId, FolderId>) {
+    let section = imported.section.healed_for(MemberKind::Layer);
+    target.set_layer_section(id, section);
+    let folder = (section == imported.section).then(|| merged_folder(folders, imported.folder)).flatten();
+    target.set_layer_folder(id, folder);
+}
+
+/// `folders` is the map [`merge_folders`] returned for the same merge: the
+/// registry is merged once for the whole file, and each document merge looks
+/// its layers' membership up in it.
+pub(crate) fn merge_document(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>) -> usize {
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
-        let target_layer = target
-            .layer_id_by_name(&layer.name)
-            .unwrap_or_else(|| target.add_layer(layer.name.clone(), layer.color_index, layer.color, layer.loaded, layer.elevation));
+        let target_layer = match target.layer_id_by_name(&layer.name) {
+            // A layer that is already here keeps the folder the user put it
+            // in: an import that happens to share a name must not rearrange
+            // the tree.
+            Some(existing) => existing,
+            None => {
+                let id = target.add_layer(layer.name.clone(), layer.color_index, layer.color, layer.loaded, layer.elevation);
+                // Set after insertion: `add_layer` always lands a layer at the
+                // root of the section its kind puts it in.
+                carry_layer_placement(target, id, layer, folders);
+                id
+            }
+        };
         layer_map.insert(layer.id, target_layer);
     }
 
@@ -590,11 +730,12 @@ pub(crate) fn merge_document(target: &mut Document, imported: &Document) -> usiz
 /// Merge a foreign design while keeping every incoming layer distinct. Name
 /// collisions receive conventional numbered suffixes and every object gets a
 /// fresh target id, avoiding aliases with native OMF ids already in use.
-pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Document) -> usize {
+pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>) -> usize {
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
         let name = unique_layer_name(target, &layer.name);
         let target_layer = target.add_layer(name, layer.color_index, layer.color, layer.loaded, layer.elevation);
+        carry_layer_placement(target, target_layer, layer, folders);
         layer_map.insert(layer.id, target_layer);
     }
 
@@ -615,7 +756,7 @@ pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Doc
 /// Merge documents belonging to one native OMF while preserving stable local
 /// IDs whenever they are valid and unused. Legacy multi-composite files can
 /// contain collisions, which are remapped into the target document.
-pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Document) -> usize {
+pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>) -> usize {
     const LOCAL_MASK: u64 = u32::MAX as u64;
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
@@ -630,6 +771,7 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
             target.append_layer_snapshot(&remapped, std::iter::empty());
             id
         };
+        carry_layer_placement(target, target_layer, layer, folders);
         layer_map.insert(layer.id, target_layer);
     }
 

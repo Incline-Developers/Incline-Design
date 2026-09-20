@@ -62,7 +62,7 @@ impl<'a> App<'a> {
                     let name = crate::model::project::unique_item_name(loaded.name, app.triangulations.iter().map(|item| item.name.as_str()));
                     app.triangulations.push(OpenTriangulation {
                         id,
-                        state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
                         name,
                         mesh: loaded.mesh,
                         spatial: loaded.spatial,
@@ -170,7 +170,7 @@ impl<'a> App<'a> {
                     let name = crate::model::project::unique_item_name(loaded.name, self.triangulations.iter().map(|item| item.name.as_str()));
                     self.triangulations.push(OpenTriangulation {
                         id,
-                        state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
                         name,
                         mesh: loaded.mesh,
                         spatial: loaded.spatial,
@@ -343,7 +343,7 @@ impl<'a> App<'a> {
         let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.triangulations.push(OpenTriangulation {
             id,
-            state: crate::model::project::ProjectItemState::dirty(None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None),
             name: name.clone(),
             mesh,
             spatial,

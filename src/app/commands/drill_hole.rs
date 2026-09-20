@@ -4,7 +4,7 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
-        Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
+        Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
             DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
             OpenDrillHoleDataset, TraceStation, default_category_colors,
@@ -85,7 +85,7 @@ impl<'a> App<'a> {
         let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
         let item = OpenDrillHoleDataset {
             id,
-            state: crate::model::project::ProjectItemState::dirty(None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, None),
             name,
             dataset,
             color: DrillColorState::default(),
@@ -203,7 +203,7 @@ impl<'a> App<'a> {
         );
         self.drill_holes.push(OpenDrillHoleDataset {
             id,
-            state: crate::model::project::ProjectItemState::dirty(Some(loaded.source.display_name())),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, Some(loaded.source.display_name())),
             name,
             dataset: loaded.dataset,
             color: DrillColorState::default(),
