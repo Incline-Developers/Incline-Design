@@ -14,27 +14,95 @@ use crate::{
         triangulation::TriangulationId,
     },
     ui::{
-        state::{DataMenu, EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+        fonts::bold,
+        state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
+        widgets::{
+            explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
+            menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+            toolbar::GROUP_CORNER_RADIUS,
+            tree_row_colors,
+        },
     },
 };
 
 const MENU_HEIGHT: f32 = 450.0;
-const EXPLORER_WIDTH: f32 = 250.0;
+/// Wide enough for the longest format name at an entry's indent, so the tree
+/// truncates nothing at the default text size.
+const EXPLORER_WIDTH: f32 = 285.0;
 const FIELD_WIDTH: f32 = 280.0;
 const DETAILS_WIDTH: f32 = 680.0;
 const MENU_WIDTH: f32 = EXPLORER_WIDTH + 4.0 + DETAILS_WIDTH;
 
+/// One format, as a row of the dialog's type tree.
 fn draw_entry(ui: &mut egui::Ui, editor: &mut EditorState, title: &str, data_menu: DataMenu) -> egui::Response {
-    let response = ui.add(
-        egui::Button::new(title)
-            .min_size(egui::Vec2::new(EXPLORER_WIDTH - 30., 25.0))
-            .selected(editor.data_menu == data_menu),
-    );
+    let response = ExplorerEntry::new(ui.id().with(("data_menu", data_menu)), bold(title))
+        .selected(editor.data_menu == data_menu)
+        .show(ui)
+        .response;
     if response.clicked() {
         editor.data_menu = data_menu;
     }
     response
+}
+
+/// The type tree down the left of both dialogs.
+///
+/// Framed and banded like the data explorer's panel, so the two lists read as
+/// the same object, and named and ordered as the explorer names and orders its
+/// sections.
+fn draw_type_explorer(ui: &mut egui::Ui, id_salt: &str, contents: impl FnOnce(&mut egui::Ui)) {
+    striped_box(ui, id_salt, egui::vec2(EXPLORER_WIDTH, MENU_HEIGHT), contents);
+}
+
+/// A framed, banded list box: the data explorer's tree, boxed for a dialog.
+fn striped_box(ui: &mut egui::Ui, id_salt: &str, size: egui::Vec2, contents: impl FnOnce(&mut egui::Ui)) {
+    const INSET: i8 = 3;
+
+    let (surface, stripe) = tree_row_colors(ui);
+    let frame = egui::Frame::new()
+        .fill(surface)
+        .stroke(ui.visuals().window_stroke())
+        .corner_radius(egui::CornerRadius::same(GROUP_CORNER_RADIUS))
+        .inner_margin(egui::Margin::same(INSET));
+
+    frame.show(ui, |ui| {
+        let inset = f32::from(INSET);
+        // A dialog lays its halves out side by side, so the box has to ask for
+        // a column of its own: rows stacked in the horizontal Ui the frame
+        // inherits would run across the dialog in one line.
+        ui.allocate_ui_with_layout(size - egui::Vec2::splat(inset * 2.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            {
+                ui.set_width(size.x - inset * 2.0);
+                ui.set_height(size.y - inset * 2.0);
+                let row = row_height(ui);
+                // The banding belongs to the box rather than to the rows, so a
+                // short list still reads as a striped tree: reserved out here,
+                // where the box's own rect and scroll offset can be measured
+                // once the rows are laid out.
+                let stripes_slot = ui.painter().add(egui::Shape::Noop);
+                let scroll = egui::ScrollArea::vertical()
+                    .id_salt(id_salt)
+                    .auto_shrink([false; 2])
+                    .min_scrolled_height(0.0)
+                    .show(ui, |ui| {
+                        // Long format names end in an ellipsis rather than wrapping a
+                        // row out of the banding, and rows butt together so the bands
+                        // tile.
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        // A dialog's widgets are laid out taller than a tree row, which
+                        // would push each row past the band behind it and leave the
+                        // list a little further out of step with every row drawn.
+                        ui.spacing_mut().interact_size.y = row;
+                        ui.spacing_mut().button_padding.y = 0.0;
+                        contents(ui);
+                    });
+                let box_rect = scroll.inner_rect;
+                let bands = stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row, stripe);
+                ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
+            }
+        });
+    });
 }
 
 pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
@@ -59,7 +127,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 ui.allocate_ui(egui::Vec2::new(DETAILS_WIDTH, MENU_HEIGHT - 25.0), |ui| {
                     ui.set_width(DETAILS_WIDTH);
                     ui.set_height(MENU_HEIGHT - 25.);
-                    draw_import_details(ui, editor, project, commands);
+                    draw_import_details(ui, editor, commands);
                 });
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(DETAILS_WIDTH, ui.spacing().interact_size.y),
@@ -144,77 +212,87 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
 }
 
 fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
-    ui.set_height(MENU_HEIGHT);
-    ui.set_width(EXPLORER_WIDTH);
-    egui::ScrollArea::new([false, true]).auto_shrink([false, false]).show(ui, |ui| {
-        ui.vertical(|ui| {
-            egui::CollapsingHeader::new(tr!(literal = "Interchange")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Open Mining Format (.omf)"), DataMenu::Omf);
+    draw_type_explorer(ui, "import_type_tree", |ui| {
+        // OMF carries a whole project rather than one kind of data, so it gets
+        // a section of its own above the rest - open, because it is also the
+        // dialog's default selection.
+        ExplorerHeader::new(egui::Id::new("import_projects_section"), tr!(literal = "Projects"))
+            .default_open(true)
+            .show(ui, |ui| {
+                draw_entry(ui, editor, &tr!(literal = "Open Mining Format 2 (.omf)"), DataMenu::Omf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "CAD")).show(ui, |ui| {
+        // The sections below are the data explorer's, in its order: whatever
+        // comes in here lands in the section of the same name over there. They
+        // carry neither the explorer's icons nor its tints - here the heading
+        // names a group of file formats, not the data itself.
+        ExplorerHeader::new(egui::Id::new("import_designs_section"), tr!(literal = "Designs"))
+            .default_open(false)
+            .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::new("import_triangulations_section"), tr!(literal = "Triangulations"))
+            .default_open(false)
+            .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
                 draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
                 draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Point Clouds")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::new("import_rasters_section"), tr!(literal = "Rasters"))
+            .default_open(false)
+            .show(ui, |ui| {
+                draw_entry(ui, editor, &tr!(literal = "GeoTIFF (.tif, .tiff)"), DataMenu::Geotiff);
+            });
+        ExplorerHeader::new(egui::Id::new("import_point_clouds_section"), tr!(literal = "Point Clouds"))
+            .default_open(false)
+            .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "LAS / LAZ (.las, .laz)"), DataMenu::Las);
                 draw_entry(ui, editor, &tr!(literal = "ASCII Points (.xyz, .pts)"), DataMenu::Xyz);
                 draw_entry(ui, editor, &tr!(literal = "Point Cloud Data (.pcd)"), DataMenu::Pcd);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Block Models")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::new("import_block_models_section"), tr!(literal = "Block Models"))
+            .default_open(false)
+            .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Drill Holes")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::new("import_drill_holes_section"), tr!(literal = "Drill Holes"))
+            .default_open(false)
+            .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
             });
-            egui::CollapsingHeader::new(tr!(literal = "Textures")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "GeoTIFF (.tif, .tiff)"), DataMenu::Geotiff);
-            });
-        });
     });
 }
 
 fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
-    ui.set_height(MENU_HEIGHT);
-    ui.set_width(EXPLORER_WIDTH);
-    egui::ScrollArea::new([false, true]).auto_shrink([false, false]).show(ui, |ui| {
-        ui.vertical(|ui| {
-            egui::CollapsingHeader::new(tr!(literal = "Interchange")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Open Mining Format (.omf)"), DataMenu::Omf);
-            });
-            egui::CollapsingHeader::new(tr!(literal = "CAD")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
-            });
-            egui::CollapsingHeader::new(tr!(literal = "Triangulations")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
-                draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
-                draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
-            });
-            egui::CollapsingHeader::new(tr!(literal = "Block Models")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
-            });
-            egui::CollapsingHeader::new(tr!(literal = "Drill Holes")).show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
-            });
+    draw_type_explorer(ui, "export_type_tree", |ui| {
+        ExplorerHeader::new(egui::Id::new("export_projects_section"), tr!(literal = "Projects")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Open Mining Format 2 (.omf)"), DataMenu::Omf);
+        });
+        ExplorerHeader::new(egui::Id::new("export_designs_section"), tr!(literal = "Designs")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
+        });
+        ExplorerHeader::new(egui::Id::new("export_triangulations_section"), tr!(literal = "Triangulations")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
+            draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
+            draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
+        });
+        ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!(literal = "Block Models")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
+        });
+        ExplorerHeader::new(egui::Id::new("export_drill_holes_section"), tr!(literal = "Drill Holes")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
         });
     });
 }
 
-fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     // Scope ids by page so widgets on different pages that happen to share a
     // rect don't trip egui's id-stability check when switching pages.
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => {
-            ui.heading(tr!(literal = "Import Open Mining Format"));
+            ui.heading(tr!(literal = "Import Open Mining Format 2"));
             draw_import_source_picker(ui, editor, commands, tr!(literal = "Project"), tr!(literal = "No .omf chosen"));
-            ui.small(tr!(
-                literal = "Imports every supported OMF element: designs and line sets, surfaces, block models, drillholes, point sets, and raster textures."
-            ));
         }
-        DataMenu::Dxf => draw_import_dxf(ui, editor, project, commands),
+        DataMenu::Dxf => draw_import_dxf(ui, editor, commands),
         DataMenu::Obj => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import Wavefront OBJ")),
         DataMenu::Stl => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import STL")),
         DataMenu::Ply => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import PLY")),
@@ -230,7 +308,7 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
 
 fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
-        DataMenu::Omf => draw_export_omf(ui, project),
+        DataMenu::Omf => draw_export_omf(ui, editor, project),
         DataMenu::Dxf => draw_export_dxf(ui, editor, project),
         DataMenu::Obj => draw_export_mesh(ui, editor, project, &tr!(literal = "Export Wavefront OBJ")),
         DataMenu::Stl => draw_export_mesh(ui, editor, project, &tr!(literal = "Export STL")),
@@ -241,32 +319,124 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     });
 }
 
-fn draw_export_omf(ui: &mut egui::Ui, project: &UiProjectView) {
-    ui.heading(tr!(literal = "Export Open Mining Format"));
-    let designs = project.projects.len();
-    let triangulations = project.triangulations.iter().filter(|entry| entry.is_loaded).count();
-    let block_models = project.block_models.iter().filter(|entry| entry.is_loaded).count();
-    let drill_holes = project.drill_holes.iter().filter(|entry| entry.is_loaded).count();
-    let point_clouds = project.point_clouds.iter().filter(|entry| entry.is_loaded).count();
-    let rasters = project.raster_textures.iter().filter(|entry| entry.is_loaded).count();
-    ui.label(tr_format!(
-        literal = "Exports all open data in one project: %designs% design document, %triangulations% triangulation(s), %block_models% block model(s), %drill_holes% drillhole dataset(s), %point_clouds% point cloud(s), and %rasters% raster(s).",
-        designs = designs,
-        triangulations = triangulations,
-        block_models = block_models,
-        drill_holes = drill_holes,
-        point_clouds = point_clouds,
-        rasters = rasters
-    ));
-    ui.small(tr!(
-        literal = "Incline Design styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes."
-    ));
+/// The OMF export checklist: what a whole-project export writes.
+///
+/// One row per section of the data explorer, each ticked to begin with, so the
+/// default export is still the whole project. Ticking a section takes all of
+/// it, which is why the items under it are disabled while it stands ticked -
+/// untick it and they decide for themselves.
+fn draw_export_omf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    const CHECKLIST_SIZE: egui::Vec2 = egui::vec2(320.0, 340.0);
+
+    ui.heading(tr!(literal = "Export Open Mining Format 2"));
+    ui.add_space(6.0);
+    let active = project.projects.iter().find(|entry| entry.is_active);
+    striped_box(ui, "omf_export_checklist", CHECKLIST_SIZE, |ui| {
+        let selection = &mut editor.export_omf;
+        checklist_section(
+            ui,
+            "omf_export_designs",
+            &tr!(literal = "Designs"),
+            &mut selection.designs,
+            active
+                .map(|entry| entry.layers.iter().map(|layer| (layer.id, layer.name.clone())).collect())
+                .unwrap_or_default(),
+            &tr!(literal = "No design layers"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_triangulations",
+            &tr!(literal = "Triangulations"),
+            &mut selection.triangulations,
+            project.triangulations.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!(literal = "No triangulations"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_rasters",
+            &tr!(literal = "Rasters"),
+            &mut selection.rasters,
+            project.raster_textures.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!(literal = "No rasters"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_point_clouds",
+            &tr!(literal = "Point Clouds"),
+            &mut selection.point_clouds,
+            project.point_clouds.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!(literal = "No point clouds"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_block_models",
+            &tr!(literal = "Block Models"),
+            &mut selection.block_models,
+            project.block_models.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!(literal = "No block models"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_drill_holes",
+            &tr!(literal = "Drill Holes"),
+            &mut selection.drill_holes,
+            project.drill_holes.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!(literal = "No drill holes"),
+        );
+    });
 }
 
-fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+/// One section of the export checklist: a heading over the items it writes.
+///
+/// The heading and its items keep each other honest - see
+/// [`OmfExportSection::set_item`] for the rules they follow.
+fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    title: &str,
+    section: &mut OmfExportSection<Id>,
+    entries: Vec<(Id, String)>,
+    empty_note: &str,
+) {
+    let height = row_height(ui);
+    let id = egui::Id::new(id_salt);
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    // Read out of the heading's closure rather than acted on inside it: the
+    // closure cannot hold the section while the body's closure needs it too.
+    let mut heading_toggle = None;
+    let heading = state.show_header(ui, |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let mut ticked = section.all;
+            if ui.checkbox(&mut ticked, bold(title)).changed() {
+                heading_toggle = Some(ticked);
+            }
+        });
+    });
+    // Applied before the body draws, so the items answer the heading in the
+    // same frame it was clicked rather than one frame later.
+    if let Some(ticked) = heading_toggle {
+        section.set_all(ticked);
+    }
+    heading.body(|ui| {
+        if entries.is_empty() {
+            explorer_note(ui, empty_note);
+            return;
+        }
+        let every = entries.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        for (entry_id, name) in &entries {
+            let mut ticked = section.includes(*entry_id);
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if ui.add(egui::Checkbox::new(&mut ticked, name.clone())).changed() {
+                    section.set_item(*entry_id, ticked, &every);
+                }
+            });
+        }
+    });
+}
+
+fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     ui.heading(tr!(literal = "Import DXF"));
     draw_import_source_picker(ui, editor, commands, tr!(literal = "Source file"), tr!(literal = "No .dxf chosen"));
-    active_project_label(ui, &tr!(literal = "Add to project:"), project);
 }
 
 fn draw_import_mesh(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, heading: &str) {
@@ -297,9 +467,6 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
     ui.heading(tr!(literal = "Import CSV Block Model"));
     draw_import_source_picker(ui, editor, commands, tr!(literal = "Model file"), tr!(literal = "No .csv chosen"));
     if selected_import_source_paths(editor).is_empty() {
-        ui.small(tr!(
-            literal = "Choose a CSV file to map its columns. Text columns are detected as Category; other unmapped columns default to Value."
-        ));
         return;
     }
     if let Some(error) = &editor.import_csv_error {
@@ -348,7 +515,6 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
     if editor.import_drill_csv.is_empty() {
-        ui.small(tr!(literal = "Choose one or more CSVs, then assign each file and column a role."));
         return;
     }
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
@@ -486,8 +652,9 @@ fn draw_export_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         ensure_export_layer(editor, project);
         layer_combo(ui, "dxf_export_layer", &tr!(literal = "Layer:"), project, &mut editor.export_layer);
     } else {
+        // A workspace holds one project, so a whole-project export just takes
+        // the active one rather than offering a choice of exactly one.
         ensure_export_project(editor, project);
-        project_combo(ui, "dxf_export_project", &tr!(literal = "Project:"), project, &mut editor.export_project);
     }
 }
 
@@ -501,7 +668,6 @@ fn draw_export_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.heading(tr!(literal = "Export CSV Block Model"));
     ensure_export_block_model(editor, project);
     block_model_combo(ui, "csv_export_block_model", &tr!(literal = "Block model:"), project, &mut editor.export_block_model);
-    ui.small(tr!(literal = "Exports block centroids as x/y/z, block sizes as dx/dy/dz, followed by resource columns."));
 }
 
 fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
@@ -511,29 +677,6 @@ fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.small(tr!(
         literal = "Writes three files beside the name you choose: collars, survey and intervals, in the columns this dialog imports."
     ));
-}
-
-/// Imports that merge into an existing project target the active project.
-fn active_project_label(ui: &mut egui::Ui, field_label: &str, project: &UiProjectView) {
-    let name = project
-        .projects
-        .iter()
-        .find(|entry| entry.is_active)
-        .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| tr!(literal = "No active project"));
-    ui.horizontal(|ui| {
-        ui.label(field_label);
-        ui.label(name);
-    });
-}
-
-fn project_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<u32>) {
-    let selected_label = selected
-        .and_then(|runtime_id| project.projects.iter().find(|entry| entry.runtime_id == runtime_id))
-        .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| tr!(literal = "Choose a project"));
-    let options = project.projects.iter().map(|entry| (Some(entry.runtime_id), entry.name.clone().into()));
-    MenuFieldCombo::new(id, field_label, selected, selected_label, options).width(FIELD_WIDTH).show(ui);
 }
 
 fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<LayerId>) {
@@ -616,6 +759,9 @@ fn reset_import_defaults(editor: &mut EditorState, _project: &UiProjectView) {
 
 fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
     match editor.data_menu {
+        DataMenu::Omf => {
+            editor.export_omf = crate::ui::state::OmfExportSelection::default();
+        }
         DataMenu::Dxf => {
             editor.export_dxf_layer = false;
             editor.export_layer = first_loaded_layer(project);
@@ -731,7 +877,8 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
 
 fn export_command(editor: &EditorState) -> Option<UiCommand> {
     match editor.data_menu {
-        DataMenu::Omf => Some(UiCommand::ExportOmf),
+        DataMenu::Omf if editor.export_omf.is_empty() => None,
+        DataMenu::Omf => Some(UiCommand::ExportOmf(Box::new(editor.export_omf.clone()))),
         DataMenu::Dxf if editor.export_dxf_layer => editor.export_layer.map(UiCommand::ExportLayerDxf),
         DataMenu::Dxf => editor.export_project.map(UiCommand::ExportProjectDxf),
         DataMenu::Obj | DataMenu::Stl | DataMenu::Ply => {

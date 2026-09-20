@@ -1262,6 +1262,8 @@ pub(crate) struct EditorState {
     /// `App::refresh_intersection_availability` before each frame's UI. Gates
     /// Design > Insert Point > At intersection.
     pub(crate) selection_has_intersections: bool,
+    /// Whether Insert Point has a selected polyline to act on; circles are excluded.
+    pub(crate) selection_has_polylines: bool,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
@@ -1342,16 +1344,11 @@ pub(crate) struct EditorState {
     pub(crate) offset_collide_with_triangulation: bool,
     /// Preview polyline vertices in world coordinates.
     pub(crate) offset_preview_world: Vec<DVec3>,
-    /// Source vertices matching `offset_preview_world`, used for offset guide connectors.
-    pub(crate) offset_source_world: Vec<DVec3>,
     /// Preview polyline vertices projected to physical-pixel screen
-    /// coordinates this frame. One entry per source vertex; `None` marks a
+    /// coordinates this frame. One entry per preview vertex; `None` marks a
     /// vertex outside the camera depth range so indexed consumers stay
     /// aligned with `offset_preview_world`.
     pub(crate) offset_preview_screen_px: Vec<Option<(f32, f32)>>,
-    /// Source vertices projected to physical-pixel screen coordinates this
-    /// frame; index-aligned with `offset_source_world` (`None` = clipped).
-    pub(crate) offset_source_screen_px: Vec<Option<(f32, f32)>>,
     /// Preview screen ranges as `(start, end, closed)` so multiple offset
     /// previews are drawn independently.
     pub(crate) offset_preview_ranges: Vec<(usize, usize, bool)>,
@@ -1656,6 +1653,11 @@ pub(crate) struct EditorState {
     pub(crate) batter_berm_direction_up: bool,
     /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
     pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
+    /// Centre and radius per ring, parallel to [`Self::batter_berm_rings_world`],
+    /// when the source is a circle. Benching a circle yields concentric
+    /// circles, so the commit writes those rather than the flattened rings the
+    /// preview draws. `None` for every other source.
+    pub(crate) batter_berm_ring_circles: Option<Vec<(DVec3, f64)>>,
     pub(crate) batter_berm_source_world: Vec<DVec3>,
     /// Screen projections preserve one entry per world vertex. `None` means
     /// that vertex is outside the camera depth range, so adjacent vertices
@@ -1761,6 +1763,101 @@ pub(crate) struct EditorState {
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
     pub(crate) export_drill_hole: Option<DrillHoleId>,
+    /// What the whole-project OMF export writes.
+    pub(crate) export_omf: OmfExportSelection,
+}
+
+/// One section of the OMF export checklist: the whole kind, or named items of
+/// it.
+///
+/// A section starts whole, which is why its items' own boxes are disabled
+/// while it stands ticked - they would have nothing left to decide. Unticking
+/// it hands the choice back to them, and their earlier ticks are still here.
+#[derive(Clone, Debug)]
+pub(crate) struct OmfExportSection<Id> {
+    /// Take everything in this section, whatever `items` holds.
+    pub(crate) all: bool,
+    pub(crate) items: HashSet<Id>,
+}
+
+/// Written out rather than derived: a derived `PartialEq` would only bound
+/// `Id: PartialEq`, which is not enough to compare the `HashSet`.
+impl<Id: Eq + std::hash::Hash> PartialEq for OmfExportSection<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.all == other.all && self.items == other.items
+    }
+}
+
+impl<Id> Default for OmfExportSection<Id> {
+    fn default() -> Self {
+        Self { all: true, items: HashSet::new() }
+    }
+}
+
+impl<Id: Copy + Eq + std::hash::Hash> OmfExportSection<Id> {
+    /// Whether this section writes `id`.
+    pub(crate) fn includes(&self, id: Id) -> bool {
+        self.all || self.items.contains(&id)
+    }
+
+    /// Tick or untick the section as a whole, taking its items with it.
+    pub(crate) fn set_all(&mut self, ticked: bool) {
+        self.all = ticked;
+        self.items.clear();
+    }
+
+    /// Tick or untick one item, keeping the heading in step: unticking an item
+    /// unticks the heading and leaves the item's neighbours as they were, and
+    /// ticking the last missing one makes the section whole again.
+    ///
+    /// `every` is the section's full contents, needed because `all` stands for
+    /// the section rather than for a list of what is in it.
+    pub(crate) fn set_item(&mut self, id: Id, ticked: bool, every: &[Id]) {
+        if self.all {
+            // The section stood whole: spell out what that covered before
+            // taking this one out of it.
+            self.items = every.iter().copied().collect();
+            self.all = false;
+        }
+        if ticked {
+            self.items.insert(id);
+        } else {
+            self.items.remove(&id);
+        }
+        if !every.is_empty() && every.iter().all(|id| self.items.contains(id)) {
+            self.all = true;
+            self.items.clear();
+        }
+    }
+
+    /// Whether the section writes nothing at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.all && self.items.is_empty()
+    }
+}
+
+/// What a whole-project OMF export writes, one section of the data explorer's
+/// tree at a time.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct OmfExportSelection {
+    pub(crate) designs: OmfExportSection<LayerId>,
+    pub(crate) triangulations: OmfExportSection<TriangulationId>,
+    pub(crate) rasters: OmfExportSection<RasterTextureId>,
+    pub(crate) point_clouds: OmfExportSection<PointCloudId>,
+    pub(crate) block_models: OmfExportSection<BlockModelId>,
+    pub(crate) drill_holes: OmfExportSection<crate::model::drill_hole::DrillHoleId>,
+}
+
+impl OmfExportSelection {
+    /// Whether every section is empty, leaving nothing to export.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.designs.is_empty()
+            && self.triangulations.is_empty()
+            && self.rasters.is_empty()
+            && self.point_clouds.is_empty()
+            && self.block_models.is_empty()
+            && self.drill_holes.is_empty()
+    }
 }
 
 impl EditorState {
@@ -1998,9 +2095,7 @@ impl EditorState {
         self.offset_awaiting_side_pick = false;
         self.offset_project_to_rl = None;
         self.offset_preview_world.clear();
-        self.offset_source_world.clear();
         self.offset_preview_screen_px.clear();
-        self.offset_source_screen_px.clear();
         self.offset_preview_ranges.clear();
 
         self.relimit_dialog_open = false;
@@ -2059,6 +2154,7 @@ impl EditorState {
         self.batter_berm_dialog_open = false;
         self.batter_berm_target_id = None;
         self.batter_berm_rings_world.clear();
+        self.batter_berm_ring_circles = None;
         self.batter_berm_source_world.clear();
         self.batter_berm_rings_screen_px.clear();
         self.batter_berm_source_screen_px.clear();
@@ -2254,6 +2350,7 @@ impl EditorState {
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
+            selection_has_polylines: false,
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
@@ -2295,9 +2392,7 @@ impl EditorState {
             offset_project_to_rl: None,
             offset_collide_with_triangulation: false,
             offset_preview_world: Vec::new(),
-            offset_source_world: Vec::new(),
             offset_preview_screen_px: Vec::new(),
-            offset_source_screen_px: Vec::new(),
             offset_preview_ranges: Vec::new(),
             offset_preview_closed: false,
             relimit_dialog_open: false,
@@ -2475,6 +2570,7 @@ impl EditorState {
             // Down keeps the historical default (Pit + Down = inward + down).
             batter_berm_direction_up: false,
             batter_berm_rings_world: Vec::new(),
+            batter_berm_ring_circles: None,
             batter_berm_source_world: Vec::new(),
             batter_berm_rings_screen_px: Vec::new(),
             batter_berm_source_screen_px: Vec::new(),
@@ -2530,6 +2626,7 @@ impl EditorState {
             export_triangulation: None,
             export_block_model: None,
             export_drill_hole: None,
+            export_omf: OmfExportSelection::default(),
         }
     }
 
@@ -2965,7 +3062,8 @@ pub(crate) enum UiCommand {
         path: PathBuf,
         mapping: CsvColumnMapping,
     },
-    ExportOmf,
+    /// Boxed: the selection carries six sets, and every other variant is small.
+    ExportOmf(Box<OmfExportSelection>),
     ExportProjectDxf(u32),
     ExportViewportImage,
     ExportLayerDxf(LayerId),
@@ -3470,7 +3568,14 @@ impl UiCommand {
             Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
             Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
-            Self::ExportOmf => report(tr!(literal = "Export OMF"), tr!(literal = "All open Incline Design data")),
+            Self::ExportOmf(selection) => report(
+                tr!(literal = "Export OMF"),
+                if *selection.as_ref() == OmfExportSelection::default() {
+                    tr!(literal = "All open Incline Design data")
+                } else {
+                    tr!(literal = "The data ticked in the export checklist")
+                },
+            ),
             Self::ExportProjectDxf(id) => report(tr!(literal = "Export Project to DXF"), tr_format!(literal = "Project %id%", id = id)),
             Self::ExportViewportImage => report(tr!(literal = "Export Viewport Image"), tr!(literal = "Choose a destination")),
             Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),

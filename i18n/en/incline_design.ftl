@@ -116,6 +116,11 @@ tri-count-strings =
         [one] { $count } string
        *[other] { $count } strings
     }
+tri-count-circles =
+    { $count ->
+        [one] { $count } circle
+       *[other] { $count } circles
+    }
 tri-count-points =
     { $count ->
         [one] { $count } point
@@ -213,7 +218,6 @@ literal-categories-beyond-the-first-12-and-missing-values-remain-white-0cfe55e66
 literal-chamfer-ae5a9f3a1d4ae6f5 = Chamfer
 literal-choose-a-file-purpose-to-map-its-columns-c9d9a7858337fffd = Choose a file purpose to map its columns.
 literal-choose-offset-side-aacb869b6ee02832 = Choose offset side
-literal-choose-one-or-more-csvs-then-assign-each-file-and-column-a-role-2353bec83db94d10 = Choose one or more CSVs, then assign each file and column a role.
 literal-choose-relimit-side-a68cafc22fd54e63 = Choose relimit side
 literal-choose-the-active-block-model-variable-1d977eec7f1c81b5 = Choose the active block model variable
 literal-choose-the-boundary-by-clicking-a-closed-polyline-in-the-viewport-e5cc4f39e7101815 = Choose the boundary by clicking a closed polyline in the viewport
@@ -348,13 +352,12 @@ literal-export-dxf-a55b38c20132f261 = Export DXF
 literal-export-engineering-drawing-0c0002e2cdb7434a = Export Engineering Drawing
 literal-export-layer-to-dxf-dda9d8efe5359829 = Export Layer to DXF
 literal-export-omf-6ab339c1e0893291 = Export OMF
-literal-export-open-mining-format-2c86d7ef8df21a42 = Export Open Mining Format
+literal-export-open-mining-format-2-289a561f9def6ddc = Export Open Mining Format 2
 literal-export-png-e0decf4279c1597e = Export PNG...
 literal-export-project-to-dxf-1d58f99e6ded43d9 = Export Project to DXF
 literal-export-triangulation-96c456cdd2fa5764 = Export Triangulation
 literal-export-viewport-image-d497c041afb7b212 = Export Viewport Image
 literal-export-one-layer-b91213cb21d38522 = Export one layer
-literal-exports-block-centroids-as-x-y-z-block-sizes-as-dx-dy-dz-followed-by-resource-columns-ccfd16f3916aba8d = Exports block centroids as x/y/z, block sizes as dx/dy/dz, followed by resource columns.
 literal-fps-6d1e25f3633b2410 = FPS: --
 literal-face-colour-6453100ee6fd7918 = Face colour
 literal-field-of-view-4ead39edc97a64f9 = Field of view
@@ -390,7 +393,7 @@ literal-import-dxf-d96c811de1e76f42 = Import DXF
 literal-import-drillhole-csv-bundle-290b32d863509029 = Import Drillhole CSV Bundle
 literal-import-drillholes-df6d2581a26e6cc8 = Import Drillholes
 literal-import-omf-adf1641dc93ab8be = Import OMF
-literal-import-open-mining-format-c8fa010d6fb7f223 = Import Open Mining Format
+literal-import-open-mining-format-2-018a38a6e4148a11 = Import Open Mining Format 2
 literal-import-point-cloud-7f3b2109403a9283 = Import Point Cloud
 literal-import-raster-62869e3034e9b6c1 = Import Raster
 literal-import-triangulation-e7b3700df192de5b = Import Triangulation
@@ -925,9 +928,8 @@ literal-control-point-1-faf6fbf950b17c2f = Control point 1
 literal-world-x-y-and-z-coordinates-of-the-first-bezier-control-point-189bac93dcd06e70 = World X, Y and Z coordinates of the first Bezier control point.
 literal-control-point-2-faf6fcf950b17de2 = Control point 2
 literal-world-x-y-and-z-coordinates-of-the-second-bezier-control-point-0adf27f4525cd44a = World X, Y and Z coordinates of the second Bezier control point.
-literal-interchange-cede0f7daa1829a9 = Interchange
-literal-open-mining-format-omf-50369ad5c43f1261 = Open Mining Format (.omf)
-literal-cad-0b7ef719aa408c17 = CAD
+literal-projects-199f5853f4e718f7 = Projects
+literal-open-mining-format-2-omf-9fc81b6230e38e33 = Open Mining Format 2 (.omf)
 literal-drawing-exchange-format-dxf-8c5d1ee5571a262c = Drawing Exchange Format (.dxf)
 literal-wavefront-obj-obj-663259235560c82c = Wavefront OBJ (.obj)
 literal-stl-stl-ac855d0eb0ece26c = STL (.stl)
@@ -937,7 +939,6 @@ literal-ascii-points-xyz-pts-e183cec302ce25d0 = ASCII Points (.xyz, .pts)
 literal-point-cloud-data-pcd-d88f4be3fd2ef958 = Point Cloud Data (.pcd)
 literal-comma-separated-values-csv-e98eac2bf14a98bd = Comma-Separated Values (.csv)
 literal-mapped-csv-bundle-csv-c3b487cd838e374f = Mapped CSV bundle (.csv)
-literal-textures-06eaee20d025f545 = Textures
 literal-geotiff-tif-tiff-a4c8f984908d6d8c = GeoTIFF (.tif, .tiff)
 literal-no-omf-chosen-0998297ae4891598 = No .omf chosen
 literal-import-wavefront-obj-9e22315101c4040d = Import Wavefront OBJ
@@ -952,7 +953,6 @@ literal-export-stl-17ed65c242a623c6 = Export STL
 literal-export-ply-0d5b0dc23c1f3ca4 = Export PLY
 literal-source-file-b221d7db388fcafe = Source file
 literal-no-dxf-chosen-91403908aebb9154 = No .dxf chosen
-literal-add-to-project-9be55cb299a564c2 = Add to project:
 literal-no-file-chosen-0073fee5e8d437c2 = No file chosen
 literal-model-file-bde0d1d68506b488 = Model file
 literal-no-csv-chosen-acaf959ea4a4c072 = No .csv chosen
@@ -977,11 +977,8 @@ literal-end-y-f1dd09256e64ab85 = End Y
 literal-end-z-f1dd06256e64a66c = End Z
 literal-diameter-21900f027f2d7cfa = Diameter
 literal-attribute-bba865d4b437944f = Attribute
-literal-project-199f8f53f4e7766c = Project:
 literal-triangulation-c0d5aed309c533a6 = Triangulation:
 literal-block-model-9b06800b020fb56b = Block model:
-literal-no-active-project-382637642c4c5a8d = No active project
-literal-choose-a-project-f1c0f595b9e24e62 = Choose a project
 literal-choose-a-loaded-layer-e0b05bc3ef7be5d1 = Choose a loaded layer
 literal-choose-a-loaded-triangulation-8c92b16453be8513 = Choose a loaded triangulation
 literal-choose-a-loaded-block-model-fa2f8b657a356184 = Choose a loaded block model
@@ -1238,7 +1235,6 @@ literal-locale-environment-lang-lang-lc-all-locale-tz-timezone-3cf966620f1287a3 
 literal-desktop-session-xdg-session-type-type-xdg-current-desktop-desktop-wayland-display-wayland-display-display-6822ab2172fa5579 = Desktop session: XDG_SESSION_TYPE=%type%, XDG_CURRENT_DESKTOP=%desktop%, WAYLAND_DISPLAY=%wayland%, DISPLAY=%display%
 literal-windows-session-sessionname-session-username-user-dd705b135e5cfa1a = Windows session: SESSIONNAME=%session%, USERNAME=%user%
 literal-macos-session-user-user-shell-shell-5d332ee1a47e7bba = macOS session: USER=%user%, SHELL=%shell%
-literal-imports-every-supported-omf-element-designs-and-line-sets-surfaces-block-models-drillholes-point-sets-and-raster-textures-7a8d4e648aaff12b = Imports every supported OMF element: designs and line sets, surfaces, block models, drillholes, point sets, and raster textures.
 
 ## Source literals discovered by the coverage audit
 literal-block-model-path-has-count-variable-s-of-an-unsupported-type-that-won-t-be-readable-names-6757175f194407a1 = Block model %path% has %count% variable(s) of an unsupported type that won't be readable: %names%
@@ -1300,9 +1296,6 @@ literal-intersect-moves-one-endpoint-to-another-line-absolute-sets-the-final-lin
 literal-the-selected-start-or-end-point-moves-along-the-line-direction-the-opposite-endpoint-stays-fixed-8f2a3c130dc719b2 = The selected start or end point moves along the line direction; the opposite endpoint stays fixed.
 literal-number-of-straight-segments-used-to-approximate-the-rounded-corner-use-1-for-a-straight-chamfer-dde9ba4f244d7220 = Number of straight segments used to approximate the rounded corner. Use 1 for a straight chamfer.
 literal-choose-which-of-the-two-polyline-paths-between-the-selected-vertices-will-be-replaced-length-includes-elevation-and-curved-edges-2cdc8907210a59dd = Choose which of the two polyline paths between the selected vertices will be replaced. Length includes elevation and curved edges.
-literal-exports-all-open-data-in-one-project-designs-design-document-triangulations-triangulation-s-block-models-block-model-s-drill-holes-drillhole-dataset-s-point-clouds-point-cloud-s-and-rasters-raster-s-adb3b42ef5c47b66 = Exports all open data in one project: %designs% design document, %triangulations% triangulation(s), %block_models% block model(s), %drill_holes% drillhole dataset(s), %point_clouds% point cloud(s), and %rasters% raster(s).
-literal-incline-design-styling-and-exact-design-drillhole-semantics-are-retained-as-omf-metadata-alongside-native-omf-geometry-and-attributes-f67793cd7f197c2c = Incline Design styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes.
-literal-choose-a-csv-file-to-map-its-columns-text-columns-are-detected-as-category-other-unmapped-columns-default-to-value-8f12a7249eaf7b2a = Choose a CSV file to map its columns. Text columns are detected as Category; other unmapped columns default to Value.
 literal-paper-orientation-width-height-mm-b068858104e7773b = %paper% %orientation% · %width% × %height% mm
 literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · covers %width% × %height% m
 literal-size-width-height-mm-3b309605c72e220c = %size% (%width% × %height% mm)
@@ -1784,4 +1777,14 @@ survey-same-system = Choose different source and destination systems.
 survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
 
 preferences-ui-size = UI size
-preferences-ui-size-help = Scales text and controls relative to the monitor resolution, using 2560 × 1440 as the reference. Resizing the window keeps their size unchanged.
+preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+
+relimit-select-boundary = Select polyline or circle to relimit to
+
+relimit-click-boundary = Click the polyline or circle to intersect with…
+
+relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolute sets the final line length. Relative adds or subtracts length.
+
+browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }
+literal-no-rasters-ffe3e01615f7276c = No rasters
+literal-the-data-ticked-in-the-export-checklist-b5a9058e6f00002a = The data ticked in the export checklist

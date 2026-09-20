@@ -35,7 +35,7 @@ impl<'a> App<'a> {
             ids,
             |obj: &mut Object| {
                 match obj {
-                    Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Text { color, .. } => *color = new_color,
+                    Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color = new_color,
                 }
             },
             "Batch-set color on %count% object(s)"
@@ -60,7 +60,7 @@ impl<'a> App<'a> {
             self,
             ids,
             |obj: &mut Object| {
-                if let Object::Polyline { fill, .. } = obj {
+                if let Object::Polyline { fill, .. } | Object::Circle { fill, .. } = obj {
                     *fill = new_fill;
                 }
             },
@@ -73,7 +73,7 @@ impl<'a> App<'a> {
             self,
             ids,
             |obj: &mut Object| {
-                if let Object::Polyline { line_weight, .. } = obj {
+                if let Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } = obj {
                     *line_weight = weight;
                 }
             },

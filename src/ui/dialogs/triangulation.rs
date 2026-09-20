@@ -37,12 +37,13 @@ fn tri_close_dialog(editor: &mut EditorState) {
 /// Each noun is pluralised by its own count through Fluent, so a language with
 /// more than the two English plural forms (Russian's one/few/many) reads right.
 fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
-    let (mut points, mut polylines, mut strings, mut texts) = (0i64, 0i64, 0i64, 0i64);
+    let (mut points, mut polylines, mut strings, mut texts, mut circles) = (0i64, 0i64, 0i64, 0i64, 0i64);
     for &oid in object_ids {
         match document.get_object(oid) {
             Some(Object::Point { .. }) => points += 1,
             Some(Object::Polyline { closed: true, .. }) => polylines += 1,
             Some(Object::Polyline { closed: false, .. }) => strings += 1,
+            Some(Object::Circle { .. }) => circles += 1,
             Some(Object::Text { .. }) => texts += 1,
             None => {}
         }
@@ -50,6 +51,9 @@ fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
     let mut parts: Vec<String> = Vec::new();
     if polylines > 0 {
         parts.push(tr!("tri-count-polylines", count = polylines));
+    }
+    if circles > 0 {
+        parts.push(tr!("tri-count-circles", count = circles));
     }
     if strings > 0 {
         parts.push(tr!("tri-count-strings", count = strings));
@@ -434,16 +438,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
         return;
     }
     if let Some(object_id) = editor.tri_cut_poly_object_id {
-        let boundary_is_valid = document.get_object(object_id).is_some_and(|object| {
-            matches!(
-                object,
-                Object::Polyline {
-                    closed: true,
-                    verts,
-                    ..
-                } if verts.len() >= 3
-            )
-        });
+        let boundary_is_valid = document.get_object(object_id).is_some_and(Object::encloses_area);
         if !boundary_is_valid {
             editor.tri_cut_poly_object_id = None;
             editor.tri_cut_poly_object_name.clear();

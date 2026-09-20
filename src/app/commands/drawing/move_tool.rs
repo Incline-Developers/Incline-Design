@@ -6,7 +6,6 @@ use crate::{
     model::{
         Command, Object, ObjectId, ObjectPoint, SceneEntityId,
         drill_hole::{DrillHoleRef, HolePlacement},
-        geometry::compact_circle_center,
     },
     ui::state::ActiveTool,
 };
@@ -624,12 +623,8 @@ fn translate_move_target(object: &mut Object, vertex_target: Option<(ObjectId, O
                 vertex.pos += delta;
             }
         }
-        (object @ Object::Polyline { .. }, ObjectPoint::Center) => {
-            let is_circle = matches!(object, Object::Polyline { verts, closed, .. } if compact_circle_center(verts, *closed).is_some());
-            if is_circle {
-                object.translate(delta);
-            }
-        }
+        // Dragging a circle's centre moves the whole circle.
+        (object @ Object::Circle { .. }, ObjectPoint::Center) => object.translate(delta),
         (Object::Point { pos, .. }, ObjectPoint::Vertex(0)) => {
             *pos += delta;
         }

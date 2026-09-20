@@ -196,6 +196,7 @@ impl<'a> App<'a> {
                 WindowEvent::KeyboardInput { .. } => self.handle_key_action(&event),
                 WindowEvent::Resized(physical_size) if physical_size.width > 0 && physical_size.height > 0 => {
                     self.pending_resize = Some(physical_size);
+                    self.last_resize_event = Some(Instant::now());
                     self.redraw_requested = true;
                 }
                 WindowEvent::RedrawRequested => {
@@ -237,7 +238,7 @@ impl<'a> App<'a> {
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
                     let completing_topology_load = self.topology_uploads_pending();
-                    let applied_resize = self.pending_resize.take();
+                    let applied_resize = self.take_resize_to_apply(now);
                     let mut slice_moving = false;
                     if let Some(graphics) = self.graphics.as_mut() {
                         if let Some(size) = applied_resize {

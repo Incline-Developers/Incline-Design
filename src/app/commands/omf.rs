@@ -14,6 +14,7 @@ use crate::{
         project,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
+    ui::state::OmfExportSelection,
     userspace_log, userspace_warn,
 };
 
@@ -57,7 +58,12 @@ pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole
 }
 
 impl<'a> App<'a> {
-    pub(super) fn omf_export_snapshot(&mut self) -> Result<ProjectSnapshot> {
+    /// Everything open, for the saves that write the project file itself.
+    pub(super) fn omf_save_snapshot(&mut self) -> Result<ProjectSnapshot> {
+        self.omf_export_snapshot(&OmfExportSelection::default())
+    }
+
+    pub(super) fn omf_export_snapshot(&mut self, selection: &OmfExportSelection) -> Result<ProjectSnapshot> {
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -70,14 +76,33 @@ impl<'a> App<'a> {
             .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| tr!(literal = "Incline Design project"));
+        // The encoder walks the document layer by layer and only ever looks at
+        // objects whose layer it is writing, so dropping an unticked layer
+        // leaves its objects unreachable rather than orphaned in the file.
+        let designs = self.workspace.active_project().map(|project| project.project.clone()).and_then(|mut design| {
+            if selection.designs.all {
+                return Some(design);
+            }
+            let dropped = design
+                .document
+                .layers()
+                .iter()
+                .map(|layer| layer.id)
+                .filter(|id| !selection.designs.includes(*id))
+                .collect::<Vec<_>>();
+            for layer in dropped {
+                design.document.delete_layer(layer);
+            }
+            (!design.document.layers().is_empty()).then_some(design)
+        });
         let snapshot = ProjectSnapshot {
             name,
-            designs: self.workspace.active_project().map(|project| project.project.clone()),
-            triangulations: self.triangulations.clone(),
-            block_models: self.block_models.clone(),
-            drill_holes: self.drill_holes.clone(),
-            point_clouds: self.point_clouds.clone(),
-            rasters: self.raster_textures.clone(),
+            designs,
+            triangulations: self.triangulations.iter().filter(|item| selection.triangulations.includes(item.id)).cloned().collect(),
+            block_models: self.block_models.iter().filter(|item| selection.block_models.includes(item.id)).cloned().collect(),
+            drill_holes: self.drill_holes.iter().filter(|item| selection.drill_holes.includes(item.id)).cloned().collect(),
+            point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
+            rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
         };
         if snapshot.is_empty() {
             anyhow::bail!(tr!(literal = "There is no open Incline Design data to export"));
@@ -531,8 +556,8 @@ impl<'a> App<'a> {
         }
     }
 
-    pub(crate) fn choose_export_omf(&mut self) -> Result<()> {
-        let snapshot = self.omf_export_snapshot()?;
+    pub(crate) fn choose_export_omf(&mut self, selection: &OmfExportSelection) -> Result<()> {
+        let snapshot = self.omf_export_snapshot(selection)?;
         let default_name = format!("{}.omf", safe_stem(&snapshot.name));
         #[cfg(target_arch = "wasm32")]
         {

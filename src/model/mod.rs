@@ -26,7 +26,7 @@ pub(crate) mod spatial;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,13 @@ impl PolyVertex {
 }
 
 /// A drawable design element. `Polyline` with `closed == true` represents a
-/// polyline; vertices carry bulges so arcs/circles are preserved.
+/// polyline; vertices carry bulges so arcs are preserved.
+///
+/// A circle is its own variant rather than a two-vertex bulged polyline. The
+/// compact encoding still exists, but only as a *geometry view*
+/// ([`Object::string_geometry`]) for tessellation, snapping and export - never
+/// as something editing tools reason about. Tools ask which variant they have,
+/// not how many vertices it happens to hold.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Object {
@@ -158,6 +164,15 @@ pub(crate) enum Object {
         fill: FillStyle,
         line_weight: f32,
     },
+    Circle {
+        id: ObjectId,
+        layer: LayerId,
+        center: DVec3,
+        radius: f64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+    },
     Text {
         id: ObjectId,
         layer: LayerId,
@@ -172,13 +187,13 @@ pub(crate) enum Object {
 impl Object {
     pub(crate) fn id(&self) -> ObjectId {
         match self {
-            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Text { id, .. } => *id,
+            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } => *id,
         }
     }
 
     pub(crate) fn layer(&self) -> LayerId {
         match self {
-            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Text { layer, .. } => *layer,
+            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } => *layer,
         }
     }
 
@@ -189,13 +204,14 @@ impl Object {
             Object::Point { .. } => crate::i18n::tr!(literal = "Point"),
             Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!(literal = "Line"),
             Object::Polyline { .. } => crate::i18n::tr!(literal = "Polyline"),
+            Object::Circle { .. } => crate::i18n::tr!(literal = "Circle"),
             Object::Text { .. } => crate::i18n::tr!(literal = "Text"),
         }
     }
 
     pub(crate) fn color(&self) -> ObjectColor {
         match self {
-            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Text { color, .. } => *color,
+            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color,
         }
     }
 
@@ -246,6 +262,21 @@ impl Object {
                 1u8.hash(&mut hasher);
                 hash_verts(&mut hasher, verts);
                 closed.hash(&mut hasher);
+                hash_color(&mut hasher, *color);
+                std::mem::discriminant(fill).hash(&mut hasher);
+                line_weight.to_bits().hash(&mut hasher);
+            }
+            Object::Circle {
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+                ..
+            } => {
+                3u8.hash(&mut hasher);
+                hash_pos(&mut hasher, *center);
+                radius.to_bits().hash(&mut hasher);
                 hash_color(&mut hasher, *color);
                 std::mem::discriminant(fill).hash(&mut hasher);
                 line_weight.to_bits().hash(&mut hasher);
@@ -308,6 +339,17 @@ impl Object {
                     return Err("invalid polyline line weight".to_string());
                 }
             }
+            Object::Circle { center, radius, line_weight, .. } => {
+                if !center.is_finite() {
+                    return Err("non-finite circle centre".to_string());
+                }
+                if !radius.is_finite() || *radius <= 0.0 {
+                    return Err("circle radius must be greater than zero".to_string());
+                }
+                if !line_weight.is_finite() || *line_weight < 0.0 {
+                    return Err("invalid circle line weight".to_string());
+                }
+            }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
                     return Err("non-finite text position".to_string());
@@ -326,6 +368,7 @@ impl Object {
     pub(crate) fn translate(&mut self, delta: DVec3) {
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos += delta,
+            Object::Circle { center, .. } => *center += delta,
             Object::Polyline { verts, .. } => {
                 for vertex in verts {
                     vertex.pos += delta;
@@ -338,6 +381,7 @@ impl Object {
     pub(crate) fn axis_position(&self, axis: Axis) -> f64 {
         let pos = match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
+            Object::Circle { center, .. } => *center,
             Object::Polyline { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
         };
         match axis {
@@ -355,6 +399,7 @@ impl Object {
         };
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => set(pos),
+            Object::Circle { center, .. } => set(center),
             Object::Polyline { verts, .. } => {
                 for vertex in verts {
                     set(&mut vertex.pos);
@@ -387,6 +432,22 @@ impl Object {
                 fill: *fill,
                 line_weight: *line_weight,
             },
+            Object::Circle {
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+                ..
+            } => Object::Circle {
+                id,
+                layer,
+                center: *center,
+                radius: *radius,
+                color: *color,
+                fill: *fill,
+                line_weight: *line_weight,
+            },
             Object::Text {
                 pos,
                 content,
@@ -405,6 +466,100 @@ impl Object {
             },
         }
     }
+
+    /// Centre and radius, for the one variant that has them.
+    pub(crate) fn circle(&self) -> Option<(DVec3, f64)> {
+        match self {
+            Object::Circle { center, radius, .. } => Some((*center, *radius)),
+            _ => None,
+        }
+    }
+
+    /// The bulged-polyline *view* of anything that draws as a string.
+    ///
+    /// A polyline lends its stored vertices; a circle is rendered into the
+    /// compact two-semicircle encoding on demand. This exists so tessellation,
+    /// snapping, picking and export keep one code path - it is emphatically
+    /// not an invitation to edit a circle through its vertices. Editing tools
+    /// match on the variant.
+    pub(crate) fn string_geometry(&self) -> Option<(Cow<'_, [PolyVertex]>, bool)> {
+        match self {
+            Object::Polyline { verts, closed, .. } => Some((Cow::Borrowed(verts.as_slice()), *closed)),
+            Object::Circle { center, radius, .. } => {
+                let verts = geometry::circle_polyline_vertices(*center, *radius, glam::DVec2::X)?;
+                Some((Cow::Owned(verts.to_vec()), true))
+            }
+            Object::Point { .. } | Object::Text { .. } => None,
+        }
+    }
+
+    /// Tessellated path of anything that draws as a string, plus whether it
+    /// closes. Arcs and circles are flattened, so callers that want a region
+    /// or a breakline get points without caring which variant produced them.
+    pub(crate) fn tessellated_path(&self) -> Option<(Vec<DVec3>, bool)> {
+        let (verts, closed) = self.string_geometry()?;
+        Some((geometry::tessellate_polyline_bulges(verts.as_ref(), closed), closed))
+    }
+
+    /// Tessellated outline of an object that encloses an area - a closed
+    /// polyline or a circle - with enough points to bound a region.
+    pub(crate) fn closed_boundary(&self) -> Option<Vec<DVec3>> {
+        let (points, closed) = self.tessellated_path()?;
+        (closed && points.len() >= 3).then_some(points)
+    }
+
+    /// Whether this object bounds a region: the question every boundary
+    /// picker actually means when it inspects `closed` and a vertex count.
+    pub(crate) fn encloses_area(&self) -> bool {
+        self.closed_boundary().is_some()
+    }
+
+    /// Hatching style, for the two variants that enclose an area.
+    pub(crate) fn fill(&self) -> Option<FillStyle> {
+        match self {
+            Object::Polyline { fill, .. } | Object::Circle { fill, .. } => Some(*fill),
+            _ => None,
+        }
+    }
+
+    /// Stroke width, for the two variants that carry one.
+    pub(crate) fn line_weight(&self) -> Option<f32> {
+        match self {
+            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } => Some(*line_weight),
+            _ => None,
+        }
+    }
+}
+
+/// Promote a polyline that is a circle in the pre-[`Object::Circle`] compact
+/// encoding - closed, two vertices, both bulges a half turn the same way.
+///
+/// Documents written before circles had a variant of their own, and DXF's own
+/// `CIRCLE` entity, both arrive in that form. Returns `None` for anything that
+/// is genuinely a polyline.
+pub(crate) fn promote_compact_circle(object: &Object) -> Option<Object> {
+    let Object::Polyline {
+        id,
+        layer,
+        verts,
+        closed,
+        color,
+        fill,
+        line_weight,
+    } = object
+    else {
+        return None;
+    };
+    let spec = object_edit::compact_circle(verts, *closed)?;
+    Some(Object::Circle {
+        id: *id,
+        layer: *layer,
+        center: spec.center,
+        radius: spec.radius,
+        color: *color,
+        fill: *fill,
+        line_weight: *line_weight,
+    })
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -470,9 +625,17 @@ impl Document {
     /// Some external design formats encode ordinary two-point strings as
     /// closed polylines. Importers use this before constructing a project so the
     /// resulting document satisfies the three-vertex polyline invariant.
+    ///
+    /// A closed bulged pair is a circle in compact form, not a degenerate
+    /// string: those are promoted to [`Object::Circle`] rather than opened.
     pub(crate) fn repair_degenerate_closed_polylines(&mut self) -> usize {
         let mut repaired = 0;
         for object in &mut self.objects {
+            if let Some(promoted) = promote_compact_circle(object) {
+                *object = promoted;
+                repaired += 1;
+                continue;
+            }
             if let Object::Polyline { verts, closed, .. } = object
                 && *closed
                 && verts.len() == 2
@@ -485,6 +648,23 @@ impl Document {
             self.touch();
         }
         repaired
+    }
+
+    /// Upgrade every circle still stored in the pre-[`Object::Circle`] compact
+    /// encoding. Runs when a document is read, so nothing downstream of load
+    /// has to recognise the old form. Returns how many were promoted.
+    pub(crate) fn promote_compact_circles(&mut self) -> usize {
+        let mut promoted = 0;
+        for object in &mut self.objects {
+            if let Some(circle) = promote_compact_circle(object) {
+                *object = circle;
+                promoted += 1;
+            }
+        }
+        if promoted > 0 {
+            self.touch();
+        }
+        promoted
     }
 
     /// Validate on-disk model invariants. Runs on deserialized documents
@@ -1694,7 +1874,7 @@ impl Command {
                 + match object {
                     Object::Polyline { verts, .. } => verts.len().saturating_mul(size_of::<PolyVertex>()),
                     Object::Text { content, .. } => content.len(),
-                    Object::Point { .. } => 0,
+                    Object::Point { .. } | Object::Circle { .. } => 0,
                 }
         }
         fn layer_bytes(layer: &Layer) -> usize {
