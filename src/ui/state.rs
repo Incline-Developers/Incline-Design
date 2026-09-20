@@ -1251,6 +1251,11 @@ pub(crate) struct EditorState {
 
     // Display overrides
     pub(crate) xray_enabled: bool,
+    /// Presentation shading: sky, ambient occlusion, sun shadows and a filmic
+    /// grade over the ordinary scene pass. A view mode, not a tool - every
+    /// tool keeps working with it on, and nothing about it is saved. On by
+    /// default natively; the browser build has no post chain at all.
+    pub(crate) cinematic_enabled: bool,
     pub(crate) vertical_exaggeration_dialog_open: bool,
     pub(crate) vertical_exaggeration: f64,
     pub(crate) vertical_exaggeration_input: f64,
@@ -2322,6 +2327,7 @@ impl EditorState {
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
+            cinematic_enabled: !cfg!(target_arch = "wasm32"),
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
             vertical_exaggeration_input: 1.,
@@ -3040,6 +3046,9 @@ pub(crate) enum UiCommand {
     SetGridShown(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
+    /// Presentation shading over the scene pass. Native only.
+    #[cfg(not(target_arch = "wasm32"))]
+    SetCinematicEnabled(bool),
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
@@ -3517,6 +3526,11 @@ impl UiCommand {
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::SetCinematicEnabled(enabled) => report(
+                tr!(literal = "Set Cinematic View"),
+                if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") },
             ),
             Self::SetStandardView(view) => report(tr!(literal = "Set Standard View"), view.label()),
             Self::SaveProject => report(tr!(literal = "Save Project"), tr!(literal = "Current project")),
