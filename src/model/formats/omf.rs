@@ -17,6 +17,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use glam::{DMat3, DVec3};
 use omf as omf_crate;
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::{
@@ -32,7 +33,7 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
-        point_cloud::{LoadedPointCloud, OpenPointCloud, finite_bounds, prepare_for_render},
+        point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -1531,7 +1532,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             omf_crate::Geometry::LineSet(lines) => {
                 let offset = self.project_origin + DVec3::from_array(lines.origin);
                 let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-                let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+                let segments = self.reader.array_segments_vec(&lines.segments)?;
                 for (points, closed) in line_strings(&vertices, &segments) {
                     let color = ObjectColor::Fixed(element_color(element, [1.0; 4]));
                     document.add_object(|id| Object::Polyline {
@@ -1560,7 +1561,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         // `generic_design` mutably at the same time.
         let offset = self.project_origin + DVec3::from_array(lines.origin);
         let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-        let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+        let segments = self.reader.array_segments_vec(&lines.segments)?;
         for (points, closed) in line_strings(&vertices, &segments) {
             self.generic_design.add_object(|id| Object::Polyline {
                 id,
@@ -1582,7 +1583,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .into_iter()
             .map(|point| Vertex::new(point.x + offset.x, point.y + offset.y, point.z + offset.z))
             .collect();
-        let faces = collect_results(self.reader.array_triangles(&surface.triangles)?)?;
+        let faces = self.reader.array_triangles_vec(&surface.triangles)?;
         self.push_triangulation(element, vertices, faces)
     }
 
@@ -1669,7 +1670,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn read_point_cloud(&mut self, element: &omf_crate::Element, points: &omf_crate::PointSet) -> Result<()> {
         let offset = self.project_origin + DVec3::from_array(points.origin);
-        let positions = self.read_vertices(&points.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
+        let mut positions = self.read_vertices(&points.vertices)?;
+        // Applying the offset and measuring the bounds are both full sweeps of
+        // an array that can run to gigabytes, so they share one pass.
+        let bounds = shift_and_measure(&mut positions, offset);
         if positions.is_empty() {
             self.bundle.warnings.push(format!("Skipped empty OMF point set '{}'", element.name));
             return Ok(());
@@ -1686,7 +1690,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .map(|colors| colors.into_iter().map(|color| color.unwrap_or([255; 4])).map(u32::from_le_bytes).collect::<Vec<_>>())
             })
             .transpose()?;
-        let bounds = finite_bounds(&positions).with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
+        let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
         let prepared = prepare_for_render(&positions, colors.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
         self.bundle.point_clouds.push(ImportedPointCloud {
@@ -2176,9 +2180,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         Ok(())
     }
 
+    /// Vertex arrays are the bulk of an OMF file, so they go through the
+    /// reader's bulk path: whole Parquet column blocks instead of one
+    /// `Option<Result<f64>>` per coordinate, with row groups decoded in
+    /// parallel. `[f64; 3]` and `DVec3` share a layout, so the cast below
+    /// reuses the allocation rather than copying it.
     fn read_vertices(&self, array: &omf_crate::Array<omf_crate::array_type::Vertex>) -> Result<Vec<DVec3>> {
         ensure_items(array.item_count(), "vertices")?;
-        Ok(collect_results(self.reader.array_vertices(array)?)?.into_iter().map(DVec3::from_array).collect())
+        Ok(self.reader.array_vertices_vec(array)?.into_iter().map(DVec3::from_array).collect())
     }
 
     fn grid2_sizes(&self, grid: &omf_crate::Grid2) -> Result<[Vec<f64>; 2]> {
@@ -2243,6 +2252,27 @@ fn ensure_items(count: u64, description: &str) -> Result<usize> {
         bail!("OMF {description} count {count} exceeds Incline Design's import limit of {MAX_ARRAY_ITEMS}");
     }
     usize::try_from(count).with_context(|| format!("OMF {description} count exceeds addressable memory"))
+}
+
+/// Shift every point by `offset` in place and return the bounds of the finite
+/// ones, in a single parallel pass.
+fn shift_and_measure(positions: &mut [DVec3], offset: DVec3) -> Option<(DVec3, DVec3)> {
+    let (min, max) = positions
+        .par_iter_mut()
+        .map(|point| {
+            *point += offset;
+            *point
+        })
+        .filter(|point| point.is_finite())
+        .fold(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min, max), point| (min.min(point), max.max(point)),
+        )
+        .reduce(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
+        );
+    (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
 fn collect_results<T>(items: impl IntoIterator<Item = std::result::Result<T, omf_crate::error::Error>>) -> Result<Vec<T>> {
