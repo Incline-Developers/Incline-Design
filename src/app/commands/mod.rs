@@ -283,7 +283,7 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
-            UiCommand::ExportOmf => self.choose_export_omf(),
+            UiCommand::ExportOmf(selection) => self.choose_export_omf(&selection),
             UiCommand::ExportProjectDxf(runtime_id) => {
                 self.choose_export_project_dxf(runtime_id);
                 Ok(())

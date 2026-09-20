@@ -691,7 +691,7 @@ impl<'a> App<'a> {
                     project.project.metadata.name = previous_name.clone();
                     (previous_name, snapshot_hash, snapshot_layer_hashes)
                 };
-                let mut snapshot = self.omf_export_snapshot()?;
+                let mut snapshot = self.omf_save_snapshot()?;
                 let asset_token = self.project_asset_save_token();
                 snapshot.name = new_name;
                 let kind = PendingSaveKind::Project {
@@ -1704,7 +1704,7 @@ impl<'a> App<'a> {
                 .map(|project| project.runtime_id)
                 .filter(|runtime_id| self.project_content_is_dirty(*runtime_id))
             {
-                Some(runtime_id) => match self.omf_export_snapshot() {
+                Some(runtime_id) => match self.omf_save_snapshot() {
                     Ok(snapshot) => match write_recovery_copy(snapshot, runtime_id, &recovery_dir) {
                         Ok(report) => {
                             for path in &report.written {
@@ -1899,7 +1899,7 @@ impl<'a> App<'a> {
                 let project = &self.workspace.projects[index];
                 (project.current_content_hash(), project.current_layer_hashes())
             };
-            let snapshot = self.omf_export_snapshot()?;
+            let snapshot = self.omf_save_snapshot()?;
             let asset_token = self.project_asset_save_token();
             let kind = PendingSaveKind::Project {
                 runtime_id,
@@ -1942,7 +1942,7 @@ impl<'a> App<'a> {
             (project.current_content_hash(), project.current_layer_hashes())
         };
         let asset_token = self.project_asset_save_token();
-        let snapshot = self.omf_export_snapshot()?;
+        let snapshot = self.omf_save_snapshot()?;
         let name = snapshot.name.clone();
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
         self.browser_saves_pending.insert(runtime_id);

@@ -65,6 +65,35 @@ pub(crate) const PICK_THRESHOLD_PX: f32 = 8.0;
 /// vertex only grabs when the cursor is genuinely on it.
 pub(crate) const MOVE_VERTEX_PICK_PX: f32 = 6.0;
 
+/// Ceiling on how often a browser drag-resize reconfigures the surface and
+/// rebuilds its attachments, whatever the configured resize cap. Matches the
+/// lowest cap the properties panel offers, so it never contradicts a setting
+/// the user can see.
+const WEB_RESIZE_FRAME_RATE_CAP: u32 = 20;
+
+/// How still the window must be for a drag-resize to count as finished.
+const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(120);
+
+/// Step the surface size is rounded up to while a drag is still moving.
+/// Wide enough that dragging an edge crosses few steps, narrow enough that
+/// the browser scaling the slightly oversized buffer onto the canvas is not
+/// noticeable - at most this many pixels across the window.
+const DRAG_SURFACE_QUANTUM: u32 = 64;
+
+/// The surface extent to configure mid-drag, along one axis.
+///
+/// Grows as soon as the window outgrows the buffer, but shrinks only once the
+/// window is two steps smaller, so jiggling an edge back and forth across a
+/// step boundary does not reallocate on every frame. Returning the current
+/// extent unchanged is what makes the reconfiguration a no-op.
+fn drag_surface_extent(current: u32, requested: u32) -> u32 {
+    if requested > current || current.saturating_sub(requested) >= 2 * DRAG_SURFACE_QUANTUM {
+        requested.div_ceil(DRAG_SURFACE_QUANTUM) * DRAG_SURFACE_QUANTUM
+    } else {
+        current
+    }
+}
+
 fn rate_interval(rate: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(rate.clamp(1, 1000)))
 }
@@ -291,6 +320,9 @@ pub(crate) struct App<'a> {
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
+    /// When the last resize event arrived, for deciding whether a drag is
+    /// still moving. See `take_resize_to_apply`.
+    last_resize_event: Option<Instant>,
     last_render_time: Option<Instant>,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
@@ -430,6 +462,7 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
             pending_resize: None,
+            last_resize_event: None,
             last_render_time: None,
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
@@ -1251,11 +1284,43 @@ impl<'a> App<'a> {
         self.editor.rotate_preview_active = false;
     }
 
+    /// The surface size to configure for a pending resize, if one is due.
+    ///
+    /// Every configuration hands the browser a new canvas drawing buffer and
+    /// swapchain, and those are released on its collection schedule rather
+    /// than ours - a fast drag can outrun it and exhaust the tab's GPU memory
+    /// even though the attachments we own are destroyed promptly. So while a
+    /// drag is still moving the surface is configured to a coarsely rounded
+    /// size and reused until the window outgrows it, which makes most frames
+    /// of a drag reconfigure nothing at all. The browser scales that slightly
+    /// oversized buffer onto the canvas, and the exact size is applied once
+    /// the drag settles. Native windowing has no such collection delay, so it
+    /// always takes the exact size.
+    fn take_resize_to_apply(&mut self, now: Instant) -> Option<winit::dpi::PhysicalSize<u32>> {
+        let requested = self.pending_resize?;
+        let settled = self.last_resize_event.is_none_or(|last| now.duration_since(last) >= RESIZE_SETTLE_DELAY);
+        let current = self.graphics.as_ref().map(Graphics::surface_size)?;
+        if settled || !cfg!(target_arch = "wasm32") {
+            self.pending_resize = None;
+            return Some(requested);
+        }
+        // Left pending deliberately: the exact size still has to land when the
+        // drag stops, and `about_to_wait` schedules the wake-up for it.
+        Some(winit::dpi::PhysicalSize::new(
+            drag_surface_extent(current.width, requested.width),
+            drag_surface_extent(current.height, requested.height),
+        ))
+    }
+
     /// How long to hold off the next frame.
     ///
     /// While resizing, the resize cap deliberately renders below the display's
     /// rate: attachments are rebuilt every frame and the interaction stays
-    /// responsive for costing fewer of them. Otherwise the cap only applies
+    /// responsive for costing fewer of them. In the browser each applied
+    /// resize also reconfigures the surface, and the swapchain images that
+    /// replaces are released on the browser's schedule rather than ours, so a
+    /// fast drag there is capped harder still - the alternative is exhausting
+    /// GPU memory and losing the device mid-drag. Otherwise the cap only applies
     /// with vsync off - with it on the display already paces presentation, and
     /// a cap the refresh rate does not divide evenly just makes every frame
     /// miss its slot and wait for the next one (144 on a 165 Hz display
@@ -1265,7 +1330,12 @@ impl<'a> App<'a> {
             // Failed acquisition never reaches present, so vsync cannot pace it.
             Duration::from_millis(250)
         } else if self.pending_resize.is_some() {
-            rate_interval(self.editor.resize_frame_rate_cap)
+            let cap = if cfg!(target_arch = "wasm32") {
+                self.editor.resize_frame_rate_cap.min(WEB_RESIZE_FRAME_RATE_CAP)
+            } else {
+                self.editor.resize_frame_rate_cap
+            };
+            rate_interval(cap)
         } else if self.editor.vsync_enabled {
             Duration::ZERO
         } else {
@@ -1970,6 +2040,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.next_ui_repaint_deadline = None;
             self.redraw_requested = true;
         }
+        // A drag that has stopped produces no further events, so the frame
+        // that applies its exact size has to be asked for here.
+        let resize_settle_deadline = self.pending_resize.and(self.last_resize_event).map(|last| last + RESIZE_SETTLE_DELAY);
+        if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
+            self.redraw_requested = true;
+        }
         if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
             self.slice_surface_retry_deadline = None;
             if let Some(graphics) = self.graphics.as_ref() {
@@ -2000,7 +2076,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).min();
+        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
