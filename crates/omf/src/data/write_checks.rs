@@ -106,7 +106,7 @@ impl ArrayWriteCheck {
 }
 
 pub(crate) fn subblock_is_octree_compat(corners: &[u32; 6]) -> bool {
-    (0..3).all(|i| corners[i] % (corners[i + 3] - corners[i]) == 0)
+    (0..3).all(|i| corners[i].is_multiple_of(corners[i + 3] - corners[i]))
 }
 
 pub(crate) fn valid_subblock_sizes(
@@ -192,10 +192,10 @@ impl<T: NumberType> IncreasingBoundary<T> {
     }
 
     pub fn visit(&mut self, value: T) -> T {
-        if let Some(previous) = self.previous {
-            if value < previous {
-                self.ok = false;
-            }
+        if let Some(previous) = self.previous
+            && value < previous
+        {
+            self.ok = false;
         }
         self.previous = Some(value);
         value

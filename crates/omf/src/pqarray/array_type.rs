@@ -232,8 +232,8 @@ mod tests {
 
     #[test]
     fn date_conversion() {
-        let zero = NaiveDate::from_ymd_opt(1970, 01, 01).unwrap();
-        let one = NaiveDate::from_ymd_opt(1970, 01, 02).unwrap();
+        let zero = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let one = NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
         let minus_one = NaiveDate::from_ymd_opt(1969, 12, 31).unwrap();
         assert_eq!(zero.to_parquet(), 0);
         assert_eq!(one.to_parquet(), 1);

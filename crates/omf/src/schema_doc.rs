@@ -48,7 +48,7 @@ fn geometry(base_dir: &Path, schema: &Value) -> std::io::Result<()> {
     // Title.
     write!(f, "# Geometry\n\n")?;
     // Description paragraph.
-    let descr = description(&schema);
+    let descr = description(schema);
     write!(f, "{descr}\n\n")?;
     // List of options.
     write!(f, "## Options\n\n")?;
@@ -59,10 +59,10 @@ fn geometry(base_dir: &Path, schema: &Value) -> std::io::Result<()> {
     for item in variants {
         let child_schema = item;
         let name = variant_name(child_schema);
-        write!(f, "- [{name}]({name}.md)\n")?;
+        writeln!(f, "- [{name}]({name}.md)")?;
         object(base_dir, name, child_schema)?;
     }
-    write!(f, "\n")?;
+    writeln!(f)?;
     // Code.
     schema_object_code(&mut f, schema)
 }
@@ -77,7 +77,7 @@ fn object(base_dir: &Path, name: &str, schema: &Value) -> std::io::Result<()> {
     // Title.
     write!(f, "# {name}\n\n")?;
     // Description paragraph.
-    let descr = description(&schema);
+    let descr = description(schema);
     write!(f, "{descr}\n\n")?;
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         write!(f, "## Fields\n\n")?;
@@ -109,7 +109,7 @@ fn number_colormap_range(base_dir: &Path, name: &str, schema: &Value) -> std::io
     // Title.
     write!(f, "# {name}\n\n")?;
     // Description paragraph.
-    let descr = description(&schema);
+    let descr = description(schema);
     write!(f, "{descr}\n\n")?;
     ty_defn_list_item(
         &mut f,
@@ -190,12 +190,12 @@ fn simple_enum_values(f: &mut impl Write, values: &Vec<Value>) -> std::io::Resul
     for value in values {
         if let Value::String(s) = value {
             let fixed = s.replace("\n\n", "\n\n    ");
-            write!(f, "- {fixed}\n")?;
+            writeln!(f, "- {fixed}")?;
         } else {
             panic!("enum variant not a string: {value:#?}")
         }
     }
-    write!(f, "\n")
+    writeln!(f)
 }
 
 fn enum_variants(f: &mut impl Write, variants: &[Value]) -> std::io::Result<()> {

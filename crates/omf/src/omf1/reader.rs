@@ -32,10 +32,10 @@ impl<R: ReadAt> Omf1Reader<R> {
         let mut file = SubFile::new(Arc::new(data), 0, size)?;
         let (project, json_start, version) = read_header(&mut file)?;
         let stream_len = file.seek(SeekFrom::End(0))?;
-        if let Some(lim) = limit {
-            if stream_len.saturating_sub(json_start) > lim {
-                return Err(Error::LimitExceeded(Limit::JsonBytes));
-            }
+        if let Some(lim) = limit
+            && stream_len.saturating_sub(json_start) > lim
+        {
+            return Err(Error::LimitExceeded(Limit::JsonBytes));
         }
         file.seek(SeekFrom::Start(json_start))?;
         let models: HashMap<String, Model> =
@@ -79,9 +79,9 @@ impl<R: ReadAt> Omf1Reader<R> {
         &self,
         array: &Array,
     ) -> Result<impl Iterator<Item = Result<u8, std::io::Error>>, Error> {
-        Ok(ZlibDecoder::new(BufReader::new(
+        Ok(BufReader::new(ZlibDecoder::new(BufReader::new(
             self.file.sub_file(array.start, array.length)?,
-        ))
+        )))
         .bytes())
     }
 }

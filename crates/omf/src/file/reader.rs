@@ -107,10 +107,10 @@ impl<R: ReadAt> Reader<R> {
         let size = data.size()?;
         let archive = Archive::new(SubFile::new(Arc::new(data), 0, size)?)?;
         let (version, pre_release) = archive.version();
-        if let Some(pre) = pre_release {
-            if Some(pre) != FORMAT_VERSION_PRERELEASE {
-                return Err(Error::PreReleaseVersion(version[0], version[1], pre.into()));
-            }
+        if let Some(pre) = pre_release
+            && Some(pre) != FORMAT_VERSION_PRERELEASE
+        {
+            return Err(Error::PreReleaseVersion(version[0], version[1], pre.into()));
         }
         if version > [FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR] {
             return Err(Error::NewerVersion(version[0], version[1]));

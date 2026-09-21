@@ -2167,7 +2167,6 @@ impl<'a> App<'a> {
             } else {
                 self.close_project(runtime_id);
             }
-            return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
