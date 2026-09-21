@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install repository toolchain
+        run: rustup show
+      - run: cargo fmt --all --check
+
+  check:
+    name: Check and Clippy (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            cargo-targets: --all-targets
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo-targets: --all-targets
+          - os: ubuntu-24.04
+            target: x86_64-pc-windows-gnu
+            cargo-targets: --all-targets
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            cargo-targets: --all-targets
+          - os: ubuntu-24.04
+            target: wasm32-unknown-unknown
+            # Browser builds use panic=abort and do not support the native test harness.
+            cargo-targets: --lib --bins
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang mold libgtk-3-dev libxkbcommon-dev
+      - name: Install Windows GNU cross tools
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Install repository toolchain
+        run: rustup show
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+      - name: Check
+        run: cargo check --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }}
+      - name: Clippy
+        run: cargo clippy --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} -- -D warnings

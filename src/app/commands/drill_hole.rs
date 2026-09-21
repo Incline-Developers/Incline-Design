@@ -32,7 +32,7 @@ fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterat
             if files.len() != bytes.len() {
                 anyhow::bail!("Stored CSV manifest contains {} mappings but {} files", files.len(), bytes.len());
             }
-            csv_drill_hole::parse_bundle(files.iter().zip(bytes).map(|(mapping, bytes)| (mapping, bytes))).map_err(anyhow::Error::new)
+            csv_drill_hole::parse_bundle(files.iter().zip(bytes)).map_err(anyhow::Error::new)
         }
         DrillHoleSource::Omf { .. } => anyhow::bail!("OMF drillhole data is loaded through the project importer"),
     }

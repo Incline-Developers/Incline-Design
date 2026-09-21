@@ -312,7 +312,7 @@ pub(crate) fn dump_parquet_schemas() {
             .open(path)
             .unwrap();
         let s = schemas
-            .into_iter()
+            .iter()
             .map(schema_string)
             .collect::<Vec<_>>()
             .join("\n\n");

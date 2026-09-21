@@ -192,8 +192,6 @@ pub(crate) use {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn parquet_schema_match() {
         let matcher = schema_match! {

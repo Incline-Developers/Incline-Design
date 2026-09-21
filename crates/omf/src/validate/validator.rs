@@ -162,13 +162,13 @@ impl<'n> Validator<'n> {
         for reason in array.run_write_checks() {
             self.push(reason, Some(field));
         }
-        if let Some(filenames) = self.filenames.as_ref() {
-            if !filenames.contains(array.filename()) {
-                self.push(
-                    Reason::ZipMemberMissing(array.filename().to_owned()),
-                    Some(field),
-                );
-            }
+        if let Some(filenames) = self.filenames.as_ref()
+            && !filenames.contains(array.filename())
+        {
+            self.push(
+                Reason::ZipMemberMissing(array.filename().to_owned()),
+                Some(field),
+            );
         }
         self
     }
@@ -448,7 +448,7 @@ mod tests {
                 "a",
                 Location::Vertices,
                 AttributeData::Number {
-                    values: Array::new("1.parquet".to_owned(), 100).into(),
+                    values: Array::new("1.parquet".to_owned(), 100),
                     colormap: None,
                 },
             ),
@@ -456,7 +456,7 @@ mod tests {
                 "b",
                 Location::Primitives, // location error
                 AttributeData::Number {
-                    values: Array::new("2.parquet".to_owned(), 100).into(),
+                    values: Array::new("2.parquet".to_owned(), 100),
                     colormap: None,
                 },
             ),
@@ -464,7 +464,7 @@ mod tests {
                 "c",
                 Location::Vertices,
                 AttributeData::Number {
-                    values: Array::new("3.parquet".to_owned(), 101).into(), // length error
+                    values: Array::new("3.parquet".to_owned(), 101), // length error
                     colormap: None,
                 },
             ),
@@ -570,7 +570,7 @@ mod tests {
         ];
         let mut unexpected = Vec::new();
         for s in results {
-            if let Some(index) = expected.iter().position(|e| *e == &s) {
+            if let Some(index) = expected.iter().position(|e| *e == s) {
                 expected.remove(index);
             } else {
                 unexpected.push(s.to_owned());
