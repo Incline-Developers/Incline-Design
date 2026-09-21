@@ -469,7 +469,7 @@ mod tests {
                 metadata: Default::default(),
                 location: Location::Vertices,
                 data: AttributeData::Boolean {
-                    values: Array::new("1.parquet".to_owned(), 100).into(),
+                    values: Array::new("1.parquet".to_owned(), 100),
                 },
             },
             Attribute {
@@ -479,7 +479,7 @@ mod tests {
                 metadata: Default::default(),
                 location: Location::Primitives,
                 data: AttributeData::Number {
-                    values: Array::new("2.parquet".to_owned(), 100).into(),
+                    values: Array::new("2.parquet".to_owned(), 100),
                     colormap: Some(NumberColormap::Continuous {
                         range: NumberRange::Float {
                             min: 0.0,

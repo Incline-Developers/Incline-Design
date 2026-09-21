@@ -36,15 +36,14 @@ impl<T: FloatType, R: ReadAt> Iterator for GenericScalars<T, R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.inner.next()?;
-        if self.is_size {
-            if let Ok(value) = item {
-                if value <= T::default() {
-                    return Some(Err(InvalidData::SizeZeroOrLess {
-                        value: value.into(),
-                    }
-                    .into()));
-                }
+        if self.is_size
+            && let Ok(value) = item
+            && value <= T::default()
+        {
+            return Some(Err(InvalidData::SizeZeroOrLess {
+                value: value.into(),
             }
+            .into()));
         }
         Some(item)
     }
@@ -156,10 +155,10 @@ impl<T: NumberType, R: ReadAt> Iterator for BoundaryValues<T, R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.inner.next()?;
-        if let (Ok(v), Some(p)) = (&item, &self.previous) {
-            if v < p {
-                return Some(Err(InvalidData::BoundaryDecreases.into()));
-            }
+        if let (Ok(v), Some(p)) = (&item, &self.previous)
+            && v < p
+        {
+            return Some(Err(InvalidData::BoundaryDecreases.into()));
         }
         Some(item)
     }

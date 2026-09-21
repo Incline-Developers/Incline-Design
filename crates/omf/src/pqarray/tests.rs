@@ -298,7 +298,7 @@ fn parquet_nullable_array_string() {
 #[ignore = "for performance testing"]
 #[test]
 fn parquet_array_large() {
-    let values: Vec<_> = (0..10_000_000).map(|i| f64::from(i)).collect();
+    let values: Vec<_> = (0..10_000_000).map(f64::from).collect();
 
     let mut writer = PqArrayWriter::new(Default::default());
     writer.add("value", values).unwrap();
@@ -314,7 +314,7 @@ fn parquet_array_large() {
     let _read_column = read_column::<f64>(&reader, "value");
     println!("read in {:?}", start.elapsed());
 
-    assert!(false);
+    panic!("intentional failure to display performance measurements");
 }
 
 #[test]
