@@ -6,7 +6,7 @@ Built for mine engineers, geologists, surveyors, researchers, and scientists, In
 
 Cross-platform, lightweight, and built for mining professionals. Incline Design is free for everyone.
 
-![Screenshot of the app](./docs/poster.png)
+![Incline Design Poster](./docs/poster.png)
 
 ## Getting Started
 
