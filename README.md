@@ -1,6 +1,8 @@
 # Incline Design
 
-[Incline Design](https://inclinedesign.net/) is a free open-source mine design application that makes mine design accessible for those who do not wish to be bound by expensive and restrictive licences.
+[Incline Design](https://inclinedesign.net/) is a free open-source application for mine design, planning, geological modeling, and geospatial data.
+
+Built for mine engineers, geologists, surveyors, researchers, and scientists, Incline provides capable mining software without expensive or restrictive licensing. Incline is developed openly by the community under the MIT License and provides a framework in which new mining technologies, workflows, and algorithms can be developed, and trialled.
 
 Cross-platform, lightweight, and built for mining professionals. Incline Design is free for everyone.
 
@@ -10,49 +12,43 @@ Cross-platform, lightweight, and built for mining professionals. Incline Design 
 
 Check out the [releases page](https://inclinedesign.net/downloads/) and grab the latest version of Incline Design!
 
+Incline is available for Windows, Linux, macOS, and WebAssembly.
+
 ## Features
 
-### Designs
+### Mine Design
 
-Points, lines, polylines, circles and text, organised on layers. Offset, chamfer, bezier, relimit, fuse, explode, split and drape them. Generate pit and stockpile shells. Snap to points, lines and surfaces, and measure distance, strike and dip. Support for OMF and DXF.
+Create and edit mine designs using points, lines, polylines, circles, text, and triangulations. Incline features a suite of design tools such as pit and stockpile shell generation, offsets, chamfers, Bézier curves, and surface draping, alongside tools for clipping triangulations, generating contours, and merging pit and stockpile shells into terrain.
 
-### Triangulations
+### Geological Modeling
 
-Import, create, view, and edit surfaces and solids. Build them from designs or point clouds. Clip, trim, cut and merge them against polylines, RLs, topographies and shells. Contour them.
+Coming Soon!
 
-### Block models
+### Mine Planning
 
-Create them from drillholes by ordinary kriging. View, colour, slice and switch variables. Generate grade shells. Reads and writes CSV.
+Coming Soon!
 
-### Point clouds
+### Geospatial Data & Survey
 
-Load LAS/LAZ surveys, view them, and build terrain surfaces from them.
-
-### Drillholes
-
-Import from CSV or OMF and colour by any field. Generate blast patterns, move and rotate collars, and tie up rounds with delays and initiation points.
-
-### Rasters
-
-Load GeoTIFFs and drape them over topography as orthophotos.
+Coming Soon!
 
 ### Localisation
 
-We support the following languages: English, Español, Português, Français, 简体中文, Bahasa Indonesia, Русский, العربية, فارسی, हिन्दी, Deutsch, Italiano, Polski, Türkçe, Tiếng Việt, Монгол, Kiswahili, 日本語, 한국어 and Українська.
-
-### Platforms
-
-Incline supports Windows, macOS, Linux and WebAssembly.
+Incline supports: English, Español, Português, Français, 简体中文, Bahasa Indonesia, Русский, العربية, فارسی, हिन्दी, Deutsch, Italiano, Polski, Türkçe, Tiếng Việt, Монгол, Kiswahili, 日本語, 한국어 and Українська.
 
 ## Example data
 
-The [`examples`](examples/) directory contains an import-ready project with a coordinated open-pit design, continuous detailed topography, point cloud, drillholes, and orthophoto in a local mine grid.
+The [`examples`](examples/) directory contains a small OMF 2 project with a pit-shell design, mine surface triangulation, point cloud, drillholes, and an orthophoto raster. Create a project, then use **File → Import** to load [`pit_design.omf`](examples/pit_design.omf) and explore the datasets together.
 
 ## License
 
-Incline Design is licensed under the MIT License. See [LICENSE](LICENSE.md) for the full terms.
+Incline Design is licensed under the [MIT License](LICENSE.md).
 
 ## Maintainers
 
-- **Leo Timmins** github: *leotimmins1974* email: `leo@inclinedesign.net`
-- **Lucas Timmins** github: *trimental* email: `lucas@inclinedesign.net`
+- **Leo Timmins**, github: *leotimmins1974*, email: `leo@inclinedesign.net`.
+- **Lucas Timmins**, github: *trimental*, email: `lucas@inclinedesign.net`.
+
+## Committers
+
+- **Norman Heckscher**, github: *normanheckscher*.

@@ -1532,8 +1532,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Scegli p
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Fai clic su una polilinea chiusa da usare come forma della volata
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc annulla
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Fai clic su una bocca foro per aggiungere o modificare un punto di innesco
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Copyright (c) 2026 Leo Timmins, Lucas Timmins e i contributori di Incline Design. Con la presente si concede, gratuitamente, a chiunque ottenga una copia di questo software, il permesso di utilizzarlo senza restrizioni, alle condizioni della Licenza MIT.
+
     Incline Design è fornito "COSÌ COM'È", SENZA GARANZIA DI ALCUN TIPO, ESPRESSA O IMPLICITA, incluse a titolo esemplificativo le garanzie di COMMERCIABILITÀ, IDONEITÀ A UNO SCOPO PARTICOLARE e NON VIOLAZIONE.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% connettore/i
 literal-count-hole-s-d9bc7e624fadff18 = %count% foro/i

@@ -1524,8 +1524,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Chọn b
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Nhấp vào một đường đa tuyến khép kín để dùng làm hình dạng bãi nổ
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc để hủy
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Nhấp vào một miệng lỗ để thêm hoặc sửa điểm kích nổ
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Bản quyền (c) 2026 Leo Timmins, Lucas Timmins và những người đóng góp cho Incline Design. Theo đây, quyền được cấp miễn phí cho bất kỳ ai có được bản sao của phần mềm này để sử dụng nó mà không bị hạn chế, tuân theo các điều kiện của Giấy phép MIT.
+
     Incline Design được cung cấp "NGUYÊN TRẠNG", KHÔNG CÓ BẤT KỲ BẢO ĐẢM NÀO, RÕ RÀNG HAY NGỤ Ý, bao gồm nhưng không giới hạn ở các bảo đảm về KHẢ NĂNG THƯƠNG MẠI, SỰ PHÙ HỢP CHO MỘT MỤC ĐÍCH CỤ THỂ và KHÔNG VI PHẠM.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% đầu nối
 literal-count-hole-s-d9bc7e624fadff18 = %count% lỗ khoan

@@ -1526,8 +1526,9 @@ literal-esc-cancels-baa1fbafa2ec28c1 = Esc로 취소
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = 공구를 클릭하여 기폭점을 추가하거나 편집하세요
 literal-drag-a-ring-or-type-an-azimuth-and-dip-2cb078a11f62463c = 링을 드래그하거나 방위각과 경사각을 입력하세요
 literal-each-hole-turns-about-its-own-collar-73a2499ee7279efe = 각 발파공은 자신의 공구를 중심으로 회전합니다
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. 이 소프트웨어의 사본을 취득한 모든 사람은 MIT 라이선스 조건에 따라 제한 없이 이를 다룰 수 있는 권한을 무료로 부여받습니다.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. 이 소프트웨어의 사본을 취득한 모든 사람은 MIT 라이선스 조건에 따라 제한 없이 이를 다룰 수 있는 권한을 무료로 부여받습니다.
+
     Incline Design은 상품성, 특정 목적 적합성, 비침해에 대한 보증을 포함하되 이에 국한되지 않는 어떠한 종류의 명시적 또는 묵시적 보증 없이 "있는 그대로" 제공됩니다.
 literal-count-connector-s-b0f5c43e0c1c25ff = 커넥터 %count%개
 literal-count-hole-s-d9bc7e624fadff18 = 발파공 %count%개

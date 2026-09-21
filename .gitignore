@@ -1,31 +1,19 @@
-# Rust
+# Development
 /target/
-
-# MacOS
-.DS_Store
+tmp/
+/dist/
+.vscode/
 
 # Ai Agents
 .claude/
-.cursor/
 .agents/
 .codex/
 .qwen/
-.aider*
-*.code-workspace
 
 # Profiling
 flamegraph.svg
 perf.data
 perf.data.old
-profile.json.gz
 
-# Web Development
-.wrangler/
-/dist/
-
-# Development
-tmp/
-.vscode/
-
-# datasets
-/examples/
+# MacOS
+.DS_Store
