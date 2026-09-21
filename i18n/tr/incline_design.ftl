@@ -1532,8 +1532,9 @@ literal-esc-cancels-baa1fbafa2ec28c1 = Esc iptal eder
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Bir ateşleme noktası eklemek veya düzenlemek için bir ağza tıklayın
 literal-drag-a-ring-or-type-an-azimuth-and-dip-2cb078a11f62463c = Bir halkayı sürükleyin veya bir azimut ve eğim girin
 literal-each-hole-turns-about-its-own-collar-73a2499ee7279efe = her delik kendi ağzı etrafında döner
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Telif Hakkı (c) 2026 Leo Timmins, Lucas Timmins ve Incline Design katkıda bulunanları. Bu yazılımın bir kopyasını edinen herhangi bir kişiye, MIT Lisansı koşullarına tabi olarak, üzerinde kısıtlama olmaksızın işlem yapma izni işbu belgeyle ücretsiz olarak verilir.
+
     Incline Design, "OLDUĞU GİBİ", TİCARİ ELVERİŞLİLİK, BELİRLİ BİR AMACA UYGUNLUK ve İHLAL ETMEME garantileri dahil ancak bunlarla sınırlı olmamak üzere AÇIK VEYA ZIMNİ HİÇBİR TÜR GARANTİ OLMAKSIZIN sağlanmaktadır.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% bağlantı
 literal-count-hole-s-d9bc7e624fadff18 = %count% delik
