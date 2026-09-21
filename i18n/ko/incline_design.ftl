@@ -85,7 +85,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 삼각망 생성
-tri-create-help = 뷰포트에서 객체를 클릭하여 선택/선택 해제하세요. 드래그하면 상자 선택이 됩니다.
 tri-create-type-label = 삼각망 유형
 tri-create-type-help =
     개방형 표면은 지형 형태의 표면을 생성합니다. 솔리드는 완전히 밀폐된
@@ -95,7 +94,6 @@ tri-create-output-name-help = 생성된 삼각망에 지정할 이름입니다.
 tri-create-output-name-hint = 삼각망 이름
 tri-create-run = 삼각망 생성
 
-tri-selection-none = 아직 선택된 객체가 없습니다.
 tri-selection-selected = { $summary } 선택됨
 
 tri-type-open-surface = 개방형 표면

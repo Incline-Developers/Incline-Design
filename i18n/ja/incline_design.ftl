@@ -88,7 +88,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 三角網を作成
-tri-create-help = ビューポート内のオブジェクトをクリックして選択・選択解除します。ドラッグで矩形選択できます。
 tri-create-type-label = 三角網の種類
 tri-create-type-help =
     開いた曲面は地形状のシートを作成します。ソリッドは完全に閉じた
@@ -98,7 +97,6 @@ tri-create-output-name-help = 生成される三角網に割り当てる名前�
 tri-create-output-name-hint = 三角網の名前
 tri-create-run = 三角網化
 
-tri-selection-none = まだオブジェクトが選択されていません。
 tri-selection-selected = { $summary }を選択中
 
 tri-type-open-surface = 開いた曲面

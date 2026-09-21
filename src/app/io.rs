@@ -45,7 +45,7 @@ pub(crate) const fn default_show_block_model_boundary_highlights() -> bool {
 }
 
 pub(crate) const fn default_downscale_raster_previews() -> bool {
-    true
+    false
 }
 
 pub(crate) const fn default_show_world_axis_gizmo() -> bool {

@@ -10,6 +10,7 @@ pub(crate) mod atomic_file;
 pub(crate) mod block_model;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
+pub(crate) mod folders;
 pub(crate) mod formats;
 pub(crate) mod geometry;
 #[cfg(target_arch = "wasm32")]
@@ -28,6 +29,7 @@ pub(crate) mod triangulation;
 
 use std::{borrow::Cow, collections::HashMap};
 
+pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, SectionKind};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +94,24 @@ pub(crate) struct Layer {
     #[serde(alias = "visible")]
     pub(crate) loaded: bool,
     pub(crate) elevation: f32,
+    /// Folder this layer sits in, or `None` for the section root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) folder: Option<FolderId>,
+    /// Explorer section this layer is shown under.
+    #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
+    pub(crate) section: SectionKind,
+}
+
+impl Layer {
+    /// Fold what the explorer tree draws of this layer into a view key.
+    pub(crate) fn hash_row(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.id.hash(hasher);
+        self.name.hash(hasher);
+        self.loaded.hash(hasher);
+        self.folder.hash(hasher);
+        self.section.hash(hasher);
+    }
 }
 
 /// Fill style for closed polylines.
@@ -748,6 +768,8 @@ impl Document {
             color,
             loaded,
             elevation,
+            folder: None,
+            section: SectionKind::natural_layer(),
         });
         self.touch();
         id
@@ -985,6 +1007,71 @@ impl Document {
         Some(loaded)
     }
 
+    /// Put a layer in `folder`, or back at the root with `None`.
+    pub(crate) fn set_layer_folder(&mut self, id: LayerId, folder: Option<FolderId>) -> bool {
+        let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
+            return false;
+        };
+        if layer.folder != folder {
+            layer.folder = folder;
+            self.touch();
+        }
+        true
+    }
+
+    /// Show a layer under `section`. Moving it clears the folder it was in.
+    pub(crate) fn set_layer_section(&mut self, id: LayerId, section: SectionKind) -> bool {
+        let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
+            return false;
+        };
+        if layer.section != section {
+            layer.section = section;
+            layer.folder = None;
+            self.touch();
+        }
+        true
+    }
+
+    /// Ids of the layers held by `folder`, in layer order.
+    pub(crate) fn layers_in_folder(&self, folder: FolderId) -> Vec<LayerId> {
+        self.layers.iter().filter(|layer| layer.folder == Some(folder)).map(|layer| layer.id).collect()
+    }
+
+    /// Return every layer in `folder` to the root, for a folder being deleted.
+    pub(crate) fn clear_layer_folder(&mut self, folder: FolderId) {
+        for layer in &mut self.layers {
+            if layer.folder == Some(folder) {
+                layer.folder = None;
+            }
+        }
+        self.touch();
+    }
+
+    /// Put every layer somewhere it can actually be drawn, and report whether
+    /// any moved.
+    pub(crate) fn heal_layers(&mut self, known: &FolderRegistry) -> bool {
+        let mut healed = false;
+        for layer in &mut self.layers {
+            let section = layer.section.healed_for(MemberKind::Layer);
+            if layer.section != section {
+                log::warn!(
+                    "layer '{}' is tagged for {}, which does not show layers; showing it under {}",
+                    layer.name,
+                    layer.section.key(),
+                    section.key()
+                );
+                layer.section = section;
+                layer.folder = None;
+                healed = true;
+            }
+            if layer.folder.is_some_and(|folder| !known.contains(layer.section, folder)) {
+                layer.folder = None;
+                healed = true;
+            }
+        }
+        healed
+    }
+
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
         self.layers.iter().find(|layer| layer.name == name).map(|layer| layer.id)
     }
@@ -1118,9 +1205,9 @@ impl Document {
     /// the whole document to JSON, which interactive drags used to repeat on
     /// every pointer event. Ids are masked to their 32-bit local half so the
     /// fingerprint is identical before and after runtime namespacing.
-    pub(crate) fn content_hash(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> u64 {
+    pub(crate) fn content_hash(&self, cache: &mut HashMap<ObjectId, (u64, u64)>, folders: &FolderRegistry) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        let hashes = self.layer_content_hashes(cache);
+        let hashes = self.layer_content_hashes(cache, folders);
         let mut hasher = DefaultHasher::new();
         for layer in &self.layers {
             let id = layer.id.0 & u64::from(u32::MAX);
@@ -1132,7 +1219,12 @@ impl Document {
 
     /// Hash logical layer contents identically whether its payload is resident
     /// or backed by a file. Residency cannot change the saved-content baseline.
-    pub(crate) fn layer_content_hashes(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> HashMap<u64, u64> {
+    /// `folders` is the project's registry: a layer's membership is hashed by
+    /// the folder's *name*, because that is what a file records for it, so a
+    /// rename is unsaved work on everything inside while reopening a project
+    /// with freshly minted ids is not. The section is hashed as well - a file
+    /// records that too.
+    pub(crate) fn layer_content_hashes(&self, cache: &mut HashMap<ObjectId, (u64, u64)>, folders: &FolderRegistry) -> HashMap<u64, u64> {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let payloads = self.payload_hashes(cache);
         self.layers
@@ -1146,6 +1238,8 @@ impl Document {
                 }
                 layer.loaded.hash(&mut hasher);
                 layer.elevation.to_bits().hash(&mut hasher);
+                layer.section.hash(&mut hasher);
+                layer.folder.and_then(|id| folders.name(layer.section, id)).hash(&mut hasher);
                 payloads.get(&layer.id).hash(&mut hasher);
                 (layer.id.0 & u64::from(u32::MAX), hasher.finish())
             })
@@ -1170,6 +1264,16 @@ pub(crate) enum ItemRef {
 }
 
 impl ItemRef {
+    pub(crate) fn kind(self) -> MemberKind {
+        match self {
+            Self::Triangulation(_) => MemberKind::Triangulation,
+            Self::BlockModel(_) => MemberKind::BlockModel,
+            Self::DrillHole(_) => MemberKind::DrillHole,
+            Self::PointCloud(_) => MemberKind::PointCloud,
+            Self::Raster(_) => MemberKind::Raster,
+        }
+    }
+
     pub(crate) fn from_entity(entity: SceneEntityId) -> Option<Self> {
         match entity {
             SceneEntityId::Object(_) => None,
@@ -1421,6 +1525,10 @@ pub(crate) struct StepEffects {
 /// is what keeps one Ctrl-Z timeline over edits that touch both.
 pub(crate) struct EditTarget<'a> {
     pub(crate) document: &'a mut Document,
+    /// Every explorer folder in the project. Borrowed here, beside the
+    /// document and the item collections, so one undo timeline covers the
+    /// folders of all six sections and their members in the same step.
+    pub(crate) folders: &'a mut FolderRegistry,
     pub(crate) content: &'a mut project::ProjectContentState,
     pub(crate) triangulations: &'a mut Vec<triangulation::OpenTriangulation>,
     pub(crate) block_models: &'a mut Vec<block_model::OpenBlockModel>,
@@ -1433,6 +1541,117 @@ pub(crate) struct EditTarget<'a> {
 }
 
 impl EditTarget<'_> {
+    /// Record that the folder lists changed.
+    fn touch_folders(&mut self) {
+        self.content.touch();
+    }
+
+    /// Delete a folder and return its members to the section root, recording
+    /// the effects each half owes. Shared by apply (delete) and revert (undo
+    /// of an add) so the two can never drift.
+    fn remove_folder(&mut self, section: SectionKind, id: FolderId) {
+        if !self.folders.remove(section, id) {
+            return;
+        }
+        // Both halves every time: an id is unique registry-wide, so whatever
+        // a section holds - layers, project items, or both - is exactly what
+        // that id can be found on.
+        if !self.document.layers_in_folder(id).is_empty() {
+            self.document.clear_layer_folder(id);
+            self.effects.document_changed = true;
+        }
+        for item in self.items_in_folder(id) {
+            self.set_item_folder(item, None);
+        }
+        self.touch_folders();
+    }
+
+    /// Project items currently held by `folder`, whichever section shows them.
+    fn items_in_folder(&self, folder: FolderId) -> Vec<ItemRef> {
+        self.all_item_refs().into_iter().filter(|item| self.item_folder(*item) == Some(folder)).collect()
+    }
+
+    /// Every project item the app holds, in collection order.
+    pub(crate) fn all_item_refs(&self) -> Vec<ItemRef> {
+        let triangulations = self.triangulations.iter().map(|entry| ItemRef::Triangulation(entry.id));
+        let rasters = self.rasters.iter().map(|entry| ItemRef::Raster(entry.id));
+        let point_clouds = self.point_clouds.iter().map(|entry| ItemRef::PointCloud(entry.id));
+        let block_models = self.block_models.iter().map(|entry| ItemRef::BlockModel(entry.id));
+        let drill_holes = self.drill_holes.iter().map(|entry| ItemRef::DrillHole(entry.id));
+        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+    }
+
+    fn item_folder(&self, item: ItemRef) -> Option<FolderId> {
+        self.item_state(item).and_then(|state| state.folder)
+    }
+
+    /// Move one project item between folders. Goes through `touch_item`, so a
+    /// move dirties the item exactly as any other edit to it would.
+    fn set_item_folder(&mut self, item: ItemRef, folder: Option<FolderId>) {
+        let Some(state) = self.item_state_mut(item) else {
+            return;
+        };
+        if state.folder == folder {
+            return;
+        }
+        state.folder = folder;
+        self.touch_item(item);
+    }
+
+    /// The folder a layer may actually be put in, which is `None` unless the
+    /// section the layer is shown under still has it.
+    fn placeable_layer_folder(&self, id: LayerId, folder: Option<FolderId>) -> Option<FolderId> {
+        let section = self.document.layer(id)?.section;
+        folder.filter(|folder| self.folders.contains(section, *folder))
+    }
+
+    /// The same guard for a project item. See [`Self::placeable_layer_folder`].
+    fn placeable_item_folder(&self, item: ItemRef, folder: Option<FolderId>) -> Option<FolderId> {
+        let section = self.item_state(item)?.section;
+        folder.filter(|folder| self.folders.contains(section, *folder))
+    }
+
+    fn item_state(&self, item: ItemRef) -> Option<&project::ProjectItemState> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+        }
+    }
+
+    /// Drop memberships no folder can resolve, across every section.
+    pub(crate) fn heal_folders(&mut self) {
+        if self.document.heal_layers(self.folders) {
+            self.effects.document_changed = true;
+        }
+        for item in self.all_item_refs() {
+            let Some(state) = self.item_state(item) else { continue };
+            let (was_section, was_folder) = (state.section, state.folder);
+            // Same two repairs the document's layers get, in the same order:
+            // an unadmitted tag would leave the item under no heading, and a
+            // retag leaves its folder behind because an id belongs to the
+            // section that minted it.
+            let section = was_section.healed_for(item.kind());
+            let folder = was_folder.filter(|folder| section == was_section && self.folders.contains(section, *folder));
+            if (section, folder) == (was_section, was_folder) {
+                continue;
+            }
+            if section != was_section {
+                log::warn!(
+                    "an item is tagged for {}, which does not show items of its kind; showing it under {}",
+                    was_section.key(),
+                    section.key()
+                );
+            }
+            if let Some(state) = self.item_state_mut(item) {
+                state.section = section;
+                state.folder = folder;
+            }
+        }
+    }
+
     fn item_state_mut(&mut self, item: ItemRef) -> Option<&mut project::ProjectItemState> {
         match item {
             ItemRef::Triangulation(id) => self.triangulations.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
@@ -1750,6 +1969,57 @@ pub(crate) enum Command {
         /// Original global draw-order position of every object on the layer.
         objects: Vec<(usize, Object)>,
     },
+    /// Add an explorer folder to one section. Undo removes it, which returns
+    /// anything put in it since to the root. The whole folder is carried, id
+    /// included, so redo restores the one its members remember rather than a
+    /// new folder.
+    AddFolder {
+        section: SectionKind,
+        folder: Folder,
+    },
+    /// Remove an explorer folder, returning what it held to the section root.
+    /// Undo puts the folder back where it was, with those members in it.
+    ///
+    /// Members are recorded in the two shapes a section can hold - design
+    /// layers live in the document, every other kind is a project item - and
+    /// exactly one of the two is ever non-empty, because a folder belongs to
+    /// one section and a section holds one kind.
+    // `ItemRef` is not serializable, the same reason every other item-touching
+    // variant carries this attribute. Folder commands own no layer or item
+    // payload, so `payload_owners` never nominates them for archiving.
+    #[serde(skip)]
+    DeleteFolder {
+        section: SectionKind,
+        folder: Folder,
+        /// Original position in the section's folder list, restored by undo.
+        index: usize,
+        layers: Vec<LayerId>,
+        items: Vec<ItemRef>,
+    },
+    /// Rename an explorer folder. Membership follows the id, so only the name
+    /// moves.
+    RenameFolder {
+        section: SectionKind,
+        id: FolderId,
+        before: String,
+        after: String,
+    },
+    /// Move a design layer into a folder, or back to the root.
+    SetLayerFolder {
+        id: LayerId,
+        before: Option<FolderId>,
+        after: Option<FolderId>,
+    },
+    /// Move a project item into a folder of its own section, or back to the
+    /// root. Separate from [`Self::SetLayerFolder`] because the two halves
+    /// store membership in different places - a layer in the document, an item
+    /// in its [`project::ProjectItemState`] - and dirty differently for it.
+    #[serde(skip)]
+    SetItemFolder {
+        item: ItemRef,
+        before: Option<FolderId>,
+        after: Option<FolderId>,
+    },
     /// Show or hide a design layer.
     SetLayerLoaded {
         id: LayerId,
@@ -1892,6 +2162,14 @@ impl Command {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
                 Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } | Command::SetLayerElevation { .. } => 0,
+                Command::AddFolder { folder, .. } => folder.name.len(),
+                Command::DeleteFolder { folder, layers, items, .. } => folder
+                    .name
+                    .len()
+                    .saturating_add(layers.len().saturating_mul(size_of::<LayerId>()))
+                    .saturating_add(items.len().saturating_mul(size_of::<ItemRef>())),
+                Command::RenameFolder { before, after, .. } => before.len().saturating_add(after.len()),
+                Command::SetLayerFolder { .. } | Command::SetItemFolder { .. } => 0,
                 Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
@@ -1974,6 +2252,26 @@ impl Command {
         }
     }
 
+    /// Whether this command can put a layer or an item back into the project.
+    ///
+    /// That is the only way a membership can outlive the folder it names, so
+    /// it is the only case worth a healing pass. Everything else - a drag, an
+    /// object edit, a colour change - answers `false` and pays nothing, which
+    /// matters because `History::execute` runs on every pointer event of a
+    /// live gesture.
+    fn may_restore_members(&self) -> bool {
+        match self {
+            Self::AddLayerSnapshot { .. }
+            | Self::DeleteLayerSnapshot { .. }
+            | Self::Archived { .. }
+            | Self::AddItem { .. }
+            | Self::DeleteItem { .. }
+            | Self::ReplaceItem { .. } => true,
+            Self::Batch(commands) => commands.iter().any(Self::may_restore_members),
+            _ => false,
+        }
+    }
+
     pub(crate) fn required_items(&self, undo: bool, into: &mut Vec<ItemRef>) {
         match self {
             Self::Archived { items, .. } => into.extend(items.iter().copied()),
@@ -2006,6 +2304,18 @@ impl Command {
                     into.push(*item);
                 }
             }
+            Command::SetItemFolder { item, .. } => {
+                if !into.contains(item) {
+                    into.push(*item);
+                }
+            }
+            Command::DeleteFolder { items, .. } => {
+                for item in items {
+                    if !into.contains(item) {
+                        into.push(*item);
+                    }
+                }
+            }
             Command::MoveCollars { dataset, .. } | Command::RotateCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
@@ -2025,7 +2335,10 @@ impl Command {
             | Command::DeleteLayerSnapshot { .. }
             | Command::SetLayerLoaded { .. }
             | Command::SetLayerElevation { .. }
-            | Command::SetObjectHidden { .. } => {}
+            | Command::SetObjectHidden { .. }
+            | Command::AddFolder { .. }
+            | Command::RenameFolder { .. }
+            | Command::SetLayerFolder { .. } => {}
         }
     }
 
@@ -2101,6 +2414,49 @@ impl Command {
                 target.document.remove_objects_bulk(&ids);
                 target.document.delete_layer(layer.id);
                 target.effects.document_changed = true;
+            }
+            Command::AddFolder { section, folder } => {
+                let index = target.folders.folders(*section).len();
+                if target.folders.insert(*section, index, folder.clone()) {
+                    target.touch_folders();
+                } else {
+                    // The first application is always unique - the caller
+                    // checks synchronously right before constructing the
+                    // command - but this arm also runs redo, which can land
+                    // after something outside the undo history (an OMF merge)
+                    // has taken the name since undo removed the folder. Keep
+                    // the id, uniquify the name, same fallback as
+                    // `DeleteFolder`/`RenameFolder` below.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(folder.name.clone(), existing.iter().map(String::as_str));
+                    if target.folders.insert(*section, index, Folder { id: folder.id, name }) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::DeleteFolder { section, folder, .. } => {
+                target.remove_folder(*section, folder.id);
+            }
+            Command::RenameFolder { section, id, after, .. } => {
+                if target.folders.rename(*section, *id, after.clone()) {
+                    target.touch_folders();
+                } else {
+                    // Same redo-after-external-merge fallback as `AddFolder`.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(after.clone(), existing.iter().map(String::as_str));
+                    if target.folders.rename(*section, *id, name) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::SetLayerFolder { id, after, .. } => {
+                let after = target.placeable_layer_folder(*id, *after);
+                target.document.set_layer_folder(*id, after);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemFolder { item, after, .. } => {
+                let after = target.placeable_item_folder(*item, *after);
+                target.set_item_folder(*item, after);
             }
             Command::SetLayerLoaded { id, after, .. } => {
                 target.document.set_layer_loaded(*id, *after);
@@ -2186,6 +2542,68 @@ impl Command {
                 target.document.insert_layer_at(*layer_index, layer.clone());
                 target.document.restore_objects_bulk(objects.clone());
                 target.effects.document_changed = true;
+            }
+            Command::AddFolder { section, folder } => {
+                target.remove_folder(*section, folder.id);
+            }
+            Command::DeleteFolder {
+                section,
+                folder,
+                index,
+                layers,
+                items,
+            } => {
+                if !target.folders.insert(*section, *index, folder.clone()) {
+                    // The name was taken by something outside the undo history
+                    // since the delete - an OMF merge adds folders directly,
+                    // with no history entry to conflict with. The folder and
+                    // its members still have to come back, so retry once under
+                    // a uniquified name: same id, so `layers`/`items` below
+                    // still resolve to it. A blank name cannot reach here -
+                    // `add` and `rename` both refuse one, so no command was
+                    // ever recorded with one - and `unique_item_name` always
+                    // terminates on a non-blank name, so this cannot loop.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(folder.name.clone(), existing.iter().map(String::as_str));
+                    if !target.folders.insert(*section, *index, Folder { id: folder.id, name }) {
+                        return;
+                    }
+                }
+                for id in layers.iter() {
+                    target.document.set_layer_folder(*id, Some(folder.id));
+                }
+                for item in items.iter() {
+                    target.set_item_folder(*item, Some(folder.id));
+                }
+                target.effects.document_changed |= !layers.is_empty();
+                target.touch_folders();
+            }
+            Command::RenameFolder { section, id, before, .. } => {
+                if target.folders.rename(*section, *id, before.clone()) {
+                    target.touch_folders();
+                } else {
+                    // `before` was taken by something outside the undo history
+                    // since the rename (an OMF merge) - rename back under a
+                    // uniquified form of it rather than leaving the entry
+                    // consumed with the name never reverted. Same reasoning as
+                    // `DeleteFolder` above: a blank `before` cannot reach here,
+                    // and `unique_item_name` always terminates on a non-blank
+                    // one.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(before.clone(), existing.iter().map(String::as_str));
+                    if target.folders.rename(*section, *id, name) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::SetLayerFolder { id, before, .. } => {
+                let before = target.placeable_layer_folder(*id, *before);
+                target.document.set_layer_folder(*id, before);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemFolder { item, before, .. } => {
+                let before = target.placeable_item_folder(*item, *before);
+                target.set_item_folder(*item, before);
             }
             Command::SetLayerLoaded { id, before, .. } => {
                 target.document.set_layer_loaded(*id, *before);
@@ -2368,6 +2786,12 @@ impl History {
         command.touched_items(&mut items);
         let before = EpochSnapshot::capture(target, &items);
         command.apply(target);
+        // A command can put a layer or an item back carrying a folder that has
+        // since been deleted; nothing downstream would notice a membership
+        // pointing at a folder the registry no longer has.
+        if command.may_restore_members() {
+            target.heal_folders();
+        }
         let after = EpochSnapshot::capture(target, &items);
         self.push_entry(command, before, after, continuing);
     }
@@ -2461,6 +2885,9 @@ impl History {
                 // left behind from content something else has since changed.
                 let current = EpochSnapshot::capture(target, &items);
                 entry.command.revert(target);
+                if entry.command.may_restore_members() {
+                    target.heal_folders();
+                }
                 entry.before.restore(target, &current, &entry.after);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
                 entry.estimated_bytes = entry.command.estimated_bytes();
@@ -2490,6 +2917,9 @@ impl History {
                 entry.command.touched_items(&mut items);
                 let current = EpochSnapshot::capture(target, &items);
                 entry.command.apply(target);
+                if entry.command.may_restore_members() {
+                    target.heal_folders();
+                }
                 entry.after.restore(target, &current, &entry.before);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
                 entry.estimated_bytes = entry.command.estimated_bytes();

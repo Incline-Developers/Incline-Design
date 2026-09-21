@@ -10,11 +10,12 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
+        FolderId, FolderRegistry, LayerId, MemberKind, SectionKind,
         formats::omf::{self, ImportBundle, ProjectSnapshot},
         project,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
-    ui::state::OmfExportSelection,
+    ui::state::{OmfExportSection, OmfExportSelection},
     userspace_log, userspace_warn,
 };
 
@@ -57,13 +58,83 @@ pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole
     }
 }
 
+/// How much of the project's folder registry a snapshot carries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FolderScope {
+    /// Every folder, including ones nothing is in. The project file *is* the
+    /// project: an empty folder is unsaved work and has to survive a save.
+    Whole,
+    /// Only the folders this snapshot's own layers and items sit in. An
+    /// export is a copy, not the project - carrying the whole registry
+    /// would write folder lists for sections with nothing in them.
+    Referenced,
+}
+
+/// Every folder id a snapshot's own content sits in, across all six sections.
+fn referenced_folders(snapshot: &ProjectSnapshot) -> std::collections::HashSet<FolderId> {
+    let mut referenced = std::collections::HashSet::new();
+    if let Some(design) = &snapshot.designs {
+        referenced.extend(design.document.layers().iter().filter_map(|layer| layer.folder));
+    }
+    referenced.extend(snapshot.triangulations.iter().filter_map(|item| item.state.folder));
+    referenced.extend(snapshot.rasters.iter().filter_map(|item| item.state.folder));
+    referenced.extend(snapshot.point_clouds.iter().filter_map(|item| item.state.folder));
+    referenced.extend(snapshot.block_models.iter().filter_map(|item| item.state.folder));
+    referenced.extend(snapshot.drill_holes.iter().filter_map(|item| item.state.folder));
+    referenced
+}
+
+/// `folders` less everything `keep` does not name.
+/// Ids and order are preserved, so the membership already recorded on the
+/// snapshot's layers and items still resolves against the result.
+fn retain_folders(folders: &FolderRegistry, keep: &std::collections::HashSet<FolderId>) -> FolderRegistry {
+    let mut kept = FolderRegistry::default();
+    for section in SectionKind::ALL {
+        for folder in folders.folders(section) {
+            if keep.contains(&folder.id) {
+                let index = kept.folders(section).len();
+                kept.insert(section, index, folder.clone());
+            }
+        }
+    }
+    kept
+}
+
+/// The design half of an export snapshot: the whole project when every layer
+/// is ticked, otherwise a copy with the unticked layers dropped - and nothing
+/// at all when that leaves no layers to write.
+fn selected_designs(project: &project::ProjectFile, selection: &OmfExportSection<LayerId>) -> Option<project::ProjectFile> {
+    let mut design = project.clone();
+    if selection.all {
+        return Some(design);
+    }
+    // The encoder walks the document layer by layer and only ever looks at
+    // objects whose layer it is writing, so dropping an unticked layer leaves
+    // its objects unreachable rather than orphaned in the file.
+    let dropped = design
+        .document
+        .layers()
+        .iter()
+        .map(|layer| layer.id)
+        .filter(|id| !selection.includes(*id))
+        .collect::<Vec<_>>();
+    for layer in dropped {
+        design.document.delete_layer(layer);
+    }
+    (!design.document.layers().is_empty()).then_some(design)
+}
+
 impl<'a> App<'a> {
     /// Everything open, for the saves that write the project file itself.
     pub(super) fn omf_save_snapshot(&mut self) -> Result<ProjectSnapshot> {
-        self.omf_export_snapshot(&OmfExportSelection::default())
+        self.project_snapshot(&OmfExportSelection::default(), FolderScope::Whole)
     }
 
     pub(super) fn omf_export_snapshot(&mut self, selection: &OmfExportSelection) -> Result<ProjectSnapshot> {
+        self.project_snapshot(selection, FolderScope::Referenced)
+    }
+
+    fn project_snapshot(&mut self, selection: &OmfExportSelection, scope: FolderScope) -> Result<ProjectSnapshot> {
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -76,27 +147,10 @@ impl<'a> App<'a> {
             .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| tr!(literal = "Incline Design project"));
-        // The encoder walks the document layer by layer and only ever looks at
-        // objects whose layer it is writing, so dropping an unticked layer
-        // leaves its objects unreachable rather than orphaned in the file.
-        let designs = self.workspace.active_project().map(|project| project.project.clone()).and_then(|mut design| {
-            if selection.designs.all {
-                return Some(design);
-            }
-            let dropped = design
-                .document
-                .layers()
-                .iter()
-                .map(|layer| layer.id)
-                .filter(|id| !selection.designs.includes(*id))
-                .collect::<Vec<_>>();
-            for layer in dropped {
-                design.document.delete_layer(layer);
-            }
-            (!design.document.layers().is_empty()).then_some(design)
-        });
-        let snapshot = ProjectSnapshot {
+        let designs = self.workspace.active_project().and_then(|project| selected_designs(&project.project, &selection.designs));
+        let mut snapshot = ProjectSnapshot {
             name,
+            folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
             designs,
             triangulations: self.triangulations.iter().filter(|item| selection.triangulations.includes(item.id)).cloned().collect(),
             block_models: self.block_models.iter().filter(|item| selection.block_models.includes(item.id)).cloned().collect(),
@@ -104,7 +158,14 @@ impl<'a> App<'a> {
             point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
             rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
         };
-        if snapshot.is_empty() {
+        if scope == FolderScope::Referenced {
+            let referenced = referenced_folders(&snapshot);
+            snapshot.folders = retain_folders(&snapshot.folders, &referenced);
+        }
+        // By item count, not `is_empty`: a save's snapshot always carries the
+        // project's folder list, so an export with nothing ticked would
+        // otherwise slip past this guard.
+        if snapshot.item_count() == 0 {
             anyhow::bail!(tr!(literal = "There is no open Incline Design data to export"));
         }
         Ok(snapshot)
@@ -138,6 +199,7 @@ impl<'a> App<'a> {
             point_clouds,
             rasters,
             warnings: _,
+            folders,
         } = bundle;
 
         let mut design = project::new_empty(path.clone());
@@ -146,8 +208,11 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
+        // Merged once, for all six sections, before anything is installed:
+        // every item below looks its own membership up in this same map.
+        let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
         for imported in designs {
-            project::merge_document_preserve_ids(&mut design.document, &imported.document);
+            project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
         }
         let opened = match path.clone() {
             Some(path) => project::open_project(Some(path), design),
@@ -182,11 +247,18 @@ impl<'a> App<'a> {
             let preferred_id = imported.preferred_id;
             let source_name = imported.source_name;
             let source_format = imported.source_format;
+            let folder = project::merged_folder(&folder_map, imported.folder);
             self.add_loaded_raster(imported.loaded);
             if let Some(open) = self.raster_textures.last_mut() {
                 open.id = crate::model::raster::RasterTextureId(target_id);
                 open.state.set_provenance(source_name, source_format);
-                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
             }
             if let Some(preferred_id) = preferred_id {
                 raster_id_map.insert(preferred_id, crate::model::raster::RasterTextureId(target_id));
@@ -198,6 +270,7 @@ impl<'a> App<'a> {
             let source_name = imported.source_name;
             let source_format = imported.source_format;
             let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
+            let folder = project::merged_folder(&folder_map, imported.folder);
             let LoadedTriangulation {
                 mut name,
                 path: _,
@@ -214,9 +287,11 @@ impl<'a> App<'a> {
             ));
             self.triangulations.push(OpenTriangulation {
                 id,
-                state: crate::model::project::ProjectItemState::dirty_with_format(source_name, source_format)
+                state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::Triangulation, source_name, source_format)
                     .with_loaded(imported.is_loaded)
-                    .with_deferred(imported.deferred),
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder),
                 name,
                 mesh,
                 spatial,
@@ -235,11 +310,18 @@ impl<'a> App<'a> {
         }
         for imported in block_models {
             let target_id = allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0));
+            let folder = project::merged_folder(&folder_map, imported.folder);
             self.add_loaded_block_model(imported.loaded);
             if let Some(open) = self.block_models.last_mut() {
                 open.id = crate::model::block_model::BlockModelId(target_id);
                 open.state.set_provenance(imported.source_name, imported.source_format);
-                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
                 open.color = imported.color;
                 open.slice = imported.slice;
                 if !open.state.loaded {
@@ -251,25 +333,39 @@ impl<'a> App<'a> {
         }
         for imported in drill_holes {
             let target_id = allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0));
+            let folder = project::merged_folder(&folder_map, imported.folder);
             self.add_loaded_drill_holes(imported.loaded);
             if let Some(open) = self.drill_holes.last_mut() {
                 open.id = crate::model::drill_hole::DrillHoleId(target_id);
                 open.state.set_provenance(imported.source_name, imported.source_format);
-                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
                 open.color = imported.color;
                 reconcile_restored_drill_color(open);
             }
         }
         for imported in point_clouds {
             let target_id = allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0));
+            let folder = project::merged_folder(&folder_map, imported.folder);
             self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);
             if let Some(open) = self.point_clouds.last_mut() {
                 open.id = crate::model::point_cloud::PointCloudId(target_id);
-                open.state = open.state.clone().with_deferred(imported.deferred);
+                open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
                 open.state.set_provenance(imported.source_name, imported.source_format);
             }
         }
 
+        // Every membership above came from `folder_map`, so it already
+        // resolves in the project's (just-installed) folder registry; no
+        // separate heal pass is needed on top of the one `open_project`
+        // already ran on the document above. Marking saved last, after every
+        // item and its folder are in place, is what keeps a freshly opened
+        // project with folders from reading as unsaved work.
         self.mark_all_project_content_saved();
 
         userspace_log!(
@@ -389,6 +485,7 @@ impl<'a> App<'a> {
                 point_clouds,
                 rasters,
                 warnings: _,
+                folders,
             } = bundle;
 
             if let Some(project) = self.workspace.active_project_mut() {
@@ -438,9 +535,22 @@ impl<'a> App<'a> {
                 );
             }
 
+            // Merged once, for all six sections, before any design, layer or
+            // item below looks its own membership up in the same map. Unlike
+            // opening a whole project, the target registry already has
+            // content of its own, so an incoming name is never assumed to be
+            // the same folder - each one lands as a new, distinctly-named
+            // folder, the same treatment every merge gives a layer or item
+            // name collision.
+            let folder_map = self
+                .workspace
+                .active_project_mut()
+                .map(|project| project::merge_folders(&mut project.project.folders, &folders, project::FolderMergeMode::Distinct))
+                .unwrap_or_default();
+
             for design in designs {
                 if let Some(project) = self.workspace.active_project_mut() {
-                    project::merge_document_unique_layers(&mut project.project.document, &design.document);
+                    project::merge_document_unique_layers(&mut project.project.document, &design.document, &folder_map);
                 }
             }
 
@@ -451,11 +561,13 @@ impl<'a> App<'a> {
                 let preferred_id = raster.preferred_id;
                 let visible = raster.is_loaded;
                 let deferred = raster.deferred;
+                let section = raster.section;
+                let folder = project::merged_folder(&folder_map, raster.folder);
                 raster.loaded.name = project::unique_item_name(raster.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
                 self.add_loaded_raster(raster.loaded);
                 if let Some(open) = self.raster_textures.last_mut() {
                     open.state.set_provenance(raster.source_name, raster.source_format);
-                    open.state = open.state.clone().with_loaded(visible).with_deferred(deferred);
+                    open.state = open.state.clone().with_loaded(visible).with_deferred(deferred).with_section(section).with_folder(folder);
                     if let Some(preferred_id) = preferred_id {
                         raster_id_map.insert(preferred_id, open.id);
                     }
@@ -464,6 +576,7 @@ impl<'a> App<'a> {
 
             for imported in triangulations {
                 let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
+                let folder = project::merged_folder(&folder_map, imported.folder);
                 let LoadedTriangulation {
                     mut name,
                     path: _,
@@ -477,9 +590,11 @@ impl<'a> App<'a> {
                 self.next_triangulation_id += 1;
                 self.triangulations.push(OpenTriangulation {
                     id,
-                    state: crate::model::project::ProjectItemState::dirty_with_format(imported.source_name, imported.source_format)
+                    state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::Triangulation, imported.source_name, imported.source_format)
                         .with_loaded(imported.is_loaded)
-                        .with_deferred(imported.deferred),
+                        .with_deferred(imported.deferred)
+                        .with_section(imported.section)
+                        .with_folder(folder),
                     name,
                     mesh,
                     spatial,
@@ -499,11 +614,18 @@ impl<'a> App<'a> {
 
             for imported in block_models {
                 let mut loaded = imported.loaded;
+                let folder = project::merged_folder(&folder_map, imported.folder);
                 loaded.name = project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
                 self.add_loaded_block_model(loaded);
                 if let Some(open) = self.block_models.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
+                    open.state = open
+                        .state
+                        .clone()
+                        .with_loaded(imported.is_loaded)
+                        .with_deferred(imported.deferred)
+                        .with_section(imported.section)
+                        .with_folder(folder);
                     open.color = imported.color;
                     open.slice = imported.slice;
                     if !open.state.loaded {
@@ -515,21 +637,29 @@ impl<'a> App<'a> {
             }
             for imported in drill_holes {
                 let mut loaded = imported.loaded;
+                let folder = project::merged_folder(&folder_map, imported.folder);
                 loaded.name = project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
                 self.add_loaded_drill_holes(loaded);
                 if let Some(open) = self.drill_holes.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
+                    open.state = open
+                        .state
+                        .clone()
+                        .with_loaded(imported.is_loaded)
+                        .with_deferred(imported.deferred)
+                        .with_section(imported.section)
+                        .with_folder(folder);
                     open.color = imported.color;
                     reconcile_restored_drill_color(open);
                 }
             }
             for imported in point_clouds {
                 let mut loaded = imported.loaded;
+                let folder = project::merged_folder(&folder_map, imported.folder);
                 loaded.name = project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
                 self.add_loaded_point_cloud(loaded, imported.is_loaded, imported.color, imported.point_size);
                 if let Some(open) = self.point_clouds.last_mut() {
-                    open.state = open.state.clone().with_deferred(imported.deferred);
+                    open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
                 }
                 if let Some(open) = self.point_clouds.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
@@ -568,7 +698,7 @@ impl<'a> App<'a> {
                     if cancel.is_cancelled() {
                         anyhow::bail!("Cancelled");
                     }
-                    omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))
+                    omf::to_bytes(snapshot, omf::Compression::Archive, &progress.phase(0.0, 1.0))
                 },
                 move |_app, result| match result {
                     Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),

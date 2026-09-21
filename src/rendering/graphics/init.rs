@@ -6,8 +6,24 @@ use crate::{i18n::tr_format, userspace_log};
 const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32];
 const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32, 4 => Float32];
 
-fn make_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
+pub(super) fn make_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+    })
+}
+
+/// As [`make_shader`], plus the cinematic prelude `cinematic_common.wgsl`: the
+/// post chain's parameter block, the fullscreen vertex stage and the screen-to-
+/// world helpers every one of its passes needs.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn make_cinematic_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+    let source = format!(
+        "{}{}{body}",
+        include_str!("../shaders/camera_common.wgsl"),
+        include_str!("../shaders/cinematic_common.wgsl")
+    );
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
@@ -1565,6 +1581,7 @@ impl<'a> Graphics<'a> {
             text_index_gpu,
             camera_buffer,
             camera_bind_group,
+            camera_bind_group_layout,
             grid_buffer,
             grid_bind_group,
             section_grid_buffer,
@@ -1658,6 +1675,10 @@ impl<'a> Graphics<'a> {
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,
             detached_preview_scene_key: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cinematic: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cinematic_targets: None,
         })
     }
 
@@ -1706,6 +1727,12 @@ impl<'a> Graphics<'a> {
                 retired.textures.push(target._texture);
                 retired.textures.push(target._beam_texture);
                 retired.buffers.push(target.params_buffer);
+            }
+            // The cinematic chain's attachments go the same way. Its pipelines
+            // and shadow map are size-independent and stay put.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(targets) = self.cinematic_targets.take() {
+                retired.textures.extend(targets.into_textures());
             }
             self.retired_attachments.push(retired);
             // Document geometry is stored in world space and screen-space stroke

@@ -9,6 +9,14 @@ impl<'a> App<'a> {
     pub(crate) fn begin_select_or_drag(&mut self) {
         self.pending_selection_click = None;
 
+        // A tool open on a snapshot of the selection freezes it - see
+        // `EditorState::selection_locked_by_tool`. The field pickers below run
+        // first: the two-surface tools still name their own inputs, and their
+        // pick is not a selection change.
+        if self.editor.selection_locked_by_tool() {
+            return;
+        }
+
         if let Some(target) = self.editor.triangulation_pick_target {
             let picked = self
                 .graphics
@@ -54,46 +62,6 @@ impl<'a> App<'a> {
         // Drape owns a two-stage selection session. Defer both click and box
         // picks until release so each stage can strictly filter entity types.
         if self.editor.active_tool == ActiveTool::DrapeToTopology {
-            self.editor.selection_box_start_px = self.editor.cursor_screen_px;
-            self.editor.selection_box_current_px = self.editor.cursor_screen_px;
-            return;
-        }
-
-        // Polyline-pick mode for cut-by-polyline: intercept the click and look for a closed polyline.
-        if self.editor.tri_cut_poly_awaiting_pick {
-            let frozen = &self.editor.frozen_handles;
-            if let Some((SceneEntityId::Object(oid), _)) = self
-                .graphics
-                .as_ref()
-                .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
-            {
-                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(Object::encloses_area);
-                if is_closed_poly {
-                    let name = self
-                        .scene_document
-                        .get_object(oid)
-                        .and_then(|o| {
-                            let layer_id = o.layer();
-                            self.scene_document.layer(layer_id).map(|l| tr_format!(literal = "Polyline on '%layer%'", layer = &l.name))
-                        })
-                        .unwrap_or_else(|| tr!(literal = "Polyline"));
-                    self.editor.tri_cut_poly_object_id = Some(oid);
-                    self.editor.tri_cut_poly_object_name = name;
-                    self.editor.tri_cut_poly_awaiting_pick = false;
-                    self.editor.viewport_pick_hover_label = None;
-                    self.editor.tool_highlight_id = Some(oid);
-                    self.invalidate_geometry();
-                }
-            }
-            return;
-        }
-
-        // In triangulation creation mode, every canvas press starts a potential
-        // box selection. On release, a short press becomes a normal click-pick.
-        // This allows box drags to begin over a polyline instead of requiring
-        // empty space. Explicit field/polyline pickers above take priority over
-        // this broader selection mode when dialogs overlap.
-        if self.editor.tri_create_open {
             self.editor.selection_box_start_px = self.editor.cursor_screen_px;
             self.editor.selection_box_current_px = self.editor.cursor_screen_px;
             return;
@@ -189,7 +157,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.tri_cut_poly_awaiting_pick && !self.editor.drill_pattern_awaiting_shape_pick {
+        if !self.editor.drill_pattern_awaiting_shape_pick {
             return;
         }
 
@@ -236,19 +204,6 @@ impl<'a> App<'a> {
 
     fn apply_triangulation_field_pick(&mut self, target: TriangulationPickTarget, id: crate::model::triangulation::TriangulationId, name: &str) {
         match target {
-            TriangulationPickTarget::ClipSurface => {
-                self.editor.tri_cut_poly_tri_id = Some(id);
-                update_auto_derived_name(
-                    &mut self.editor.tri_cut_poly_name_input,
-                    self.editor.tri_cut_poly_name_auto,
-                    name,
-                    &tr!(literal = "Clipped"),
-                );
-            }
-            TriangulationPickTarget::SliceSurface => {
-                self.editor.tri_cut_z_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, &tr!(literal = "Sliced"));
-            }
             TriangulationPickTarget::TrimTopology => {
                 self.editor.tri_cut_surface_reference_id = Some(id);
                 if self.editor.tri_cut_surface_target_id == Some(id) {
@@ -302,10 +257,6 @@ impl<'a> App<'a> {
                 if self.editor.tri_include_solid_topology_id == Some(id) {
                     self.editor.tri_include_solid_topology_id = None;
                 }
-            }
-            TriangulationPickTarget::ContourSurface => {
-                self.editor.tri_contour_tri_id = Some(id);
-                self.editor.update_contour_layer_name_from_surface(name);
             }
         }
         self.editor.triangulation_pick_target = None;
@@ -361,42 +312,6 @@ impl<'a> App<'a> {
                 }
             } else {
                 self.delete_at_cursor();
-            }
-            return;
-        }
-
-        // In triangulation creation mode, drag-select adds eligible source objects to the tri pick list.
-        if self.editor.tri_create_open {
-            if dragged {
-                // Same left/right direction convention as regular selection.
-                let cross_select = end.0 > start.0;
-                let enclosed = self
-                    .graphics
-                    .as_ref()
-                    .map(|g| {
-                        if cross_select {
-                            g.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
-                        } else {
-                            g.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
-                        }
-                    })
-                    .unwrap_or_default();
-                let mut added = 0usize;
-                for handle in enclosed {
-                    if let SceneEntityId::Object(oid) = handle
-                        && !self.editor.tri_selected_object_ids.contains(&oid)
-                        && self.scene_document.get_object(oid).is_some_and(is_triangulation_polyline)
-                    {
-                        self.editor.tri_selected_object_ids.push(oid);
-                        self.editor.selected_handles.insert(SceneEntityId::Object(oid));
-                        added += 1;
-                    }
-                }
-                if added > 0 {
-                    self.invalidate_geometry();
-                }
-            } else {
-                self.tri_pick_at_cursor();
             }
             return;
         }
@@ -668,33 +583,6 @@ impl<'a> App<'a> {
         } else {
             self.editor.selected_handles.clear();
             self.editor.selected_handles.extend(candidates);
-        }
-        self.invalidate_geometry();
-    }
-
-    /// Click-pick in triangulation creation mode: toggle the picked object in the tri selection.
-    fn tri_pick_at_cursor(&mut self) {
-        let Some(picked) = self.graphics.as_ref().and_then(|g| {
-            g.pick_at_cursor(
-                PICK_THRESHOLD_PX,
-                &self.triangulations,
-                &self.editor.hidden_handles,
-                &self.editor.frozen_handles,
-                self.editor.xray_enabled,
-            )
-        }) else {
-            return;
-        };
-        let (handle, _world) = picked;
-        let SceneEntityId::Object(oid) = handle else {
-            return;
-        };
-        if self.editor.tri_selected_object_ids.contains(&oid) {
-            self.editor.tri_selected_object_ids.retain(|&o| o != oid);
-            self.editor.selected_handles.remove(&SceneEntityId::Object(oid));
-        } else if self.scene_document.get_object(oid).is_some_and(is_triangulation_polyline) {
-            self.editor.tri_selected_object_ids.push(oid);
-            self.editor.selected_handles.insert(SceneEntityId::Object(oid));
         }
         self.invalidate_geometry();
     }

@@ -86,7 +86,6 @@ confirm-delete-product =
 ## «Триангуляц үүсгэх» диалог
 
 tri-create-title = Триангуляц үүсгэх
-tri-create-help = Харагдах цонхон дахь объектууд дээр товшиж сонгох/сонголтыг цуцлах боломжтой. Хайрцаглан сонгохын тулд чирнэ үү.
 tri-create-type-label = Триангуляцын төрөл
 tri-create-type-help =
     Задгай гадаргуу нь рельефийн маягийн хавтгай үүсгэнэ. Хатуу бие нь бүрэн
@@ -97,7 +96,6 @@ tri-create-output-name-help = Үүсгэсэн триангуляцад оноо
 tri-create-output-name-hint = триангуляцын нэр
 tri-create-run = Триангуляц хийх
 
-tri-selection-none = Одоогоор ямар ч объект сонгогдоогүй байна.
 tri-selection-selected = { $summary } сонгогдсон
 
 tri-type-open-surface = Задгай гадаргуу

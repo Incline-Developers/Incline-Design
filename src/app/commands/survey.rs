@@ -438,7 +438,12 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                 .collect::<Result<Vec<_>>>()?;
             let bounds = point_cloud::finite_bounds(&points).ok_or_else(|| anyhow!("Empty point cloud"))?;
             ensure!(!cancel.is_cancelled(), "Cancelled");
-            item.prepared = Arc::new(point_cloud::prepare_for_render(&points, item.colors.as_deref().map(Vec::as_slice), bounds));
+            item.prepared = Arc::new(point_cloud::prepare_for_render(
+                &points,
+                item.colors.as_deref().map(Vec::as_slice),
+                item.classifications.as_deref().map(Vec::as_slice),
+                bounds,
+            ));
             item.points = Arc::new(points);
             item.bounds = bounds;
             item.point_size *= transform.length_scale() as f32;

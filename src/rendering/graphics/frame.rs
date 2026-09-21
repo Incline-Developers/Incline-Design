@@ -58,6 +58,12 @@ struct EditorSceneState {
     tying_holes: bool,
     /// Drill & Blast alone draws the surface tie-in connectors.
     shows_tie_ins: bool,
+    /// Cinematic view changes what the scene pass draws and what happens to
+    /// the image afterwards, so a cached frame from the other mode is wrong.
+    cinematic_enabled: bool,
+    /// Survey draws classified point clouds in their class colours, which
+    /// `PointCloudGpuCache::sync` resolves from the editor at draw time.
+    colors_points_by_classification: bool,
 }
 
 impl EditorSceneState {
@@ -71,6 +77,8 @@ impl EditorSceneState {
             fly_mode_enabled: editor.fly_mode_enabled,
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
+            cinematic_enabled: editor.cinematic_enabled,
+            colors_points_by_classification: editor.colors_points_by_classification(),
         }
     }
 }
@@ -416,11 +424,32 @@ impl<'a> Graphics<'a> {
         // long as its key holds; the overlay pass then puts this frame's
         // editor content over it and resolves the result to the surface. On a
         // cache hit that is the whole of the scene's cost.
+        // Cinematic view diverts the scene pass into its own target and puts
+        // the finished image into the cache instead, so everything downstream
+        // - the overlay pass, the cache hit next frame - is unchanged.
+        // Never set in the browser build, where the chain does not exist.
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut cinematic_post_ran = false;
         if render_scene {
             let cache_view = self.scene_cache.view.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            let cinematic_view = if editor.cinematic_enabled {
+                // The light is fitted to the scene's extent, which in every
+                // other view is only computed when something needs it.
+                self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+                self.prepare_cinematic();
+                self.upload_cinematic_uniforms();
+                self.render_cinematic_shadow_pass(&mut encoder, triangulations, editor);
+                self.cinematic_scene_view()
+            } else {
+                None
+            };
+            #[cfg(target_arch = "wasm32")]
+            let cinematic_view: Option<wgpu::TextureView> = None;
+
             self.render_scene_pass(
                 &mut encoder,
-                &cache_view,
+                cinematic_view.as_ref().unwrap_or(&cache_view),
                 self.viewport_rect,
                 editor,
                 triangulations,
@@ -430,9 +459,19 @@ impl<'a> Graphics<'a> {
                 rasters,
                 true,
             );
+            #[cfg(not(target_arch = "wasm32"))]
+            if cinematic_view.is_some() {
+                self.render_cinematic_post(&mut encoder, &cache_view);
+                cinematic_post_ran = true;
+            }
             self.scene_cache_key = Some(scene_key);
         }
-        self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene);
+        // The overlay pass draws over whatever the multisample target holds.
+        // After an ordinary scene pass that is the scene itself; after a
+        // cinematic one it is the *ungraded* scene, because the graded image
+        // went to the cache - so restore from the cache exactly as a frame
+        // that skipped the scene pass would.
+        self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene || cinematic_post_ran);
 
         // One-shot viewport export: re-render the scene (without the egui
         // chrome) into an offscreen texture and queue a readback on this

@@ -384,16 +384,51 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern are the only such run so far - see
-/// [`draw_blast_view_tools`]; production adds nothing here, its own tools being
-/// the toolbar and the design menus.
+/// Blast's reviews of the fired pattern and Survey's reading of a classified
+/// cloud are the only such runs so far - see [`draw_blast_view_tools`] and
+/// [`draw_survey_view_tools`]; production adds nothing here, its own tools
+/// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     draw_scene_modes(ui, editor, commands, side);
     draw_camera_tools(ui, editor, commands, side);
 
-    if editor.active_workspace == Workspace::DrillAndBlast {
-        divider(ui, side);
-        draw_blast_view_tools(ui, editor, project, side);
+    match editor.active_workspace {
+        Workspace::DrillAndBlast => {
+            divider(ui, side);
+            draw_blast_view_tools(ui, editor, project, side);
+        }
+        Workspace::Survey => {
+            divider(ui, side);
+            draw_survey_view_tools(ui, editor, commands, side);
+        }
+        _ => {}
+    }
+}
+
+/// What Survey asks of a point cloud that has been through a ground filter:
+/// whether to read it by class. Off in every other workspace.
+///
+/// Always available, like the switches in the run beside it: it is a standing
+/// preference for how Survey draws clouds, and greying it out whenever no
+/// classified cloud happens to be loaded would make it flicker in and out as
+/// the explorer changes.
+fn draw_survey_view_tools(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    let enabled = editor.point_cloud_classification_colors;
+    let classification = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("classification_colors.svg")),
+            if enabled {
+                tr!(literal = "Hide Classification")
+            } else {
+                tr!(literal = "Show Classification")
+            },
+        )
+        .id_salt("point_cloud_classification_colors")
+        .button_side(side)
+        .selected(enabled),
+    );
+    if classification.clicked() {
+        commands.push(UiCommand::SetPointCloudClassificationColors(!enabled));
     }
 }
 
@@ -470,13 +505,37 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
-/// The three switches saying how the scene's geometry is drawn: the vertices of
-/// its lines, the wireframes on its meshes, the grid it is drawn over. None of
-/// them is a tool, and none of them is saved.
+/// The switches saying how the scene's geometry is drawn: the vertices of its
+/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// presentation shading laid over the lot. None of them is a tool, and none of
+/// them is saved.
 ///
-/// Added grid first because the layout runs right to left - see
+/// Added cinematic first because the layout runs right to left - see
 /// [`draw_scene_modes`], which they follow along the bar.
 fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    // Sits against the grid button, on its right: both say how the scene is
+    // presented rather than what is in it. Native only - the post chain's extra
+    // screen-sized targets are more GPU memory than the browser build can spare.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let cinematic = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(themed_icon!(ui, "cinematic.svg")),
+                if editor.cinematic_enabled {
+                    tr!(literal = "Disable Cinematic View")
+                } else {
+                    tr!(literal = "Cinematic View")
+                },
+            )
+            .id_salt("cinematic")
+            .button_side(side)
+            .selected(editor.cinematic_enabled),
+        );
+        if cinematic.clicked() {
+            commands.push(UiCommand::SetCinematicEnabled(!editor.cinematic_enabled));
+        }
+    }
+
     // One grid button: the RL grid in a section, the XY grid in plan; which one
     // is the app's call (`set_grid_shown`).
     let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };

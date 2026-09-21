@@ -17,12 +17,13 @@ use std::{
 use anyhow::{Context, Result, bail};
 use glam::{DMat3, DVec3};
 use omf as omf_crate;
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::{
     i18n::{tr, tr_format},
     model::{
-        Document, FillStyle, Layer, Object, ObjectColor, PolyVertex,
+        Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             opaque_irregular_surface_block_count, opaque_surface_block_count,
@@ -32,7 +33,7 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
-        point_cloud::{LoadedPointCloud, OpenPointCloud, finite_bounds, prepare_for_render},
+        point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -48,6 +49,19 @@ const META_OBJECT: &str = "incline:object";
 /// readers that ignore `incline:object` metadata ever see this approximation.
 const CIRCLE_EXPORT_SEGMENTS: u32 = 64;
 const META_LAYER: &str = "incline:layer";
+/// Every section's explorer folder names, keyed by [`SectionKind::key`].
+/// Written on the OMF project record; omitted entirely when the project
+/// has no folders, so a project without folders writes byte for byte as
+/// before.
+const META_FOLDERS: &str = "incline:folders";
+/// A layer's or item's folder membership: the name of the folder in its
+/// own section, absent when the member is at the section root.
+const META_FOLDER: &str = "incline:folder";
+/// The explorer section an item's element is shown under, written only when
+/// it differs from the section that kind of item naturally sits in - so a
+/// file whose items are all where their kind puts them is byte for byte what
+/// it was before.
+const META_SECTION: &str = "incline:section";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -68,6 +82,10 @@ pub(crate) struct ProjectSnapshot {
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
     pub(crate) point_clouds: Vec<OpenPointCloud>,
     pub(crate) rasters: Vec<OpenRasterTexture>,
+    /// Every explorer folder in the project, for all six sections. The single
+    /// source of truth for export: `designs`'s own `ProjectFile::folders` is
+    /// not consulted, so there is exactly one registry to keep in sync.
+    pub(crate) folders: FolderRegistry,
 }
 
 impl std::fmt::Debug for ProjectSnapshot {
@@ -81,11 +99,16 @@ impl std::fmt::Debug for ProjectSnapshot {
             .field("drill_holes", &self.drill_holes.len())
             .field("point_clouds", &self.point_clouds.len())
             .field("rasters", &self.rasters.len())
+            .field("folders", &self.folders)
             .finish()
     }
 }
 
 impl ProjectSnapshot {
+    /// Whether there is nothing here worth writing at all.
+    ///
+    /// Folders count here, unlike in [`Self::item_count`]: a project whose
+    /// only unsaved work is an empty folder still has to be able to save it.
     pub(crate) fn is_empty(&self) -> bool {
         self.designs.is_none()
             && self.triangulations.is_empty()
@@ -93,9 +116,10 @@ impl ProjectSnapshot {
             && self.drill_holes.is_empty()
             && self.point_clouds.is_empty()
             && self.rasters.is_empty()
+            && self.folders.is_empty()
     }
 
-    fn item_count(&self) -> usize {
+    pub(crate) fn item_count(&self) -> usize {
         usize::from(self.designs.is_some()) + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
     }
 }
@@ -112,6 +136,9 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) line_weight: Option<f32>,
     pub(crate) raster_opacity: f32,
     pub(crate) raster_texture_id: Option<u64>,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
 }
 
 pub(crate) struct ImportedBlockModel {
@@ -129,6 +156,9 @@ pub(crate) struct ImportedBlockModel {
     /// ramp invented at load from the data.
     pub(crate) color_transfers: BTreeMap<String, ColorTransferFunction>,
     pub(crate) hide_empty_color_values: bool,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
 }
 
 pub(crate) struct ImportedPointCloud {
@@ -140,6 +170,9 @@ pub(crate) struct ImportedPointCloud {
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: [f32; 4],
     pub(crate) point_size: f32,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
 }
 
 pub(crate) struct ImportedDrillHoles {
@@ -150,6 +183,9 @@ pub(crate) struct ImportedDrillHoles {
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: crate::model::drill_hole::DrillColorState,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
 }
 
 pub(crate) struct ImportedRaster {
@@ -159,6 +195,9 @@ pub(crate) struct ImportedRaster {
     pub(crate) loaded: LoadedRasterTexture,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Default)]
@@ -173,6 +212,11 @@ pub(crate) struct ImportBundle {
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
     pub(crate) rasters: Vec<ImportedRaster>,
+    /// Every explorer folder decoded so far, for all six sections. Populated
+    /// from the OMF project record before any element is walked, so
+    /// per-element membership below always resolves against it, and grown by
+    /// `ensure` for a name the project record did not list.
+    pub(crate) folders: FolderRegistry,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -182,25 +226,62 @@ impl ImportBundle {
     }
 }
 
+/// How hard to compress an OMF container. Deflate's cost per level is steep and
+/// badly non-linear, so the level is worth choosing per destination instead of
+/// taking the library default of 6. Measured on a 7.8M-point survey cloud:
+///
+/// | level | time | size |
+/// |-------|-------|---------|
+/// | 1     | 0.50s | 83.3 MB |
+/// | 2     | 0.77s | 54.6 MB |
+/// | 3     | 0.97s | 51.8 MB |
+/// | 5     | 1.80s | 48.6 MB |
+/// | 6     | 4.34s | 48.1 MB |
+///
+/// Level 6 is a cliff - 2.4x the time of level 5 to shave a further 1% - and
+/// it was costing more CPU than every other part of a save put together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Compression {
+    /// A file the user keeps, syncs, or hands to another program. Level 5 is
+    /// the last point before the cliff: within about 1% of what level 6 would
+    /// have produced, so saved projects are no larger in any way that matters.
+    Archive,
+    /// A scratch spill this process wrote and only this process reads back,
+    /// deleted when the last handle to it drops. Level 2 gives up about a
+    /// tenth of the size for well over five times the speed. Going lower
+    /// (level 1 is another 1.5x faster) would inflate the spill by three
+    /// quarters, which defeats the point of unloading the data at all.
+    Scratch,
+}
+
+impl From<Compression> for omf_crate::file::Compression {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::Archive => Self::new(5),
+            Compression::Scratch => Self::new(2),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phase) -> Result<()> {
     crate::model::atomic_file::write_atomic(path, |file| {
-        write_to(snapshot, file, progress)?;
+        write_to(snapshot, file, Compression::Archive, progress)?;
         Ok(())
     })
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn to_bytes(snapshot: ProjectSnapshot, progress: &Phase) -> Result<Vec<u8>> {
-    let cursor = write_to(snapshot, Cursor::new(Vec::new()), progress)?;
+pub(crate) fn to_bytes(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<Vec<u8>> {
+    let cursor = write_to(snapshot, Cursor::new(Vec::new()), compression, progress)?;
     Ok(cursor.into_inner())
 }
 
-fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progress: &Phase) -> Result<W> {
+fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compression: Compression, progress: &Phase) -> Result<W> {
     if snapshot.is_empty() {
         bail!("There is no open Incline Design data to export");
     }
     let mut writer = omf_crate::file::Writer::new(output).context("create OMF writer")?;
+    writer.set_compression(compression.into());
     let total = snapshot.item_count().max(1) as u64;
     let mut complete = 0u64;
     let mut elements = Vec::with_capacity(snapshot.item_count());
@@ -212,7 +293,7 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         .collect::<BTreeSet<_>>();
 
     if let Some(design) = &snapshot.designs {
-        elements.push(write_design(&mut writer, design)?);
+        elements.push(write_design(&mut writer, design, &snapshot.folders)?);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -225,7 +306,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         } else {
             triangulation
         };
-        elements.push(write_triangulation(&mut writer, triangulation)?);
+        let mut element = write_triangulation(&mut writer, triangulation)?;
+        tag_folder(&mut element, &snapshot.folders, triangulation.state.section, triangulation.state.folder);
+        tag_section(&mut element, MemberKind::Triangulation, triangulation.state.section);
+        elements.push(element);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -238,7 +322,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         } else {
             block_model
         };
-        elements.push(write_block_model(&mut writer, block_model)?);
+        let mut element = write_block_model(&mut writer, block_model)?;
+        tag_folder(&mut element, &snapshot.folders, block_model.state.section, block_model.state.folder);
+        tag_section(&mut element, MemberKind::BlockModel, block_model.state.section);
+        elements.push(element);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -251,7 +338,9 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         } else {
             drill_holes
         };
-        if let Some(element) = write_drill_holes(&mut writer, drill_holes)? {
+        if let Some(mut element) = write_drill_holes(&mut writer, drill_holes)? {
+            tag_folder(&mut element, &snapshot.folders, drill_holes.state.section, drill_holes.state.folder);
+            tag_section(&mut element, MemberKind::DrillHole, drill_holes.state.section);
             elements.push(element);
         }
         complete += 1;
@@ -266,7 +355,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         } else {
             point_cloud
         };
-        elements.push(write_point_cloud(&mut writer, point_cloud)?);
+        let mut element = write_point_cloud(&mut writer, point_cloud)?;
+        tag_folder(&mut element, &snapshot.folders, point_cloud.state.section, point_cloud.state.folder);
+        tag_section(&mut element, MemberKind::PointCloud, point_cloud.state.section);
+        elements.push(element);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -279,7 +371,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         } else {
             raster
         };
-        elements.push(write_raster(&mut writer, raster)?);
+        let mut element = write_raster(&mut writer, raster)?;
+        tag_folder(&mut element, &snapshot.folders, raster.state.section, raster.state.folder);
+        tag_section(&mut element, MemberKind::Raster, raster.state.section);
+        elements.push(element);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -300,6 +395,16 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         project.units = design.metadata.units.clone();
     }
     project.elements = elements;
+    if !snapshot.folders.is_empty() {
+        let mut sections = serde_json::Map::new();
+        for section in SectionKind::ALL {
+            let names = snapshot.folders.names(section);
+            if !names.is_empty() {
+                sections.insert(section.key().to_owned(), json!(names));
+            }
+        }
+        project.metadata.insert(META_FOLDERS.to_owned(), Value::Object(sections));
+    }
     let (output, _warnings) = writer.finish(project).context("finish project")?;
     progress.finish();
     Ok(output)
@@ -307,6 +412,23 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
 
 fn put(element: &mut omf_crate::Element, key: &str, value: impl Into<Value>) {
     element.metadata.insert(key.to_owned(), value.into());
+}
+
+/// Tag `element` with the name its member resolves to in `section`, when it
+/// resolves at all. Absent when `id` is `None` or does not resolve.
+fn tag_folder(element: &mut omf_crate::Element, folders: &FolderRegistry, section: SectionKind, id: Option<FolderId>) {
+    if let Some(name) = id.and_then(|id| folders.name(section, id)) {
+        put(element, META_FOLDER, name);
+    }
+}
+
+/// Tag `element` with `section` when it is not where `kind` naturally sits -
+/// mirrors [`tag_folder`]'s absent-means-default convention, but for the
+/// section rather than the folder within it.
+fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: SectionKind) {
+    if section != SectionKind::natural_for(kind) {
+        put(element, META_SECTION, section.key());
+    }
 }
 
 fn kind(element: &omf_crate::Element) -> Option<&str> {
@@ -418,11 +540,14 @@ fn element_color(element: &omf_crate::Element, fallback: [f32; 4]) -> [f32; 4] {
     element.color.map(linear_rgba).unwrap_or(fallback)
 }
 
-fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, design: &ProjectFile) -> Result<omf_crate::Element> {
+fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, design: &ProjectFile, folders: &FolderRegistry) -> Result<omf_crate::Element> {
     const LOCAL_MASK: u64 = u32::MAX as u64;
     let document = &design.document;
     let mut layers = Vec::with_capacity(document.layers().len());
     for layer in document.layers() {
+        // Resolved before the swap below shadows `document`: the stand-in it
+        // builds for an unloaded layer holds that layer alone, no folder list.
+        let folder_name = layer.folder.and_then(|folder| folders.name(layer.section, folder));
         let restored;
         let document = if let Some(stored) = document.deferred_layers.get(&layer.id) {
             let mut resident = Document::new();
@@ -443,9 +568,20 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         put(&mut element, META_KIND, "design_layer");
         let mut portable_layer = layer.clone();
         portable_layer.id = crate::model::LayerId(layer.id.0 & LOCAL_MASK);
+        // Folder and section travel in META_FOLDER/META_SECTION instead of
+        // the blob, so a build that predates them still decodes it - the
+        // blob denies unknown fields.
+        portable_layer.folder = None;
+        portable_layer.section = SectionKind::natural_layer();
         put(&mut element, META_LAYER, serde_json::to_value(portable_layer)?);
+        if let Some(folder) = folder_name {
+            put(&mut element, META_FOLDER, folder);
+        }
+        tag_section(&mut element, MemberKind::Layer, layer.section);
         layers.push(element);
     }
+    // The layers still sit inside this "Designs" composite element regardless
+    // of section - that is the file's container, not the tag.
     let mut element = omf_crate::Element::new("Designs", omf_crate::Composite::new(layers));
     put(&mut element, META_KIND, "designs");
     Ok(element)
@@ -552,6 +688,9 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             writer.array_colors(colors.iter().map(|color| Some(color.to_le_bytes())))?,
         ));
     }
+    if let Some(codes) = cloud.classifications.as_ref().filter(|codes| codes.len() == cloud.points.len()) {
+        element.attributes.push(write_point_classification(writer, codes)?);
+    }
     put(&mut element, META_KIND, "point_cloud");
     put_item_identity(
         &mut element,
@@ -567,6 +706,47 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     );
     Ok(element)
 }
+
+/// Write ASPRS point classifications as an OMF category attribute.
+///
+/// Only the codes the cloud actually uses become categories, so the indices
+/// stay narrow and the names list stays short. The ASPRS code itself travels in
+/// the same `Incline category code` sidecar the block-model writer uses, which
+/// is what lets a round-trip recover codes rather than category positions, and
+/// the gradient carries the colours the classification view draws so other
+/// applications show the same cloud.
+fn write_point_classification<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, codes: &[u8]) -> Result<omf_crate::Attribute> {
+    use crate::model::point_cloud::{classification_color, classification_name};
+
+    let used: Vec<u8> = codes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut lookup = [0u32; 256];
+    for (index, code) in used.iter().enumerate() {
+        lookup[usize::from(*code)] = index as u32;
+    }
+    let names = used
+        .iter()
+        .map(|code| classification_name(*code).map_or_else(|| format!("Class {code}"), str::to_owned))
+        .collect::<Vec<_>>();
+    let original_codes = omf_crate::Attribute::from_numbers(
+        "Incline category code",
+        omf_crate::Location::Categories,
+        writer.array_numbers(used.iter().map(|code| Some(i64::from(*code))))?,
+    );
+    let gradient = writer.array_gradient(used.iter().map(|code| classification_color(*code).to_le_bytes()))?;
+    let indices = writer.array_indices(codes.iter().map(|code| Some(lookup[usize::from(*code)])))?;
+    let names = writer.array_names(names)?;
+    Ok(omf_crate::Attribute::from_categories(
+        POINT_CLASSIFICATION_ATTRIBUTE,
+        omf_crate::Location::Vertices,
+        indices,
+        names,
+        Some(gradient),
+        [original_codes],
+    ))
+}
+
+/// Attribute name the classification column round-trips under.
+const POINT_CLASSIFICATION_ATTRIBUTE: &str = "Classification";
 
 /// Write a numeric attribute, carrying its colormap when it has one.
 ///
@@ -1088,10 +1268,21 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
             application = &project.application
         ));
     }
-    if !project.metadata.is_empty() {
+    // Parsed before any element is walked, so a name on an element's own
+    // META_FOLDER below always has something to resolve against.
+    if let Some(sections) = project.metadata.get(META_FOLDERS).and_then(Value::as_object) {
+        for (key, names) in sections {
+            let Some(section) = SectionKind::from_key(key) else { continue };
+            for name in names.as_array().into_iter().flatten().filter_map(Value::as_str) {
+                bundle.folders.ensure(section, name);
+            }
+        }
+    }
+    let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
+    if !unsupported_project_metadata.is_empty() {
         bundle.warnings.push(tr_format!(
             literal = "Project has unsupported metadata keys: %keys%",
-            keys = project.metadata.keys().cloned().collect::<Vec<_>>().join(", ")
+            keys = unsupported_project_metadata.join(", ")
         ));
     }
     if !problems.is_empty() {
@@ -1158,6 +1349,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     coordinate_reference_system: self.project_crs.clone(),
                     units: self.project_units.clone(),
                 },
+                // The bundle's registry is the single source of truth for
+                // membership; a decoded `ProjectFile` never carries its own.
+                folders: FolderRegistry::default(),
             });
         }
         Ok(self.bundle)
@@ -1207,6 +1401,44 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         Ok(())
     }
 
+    /// The folder `element`'s [`META_FOLDER`] name resolves to in `section`,
+    /// minting the folder if the project record's list did not already carry
+    /// it - so membership can never dangle past the name a file recorded for
+    /// it. `None` when the element is at the section root.
+    fn element_folder(&mut self, element: &omf_crate::Element, section: SectionKind) -> Option<FolderId> {
+        element
+            .metadata
+            .get(META_FOLDER)
+            .and_then(Value::as_str)
+            .and_then(|name| self.bundle.folders.ensure(section, name))
+    }
+
+    /// The section `element` says its item is shown under, or the one its kind
+    /// naturally sits in when it says nothing.
+    fn element_section(&mut self, element: &omf_crate::Element, kind: MemberKind) -> SectionKind {
+        let natural = SectionKind::natural_for(kind);
+        let Some(key) = element.metadata.get(META_SECTION).and_then(Value::as_str) else {
+            return natural;
+        };
+        let section = SectionKind::from_key(key).unwrap_or_else(|| {
+            self.bundle.warnings.push(tr_format!(
+                literal = "Element '%name%' names an unknown section '%section%'",
+                name = &element.name,
+                section = key
+            ));
+            natural
+        });
+        if section.admits(kind) {
+            return section;
+        }
+        self.bundle.warnings.push(tr_format!(
+            literal = "Element '%name%' names section '%section%' which cannot show this kind of item in this build",
+            name = &element.name,
+            section = key
+        ));
+        section.healed_for(kind)
+    }
+
     /// Construct only explorer metadata. In particular, do not read any
     /// Parquet arrays, mesh accelerators, drill traces or raster pixels here.
     fn defer_element(&mut self, element: &omf_crate::Element) -> Result<bool> {
@@ -1226,12 +1458,16 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         };
         let path = virtual_path(self.source_name, &name, "omf");
         if kind(element) == Some("raster") {
+            let section = self.element_section(element, MemberKind::Raster);
+            let folder = self.element_folder(element, section);
             self.bundle.rasters.push(ImportedRaster {
                 preferred_id,
                 source_name,
                 source_format,
                 is_loaded: false,
                 deferred: Some((locator, AssetSummary::default())),
+                folder,
+                section,
                 loaded: LoadedRasterTexture {
                     name,
                     path,
@@ -1251,6 +1487,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 omf_crate::Geometry::Composite(group) => group.elements.len(),
                 _ => return Ok(false),
             };
+            let section = self.element_section(element, MemberKind::DrillHole);
+            let folder = self.element_folder(element, section);
             self.bundle.drill_holes.push(ImportedDrillHoles {
                 preferred_id,
                 source_name,
@@ -1269,6 +1507,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
                 color: style_value(style, "color").unwrap_or_default(),
+                folder,
+                section,
             });
             return Ok(true);
         }
@@ -1280,6 +1520,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 };
                 let mesh = Arc::new(Triangulation::empty());
                 let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+                let section = self.element_section(element, MemberKind::Triangulation);
+                let folder = self.element_folder(element, section);
                 self.bundle.triangulations.push(ImportedTriangulation {
                     preferred_id,
                     source_name,
@@ -1305,10 +1547,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     line_weight: style_value(style, "line_weight").unwrap_or(Some(1.0)),
                     raster_opacity: style_f32(style, "raster_opacity").unwrap_or(1.0),
                     raster_texture_id: style_value(style, "raster_texture_id"),
+                    folder,
+                    section,
                 });
             }
             omf_crate::Geometry::PointSet(points) => {
                 let bounds = (DVec3::ZERO, DVec3::ZERO);
+                let section = self.element_section(element, MemberKind::PointCloud);
+                let folder = self.element_folder(element, section);
                 self.bundle.point_clouds.push(ImportedPointCloud {
                     preferred_id,
                     source_name,
@@ -1326,11 +1572,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         path,
                         points: Arc::new(Vec::new()),
                         colors: None,
-                        prepared: Arc::new(prepare_for_render(&[], None, bounds)),
+                        classifications: None,
+                        prepared: Arc::new(prepare_for_render(&[], None, None, bounds)),
                         bounds,
                     },
                     color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
                     point_size: style_f32(style, "point_size").unwrap_or(0.1),
+                    folder,
+                    section,
                 });
             }
             omf_crate::Geometry::BlockModel(geometry) => {
@@ -1357,6 +1606,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 let active_color_variable = style_value::<Option<String>>(style, "active_color_variable")
                     .flatten()
                     .or_else(|| variables.first().map(|variable| variable.name.clone()));
+                let section = self.element_section(element, MemberKind::BlockModel);
+                let folder = self.element_folder(element, section);
                 self.bundle.block_models.push(ImportedBlockModel {
                     preferred_id,
                     source_name,
@@ -1390,6 +1641,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     slice: style_value(style, "slice"),
                     color_transfers: BTreeMap::new(),
                     hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+                    folder,
+                    section,
                 });
             }
             _ => return Ok(false),
@@ -1403,6 +1656,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_NAME,
             META_OBJECT,
             META_LAYER,
+            META_FOLDERS,
+            META_FOLDER,
+            META_SECTION,
             META_SOURCE,
             META_STYLE,
             META_ID,
@@ -1463,8 +1719,24 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             bail!("Incline Design designs element '{}' is not an OMF composite", element.name);
         };
         let mut document = Document::new();
+        // Legacy migration path: a file written before folders covered every
+        // section carried the Designs list here instead of the project
+        // record. `ensure` is idempotent, so carrying both keys is harmless.
+        if let Some(names) = element
+            .metadata
+            .get(META_FOLDERS)
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+        {
+            for name in names {
+                self.bundle.folders.ensure(SectionKind::Designs, &name);
+            }
+        }
         for layer_element in &composite.elements {
             self.record_unsupported_content(layer_element);
+            // Resolved first: `set_layer_section` below clears the layer's
+            // folder when the section actually changes, so the folder must be
+            // resolved against the section the layer ends up in, not Designs.
+            let section = self.element_section(layer_element, MemberKind::Layer);
             let mut layer_template = layer_element
                 .metadata
                 .get(META_LAYER)
@@ -1495,6 +1767,18 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     layer_template.as_ref().map_or(0.0, |layer| layer.elevation),
                 )
             };
+            // An absent META_SECTION means the layer sits where its kind
+            // naturally does - a file written before sections were tagged
+            // loads every layer at Designs, same as before.
+            document.set_layer_section(layer_id, section);
+            // An absent key means root; a file written before folders existed
+            // must load with every layer there. A name the project record did
+            // not list is minted here so membership can never dangle.
+            if let Some(folder) = layer_element.metadata.get(META_FOLDER).and_then(Value::as_str)
+                && let Some(folder) = self.bundle.folders.ensure(section, folder)
+            {
+                document.set_layer_folder(layer_id, Some(folder));
+            }
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
@@ -1549,6 +1833,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 coordinate_reference_system: self.project_crs.clone(),
                 units: self.project_units.clone(),
             },
+            // The bundle's registry is the single source of truth for
+            // membership; a decoded `ProjectFile` never carries its own.
+            folders: FolderRegistry::default(),
         })
     }
 
@@ -1565,7 +1852,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             omf_crate::Geometry::LineSet(lines) => {
                 let offset = self.project_origin + DVec3::from_array(lines.origin);
                 let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-                let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+                let segments = self.reader.array_segments_vec(&lines.segments)?;
                 for (points, closed) in line_strings(&vertices, &segments) {
                     let color = ObjectColor::Fixed(element_color(element, [1.0; 4]));
                     document.add_object(|id| Object::Polyline {
@@ -1594,7 +1881,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         // `generic_design` mutably at the same time.
         let offset = self.project_origin + DVec3::from_array(lines.origin);
         let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-        let segments = collect_results(self.reader.array_segments(&lines.segments)?)?;
+        let segments = self.reader.array_segments_vec(&lines.segments)?;
         for (points, closed) in line_strings(&vertices, &segments) {
             self.generic_design.add_object(|id| Object::Polyline {
                 id,
@@ -1616,7 +1903,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .into_iter()
             .map(|point| Vertex::new(point.x + offset.x, point.y + offset.y, point.z + offset.z))
             .collect();
-        let faces = collect_results(self.reader.array_triangles(&surface.triangles)?)?;
+        let faces = self.reader.array_triangles_vec(&surface.triangles)?;
         self.push_triangulation(element, vertices, faces)
     }
 
@@ -1675,6 +1962,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let surface_face_order = Arc::new(morton_surface_face_order(&mesh));
         let style = element.metadata.get(META_STYLE);
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
+        let section = self.element_section(element, MemberKind::Triangulation);
+        let folder = self.element_folder(element, section);
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -1697,13 +1986,18 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 .unwrap_or(Some(1.0)),
             raster_opacity: style_f32(style, "raster_opacity").unwrap_or(1.0),
             raster_texture_id: style_value(style, "raster_texture_id"),
+            folder,
+            section,
         });
         Ok(())
     }
 
     fn read_point_cloud(&mut self, element: &omf_crate::Element, points: &omf_crate::PointSet) -> Result<()> {
         let offset = self.project_origin + DVec3::from_array(points.origin);
-        let positions = self.read_vertices(&points.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
+        let mut positions = self.read_vertices(&points.vertices)?;
+        // Applying the offset and measuring the bounds are both full sweeps of
+        // an array that can run to gigabytes, so they share one pass.
+        let bounds = shift_and_measure(&mut positions, offset);
         if positions.is_empty() {
             self.bundle.warnings.push(format!("Skipped empty OMF point set '{}'", element.name));
             return Ok(());
@@ -1720,9 +2014,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .map(|colors| colors.into_iter().map(|color| color.unwrap_or([255; 4])).map(u32::from_le_bytes).collect::<Vec<_>>())
             })
             .transpose()?;
-        let bounds = finite_bounds(&positions).with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
-        let prepared = prepare_for_render(&positions, colors.as_deref(), bounds);
+        let classifications = self.read_point_classification(element, positions.len())?;
+        let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
+        let prepared = prepare_for_render(&positions, colors.as_deref(), classifications.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
+        let section = self.element_section(element, MemberKind::PointCloud);
+        let folder = self.element_folder(element, section);
         self.bundle.point_clouds.push(ImportedPointCloud {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -1732,6 +2029,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 path: virtual_path(self.source_name, element_name(element), "pcd"),
                 points: Arc::new(positions),
                 colors: colors.map(Arc::new),
+                classifications: classifications.map(Arc::new),
                 prepared: Arc::new(prepared),
                 bounds,
             },
@@ -1739,8 +2037,68 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
             point_size: style_f32(style, "point_size").unwrap_or(0.1),
+            folder,
+            section,
         });
         Ok(())
+    }
+
+    /// Recover the ASPRS classification column written by
+    /// [`write_point_classification`].
+    ///
+    /// Anything that does not line up - a foreign file's own `Classification`
+    /// attribute, a missing code sidecar, a length that disagrees with the
+    /// point count - yields `None` rather than a guess: a wrong classification
+    /// silently changes which points a bare-earth surface is built from.
+    fn read_point_classification(&self, element: &omf_crate::Element, point_count: usize) -> Result<Option<Vec<u8>>> {
+        let Some((values, names, attributes)) = element.attributes.iter().find_map(|attribute| match (&attribute.location, &attribute.data) {
+            (omf_crate::Location::Vertices, omf_crate::AttributeData::Category { values, names, attributes, .. }) if attribute.name == POINT_CLASSIFICATION_ATTRIBUTE => {
+                Some((values, names, attributes))
+            }
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        let category_count = collect_results(self.reader.array_names(names)?)?.len();
+        let codes = attributes
+            .iter()
+            .find(|attribute| attribute.name == "Incline category code" && attribute.location == omf_crate::Location::Categories)
+            .and_then(|attribute| match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } => Some(values),
+                _ => None,
+            })
+            .map(|values| read_numbers(self.reader, values))
+            .transpose()?
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| {
+                        value
+                            .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=255.0).contains(value))
+                            .map(|value| value as u8)
+                    })
+                    .collect::<Option<Vec<u8>>>()
+            });
+        let Some(Some(codes)) = codes else {
+            return Ok(None);
+        };
+        if codes.len() != category_count {
+            return Ok(None);
+        }
+        let values = collect_results(self.reader.array_indices(values)?)?;
+        if values.len() != point_count {
+            return Ok(None);
+        }
+        Ok(Some(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .and_then(|index| codes.get(index as usize).copied())
+                        .unwrap_or(crate::model::point_cloud::CLASS_UNCLASSIFIED)
+                })
+                .collect(),
+        ))
     }
 
     fn read_block_model(&mut self, element: &omf_crate::Element, geometry: &omf_crate::BlockModel) -> Result<()> {
@@ -1833,6 +2191,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .or_else(|| model.color_variables().into_iter().find(|variable| !variable.special).map(|variable| variable.name.clone()));
         let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable, active_color_variable.as_deref());
         let color_transfers = self.read_block_color_transfers(element, &model, &renderable, style, active_color_variable.as_deref());
+        let section = self.element_section(element, MemberKind::BlockModel);
+        let folder = self.element_folder(element, section);
         self.bundle.block_models.push(ImportedBlockModel {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -1858,6 +2218,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             slice: style_value(style, "slice"),
             color_transfers,
             hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+            folder,
+            section,
         });
         Ok(())
     }
@@ -2046,6 +2408,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }
         let dataset = Arc::new(dataset);
         let path = virtual_path(self.source_name, element_name(element), "omf");
+        let section = self.element_section(element, MemberKind::DrillHole);
+        let folder = self.element_folder(element, section);
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2061,6 +2425,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             deferred: None,
             is_loaded: style_loaded(element.metadata.get(META_STYLE)),
             color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
+            folder,
+            section,
         }))
     }
 
@@ -2107,6 +2473,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn read_textures(&mut self, element: &omf_crate::Element) -> Result<()> {
+        // One element can carry several textures (one push per attribute
+        // below); all share the carrying element's section and folder.
+        let section = self.element_section(element, MemberKind::Raster);
+        let folder = self.element_folder(element, section);
         for attribute in &element.attributes {
             let (image, derived_world_to_uv) = match &attribute.data {
                 omf_crate::AttributeData::ProjectedTexture { image, orient, width, height } => {
@@ -2209,14 +2579,21 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     projection,
                     driver_name: tr!(literal = "OMF texture"),
                 },
+                folder,
+                section,
             });
         }
         Ok(())
     }
 
+    /// Vertex arrays are the bulk of an OMF file, so they go through the
+    /// reader's bulk path: whole Parquet column blocks instead of one
+    /// `Option<Result<f64>>` per coordinate, with row groups decoded in
+    /// parallel. `[f64; 3]` and `DVec3` share a layout, so the cast below
+    /// reuses the allocation rather than copying it.
     fn read_vertices(&self, array: &omf_crate::Array<omf_crate::array_type::Vertex>) -> Result<Vec<DVec3>> {
         ensure_items(array.item_count(), "vertices")?;
-        Ok(collect_results(self.reader.array_vertices(array)?)?.into_iter().map(DVec3::from_array).collect())
+        Ok(self.reader.array_vertices_vec(array)?.into_iter().map(DVec3::from_array).collect())
     }
 
     fn grid2_sizes(&self, grid: &omf_crate::Grid2) -> Result<[Vec<f64>; 2]> {
@@ -2281,6 +2658,27 @@ fn ensure_items(count: u64, description: &str) -> Result<usize> {
         bail!("OMF {description} count {count} exceeds Incline Design's import limit of {MAX_ARRAY_ITEMS}");
     }
     usize::try_from(count).with_context(|| format!("OMF {description} count exceeds addressable memory"))
+}
+
+/// Shift every point by `offset` in place and return the bounds of the finite
+/// ones, in a single parallel pass.
+fn shift_and_measure(positions: &mut [DVec3], offset: DVec3) -> Option<(DVec3, DVec3)> {
+    let (min, max) = positions
+        .par_iter_mut()
+        .map(|point| {
+            *point += offset;
+            *point
+        })
+        .filter(|point| point.is_finite())
+        .fold(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min, max), point| (min.min(point), max.max(point)),
+        )
+        .reduce(
+            || (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
+        );
+    (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
 fn collect_results<T>(items: impl IntoIterator<Item = std::result::Result<T, omf_crate::error::Error>>) -> Result<Vec<T>> {

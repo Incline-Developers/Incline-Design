@@ -549,13 +549,19 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             });
 
             MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
-                let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
+                // Both entries run on the selected clouds: one is reconstructed
+                // at a time, and a join needs two or more to join.
+                let selected_clouds = editor.selection_counts.point_clouds;
                 if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
-                    .enabled(has_loaded_cloud)
+                    .enabled(selected_clouds == 1)
                     .show(ui)
                     .clicked()
                 {
                     commands.push(UiCommand::OpenPointCloudTin);
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!(literal = "Join...")).enabled(selected_clouds >= 2).show(ui).clicked() {
+                    commands.push(UiCommand::OpenPointCloudJoin);
                     ui.close();
                 }
             });
@@ -563,9 +569,12 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         }
 
         if editor.active_workspace == Workspace::Geology {
-            MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
+            // Thresholding runs on the block model, so - like the entry below
+            // it - the menu is the input's own and the one selected model is
+            // what the tool opens on.
+            MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
                 if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
-                    .enabled(!project.block_models.is_empty())
+                    .enabled(editor.selection_counts.block_models == 1)
                     .show(ui)
                     .clicked()
                 {
@@ -574,10 +583,16 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
             });
 
-            MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-                let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
-                if ContextMenuAction::new(tr!(literal = "Create Block Model...")).enabled(has_loaded_holes).show(ui).clicked() {
-                    commands.push(UiCommand::OpenCreateBlockModel(None));
+            // Estimation runs on the drill holes, so the entry lives under
+            // them and takes the one selected collection as its input, the
+            // way the other select-first tools do.
+            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+                if ContextMenuAction::new(tr!(literal = "Create Block Model..."))
+                    .enabled(editor.selection_counts.drill_holes == 1)
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenCreateBlockModel);
                     ui.close();
                 }
             });
@@ -625,21 +640,33 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
             });
             context_menu_separator(ui);
-            // Unlike the entries above this one runs with nothing
-            // selected: the dialog seeds from the selection when there
-            // is one, and otherwise you pick in the viewport with it open.
-            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation")).show(ui).clicked() {
+            // Like the entries above, this runs on the selection: only objects
+            // that can contribute an edge count towards it.
+            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation"))
+                .enabled(editor.selection_counts.triangulation_sources > 0)
+                .show(ui)
+                .clicked()
+            {
                 commands.push(UiCommand::OpenCreateTriangulation);
                 ui.close();
             }
         });
 
         MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
-            if ContextMenuAction::new(tr!(literal = "Clip Surface by Polyline...")).show(ui).clicked() {
+            // The tools below whose inputs the selection can name take them
+            // from it; the tools taking two surfaces cannot tell one selected
+            // surface from the other, so they still pick theirs in the dialog.
+            let one_surface_selected = editor.selection_counts.triangulations == 1;
+            let can_clip = one_surface_selected && editor.selection_counts.clip_boundaries == 1;
+            if ContextMenuAction::new(tr!(literal = "Clip Surface by Polyline...")).enabled(can_clip).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationByPolyline);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Slice Triangulation by Z Range...")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Slice Triangulation by Z Range..."))
+                .enabled(one_surface_selected)
+                .show(ui)
+                .clicked()
+            {
                 commands.push(UiCommand::OpenCutTriangulationByZ);
                 ui.close();
             }
@@ -657,7 +684,11 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 ui.close();
             }
             context_menu_separator(ui);
-            if ContextMenuAction::new(tr!(literal = "Generate Contour Lines...")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Generate Contour Lines..."))
+                .enabled(one_surface_selected)
+                .show(ui)
+                .clicked()
+            {
                 commands.push(UiCommand::OpenContourTriangulation);
                 ui.close();
             }

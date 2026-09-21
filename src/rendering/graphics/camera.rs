@@ -71,6 +71,16 @@ impl ScreenRect {
     }
 }
 
+/// Whether `point` lies inside a *convex* projected polygon: every edge has to
+/// leave it on the same side, and at least one has to place it definitively.
+///
+/// That last clause is what keeps a stroke out of this test. A stroke quad's
+/// CPU positions are the centre line - the width lives in `offset_px` and is
+/// applied by the shader - so its triangles project to zero-area slivers, as do
+/// the round joins and screen-space markers whose vertices all share one
+/// position. Accepting "no edge disagrees" would make every such polygon
+/// contain every point on the screen, and a marquee would take any entity its
+/// bounds prefilter let through rather than the ones it actually covers.
 fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
     let mut left = false;
     let mut right = false;
@@ -80,7 +90,7 @@ fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
         left |= side > 0.0;
         right |= side < 0.0;
     }
-    !(left && right)
+    left != right
 }
 
 fn polygon_touches_rect(polygon: &[DVec2], rect: ScreenRect) -> bool {

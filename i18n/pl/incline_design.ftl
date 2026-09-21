@@ -83,7 +83,6 @@ confirm-delete-product =
 ## Okno „Utwórz triangulację”
 
 tri-create-title = Utwórz triangulację
-tri-create-help = Klikaj obiekty w widoku, aby je zaznaczyć lub odznaczyć. Przeciągnij, aby zaznaczyć obszarem.
 tri-create-type-label = Typ triangulacji
 tri-create-type-help =
     Powierzchnia otwarta tworzy płat w stylu terenu. Bryła tworzy w pełni
@@ -93,7 +92,6 @@ tri-create-output-name-help = Nazwa nadawana wygenerowanej triangulacji.
 tri-create-output-name-hint = nazwa triangulacji
 tri-create-run = Triangulacja
 
-tri-selection-none = Nie wybrano jeszcze żadnych obiektów.
 tri-selection-selected = Wybrano: { $summary }
 
 tri-type-open-surface = Powierzchnia otwarta
