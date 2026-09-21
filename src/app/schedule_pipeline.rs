@@ -413,6 +413,8 @@ impl crate::app::App<'_> {
         // against the gate as it stands now, and this is where "now" is
         // established.
         self.advance_schedule_calculation();
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+        self.advance_experimental_scip_blend();
         self.mirror_schedule_stages();
     }
 

@@ -212,9 +212,24 @@ pub(crate) fn draw_destination_properties(
     // opens holding. The opening total is calculated from the lots beside it and
     // is never typed here - one figure, one place it comes from.
     let stockpile = entry.kind == DestinationKind::Stockpile;
-    let rows_used = 5 + usize::from(linked) + 2 * usize::from(stockpile);
+    // Two extra experimental rows on a stockpile when the experiment is
+    // compiled in: the representation, and the chunk capacities it needs.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    let experimental_rows = if stockpile {
+        1 + usize::from(plan.experiment().representation(entry.id) == crate::model::schedule::experiment::StockpileRepresentation::Chunks)
+    } else {
+        0
+    };
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "scip-code")))]
+    let experimental_rows = 0;
+    let rows_used = 5 + usize::from(linked) + 2 * usize::from(stockpile) + experimental_rows;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
+    #[cfg_attr(
+        not(all(not(target_arch = "wasm32"), feature = "scip-code")),
+        allow(unused_mut, reason = "mutated only by the feature-gated experimental rows")
+    )]
+    let mut chunk_draft = editor.schedule_chunk_draft.take();
     PropertyTable::new("schedule_destination_properties", table_rect, &entry.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         if linked {
@@ -292,6 +307,12 @@ pub(crate) fn draw_destination_properties(
                 .is_some_and(|capacity| entry.opening_t > capacity)
                 .then(|| crate::model::schedule::ScheduleError::OpeningOverCapacity.message());
             rows.readonly(&tr!("inventory-opening-tonnes"), &tonnes(entry.opening_t), None, over.as_deref());
+            // The experimental representation, when this build has the
+            // experiment compiled in. The authored lots above are untouched
+            // by it: choosing one changes what the optimiser is told, not
+            // what the project holds.
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            super::schedule_experiment::stockpile_rows(rows, &mut chunk_draft, plan, entry.id, session, &mut edits);
         }
         // A haul distance, not a measurement: it is one number for every source
         // that delivers here, and nothing derives it from where the solid sits.
@@ -309,6 +330,7 @@ pub(crate) fn draw_destination_properties(
             ));
         }
     });
+    editor.schedule_chunk_draft = chunk_draft;
     commands.append(&mut edits);
     table_rect
 }
@@ -635,6 +657,10 @@ pub(crate) fn draw_rule_editor(
             if rule.conditions.is_empty() {
                 explorer_note(ui, tr!("destination-no-conditions"));
             }
+            // A category condition the rule's current sources cannot evaluate.
+            // Named rather than removed: the planner chose it, and the repair -
+            // narrowing the sources, or splitting the rule - is theirs to make.
+            category_conflict_note(ui, document, &rule.sources, &rule.conditions);
             for condition in &rule.conditions {
                 let field_name = document
                     .reserve_fields()
@@ -816,6 +842,15 @@ pub(crate) fn draw_condition_dialog(
         editor.schedule_condition_draft = None;
         return;
     };
+    // The sources this rule names decide whether a category can be tested at
+    // all - the blended pile keeps tonnes and grade and discards categories.
+    // The field is offered and the values are shown, so the planner can see
+    // what the rule would have said; only committing it is refused, with the
+    // reason beside the button rather than after the edit.
+    let categories_available = match owner {
+        ConditionOwner::Routing(id) => plan.routing().rule(id).is_some_and(|rule| destinations::category_conditions_available(&rule.sources)),
+        ConditionOwner::Cashflow(id) => plan.cashflow().rule(id).is_some_and(|rule| destinations::category_conditions_available(&rule.sources)),
+    };
     let mut open = true;
     let mut close = false;
     let mut apply = false;
@@ -882,7 +917,13 @@ pub(crate) fn draw_condition_dialog(
                     .show(ui);
                 ui.checkbox(&mut draft.upper_inclusive, tr!("destination-condition-upper-inclusive"));
             }
-            let built = build_condition(draft, categorical);
+            let built = build_condition(draft, categorical).and_then(|condition| {
+                if categorical && !categories_available {
+                    Err(tr!("destination-condition-category-blocked"))
+                } else {
+                    Ok(condition)
+                }
+            });
             if let Err(message) = &built {
                 ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
             }
@@ -900,6 +941,7 @@ pub(crate) fn draw_condition_dialog(
     if apply
         && let Some(draft) = editor.schedule_condition_draft.as_ref()
         && let Ok(condition) = build_condition(draft, categorical)
+        && (!categorical || categories_available)
     {
         let replacing = draft.replacing;
         let mut conditions = existing.clone();
@@ -1697,4 +1739,31 @@ fn parse_lot_value(text: &str) -> Result<Option<f64>, String> {
         return Err(crate::model::schedule::ScheduleError::InvalidLotValue.message());
     }
     Ok(Some(value))
+}
+
+/// Report the category conditions a rule's sources cannot evaluate.
+///
+/// Draws nothing when the rule is consistent. When it is not, the rule is
+/// marked invalid *here*, beside the conditions, with the offending fields
+/// named - the one place a planner is already looking at both halves of the
+/// contradiction. Shared by the destination and cashflow rule editors so the
+/// two pages cannot describe the same policy differently.
+pub(crate) fn category_conflict_note(ui: &mut egui::Ui, document: &Document, sources: &MovementSourceSelection, conditions: &[FieldCondition]) {
+    let conflicts = destinations::conflicting_category_conditions(sources, conditions);
+    if conflicts.is_empty() {
+        return;
+    }
+    let fields = conflicts
+        .iter()
+        .map(|field| {
+            document
+                .reserve_fields()
+                .iter()
+                .find(|entry| entry.id == *field)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| tr!("destination-stage-field-missing"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    explorer_note(ui, tr!("destination-rule-category-conflict", fields = fields));
 }

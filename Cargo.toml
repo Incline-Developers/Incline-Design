@@ -17,6 +17,29 @@ exclude = [
 [build-dependencies]
 winresource = "0.1.31"
 
+[features]
+default = []
+# Experimental native SCIP backend for blended-stockpile formulations. Off by
+# default. Never compiled for wasm - the dependency is declared native-only
+# below. Pick exactly one of the two linking features:
+#
+#   scip-experiment  the preserved baseline. russcip's `bundled` path downloads
+#                    a prebuilt SCIP 10.0.2 at build time.
+#   scip-system      link whatever SCIP the environment provides, through
+#                    russcip's `bindgen` path and $SCIPOPTDIR. Used to verify
+#                    the seeded-solution finding against SCIP 10.1.0.
+#
+# Enabling both leaves `bundled` in charge, because scip-sys checks it first.
+scip-experiment = ["scip-code", "russcip/bundled"]
+scip-system = ["scip-code", "russcip/bindgen"]
+# Internal: compiles the experimental SCIP module. Not useful on its own - it
+# selects no SCIP build, so linking fails.
+scip-code = ["dep:russcip", "blend-experiment"]
+# The blended-stockpile model, its independent replay and the iterative
+# fixed-grade HiGHS solver for it. Needs no SCIP, so it can be built and run
+# on its own; the SCIP features turn it on as well because they extend it.
+blend-experiment = []
+
 [dependencies]
 anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["derive"] }
@@ -58,6 +81,10 @@ winit = "0.30.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
 egui-winit = "0.36.2"
+good_lp = { version = "1.15.0", default-features = false, features = ["highs"] }
+highs = "2.4.0"
+highs-sys = "1.15.0"
+russcip = { version = "0.10.0", default-features = false, optional = true }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 mineflow = {git = "https://github.com/Incline-Developers/MineFlow-rs.git", rev = "3a6a3b541aa55a50eebd5efadea4943c82353a08"}

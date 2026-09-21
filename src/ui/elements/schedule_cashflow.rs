@@ -433,6 +433,8 @@ pub(crate) fn draw_rule_editor(
             if rule.conditions.is_empty() {
                 explorer_note(ui, tr!("destination-no-conditions"));
             }
+            // The same policy, from the same helper, as the destination rules.
+            super::schedule_destinations::category_conflict_note(ui, document, &rule.sources, &rule.conditions);
             for condition in &rule.conditions {
                 let field_name = document
                     .reserve_fields()

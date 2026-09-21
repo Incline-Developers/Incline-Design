@@ -212,6 +212,29 @@ pub(crate) fn draw_configuration(
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
+    let rect = draw_configuration_table(ui, rect, editor, plan, document, session, commands);
+    // The experimental Optimisation section sits under the configuration
+    // table on the same page, and only exists in a build that has the
+    // experiment compiled in.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    {
+        let below = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() + ui.spacing().item_spacing.y), rect.max);
+        if below.is_positive() {
+            super::schedule_experiment::draw_optimisation(ui, below, editor, plan, document, session, commands);
+        }
+    }
+    let _ = rect;
+}
+
+fn draw_configuration_table(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    document: &Document,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) -> egui::Rect {
     if editor.schedule_name_draft.as_ref().is_none_or(|draft| draft.source != plan.name) {
         editor.schedule_name_draft = Some(ScheduleNameDraft {
             source: plan.name.clone(),
@@ -289,6 +312,9 @@ pub(crate) fn draw_configuration(
         }
     });
     commands.extend(edits);
+    // The caller lays the experimental section out beneath this table, so it
+    // needs to know where the table stopped rather than guessing.
+    egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), table_rect.bottom()))
 }
 
 /// The Loader Classes list. Selecting one drives the property table beside it.

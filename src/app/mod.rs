@@ -8,6 +8,8 @@ pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invali
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
 pub(crate) mod schedule_run; // The Gantt's explicit Run Schedule and what it holds
+#[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+pub(crate) mod scip_blend; // Developer-only blended SCIP job on the existing pool
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -397,6 +399,14 @@ pub(crate) struct App<'a> {
     /// A Run Schedule in flight on the bounded worker pool. Dropping it and
     /// cancelling its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    pub(crate) pending_experimental_scip: Option<crate::app::scip_blend::ScipRunIdentity>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    pub(crate) experimental_scip_result: Option<std::sync::Arc<crate::app::scip_blend::ScipCompletion>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    pub(crate) experimental_scip_diagnostics: Option<std::sync::Arc<crate::app::scip_blend::ScipCompletion>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    pub(crate) experimental_scip_serial: u64,
     /// Why the last Run produced no schedule, owned by the exact project and
     /// scheduling inputs that produced the refusal.
     pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleRunDiagnostics>,
@@ -534,6 +544,14 @@ impl<'a> Default for App<'a> {
             schedule_pipeline: None,
             schedule_calculation: None,
             pending_schedule_run: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            pending_experimental_scip: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            experimental_scip_result: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            experimental_scip_diagnostics: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            experimental_scip_serial: 0,
             schedule_run_diagnostics: None,
             schedule_report_cache: None,
             schedule_plan_revision_cache: std::cell::Cell::new(None),
@@ -1193,6 +1211,12 @@ impl<'a> App<'a> {
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
         self.cancel_jobs(|_| true);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+        {
+            self.pending_experimental_scip = None;
+            self.experimental_scip_result = None;
+            self.experimental_scip_diagnostics = None;
+        }
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
@@ -2082,6 +2106,8 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+        self.cancel_experimental_scip_blend();
         self.teardown_window();
     }
 

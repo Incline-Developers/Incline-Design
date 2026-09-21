@@ -100,6 +100,11 @@ pub(crate) enum JobKey {
         runtime: u32,
         serial: u64,
     },
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    ExperimentalScip {
+        runtime: u32,
+        serial: u64,
+    },
     ReserveStats(crate::model::block_model::BlockModelId, u64),
     Project {
         runtime_id: u32,
@@ -118,11 +123,16 @@ pub(crate) struct CancelFlag(Arc<AtomicBool>);
 
 impl CancelFlag {
     pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.store(true, Ordering::Release);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    pub(crate) fn signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
     }
 }
 
@@ -243,6 +253,10 @@ impl<'a> App<'a> {
                 .pending_schedule_run
                 .as_ref()
                 .is_some_and(|pending| pending.inputs.runtime == runtime && pending.serial == serial),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+            JobKey::ExperimentalScip { runtime, serial } => self
+                .pending_experimental_scip
+                .is_some_and(|pending| pending.inputs.runtime == runtime && pending.run_id == serial),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

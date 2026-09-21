@@ -146,11 +146,28 @@ impl crate::app::App<'_> {
                 agent,
                 priority,
                 window,
-                source,
+                sources,
                 maximum_t,
-            } => self.add_reclaim_bar(name, agent, priority, window, source, maximum_t),
-            ScheduleEdit::SetReclaimSource { bar, source } => self.set_reclaim_source(bar, source),
+            } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t),
+            ScheduleEdit::SetReclaimSources { bar, sources } => self.set_reclaim_sources(bar, sources),
             ScheduleEdit::SetReclaimMaximum { bar, maximum_t } => self.edit_schedule(|plan| plan.set_reclaim_maximum(bar, maximum_t)),
+            ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
+                // One edit, both fields: a horizon and the resolution it is
+                // split at are typed together and are one undo step.
+                plan.experiment_mut().set_planning_end_day(end_day)?;
+                plan.experiment_mut().set_interval_h(interval_h)
+            }),
+            ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap } => self.edit_schedule(|plan| {
+                plan.experiment_mut().set_solve_seconds(seconds)?;
+                plan.experiment_mut().set_relative_gap(relative_gap)
+            }),
+            ScheduleEdit::SetExperimentGradeUnit { field, unit } => self.edit_schedule(|plan| plan.experiment_mut().set_grade_unit(field, unit)),
+            ScheduleEdit::SetStockpileRepresentation { destination, representation } => {
+                self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_representation(destination, representation))
+            }
+            ScheduleEdit::SetStockpileChunks { destination, capacities } => {
+                self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_receiving_chunks(destination, capacities))
+            }
         }
     }
 
@@ -172,6 +189,16 @@ impl crate::app::App<'_> {
             return;
         }
         self.edit_routing(edit);
+    }
+
+    /// The same stockpile guard, for a setting that lives on the plan rather
+    /// than inside the routing configuration.
+    fn edit_stockpile_routing_plan(&mut self, destination: crate::model::schedule::DestinationId, edit: impl FnOnce(&mut SchedulePlan) -> ScheduleResult) {
+        if !self.destination_is_stockpile(destination) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return;
+        }
+        self.edit_schedule(edit);
     }
 
     fn destination_is_stockpile(&self, destination: crate::model::schedule::DestinationId) -> bool {
@@ -526,9 +553,9 @@ impl crate::app::App<'_> {
         }
     }
 
-    /// Add a bar that reclaims from one stockpile, and select it.
+    /// Add a bar permitted to reclaim from a set of stockpiles, and select it.
     ///
-    /// No dig-block picking: a reclaim bar names a pile and a window, so
+    /// No dig-block picking: a reclaim bar names piles and a window, so
     /// creating it never puts the viewport into a picking mode.
     fn add_reclaim_bar(
         &mut self,
@@ -536,16 +563,15 @@ impl crate::app::App<'_> {
         agent: Option<LoaderAgentId>,
         priority: u32,
         window: crate::model::schedule::WorkWindow,
-        source: crate::model::schedule::DestinationId,
+        sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
     ) {
-        if !self.destination_is_stockpile(source) {
-            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+        if !self.reclaim_sources_are_stockpiles(&sources) {
             return;
         }
         let mut added = None;
         self.edit_schedule(|plan| {
-            added = Some(plan.add_reclaim_bar(&name, agent, priority, window, source, maximum_t)?);
+            added = Some(plan.add_reclaim_bar(&name, agent, priority, window, sources, maximum_t)?);
             Ok(())
         });
         if let Some(id) = added {
@@ -554,12 +580,36 @@ impl crate::app::App<'_> {
         }
     }
 
-    fn set_reclaim_source(&mut self, bar: BarId, source: crate::model::schedule::DestinationId) {
-        if !self.destination_is_stockpile(source) {
-            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+    /// Replace a reclaim bar's permitted stockpiles in one edit.
+    ///
+    /// A selection identical to the one the bar already holds is not an edit
+    /// and is dropped before the undo history sees it, so reopening the popup
+    /// and closing it again leaves nothing behind.
+    fn set_reclaim_sources(&mut self, bar: BarId, sources: Vec<crate::model::schedule::DestinationId>) {
+        if !self.reclaim_sources_are_stockpiles(&sources) {
             return;
         }
-        self.edit_schedule(|plan| plan.set_reclaim_source(bar, source));
+        // `edit_schedule` already drops an edit that changed nothing, so a
+        // selection equal to the one held never reaches the undo history.
+        self.edit_schedule(|plan| plan.set_reclaim_sources(bar, sources).map(|_| ()));
+    }
+
+    /// Whether every *newly authored* source is a stockpile today.
+    ///
+    /// Checked against the document because a solid-backed stockpile's kind is
+    /// the solid's. An entry the bar already holds that has since stopped
+    /// being a stockpile remains visible in the draft and readiness report;
+    /// applying a changed source set requires repairing that entry explicitly.
+    fn reclaim_sources_are_stockpiles(&mut self, sources: &[crate::model::schedule::DestinationId]) -> bool {
+        if sources.is_empty() {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::EmptyRuleSelection.message());
+            return false;
+        }
+        if !sources.iter().all(|source| self.destination_is_stockpile(*source)) {
+            userspace_warn!("{}", crate::model::schedule::ScheduleError::NotAStockpile.message());
+            return false;
+        }
+        true
     }
 
     fn add_opening_lot(&mut self, destination: crate::model::schedule::DestinationId, name: String, tonnes_t: f64) {

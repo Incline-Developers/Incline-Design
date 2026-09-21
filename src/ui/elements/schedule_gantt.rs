@@ -930,6 +930,14 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         tr_format!(literal = "%label%: %span%", label = tr!("schedule-gantt-window"), span = span),
     ];
     if let Some(work) = bar.reclaim() {
+        // The permitted piles, named. The marker cannot list them - it says a
+        // count - so this is where a planner reads back what the bar may draw
+        // on, in the order it was authored and with nothing read as priority.
+        if let Some(report) = report
+            && !report.reclaim_sources.is_empty()
+        {
+            lines.push(tr!("reclaim-sources-tooltip", stockpiles = report.reclaim_sources.join(", ")));
+        }
         lines.push(match work.maximum_t {
             Some(maximum) => tr!("reclaim-maximum-value", tonnes = format!("{maximum:.3}")),
             None => tr!("reclaim-maximum-unlimited"),
@@ -1487,7 +1495,7 @@ fn draw_bars(
                         {
                             open_reclaim = Some(ReclaimBarDialog {
                                 target: Some(bar.id),
-                                source: Some(work.source),
+                                sources: work.sources.clone(),
                                 agent: bar.agent,
                                 priority: bar.priority,
                                 start: bar.window.start_h.to_string(),
@@ -1681,7 +1689,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                     let start_h = ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR;
                     editor.reclaim_bar_dialog = Some(ReclaimBarDialog {
                         target: None,
-                        source: None,
+                        sources: Vec::new(),
                         agent: row.agent,
                         priority,
                         start: start_h.to_string(),

@@ -425,6 +425,13 @@ impl crate::app::App<'_> {
         self.sync_schedule_pipeline();
         self.mirror_schedule_reports();
         self.mirror_routing_choices();
+        // Only while the section that reads it is on screen, and never any
+        // solver or capture work: this formats a result that already exists.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+        {
+            let showing = self.editor.is_schedule_configuration();
+            self.mirror_experimental_blend(showing);
+        }
     }
 
     /// Copy the pipeline's status into the editor state the panels read.

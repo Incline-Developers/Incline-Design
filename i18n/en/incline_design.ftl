@@ -2454,25 +2454,33 @@ inventory-field-incompatible-note = The saved value is preserved, but its field 
 
 ## Reclaim bars
 
+destination-error-category-unsupported = Categories are not retained in blended stockpiles, so this rule cannot test one.
+destination-condition-category-blocked = Categories are not retained in blended stockpiles.
+destination-rule-category-conflict = This rule tests a category on material it may reclaim: { $fields }.
+
 reclaim-error-not-a-stockpile = A reclaim bar's source has to be a stockpile.
 reclaim-error-invalid-limit = Maximum tonnes must be a number above zero, or blank.
 reclaim-error-wrong-activity = That edit does not apply to this kind of bar.
 
 reclaim-bar = Reclaim
 reclaim-bar-default-name = Reclaim { $stockpile }
+reclaim-bar-default-name-several = Reclaim ({ $count } stockpiles)
 reclaim-add-bar = Add Reclaim Bar
 reclaim-add-dig-bar = Add Dig Sequence
 reclaim-edit-bar = Edit Reclaim
-reclaim-source = Stockpile
-reclaim-source-choose = Choose a stockpile
-reclaim-source-required = Choose a stockpile.
+reclaim-source = Permitted stockpiles
+reclaim-source-choose = Choose stockpiles
+reclaim-source-required = Choose at least one stockpile.
+reclaim-sources-summary = { $count } stockpiles
+reclaim-sources-help = The optimiser may take from any of these. Their order is not a preference.
+reclaim-sources-tooltip = Permitted: { $stockpiles }
 reclaim-loader = Loader
 reclaim-loader-choose = Choose a loader
 reclaim-maximum = Maximum tonnes
 reclaim-maximum-none = No limit
 reclaim-maximum-value = Maximum: { $tonnes } t
 reclaim-maximum-unlimited = Maximum: no limit
-reclaim-set-source = Set Stockpile
+reclaim-set-source = Set Permitted Stockpiles
 reclaim-set-maximum = Set Maximum Tonnes
 reclaim-source-unresolved = That stockpile is no longer in this project.
 reclaim-no-stockpiles = No stockpiles to reclaim from.
@@ -2481,3 +2489,34 @@ reclaim-unsupported = Reclaim tasks require the optimised scheduler.
 schedule-calendar-reclaim-rate = Reclaim rate (t/h)
 schedule-calendar-dig-rate = Dig rate (t/h)
 schedule-class-reclaim-rate = Reclaim rate (t/h)
+
+# Experimental blended-stockpile optimiser (developer feature)
+experiment-error-invalid-setting = That value is not one this setting accepts.
+experiment-grade-unit-fraction = Fraction (0–1)
+experiment-grade-unit-percent = Percent (0–100)
+experiment-representation-none = Not configured
+experiment-representation-blended = Blended pile
+experiment-representation-chunks = Ordered blended chunks
+experiment-run-superseded = The project changed while the experimental optimisation was running, so its answer was discarded.
+experiment-section = Optimisation (experimental)
+experiment-end-day = Planning end day
+experiment-interval = Calendar interval (h)
+experiment-interval-help = The interval sets how finely the calendar is split and when stockpile receipts become reclaimable. It is not a limit of one dig block per interval: a loader may work through several sources inside one interval.
+experiment-solve-seconds = Solve time limit (s)
+experiment-relative-gap = Relative gap target
+experiment-grades = Grades
+experiment-no-grade-fields = No tonnes-weighted average field is defined, so no blend grade can be tracked.
+experiment-grade-unmapped = Not used
+experiment-run = Run experimental optimisation
+experiment-cancel = Cancel
+experiment-phase-idle = Not run in this session.
+experiment-phase-running = Capturing and solving…
+experiment-phase-current = Result is current.
+experiment-phase-stale = Result is stale: the project has changed since it was calculated.
+experiment-limitations = Limitations and approximations
+experiment-diagnostics = Diagnostics
+experiment-representation = Experimental representation
+experiment-representation-help = Choose how this stockpile is represented to the experimental optimiser. Nothing is chosen for you, and the authored lots are never rewritten.
+experiment-blended-help = Reclaim uses the pile's tonnes-weighted average grades. Opening lots are combined into one blend, so FIFO/LIFO does not apply.
+experiment-chunks-help = Each opening lot becomes a closed, immediately reclaimable chunk of its own composition; the capacities listed here are receiving chunks, filled in order. A chunk closes to be reclaimed and an emptied slot is not reused within the horizon, which can limit total receipts.
+experiment-receiving-chunks = Receiving chunk capacities (t)

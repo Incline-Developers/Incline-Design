@@ -15,6 +15,10 @@ pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
 pub(crate) mod residency;
 pub(crate) mod schedule;
+/// Real-project capture for the experimental blended optimiser. Native only
+/// and off by default; nothing in the ordinary schedule run reaches it.
+#[cfg(all(not(target_arch = "wasm32"), feature = "blend-experiment"))]
+pub(crate) mod schedule_capture;
 pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
 pub(crate) mod schedule_routing; // Resolves the ordered destination rules into routed material.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
@@ -135,6 +139,8 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllScheduleStages
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunWholeSchedule
+                | UiCommand::RunExperimentalOptimisation
+                | UiCommand::CancelExperimentalOptimisation
                 | UiCommand::FocusScheduleAnimationSolid(_)
                 | UiCommand::Schedule { .. }
         );
@@ -433,6 +439,20 @@ impl<'a> App<'a> {
             }
             UiCommand::RunAllScheduleStages => {
                 self.run_all_schedule_steps();
+                Ok(())
+            }
+            UiCommand::RunExperimentalOptimisation => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+                if let Err(problems) = self.start_experimental_project_blend() {
+                    for problem in problems {
+                        crate::userspace_warn!("{problem}");
+                    }
+                }
+                Ok(())
+            }
+            UiCommand::CancelExperimentalOptimisation => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+                self.cancel_experimental_scip_blend();
                 Ok(())
             }
             UiCommand::RunSchedulePeriod => {

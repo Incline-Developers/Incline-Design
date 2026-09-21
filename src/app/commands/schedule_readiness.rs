@@ -193,10 +193,26 @@ pub(crate) struct MemberReport {
 }
 
 /// What a reclaim bar would take, as the current project sees it.
+/// What an unnamed reclaim bar is called.
+///
+/// One permitted pile names the bar, because that is the choice the user
+/// made. Several do not: listing them would grow without bound and reading
+/// the first as the bar's name would present an authored *set* as though its
+/// order meant something. The count is said instead, and the permitted piles
+/// are in the tooltip.
+pub(crate) fn reclaim_default_name(reclaim: &ReclaimReport) -> String {
+    match reclaim.source_names.as_slice() {
+        [single] => tr!("reclaim-bar-default-name", stockpile = single.clone().unwrap_or_else(|| tr!("destination-unresolved"))),
+        sources => tr!("reclaim-bar-default-name-several", count = sources.len().to_string()),
+    }
+}
+
 pub(crate) struct ReclaimReport {
-    /// What the stockpile is currently called, or `None` when the source no
-    /// longer resolves - which is a problem beside it rather than a repair.
-    pub(crate) source_name: Option<String>,
+    /// What each permitted stockpile is currently called, in the bar's
+    /// authored order, with `None` where that entry no longer resolves -
+    /// which is a problem beside it rather than a repair. The list is the
+    /// bar's own, so its length is the number of piles the planner approved.
+    pub(crate) source_names: Vec<Option<String>>,
 }
 
 /// What one bar would execute.
@@ -745,15 +761,23 @@ impl crate::app::App<'_> {
                 let default_name = match &report.reclaim {
                     // A reclaim bar is named by its pile, which is what the user
                     // chose when they created it.
-                    Some(reclaim) => tr!(
-                        "reclaim-bar-default-name",
-                        stockpile = reclaim.source_name.clone().unwrap_or_else(|| tr!("destination-unresolved"))
-                    ),
+                    Some(reclaim) => reclaim_default_name(reclaim),
                     None => default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref())),
                 };
                 ScheduleBarView {
                     bar: report.bar,
                     default_name,
+                    reclaim_sources: report
+                        .reclaim
+                        .as_ref()
+                        .map(|reclaim| {
+                            reclaim
+                                .source_names
+                                .iter()
+                                .map(|name| name.clone().unwrap_or_else(|| tr!("destination-unresolved")))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     // A refused attempt is historical evidence about these
                     // still-current inputs, not part of live readiness. The
                     // messages remain available, while repairs immediately
@@ -1064,15 +1088,24 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     // the Solids run's.
     if let Some(work) = bar.reclaim() {
         let plan = document.schedule();
-        let resolved = crate::model::schedule::destinations::resolve(work.source, document.solids(), plan.routing())
-            .ok()
-            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile);
-        if resolved.is_none() {
+        // Every permitted pile, resolved on its own. One entry that no longer
+        // names a stockpile is a configuration error against that entry, not
+        // a reason to report the whole bar as sourceless while other
+        // permitted piles are still usable.
+        let resolved: Vec<Option<String>> = work
+            .sources
+            .iter()
+            .map(|source| {
+                crate::model::schedule::destinations::resolve(*source, document.solids(), plan.routing())
+                    .ok()
+                    .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
+                    .map(|entry| entry.name)
+            })
+            .collect();
+        if resolved.iter().any(Option::is_none) {
             report.problems.push(ReadinessProblem::ReclaimSourceUnresolved);
         }
-        report.reclaim = Some(ReclaimReport {
-            source_name: resolved.map(|entry| entry.name),
-        });
+        report.reclaim = Some(ReclaimReport { source_names: resolved });
         return report;
     }
     if bar.members().is_empty() {

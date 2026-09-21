@@ -17,7 +17,9 @@ pub(crate) mod calendar;
 pub(crate) mod cashflow;
 pub(crate) mod destinations;
 pub(crate) mod dispatch;
+pub(crate) mod experiment;
 pub(crate) mod inventory;
+pub(crate) mod optimisation;
 pub(crate) mod production;
 pub(crate) mod sequence;
 pub(crate) mod trucking;
@@ -128,14 +130,31 @@ impl Default for BarWork {
     }
 }
 
-/// Reclaiming from one stockpile, up to an optional total.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Reclaiming from an explicitly permitted set of stockpiles, up to an
+/// optional total.
+///
+/// # The list is permission, not priority
+///
+/// Every stockpile named here is one the planner has *approved* this bar to
+/// draw on. Which of them a given segment actually takes from is an
+/// optimisation answer, so the list's display order carries no economic
+/// meaning and must never become a hidden preference: it is stored in the
+/// order it was authored so a hash and a rebuilt model are deterministic, and
+/// nothing reads position 0 as "the one to try first". That is the difference
+/// between this and a dig order, where position *is* the instruction.
+///
+/// The cap is the bar's own and is cumulative across every permitted source
+/// together, so approving a second stockpile widens where the tonnes may come
+/// from and never how many there are.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, from = "ReclaimRepr")]
 pub(crate) struct ReclaimWork {
-    /// The stockpile this bar takes from. An id that no longer names a
-    /// stockpile stays exactly as authored and is reported unresolved: a bar
-    /// silently repointed at another pile would reclaim material nobody chose.
-    pub(crate) source: DestinationId,
+    /// The stockpiles this bar may take from, in authored order and without
+    /// repeats. Never empty. An id that no longer names a stockpile stays
+    /// exactly as authored and is reported unresolved: a bar silently
+    /// repointed at another pile, or silently narrowed to the sources that
+    /// still resolve, would reclaim material nobody chose.
+    pub(crate) sources: Vec<DestinationId>,
     /// The most this bar may reclaim over the whole calculation, or `None` for
     /// no cap of its own. Cumulative across the bar rather than per period, and
     /// per bar rather than per stockpile - a copy of the bar gets its own.
@@ -143,12 +162,44 @@ pub(crate) struct ReclaimWork {
     pub(crate) maximum_t: Option<f64>,
 }
 
+/// What a saved reclaim bar is read through.
+///
+/// A bar used to name exactly one stockpile, and projects written then are
+/// still on disk; the singular field is accepted and folded into the list so
+/// those projects load rather than being refused a field they were right to
+/// write. Only reading goes through this - what is written is the list.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReclaimRepr {
+    #[serde(default)]
+    source: Option<DestinationId>,
+    #[serde(default)]
+    sources: Vec<DestinationId>,
+    #[serde(default)]
+    maximum_t: Option<f64>,
+}
+
+impl From<ReclaimRepr> for ReclaimWork {
+    fn from(repr: ReclaimRepr) -> Self {
+        let ReclaimRepr { source, mut sources, maximum_t } = repr;
+        if let Some(source) = source
+            && !sources.contains(&source)
+        {
+            sources.insert(0, source);
+        }
+        Self { sources, maximum_t }
+    }
+}
+
 impl ReclaimWork {
-    /// Whether the cap is one: absent, or a finite positive tonnage. Zero is
-    /// refused rather than read as "reclaim nothing", which is what deleting
-    /// the bar says.
-    pub(crate) fn is_valid(self) -> bool {
-        self.maximum_t.is_none_or(|maximum| maximum.is_finite() && maximum > 0.0)
+    /// Whether this is work at all: at least one permitted stockpile, no
+    /// repeats, and a cap that is absent or a finite positive tonnage. Zero
+    /// is refused rather than read as "reclaim nothing", which is what
+    /// deleting the bar says.
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.sources.is_empty()
+            && self.sources.iter().enumerate().all(|(index, source)| !self.sources[..index].contains(source))
+            && self.maximum_t.is_none_or(|maximum| maximum.is_finite() && maximum > 0.0)
     }
 }
 
@@ -271,10 +322,10 @@ impl ScheduleBar {
         }
     }
 
-    pub(crate) fn reclaim(&self) -> Option<ReclaimWork> {
+    pub(crate) fn reclaim(&self) -> Option<&ReclaimWork> {
         match &self.work {
             BarWork::Dig(_) => None,
-            BarWork::Reclaim(work) => Some(*work),
+            BarWork::Reclaim(work) => Some(work),
         }
     }
 
@@ -483,6 +534,15 @@ pub(crate) enum ScheduleError {
     InvalidReclaimLimit,
     /// A dig edit addressed to a reclaim bar, or the other way round.
     WrongActivity,
+    /// A category condition on a rule whose sources include stockpiles, where
+    /// the blended representation has no category left to test. Refused when
+    /// authored; an existing one is preserved and the rule reported invalid
+    /// instead. See [`destinations::category_conditions_available`].
+    CategoryConditionUnsupported,
+    /// An experimental optimiser setting outside what the model accepts: a
+    /// non-positive horizon, interval, time limit or chunk capacity, or a
+    /// relative gap outside `0..=1`.
+    InvalidExperimentSetting,
 }
 
 impl ScheduleError {
@@ -547,6 +607,8 @@ impl ScheduleError {
             Self::NotAStockpile => tr!("reclaim-error-not-a-stockpile"),
             Self::InvalidReclaimLimit => tr!("reclaim-error-invalid-limit"),
             Self::WrongActivity => tr!("reclaim-error-wrong-activity"),
+            Self::CategoryConditionUnsupported => tr!("destination-error-category-unsupported"),
+            Self::InvalidExperimentSetting => tr!("experiment-error-invalid-setting"),
         }
     }
 }
@@ -616,6 +678,11 @@ pub(crate) struct SchedulePlan {
     cashflow: CashflowConfig,
     #[serde(default = "default_currency")]
     currency: String,
+    /// Explicit settings for the experimental blended optimiser; see
+    /// [`experiment`]. Persisted in every build so a project written by one
+    /// with the experiment enabled round-trips through one without it.
+    #[serde(default)]
+    experiment: experiment::ExperimentConfig,
 }
 
 fn default_currency() -> String {
@@ -638,6 +705,7 @@ impl Default for SchedulePlan {
             trucks: TruckFleetConfig::default(),
             cashflow: CashflowConfig::default(),
             currency: default_currency(),
+            experiment: experiment::ExperimentConfig::default(),
         }
     }
 }
@@ -681,6 +749,7 @@ impl SchedulePlan {
             && self.trucks.is_empty()
             && self.cashflow.is_empty()
             && self.currency == cashflow::DEFAULT_CURRENCY
+            && self.experiment.is_pristine()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -736,6 +805,17 @@ impl SchedulePlan {
 
     /// Edit the cashflow rules. One committed edit is one undo step, like the
     /// rest of the plan.
+    #[allow(dead_code, reason = "read by the feature-gated experimental capture")]
+    pub(crate) fn experiment(&self) -> &experiment::ExperimentConfig {
+        &self.experiment
+    }
+
+    /// Mutable access for the command layer, which snapshots the whole plan
+    /// either side of an edit exactly as every other setting here does.
+    pub(crate) fn experiment_mut(&mut self) -> &mut experiment::ExperimentConfig {
+        &mut self.experiment
+    }
+
     pub(crate) fn cashflow_mut(&mut self) -> &mut CashflowConfig {
         &mut self.cashflow
     }
@@ -1021,9 +1101,10 @@ impl SchedulePlan {
         Ok(id)
     }
 
-    /// Add a bar that reclaims from one stockpile.
+    /// Add a bar that may reclaim from any of an explicitly permitted set of
+    /// stockpiles.
     ///
-    /// The source is checked to be a stockpile *of this plan's standalone
+    /// Each source is checked to be a stockpile *of this plan's standalone
     /// destinations* only when it is one of them: a solid-backed stockpile's
     /// kind is the solid's, which the plan cannot see, so that half is checked
     /// where the document is - and an id that stops naming a stockpile later
@@ -1034,7 +1115,7 @@ impl SchedulePlan {
         agent: Option<LoaderAgentId>,
         priority: u32,
         window: WorkWindow,
-        source: DestinationId,
+        sources: Vec<DestinationId>,
         maximum_t: Option<f64>,
     ) -> ScheduleResult<BarId> {
         let name = name.trim().to_owned();
@@ -1047,8 +1128,8 @@ impl SchedulePlan {
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
         }
-        self.check_reclaim_source(source)?;
-        let work = ReclaimWork { source, maximum_t };
+        let sources = self.checked_reclaim_sources(sources)?;
+        let work = ReclaimWork { sources, maximum_t };
         if !work.is_valid() {
             return Err(ScheduleError::InvalidReclaimLimit);
         }
@@ -1077,15 +1158,45 @@ impl SchedulePlan {
         Ok(())
     }
 
-    /// Point a reclaim bar at a different stockpile.
-    pub(crate) fn set_reclaim_source(&mut self, id: BarId, source: DestinationId) -> ScheduleResult {
-        self.check_reclaim_source(source)?;
+    /// The permitted stockpiles of one reclaim bar, deduplicated and never
+    /// empty.
+    ///
+    /// Order is preserved because it is the authored order and because a
+    /// deterministic list is what makes the built model and its fingerprint
+    /// reproducible - not because position means anything.
+    fn checked_reclaim_sources(&self, sources: Vec<DestinationId>) -> ScheduleResult<Vec<DestinationId>> {
+        if sources.is_empty() {
+            return Err(ScheduleError::EmptyRuleSelection);
+        }
+        let mut kept: Vec<DestinationId> = Vec::with_capacity(sources.len());
+        for source in sources {
+            self.check_reclaim_source(source)?;
+            if !kept.contains(&source) {
+                kept.push(source);
+            }
+        }
+        Ok(kept)
+    }
+
+    /// Replace the set of stockpiles a reclaim bar is permitted to draw on.
+    ///
+    /// Atomic: either the whole set is accepted or the bar is untouched, so a
+    /// selection containing one unusable entry never leaves the bar half
+    /// edited. A set equal to the one already held is not an edit, which is
+    /// what keeps a popup that closes unchanged out of the undo history.
+    pub(crate) fn set_reclaim_sources(&mut self, id: BarId, sources: Vec<DestinationId>) -> ScheduleResult<bool> {
+        let sources = self.checked_reclaim_sources(sources)?;
         let bar = self.bar_mut(id)?;
         match &mut bar.work {
-            BarWork::Reclaim(work) => work.source = source,
-            BarWork::Dig(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Reclaim(work) => {
+                if work.sources == sources {
+                    return Ok(false);
+                }
+                work.sources = sources;
+                Ok(true)
+            }
+            BarWork::Dig(_) => Err(ScheduleError::WrongActivity),
         }
-        Ok(())
     }
 
     /// Set or clear the most one reclaim bar may take over the calculation.
@@ -1323,7 +1434,7 @@ impl SchedulePlan {
             }
             match &bar.work {
                 BarWork::Dig(order) => order.check_loaded()?,
-                // The source is deliberately *not* required to resolve: a
+                // The sources are deliberately *not* required to resolve: a
                 // stockpile deleted or retyped since leaves the bar holding an
                 // unresolved reference, which the readiness report names. A file
                 // is not broken because the project moved on.
@@ -1393,12 +1504,13 @@ impl SchedulePlan {
         self.cashflow.hash_content(hasher);
         self.cashflow.hash_names(hasher);
         self.currency.hash(hasher);
+        self.experiment.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.name.hash(hasher);
             if let Some(work) = bar.reclaim() {
                 1u8.hash(hasher);
-                work.source.hash(hasher);
+                work.sources.hash(hasher);
                 work.maximum_t.map(f64::to_bits).hash(hasher);
             } else {
                 0u8.hash(hasher);
@@ -1450,6 +1562,7 @@ impl SchedulePlan {
             + self.trucks.estimated_bytes()
             + self.cashflow.estimated_bytes()
             + self.currency.len()
+            + self.experiment.estimated_bytes()
     }
 }
 

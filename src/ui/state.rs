@@ -203,6 +203,16 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
     }
 
+    /// Whether the Schedule Setup page is showing the Configuration step,
+    /// which is the only page that draws the experimental result.
+    #[allow(dead_code, reason = "read by the feature-gated experimental result mirror")]
+    pub(crate) fn is_schedule_configuration(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Schedule
+            && self.schedule_subpage == PlanningSubpage::Setup
+            && self.schedule_setup_step == ScheduleStep::Configuration
+    }
+
     /// Whether the Schedule Setup page is showing the Destinations step, the
     /// one page whose choices are drawn from the Solids run's own bands.
     pub(crate) fn is_schedule_destinations(&self) -> bool {
@@ -2272,6 +2282,18 @@ pub(crate) struct EditorState {
     /// prerequisite, named. Inspection never consults it - only calculation is
     /// gated.
     pub(crate) schedule_calculation_status: String,
+    /// The experimental blended optimiser's last answer, mirrored from the
+    /// App while the Optimisation section is on screen. Held separately from
+    /// every dispatcher result: nothing here feeds the Gantt, the calendar
+    /// rows or the animation.
+    #[allow(dead_code, reason = "read by the feature-gated experimental Optimisation section")]
+    pub(crate) experimental_blend: ExperimentalBlendView,
+    /// Typed text for the experimental settings, so a partly typed number is
+    /// not committed and not lost.
+    #[allow(dead_code, reason = "held for the feature-gated experimental Optimisation section")]
+    pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
+    /// Typed chunk capacities for one stockpile, as `(destination, source, text)`.
+    pub(crate) schedule_chunk_draft: Option<(crate::model::schedule::DestinationId, String, String)>,
     /// Selected rows in the two loader editors, and the drafts of the cells
     /// being typed into. Drafts are held rather than rebuilt each frame so an
     /// invalid entry stays on screen with its error instead of snapping back
@@ -3293,6 +3315,9 @@ impl EditorState {
             schedule_stages: Default::default(),
             schedule_run_active: false,
             schedule_calculation_status: String::new(),
+            experimental_blend: ExperimentalBlendView::default(),
+            schedule_experiment_draft: None,
+            schedule_chunk_draft: None,
             schedule_selected_class: None,
             schedule_selected_agent: None,
             schedule_class_draft: None,
@@ -3844,6 +3869,15 @@ pub(crate) enum UiCommand {
     /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
     /// whatever result the last completed run left stands untouched.
     CancelScheduleRun,
+    /// Capture the project, solve it with the experimental blended optimiser
+    /// and retain the replayed answer. Feature-gated and developer-only:
+    /// nothing it produces reaches the Gantt, the calendar or the animation.
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    RunExperimentalOptimisation,
+    /// Stop an experimental optimisation in flight. The previous answer is
+    /// kept exactly as it was and is not presented as current.
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    CancelExperimentalOptimisation,
     /// One edit to a project's loader fleet.
     ///
     /// Addressed rather than implicit: `project` is the runtime id of the
@@ -4273,6 +4307,8 @@ impl UiCommand {
             | Self::CancelScheduleRun
             | Self::RunSchedulePeriod
             | Self::RunWholeSchedule
+            | Self::RunExperimentalOptimisation
+            | Self::CancelExperimentalOptimisation
             | Self::CancelScheduleCalculation => None,
 
             #[cfg(target_arch = "wasm32")]
@@ -4436,8 +4472,16 @@ impl UiCommand {
                 | ScheduleEdit::MoveOpeningLot { .. }
                 | ScheduleEdit::SetOpeningPortionTonnes { .. }
                 | ScheduleEdit::SetOpeningPortionValue { .. }
-                | ScheduleEdit::SetReclaimSource { .. }
-                | ScheduleEdit::SetReclaimMaximum { .. } => None,
+                | ScheduleEdit::SetReclaimSources { .. }
+                | ScheduleEdit::SetReclaimMaximum { .. }
+                // Experimental optimiser settings: the Optimisation section
+                // and the stockpile's own page show the result where it was
+                // typed.
+                | ScheduleEdit::SetExperimentHorizon { .. }
+                | ScheduleEdit::SetExperimentSolveLimits { .. }
+                | ScheduleEdit::SetExperimentGradeUnit { .. }
+                | ScheduleEdit::SetStockpileRepresentation { .. }
+                | ScheduleEdit::SetStockpileChunks { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
@@ -5169,6 +5213,37 @@ pub(crate) struct ScheduleAgentDraft {
     pub(crate) name: String,
 }
 
+/// What the experimental optimiser's last run says, in already-formatted
+/// rows. The UI never computes any of this; it only draws it.
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code, reason = "drawn by the feature-gated experimental Optimisation section")]
+pub(crate) struct ExperimentalBlendView {
+    /// A run is in flight, so Run is unavailable and Cancel is not.
+    pub(crate) running: bool,
+    /// Whether a retained answer still describes the project. A stale answer
+    /// is labelled, never deleted and never presented as current.
+    pub(crate) current: bool,
+    pub(crate) have_result: bool,
+    /// Property/value rows for the summary table.
+    pub(crate) rows: Vec<(String, String)>,
+    /// Stated approximations and limitations, verbatim.
+    pub(crate) notes: Vec<String>,
+    /// Why the last attempt produced nothing, when it produced nothing.
+    pub(crate) diagnostics: Vec<String>,
+}
+
+/// Typed experimental settings, held against the values they were read from
+/// so an edit elsewhere refreshes the fields.
+#[derive(Clone, Debug)]
+#[allow(dead_code, reason = "held for the feature-gated experimental Optimisation section")]
+pub(crate) struct ScheduleExperimentDraft {
+    pub(crate) source: (u32, u64, u64, u64),
+    pub(crate) end_day: String,
+    pub(crate) interval_h: String,
+    pub(crate) solve_seconds: String,
+    pub(crate) relative_gap: String,
+}
+
 /// What one [`UiCommand::Schedule`] does to the fleet.
 ///
 /// Split out from the command so every fleet edit carries the project it was
@@ -5549,26 +5624,57 @@ pub(crate) enum ScheduleEdit {
         field: crate::model::ReserveFieldId,
         value: Option<crate::model::schedule::OpeningValue>,
     },
-    /// Add a Gantt bar that reclaims from one stockpile. No viewport picking:
-    /// a reclaim bar names a pile, not ground.
+    /// Add a Gantt bar that reclaims from an explicitly permitted set of
+    /// stockpiles. No viewport picking: a reclaim bar names piles, not ground.
     AddReclaimBar {
         name: String,
         agent: Option<crate::model::schedule::LoaderAgentId>,
         priority: u32,
         window: crate::model::schedule::WorkWindow,
-        source: crate::model::schedule::DestinationId,
+        sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
     },
-    /// Point a reclaim bar at a different stockpile.
-    SetReclaimSource {
+    /// Replace the set of stockpiles a reclaim bar may draw on, as one edit.
+    /// Never empty, and never a silent repair of an entry that no longer
+    /// resolves.
+    SetReclaimSources {
         bar: crate::model::schedule::BarId,
-        source: crate::model::schedule::DestinationId,
+        sources: Vec<crate::model::schedule::DestinationId>,
     },
     /// The most one reclaim bar may take over the whole calculation, or `None`
     /// for no cap of its own.
     SetReclaimMaximum {
         bar: crate::model::schedule::BarId,
         maximum_t: Option<f64>,
+    },
+    /// Experimental blended-optimiser settings. Persisted and undoable like
+    /// every other plan setting; only the section that edits them is behind
+    /// the feature gate, because a project written by a build with the
+    /// experiment on must round-trip through one with it off.
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetExperimentHorizon {
+        end_day: u32,
+        interval_h: f64,
+    },
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetExperimentSolveLimits {
+        seconds: f64,
+        relative_gap: f64,
+    },
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetExperimentGradeUnit {
+        field: crate::model::ReserveFieldId,
+        unit: Option<crate::model::schedule::experiment::GradeUnit>,
+    },
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetStockpileRepresentation {
+        destination: crate::model::schedule::DestinationId,
+        representation: crate::model::schedule::experiment::StockpileRepresentation,
+    },
+    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetStockpileChunks {
+        destination: crate::model::schedule::DestinationId,
+        capacities: Vec<f64>,
     },
 }
 
@@ -5610,7 +5716,9 @@ pub(crate) struct BarNameDialog {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ReclaimBarDialog {
     pub(crate) target: Option<crate::model::schedule::BarId>,
-    pub(crate) source: Option<crate::model::schedule::DestinationId>,
+    /// The permitted stockpiles, as the draft holds them. Entries that no
+    /// longer resolve stay in the list and stay removable.
+    pub(crate) sources: Vec<crate::model::schedule::DestinationId>,
     pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
     pub(crate) priority: u32,
     pub(crate) start: String,
@@ -5747,6 +5855,10 @@ pub(crate) struct ScheduleBarView {
     pub(crate) ready: bool,
     pub(crate) tonnes: Option<f64>,
     pub(crate) members: Vec<ScheduleMemberView>,
+    /// A reclaim bar's permitted stockpiles as they are currently named, in
+    /// the bar's authored order, with an unresolved entry named as such.
+    /// Empty for a dig bar.
+    pub(crate) reclaim_sources: Vec<String>,
     pub(crate) problems: Vec<String>,
 }
 

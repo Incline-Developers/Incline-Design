@@ -119,7 +119,7 @@ impl crate::app::App<'_> {
             bar.window.end_h.map(f64::to_bits).hash(&mut hasher);
             if let Some(work) = bar.reclaim() {
                 1u8.hash(&mut hasher);
-                work.source.hash(&mut hasher);
+                work.sources.hash(&mut hasher);
                 work.maximum_t.map(f64::to_bits).hash(&mut hasher);
             } else {
                 0u8.hash(&mut hasher);

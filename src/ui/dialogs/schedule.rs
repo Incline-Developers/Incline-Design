@@ -9,12 +9,15 @@ use crate::{
     i18n::tr,
     model::{
         Document,
-        schedule::{DestinationKind, SchedulePlan, WorkWindow, destinations},
+        schedule::{DestinationId, DestinationKind, SchedulePlan, WorkWindow, destinations},
     },
     ui::{
         EditorState,
         state::{BarNameDialog, BarWindowDialog, ScheduleEdit, UiCommand},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
+        widgets::{
+            context_menu::{ChecklistRow, Tick, checklist_popup},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldText},
+        },
     },
 };
 
@@ -38,25 +41,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     let draft = editor.reclaim_bar_dialog.as_mut().expect("checked above");
     let title = if target.is_some() { tr!("reclaim-edit-bar") } else { tr!("reclaim-add-bar") };
     DragableMenu::new("reclaim_bar_dialog", title).open(&mut open).min_width(360.0).show(ui.ctx(), |ui| {
-        let source_label = draft
-            .source
-            .and_then(|id| stockpiles.iter().find(|entry| entry.id == id))
-            .map(|entry| entry.name.clone())
-            .unwrap_or_else(|| {
-                if draft.source.is_some() {
-                    tr!("destination-unresolved")
-                } else {
-                    tr!("reclaim-source-choose")
-                }
-            });
-        MenuFieldCombo::new(
-            "reclaim_bar_source",
-            tr!("reclaim-source"),
-            &mut draft.source,
-            source_label,
-            stockpiles.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
-        )
-        .show(ui);
+        permitted_stockpiles_field(ui, &mut draft.sources, &stockpiles);
 
         if target.is_none() {
             let agent_label = draft
@@ -94,8 +79,8 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         } else {
             None
         };
-        let valid = draft.source.is_some() && maximum.is_some() && (target.is_some() || (draft.agent.is_some() && window.is_some()));
-        if !stockpiles.is_empty() && draft.source.is_none() {
+        let valid = !draft.sources.is_empty() && maximum.is_some() && (target.is_some() || (draft.agent.is_some() && window.is_some()));
+        if !stockpiles.is_empty() && draft.sources.is_empty() {
             ui.label(egui::RichText::new(tr!("reclaim-source-required")).color(ui.visuals().error_fg_color));
         } else if stockpiles.is_empty() {
             ui.label(egui::RichText::new(tr!("reclaim-no-stockpiles")).color(ui.visuals().error_fg_color));
@@ -107,11 +92,12 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked())
                 && valid
-                && let (Some(source), Some(maximum_t)) = (draft.source, maximum)
+                && let Some(maximum_t) = maximum
             {
+                let sources = draft.sources.clone();
                 match target {
                     Some(bar) => {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimSource { bar, source }));
+                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimSources { bar, sources }));
                         commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimMaximum { bar, maximum_t }));
                     }
                     None => commands.push(UiCommand::schedule(
@@ -121,7 +107,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                             agent: draft.agent,
                             priority: draft.priority,
                             window: window.expect("validated above"),
-                            source,
+                            sources,
                             maximum_t,
                         },
                     )),
@@ -351,5 +337,67 @@ pub(crate) fn draw_bar_window_dialog(ui: &mut egui::Ui, editor: &mut EditorState
         });
     if close || !open {
         editor.bar_window_dialog = None;
+    }
+}
+
+/// The permitted-stockpile selector of a reclaim bar.
+///
+/// A checkable popup rather than a combo, because the bar names a *set*. Two
+/// things it deliberately does not do: it never offers "All", since the point
+/// of the field is that a planner has approved specific piles and a pile
+/// created tomorrow is not one of them; and it never drops an entry that no
+/// longer resolves, which stays listed, ticked and removable so a deleted
+/// stockpile is visible rather than quietly gone.
+///
+/// Unticking the last entry does nothing: an empty list is not a reclaim bar,
+/// and the bar is deleted to say that.
+fn permitted_stockpiles_field(ui: &mut egui::Ui, chosen: &mut Vec<DestinationId>, stockpiles: &[destinations::DestinationView]) {
+    let summary = match chosen.as_slice() {
+        [] => tr!("reclaim-source-choose"),
+        [single] => stockpiles
+            .iter()
+            .find(|entry| entry.id == *single)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| tr!("destination-unresolved")),
+        several => tr!("reclaim-sources-summary", count = several.len().to_string()),
+    };
+    let response = MenuField::new(tr!("reclaim-source"))
+        .help_text(tr!("reclaim-sources-help"))
+        .show(ui, |ui, _, column_width| {
+            ui.add_sized([column_width, ui.spacing().interact_size.y], egui::Button::new(summary.clone()).truncate())
+        });
+    checklist_popup(&response, tr!("reclaim-source"), 260.0, |ui| {
+        if stockpiles.is_empty() && chosen.is_empty() {
+            menu::menu_note(ui, tr!("reclaim-no-stockpiles"));
+        }
+        for entry in stockpiles {
+            let picked = chosen.contains(&entry.id);
+            if ChecklistRow::new(&entry.name, Tick::of(picked, false)).show(ui).toggled {
+                toggle_source(chosen, entry.id, picked);
+            }
+        }
+        // Entries the project no longer exposes as stockpiles. Kept visible so
+        // a bar pointing at a deleted pile reads as a configuration error the
+        // user can repair, rather than as a bar that silently lost a source.
+        let unresolved: Vec<DestinationId> = chosen.iter().copied().filter(|id| !stockpiles.iter().any(|entry| entry.id == *id)).collect();
+        if !unresolved.is_empty() {
+            crate::ui::widgets::context_menu::context_menu_separator(ui);
+        }
+        for id in unresolved {
+            if ChecklistRow::new(&tr!("destination-unresolved"), Tick::On).show(ui).toggled {
+                toggle_source(chosen, id, true);
+            }
+        }
+    });
+}
+
+/// Tick or untick one permitted stockpile, refusing to empty the list.
+fn toggle_source(chosen: &mut Vec<DestinationId>, id: DestinationId, picked: bool) {
+    if picked {
+        if chosen.len() > 1 {
+            chosen.retain(|entry| *entry != id);
+        }
+    } else {
+        chosen.push(id);
     }
 }

@@ -153,6 +153,18 @@ impl CashflowRule {
     /// not one per scope that happens to cover it.
     #[allow(dead_code, reason = "matching is consumed by the optimised run in a later stage")]
     pub(crate) fn matches(&self, movement: MovementContext, value: impl Fn(ReserveFieldId) -> Option<PortionValue>) -> bool {
+        self.matches_identity(movement) && self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
+    }
+
+    /// The identity half alone: enabled, this activity, loader, source and
+    /// destination - and nothing about the material.
+    ///
+    /// For the same reason [`super::DestinationRule::accepts_identity`]
+    /// exists: a blended stockpile's grade is a decision variable, so a
+    /// caller pricing a reclaim has to be able to ask whether a conditional
+    /// rule *would* describe this movement, in order to refuse rather than
+    /// quietly price it as though the condition failed.
+    pub(crate) fn matches_identity(&self, movement: MovementContext) -> bool {
         if !self.enabled {
             return false;
         }
@@ -174,7 +186,7 @@ impl CashflowRule {
             DestinationSelection::Only(ids) if ids.contains(&movement.destination) => {}
             DestinationSelection::Only(_) => return false,
         }
-        self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
+        true
     }
 
     fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
@@ -416,6 +428,11 @@ impl CashflowConfig {
                 return Err(ScheduleError::DuplicateCondition(condition.field));
             }
         }
+        // The same policy the destination rules apply, from the same helper:
+        // a category is not retained by a blended pile, wherever the rule that
+        // tests it lives.
+        let rule = self.rule(id).ok_or(ScheduleError::UnknownCashflowRule)?;
+        destinations::check_category_conditions(&rule.sources, &conditions, &rule.conditions)?;
         self.rule_mut(id)?.conditions = conditions;
         Ok(())
     }

@@ -615,6 +615,19 @@ impl DestinationRule {
     /// source is its stockpile, so a rule written for ex-pit ground cannot
     /// route material a second time on its way out of a pile.
     pub(crate) fn accepts(&self, loader: LoaderAgentId, source: super::RouteSource, value: impl Fn(ReserveFieldId) -> Option<PortionValue>) -> bool {
+        self.accepts_identity(loader, source) && self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
+    }
+
+    /// The identity half alone: enabled, this loader, this source - and
+    /// nothing about the material.
+    ///
+    /// Split out for a caller whose material composition is not known at the
+    /// time it asks, which is exactly the blended stockpile case: a pile's
+    /// grade is a decision variable, so "would this rule apply if the grade
+    /// allowed it" is a different and answerable question from "does it
+    /// apply". Callers that know the material use [`Self::accepts`], which is
+    /// this plus the conditions and is the only path routing takes.
+    pub(crate) fn accepts_identity(&self, loader: LoaderAgentId, source: super::RouteSource) -> bool {
         if !self.enabled {
             return false;
         }
@@ -628,7 +641,7 @@ impl DestinationRule {
             MovementSourceSelection::Only(scopes) if scopes.iter().any(|scope| scope.covers(source)) => {}
             MovementSourceSelection::Only(_) => return false,
         }
-        self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
+        true
     }
 }
 
@@ -702,6 +715,71 @@ pub(crate) fn checked_sources(sources: MovementSourceSelection) -> ScheduleResul
             Ok(MovementSourceSelection::Only(kept))
         }
     }
+}
+
+/// Whether a rule selecting these sources may carry **category** conditions.
+///
+/// # Why a source selection decides this
+///
+/// The accepted blended-stockpile representation keeps tonnes and contained
+/// quantity per tracked grade and *discards categories*: once material is in a
+/// pile there is no ore-type left to test, only a blend. So a condition on a
+/// category can be evaluated for material coming straight out of the ground
+/// and cannot be evaluated for material coming out of a stockpile.
+///
+/// That makes availability a property of the sources a rule names, and the
+/// same table applies to destination rules and to cashflow rules:
+///
+/// | sources | category conditions |
+/// |---|---|
+/// | explicit pit, bench or flitch scopes only | available |
+/// | any stockpile scope | unavailable |
+/// | a mix of ground and stockpile scopes | unavailable |
+/// | `All` | unavailable, because `All` includes stockpiles |
+///
+/// `All` is unavailable even in a project that has no stockpiles today.
+/// `All` is a standing instruction that covers whatever is added tomorrow, so
+/// reading it as "ground only, for now" would make a rule's meaning depend on
+/// when it was last looked at. A planner who wants the ground half says so by
+/// naming the pits.
+///
+/// A mixed rule is not split automatically. Which half keeps the category and
+/// which loses it is the planner's decision, and guessing it would reroute
+/// material nobody chose.
+pub(crate) fn category_conditions_available(sources: &MovementSourceSelection) -> bool {
+    match sources {
+        MovementSourceSelection::All => false,
+        MovementSourceSelection::Only(scopes) => !scopes.is_empty() && scopes.iter().all(|scope| scope.ground().is_some()),
+    }
+}
+
+/// The fields whose category conditions this combination cannot evaluate.
+///
+/// Empty for every compatible rule. A non-empty answer is a rule to mark
+/// invalid and a condition to name - never a condition to drop, because a
+/// category silently ignored is a rule that stopped restricting and routes
+/// material somewhere nobody chose.
+pub(crate) fn conflicting_category_conditions(sources: &MovementSourceSelection, conditions: &[FieldCondition]) -> Vec<ReserveFieldId> {
+    if category_conditions_available(sources) {
+        return Vec::new();
+    }
+    conditions
+        .iter()
+        .filter(|condition| matches!(condition.test, ConditionTest::Category { .. }))
+        .map(|condition| condition.field)
+        .collect()
+}
+
+/// Refuse a condition list containing a category the sources cannot evaluate.
+///
+/// This is the *condition edit* boundary. Changing sources on a rule that
+/// already carries a category preserves that condition and marks the rule
+/// invalid; any later condition edit must repair the conflict explicitly.
+pub(crate) fn check_category_conditions(sources: &MovementSourceSelection, conditions: &[FieldCondition], _held: &[FieldCondition]) -> ScheduleResult {
+    if !conflicting_category_conditions(sources, conditions).is_empty() {
+        return Err(ScheduleError::CategoryConditionUnsupported);
+    }
+    Ok(())
 }
 
 /// Whether a pile's opening stock fits its capacity. Equality is valid: a pile
@@ -1129,6 +1207,8 @@ impl RoutingConfig {
         for condition in &conditions {
             check_condition(&condition.test)?;
         }
+        let rule = self.rule(id).ok_or(ScheduleError::UnknownRule)?;
+        check_category_conditions(&rule.sources, &conditions, &rule.conditions)?;
         if let Some(condition) = conditions
             .iter()
             .enumerate()
