@@ -1,9 +1,10 @@
 //! Ordinary kriging of drill-hole interval samples onto a regular block grid.
 
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 
 use anyhow::{Context, Result};
 use glam::DVec3;
+use rayon::prelude::*;
 
 use crate::{app::jobs::CancelFlag, model::progress::Phase};
 
@@ -78,26 +79,43 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
     let mut estimates = allocated_values(count, f64::NAN, "kriging estimates")?;
     let total_covariance = options.sill + options.nugget;
 
-    for (index, slot) in estimates.iter_mut().enumerate() {
-        if index.is_multiple_of(256) {
+    // Blocks are independent: each one reads the shared bins and writes only
+    // its own slot, so the grid splits into chunks without any ordering or
+    // locking, and the result does not depend on the thread count.
+    let task_count = rayon::current_num_threads().saturating_mul(4).max(1);
+    let chunk_size = count.div_ceil(task_count).max(1);
+    let kriged = progress.counter(count);
+    estimates.par_chunks_mut(chunk_size).enumerate().try_for_each(|(chunk_index, chunk)| -> Result<()> {
+        // Scratch reused across every block in the chunk: the neighbour
+        // shortlist and the kriging system both have a fixed worst-case
+        // size, so neither allocates after the first block.
+        let mut neighbours: Vec<Candidate> = Vec::with_capacity(options.max_samples);
+        let mut system: Vec<f64> = Vec::new();
+        let chunk_base = chunk_index * chunk_size;
+        for (step, slice) in chunk.chunks_mut(PROGRESS_STRIDE).enumerate() {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            progress.set_items(index as u64, count as u64);
+            let base = chunk_base + step * PROGRESS_STRIDE;
+            for (offset, slot) in slice.iter_mut().enumerate() {
+                let index = base + offset;
+                let x = index % dims[0];
+                let yz = index / dims[0];
+                let y = yz % dims[1];
+                let z = yz / dims[1];
+                let center = grid.lower + grid.cell * DVec3::new(x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5);
+                bins.nearest(center, samples, options.range, options.max_samples, &mut neighbours);
+                if neighbours.len() < options.min_samples {
+                    continue;
+                }
+                if let Some(estimate) = estimate_at(samples, &neighbours, options, total_covariance, &mut system) {
+                    *slot = estimate;
+                }
+            }
+            kriged.advance_by(slice.len());
         }
-        let x = index % dims[0];
-        let yz = index / dims[0];
-        let y = yz % dims[1];
-        let z = yz / dims[1];
-        let center = grid.lower + grid.cell * DVec3::new(x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5);
-        let neighbours = bins.nearest(center, samples, options.range, options.max_samples);
-        if neighbours.len() < options.min_samples {
-            continue;
-        }
-        if let Some(estimate) = estimate_at(center, samples, &neighbours, options, total_covariance) {
-            *slot = estimate;
-        }
-    }
+        Ok(())
+    })?;
     progress.finish();
     Ok(KrigedGrid {
         dims,
@@ -105,6 +123,11 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
         estimates,
     })
 }
+
+/// Blocks between cancellation checks and progress reports. Matches the
+/// counter's own reporting stride, so neither costs more than one atomic per
+/// block batch.
+const PROGRESS_STRIDE: usize = 4096;
 
 fn allocated_values(count: usize, initial: f64, description: &str) -> Result<Vec<f64>> {
     let mut values = Vec::new();
@@ -129,27 +152,89 @@ impl SampleBins {
         Self { cell, bins }
     }
 
-    fn nearest(&self, target: DVec3, samples: &[KrigingSample], radius: f64, maximum: usize) -> Vec<usize> {
+    /// Fills `best` with the `maximum` closest samples within `radius` of
+    /// `target`, nearest first. Only the shortlist is kept, so the cost is one
+    /// comparison per candidate rather than a full sort of every sample in the
+    /// neighbourhood — which, with a block size far below the variogram range,
+    /// is the difference between the search dominating the run and disappearing
+    /// from it.
+    fn nearest(&self, target: DVec3, samples: &[KrigingSample], radius: f64, maximum: usize, best: &mut Vec<Candidate>) {
+        best.clear();
         let base = bin_key(target, self.cell);
         let radius_squared = radius * radius;
-        let mut found = Vec::new();
+        // Bins are `radius` across, so the search sphere always lies inside the
+        // 3x3x3 neighbourhood — but that block is ~27x the sphere's volume, so
+        // most of its corners hold nothing reachable. Rejecting a bin by its own
+        // bounds skips the hash lookup as well as its samples.
         for dz in -1..=1 {
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let key = [base[0].saturating_add(dx), base[1].saturating_add(dy), base[2].saturating_add(dz)];
-                    if let Some(indices) = self.bins.get(&key) {
-                        found.extend(indices.iter().copied().filter_map(|index| {
-                            let distance_squared = samples[index].position.distance_squared(target);
-                            (distance_squared <= radius_squared).then_some((index, distance_squared))
-                        }));
+                    if self.bin_distance_squared(key, target) > radius_squared {
+                        continue;
+                    }
+                    let Some(indices) = self.bins.get(&key) else {
+                        continue;
+                    };
+                    for index in indices.iter().copied() {
+                        let distance_squared = samples[index].position.distance_squared(target);
+                        if distance_squared <= radius_squared {
+                            offer(best, maximum, Candidate { distance_squared, index });
+                        }
                     }
                 }
             }
         }
-        found.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        found.truncate(maximum);
-        found.into_iter().map(|(index, _)| index).collect()
     }
+
+    /// Squared distance from `target` to the nearest point of the bin's own box.
+    fn bin_distance_squared(&self, key: [i64; 3], target: DVec3) -> f64 {
+        let lower = DVec3::from_array(key.map(|coordinate| coordinate as f64)) * self.cell;
+        target.distance_squared(target.clamp(lower, lower + DVec3::splat(self.cell)))
+    }
+}
+
+/// One sample in the running shortlist. Ordered by distance, ties broken by
+/// sample index so the chosen neighbours never depend on bin iteration order.
+#[derive(Clone, Copy, Debug)]
+struct Candidate {
+    distance_squared: f64,
+    index: usize,
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance_squared.total_cmp(&other.distance_squared).then(self.index.cmp(&other.index))
+    }
+}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Candidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Candidate {}
+
+/// Insert `candidate` into a shortlist held sorted and capped at `maximum`.
+/// Once the list is full, a candidate that cannot displace the worst entry
+/// costs a single comparison, which is the common case by a wide margin.
+fn offer(best: &mut Vec<Candidate>, maximum: usize, candidate: Candidate) {
+    if best.len() == maximum {
+        // `maximum` is at least 1, so a full list has a last element.
+        if best[maximum - 1] <= candidate {
+            return;
+        }
+        best.pop();
+    }
+    let at = best.partition_point(|held| *held < candidate);
+    best.insert(at, candidate);
 }
 
 fn bin_key(position: DVec3, cell: f64) -> [i64; 3] {
@@ -167,30 +252,35 @@ fn spherical_covariance(distance: f64, options: OrdinaryKrigingOptions) -> f64 {
     options.sill * (1.0 - 1.5 * ratio + 0.5 * ratio * ratio * ratio)
 }
 
-fn estimate_at(target: DVec3, samples: &[KrigingSample], neighbours: &[usize], options: OrdinaryKrigingOptions, total_covariance: f64) -> Option<f64> {
+/// Solves the ordinary kriging system for one block. `augmented` is caller-owned
+/// scratch so the per-block system — up to 66x68 doubles — is allocated once per
+/// worker rather than once per block.
+fn estimate_at(samples: &[KrigingSample], neighbours: &[Candidate], options: OrdinaryKrigingOptions, total_covariance: f64, augmented: &mut Vec<f64>) -> Option<f64> {
     let n = neighbours.len();
     let width = n + 2;
-    let mut augmented = vec![0.0; (n + 1) * width];
+    augmented.clear();
+    augmented.resize((n + 1) * width, 0.0);
     let jitter = total_covariance.max(1.0) * 1.0e-10;
     for row in 0..n {
         for column in 0..n {
-            let distance = samples[neighbours[row]].position.distance(samples[neighbours[column]].position);
+            let distance = samples[neighbours[row].index].position.distance(samples[neighbours[column].index].position);
             augmented[row * width + column] = spherical_covariance(distance, options) + if row == column { jitter } else { 0.0 };
         }
         augmented[row * width + n] = 1.0;
-        augmented[row * width + n + 1] = spherical_covariance(samples[neighbours[row]].position.distance(target), options);
+        // The search already measured this distance.
+        augmented[row * width + n + 1] = spherical_covariance(neighbours[row].distance_squared.sqrt(), options);
     }
     for column in 0..n {
         augmented[n * width + column] = 1.0;
     }
     augmented[n * width + n] = 0.0;
     augmented[n * width + n + 1] = 1.0;
-    gaussian_solve(&mut augmented, n + 1, width)?;
+    gaussian_solve(augmented, n + 1, width)?;
 
     let mut estimate = 0.0;
     for row in 0..n {
         let weight = augmented[row * width + n + 1];
-        estimate += weight * samples[neighbours[row]].value;
+        estimate += weight * samples[neighbours[row].index].value;
     }
     estimate.is_finite().then_some(estimate)
 }
