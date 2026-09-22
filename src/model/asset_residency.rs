@@ -58,7 +58,26 @@ impl OpenItem {
         Ok(self)
     }
 
+    /// The payload allocations a [`omf::PayloadSource`] tracks, for the kinds
+    /// a save can copy.
+    fn payload_identity(&self) -> Option<omf::PayloadIdentity> {
+        match self {
+            Self::Triangulation(item) => Some(omf::PayloadIdentity::triangulation(item)),
+            Self::PointCloud(item) => Some(omf::PayloadIdentity::point_cloud(item)),
+            Self::BlockModel(_) | Self::DrillHole(_) | Self::Raster(_) => None,
+        }
+    }
+
     pub(crate) fn release_payload(&mut self) {
+        // Decided before the payload goes: once it has, nothing can tell
+        // whether it was still the one read from the source archive.
+        let payload_source = self
+            .state_mut()
+            .payload_source
+            .take()
+            .zip(self.payload_identity())
+            .and_then(|(source, current)| source.released(&current));
+        self.state_mut().payload_source = payload_source;
         let summary = match self {
             Self::Triangulation(item) => {
                 let summary = AssetSummary {
@@ -163,6 +182,13 @@ impl OpenItem {
         }
         self.state_mut().deferred = None;
         self.state_mut().summary = None;
+        let payload_source = self
+            .state_mut()
+            .payload_source
+            .take()
+            .zip(self.payload_identity())
+            .and_then(|(source, current)| source.restored(current));
+        self.state_mut().payload_source = payload_source;
         Ok(self)
     }
 }

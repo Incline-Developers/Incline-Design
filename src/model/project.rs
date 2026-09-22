@@ -29,6 +29,8 @@ pub(crate) struct ProjectItemState {
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: bool,
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
+    /// Where an unchanged payload's encoded arrays can be copied from on save.
+    pub(crate) payload_source: Option<crate::model::formats::omf::PayloadSource>,
     pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
     /// Explorer folder this item sits in, or `None` for its section root.
     ///
@@ -67,6 +69,7 @@ impl ProjectItemState {
             source_format,
             loaded: true,
             deferred: None,
+            payload_source: None,
             summary: None,
             folder: None,
             section: SectionKind::natural_for(kind),

@@ -10,6 +10,12 @@ use anyhow::Result;
 #[derive(Clone, Debug)]
 pub(crate) struct Backing(Arc<BackingFile>);
 
+/// What [`Backing::open`] reads from.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type BackingData = std::fs::File;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type BackingData = Vec<u8>;
+
 #[derive(Debug)]
 struct BackingFile {
     #[cfg(not(target_arch = "wasm32"))]
@@ -41,6 +47,25 @@ impl Backing {
             browser::write(&key, bytes).map_err(|error| anyhow::anyhow!("store unloaded asset: {error:?}"))?;
             Ok(Self(Arc::new(BackingFile { key, len: bytes.len() })))
         }
+    }
+
+    /// Open the copy for reading parts of it. Natively that is the file
+    /// itself, so pulling one array out doesn't read the whole archive; the
+    /// browser store can only hand back everything.
+    pub(crate) fn open(&self) -> Result<BackingData> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::fs::File::open(&self.0.path).context("open unloaded asset")
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.read()
+        }
+    }
+
+    /// Whether both handles name the same copy.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     pub(crate) fn read(&self) -> Result<Vec<u8>> {

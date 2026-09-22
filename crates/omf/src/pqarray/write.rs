@@ -3,12 +3,15 @@ use parquet::{
     errors::ParquetError,
     file::{
         properties::{
-            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties, WriterVersion,
+            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties, WriterPropertiesPtr,
+            WriterVersion,
         },
         writer::SerializedFileWriter,
     },
     schema::types::Type,
 };
+
+use rayon::prelude::*;
 
 use crate::error::Error;
 
@@ -162,26 +165,50 @@ impl<'a> PqArrayWriter<'a> {
     }
 
     pub fn write(mut self, w: impl std::io::Write + Send) -> Result<u64, Error> {
-        // Create Parquet writer.
-        let mut writer =
-            SerializedFileWriter::new(w, self.schema()?.into(), self.options.properties().into())?;
-        // Write data.
-        let mut counts = vec![0_u64; self.sources.len()];
-        loop {
-            // Buffer data, collecting counts.
-            for (source, n) in self.sources.iter_mut().zip(&mut counts) {
-                *n = source.buffer(self.options.row_group_size) as u64;
+        let properties: WriterPropertiesPtr = self.options.properties().into();
+        let mut writer = SerializedFileWriter::new(w, self.schema()?.into(), properties.clone())?;
+        let columns = writer.schema_descr().columns().to_vec();
+        // Compression is nearly all of the cost of writing, and every column chunk compresses
+        // independently. Buffer enough row groups to give each thread a chunk, encode them all
+        // at once, then splice them into the file in order. A wide array needs one row group
+        // to fill the pool; a narrow one buffers several.
+        let batch_row_groups = rayon::current_num_threads()
+            .div_ceil(columns.len().max(1))
+            .max(1);
+        let mut finished = false;
+        while !finished {
+            let mut row_groups = Vec::with_capacity(batch_row_groups);
+            while row_groups.len() < batch_row_groups {
+                let mut counts = Vec::with_capacity(self.sources.len());
+                let mut jobs = Vec::with_capacity(columns.len());
+                for source in &mut self.sources {
+                    let (count, source_jobs) = source.take(self.options.row_group_size)?;
+                    counts.push(count as u64);
+                    jobs.extend(source_jobs);
+                }
+                // Check that sources buffered the same amount.
+                if self.check_counts(&counts)? {
+                    finished = true;
+                    break;
+                }
+                row_groups.push(jobs);
             }
-            // Check that sources buffered the same amount.
-            if self.check_counts(&counts)? {
-                break;
+            let encoded = row_groups
+                .into_par_iter()
+                .map(|jobs| {
+                    jobs.into_par_iter()
+                        .zip(columns.par_iter())
+                        .map(|(job, column)| job(column.clone(), properties.clone()))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for chunks in encoded {
+                let mut row_group = writer.next_row_group()?;
+                for chunk in chunks {
+                    row_group.append_column(&chunk.data, chunk.close)?;
+                }
+                row_group.close()?;
             }
-            // Write that data.
-            let mut row_group = writer.next_row_group()?;
-            for source in &mut self.sources {
-                source.write(&mut row_group)?;
-            }
-            row_group.close()?;
         }
         writer.close()?;
         Ok(self.total_written)
