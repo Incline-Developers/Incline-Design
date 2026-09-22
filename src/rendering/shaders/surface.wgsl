@@ -29,6 +29,8 @@ var<uniform> raster_map: RasterMap;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    // Crease-aware shading normal (Snorm16x4, w unused), shared by both modes.
+    @location(2) smooth_normal: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -43,6 +45,9 @@ struct VertexOutput {
     @location(2) surface_xy: vec2<f32>,
     // Distance from the section plane; affine in position, so interpolation is exact.
     @location(3) section_offset: f32,
+    @location(4) smooth_normal: vec3<f32>,
+    // Model-space position, for the cinematic lighting's shadow lookups.
+    @location(5) world: vec3<f32>,
 };
 
 @vertex
@@ -50,7 +55,9 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = surface_style.color;
     out.normal = model.normal;
+    out.smooth_normal = model.smooth_normal.xyz;
     let scene_position = model.position + chunk.offset.xyz;
+    out.world = scene_position;
     out.surface_xy = scene_position.xy;
     out.clip_position = camera.view_proj * vec4<f32>(scene_position, 1.0);
     out.section_offset = section_plane_offset(scene_position);
@@ -62,27 +69,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if outside_section_slab(in.section_offset) {
         discard;
     }
-    let normal = normalize(in.normal);
-    // Fixed world-space orientation lighting. Surfaces are two-sided, so n and
-    // -n describe the same face orientation: abs(dot(...)) keeps their shading
-    // identical and avoids discontinuities on nearly vertical walls when the
-    // CPU's z >= 0 normal orientation flips across z == 0. A second oblique
-    // direction separates faces that receive similar light from the key.
-    let key_direction = normalize(vec3<f32>(-0.55, -0.35, 0.76));
-    let cross_direction = normalize(vec3<f32>(0.75, -0.62, 0.22));
-    let key_light = abs(dot(normal, key_direction));
-    let cross_light = abs(dot(normal, cross_direction));
-    let horizontal_light = abs(normal.z);
-    // Curve the orientation response so mid-lit faces sit in the mid greys
-    // instead of bunching near white. The ambient floor remains high enough
-    // to reveal unlit faces, while strongly aligned faces can still reach
-    // white. There is deliberately no camera headlight.
-    let orientation_light = clamp(
-        0.70 * key_light + 0.22 * cross_light + 0.08 * horizontal_light,
-        0.0,
-        1.0,
-    );
-    let intensity = 0.18 + 0.82 * orientation_light * orientation_light;
     var surface_color = in.color;
     if surface_style.params.x > 0.0 {
         let uv = vec2<f32>(
@@ -100,5 +86,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
         }
     }
-    return vec4<f32>(surface_color.rgb * intensity, surface_color.a);
+    return shade_surface(surface_color, in.normal, in.smooth_normal, in.world, in.clip_position.xy);
 }

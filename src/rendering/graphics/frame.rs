@@ -412,7 +412,8 @@ impl<'a> Graphics<'a> {
             || self.point_cloud_gpu.has_pending_uploads()
             || self.block_model_gpu.has_pending_builds()
             || self.block_model_gpu.has_visible_pending_streaming(&primary_frustum, &editor.hidden_handles);
-        let render_scene = scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
+        let scene_changed = scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
+        let render_scene = scene_changed;
         let sample_volume_feedback = render_scene && self.frame_index.is_multiple_of(VOLUME_FEEDBACK_INTERVAL_FRAMES);
         if sample_volume_feedback {
             let phase = (self.frame_index / VOLUME_FEEDBACK_INTERVAL_FRAMES) % 64;
@@ -424,45 +425,34 @@ impl<'a> Graphics<'a> {
         // long as its key holds; the overlay pass then puts this frame's
         // editor content over it and resolves the result to the surface. On a
         // cache hit that is the whole of the scene's cost.
-        // Cinematic view diverts the scene pass into its own target and puts
-        // the finished image into the cache instead, so everything downstream
-        // - the overlay pass, the cache hit next frame - is unchanged.
-        // Never set in the browser build, where the chain does not exist.
+        // Cinematic view renders its lit scene into targets of its own and
+        // puts the finished image into the cache instead, so everything
+        // downstream - the overlay pass, the cache hit next frame - is
+        // unchanged. Never set in the browser build, where it does not exist.
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut cinematic_post_ran = false;
         if render_scene {
-            let cache_view = self.scene_cache.view.clone();
             #[cfg(not(target_arch = "wasm32"))]
-            let cinematic_view = if editor.cinematic_enabled {
+            if editor.cinematic_enabled {
                 // The light is fitted to the scene's extent, which in every
                 // other view is only computed when something needs it.
                 self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
-                self.prepare_cinematic();
-                self.upload_cinematic_uniforms();
-                self.render_cinematic_shadow_pass(&mut encoder, triangulations, editor);
-                self.cinematic_scene_view()
-            } else {
-                None
-            };
-            #[cfg(target_arch = "wasm32")]
-            let cinematic_view: Option<wgpu::TextureView> = None;
-
-            self.render_scene_pass(
-                &mut encoder,
-                cinematic_view.as_ref().unwrap_or(&cache_view),
-                self.viewport_rect,
-                editor,
-                triangulations,
-                block_models,
-                drill_holes,
-                point_clouds,
-                rasters,
-                true,
-            );
-            #[cfg(not(target_arch = "wasm32"))]
-            if cinematic_view.is_some() {
-                self.render_cinematic_post(&mut encoder, &cache_view);
-                cinematic_post_ran = true;
+                cinematic_post_ran = self.render_cinematic_scene(&mut encoder, editor, triangulations, block_models, drill_holes, point_clouds, rasters);
+            }
+            if !cinematic_post_ran {
+                let cache_view = self.scene_cache.view.clone();
+                self.render_scene_pass(
+                    &mut encoder,
+                    &cache_view,
+                    self.viewport_rect,
+                    editor,
+                    triangulations,
+                    block_models,
+                    drill_holes,
+                    point_clouds,
+                    rasters,
+                    true,
+                );
             }
             self.scene_cache_key = Some(scene_key);
         }

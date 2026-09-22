@@ -21,11 +21,18 @@ pub(crate) struct Vertex {
 /// precise far from the scene origin. `normal` is the flat face normal of the
 /// triangle this vertex provokes (`@interpolate(flat)` in the shader), already
 /// oriented with `z >= 0` for the two-sided surface lighting.
+///
+/// `smooth_normal` is the crease-aware shading normal both quality modes
+/// interpolates across the face (`Snorm16x4`, `w` unused): the area-weighted
+/// average of the faces around this corner's vertex, or the flat normal where
+/// that average strays past the crease angle - a bench crest stays sharp while
+/// the facets of a rolling surface blend away. Oriented to agree with `normal`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub(crate) struct SurfaceVertex {
     pub(crate) pos: [f32; 3],
     pub(crate) normal: [f32; 3],
+    pub(crate) smooth_normal: [i16; 4],
 }
 
 /// One instanced block: local-space axis-aligned bounds plus grade. The

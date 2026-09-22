@@ -1,26 +1,15 @@
-
 // Shared state for the cinematic post chain, prefixed after the camera prelude
-// onto every cinematic shader that binds a camera (see `make_cinematic_shader`
-// in rendering/graphics/cinematic.rs).
+// and `cinematic_params.wgsl` onto every post shader that binds a camera (see
+// `make_cinematic_shader` in rendering/graphics/init.rs).
 //
-// Everything here works in *display space*: scene-origin-relative metres with
-// the vertical exaggeration already applied, which is the space the scene's
-// vertices are drawn in and therefore the space depth reconstructs into.
+// Positions are model space, as `cinematic_params.wgsl` describes: what depth
+// reconstructs into through the camera's inverse view-projection. Distances
+// *along the view* are measured in display space instead, with the vertical
+// exaggeration applied, because that is the space the camera sits in.
+//
+// Every shader here reads `scene_depth`, which each declares at its own
+// binding; the helpers below that load it rely on that shared name.
 
-struct CinematicParams {
-    // Display-space world -> shadow map clip. Fitted to the whole scene rather
-    // than the view frustum, so it does not shimmer as the camera moves.
-    light_view_proj: mat4x4<f32>,
-    // xyz: unit vector pointing *at* the sun. w: one shadow map texel in
-    // metres, which sizes the comparison filter.
-    sun: vec4<f32>,
-    sun_color: vec4<f32>,
-    // x: ambient occlusion radius in metres, y: its strength, z: shadow
-    // strength, w: 1 when a shadow map was rendered for this frame.
-    params: vec4<f32>,
-    // x: bloom intensity, y: exposure. zw: unused.
-    grade: vec4<f32>,
-};
 @group(1) @binding(0)
 var<uniform> cine: CinematicParams;
 
@@ -48,14 +37,14 @@ fn ndc_from_target_pixel(target_pixel: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 }
 
-/// Display-space position of the fragment a depth sample came from.
+/// Model-space position of the fragment a depth sample came from.
 /// Depth is reversed-Z: 1 at the near plane, 0 where nothing was drawn.
 fn world_from_depth(target_pixel: vec2<f32>, depth: f32) -> vec3<f32> {
     let point = camera.inv_view_proj * vec4<f32>(ndc_from_target_pixel(target_pixel), depth, 1.0);
     return point.xyz / point.w;
 }
 
-/// Target-space pixel a display-space point projects to, with its reversed-Z
+/// Target-space pixel a model-space point projects to, with its reversed-Z
 /// depth in `z`. The inverse of `world_from_depth`.
 fn target_pixel_from_world(world: vec3<f32>) -> vec3<f32> {
     let clip = camera.view_proj * vec4<f32>(world, 1.0);
@@ -67,15 +56,43 @@ fn target_pixel_from_world(world: vec3<f32>) -> vec3<f32> {
 /// Distance along the view direction. Unlike distance from the eye this is
 /// also correct under the orthographic projection, which has no eye point.
 fn view_depth(world: vec3<f32>) -> f32 {
-    return dot(world - camera.cam_position.xyz, camera.cam_forward.xyz);
+    let display = vec3<f32>(world.xy, world.z * cine.grade.w);
+    return dot(display - camera.cam_position.xyz, camera.cam_forward.xyz);
 }
 
 fn luminance(color: vec3<f32>) -> f32 {
     return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
-/// Interleaved gradient noise - one cheap per-pixel rotation so the occlusion
-/// sample pattern differs between neighbours and blurs out to smooth.
-fn dither(target_pixel: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(dot(target_pixel, vec2<f32>(0.06711056, 0.00583715))));
+fn load_depth(pixel: vec2<i32>) -> f32 {
+    return textureLoad(scene_depth, pixel, 0);
+}
+
+/// Face orientation rebuilt from the depth buffer. Taking the *nearer* of the
+/// two neighbours on each axis keeps the derivative on the near side of a
+/// silhouette instead of straddling it, which would otherwise ring every edge
+/// in the scene with a band of false occlusion.
+fn reconstruct_normal(pixel: vec2<i32>, centre: vec3<f32>, centre_depth: f32) -> vec3<f32> {
+    let left_depth = load_depth(pixel + vec2<i32>(-1, 0));
+    let right_depth = load_depth(pixel + vec2<i32>(1, 0));
+    let down_depth = load_depth(pixel + vec2<i32>(0, -1));
+    let up_depth = load_depth(pixel + vec2<i32>(0, 1));
+
+    let left = world_from_depth(vec2<f32>(pixel + vec2<i32>(-1, 0)) + 0.5, left_depth);
+    let right = world_from_depth(vec2<f32>(pixel + vec2<i32>(1, 0)) + 0.5, right_depth);
+    let down = world_from_depth(vec2<f32>(pixel + vec2<i32>(0, -1)) + 0.5, down_depth);
+    let up = world_from_depth(vec2<f32>(pixel + vec2<i32>(0, 1)) + 0.5, up_depth);
+
+    let dx = select(centre - left, right - centre, abs(right_depth - centre_depth) < abs(centre_depth - left_depth));
+    let dy = select(centre - down, up - centre, abs(up_depth - centre_depth) < abs(centre_depth - down_depth));
+
+    var normal = cross(dx, dy);
+    let length_squared = dot(normal, normal);
+    if length_squared < 1.0e-18 {
+        return -camera.cam_forward.xyz;
+    }
+    normal = normal * inverseSqrt(length_squared);
+    // Surfaces are two-sided and the reconstruction has no winding to go on,
+    // so orient towards the viewer rather than trusting the cross product.
+    return select(-normal, normal, dot(normal, -camera.cam_forward.xyz) > 0.0);
 }

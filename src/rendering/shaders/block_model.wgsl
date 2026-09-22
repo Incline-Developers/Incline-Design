@@ -150,9 +150,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     let rgb = select(block_style.fallback_color.rgb, grade_color.rgb, has_grade);
     let alpha = select(block_style.fallback_color.a, grade_color.a, has_grade);
-    let key_light = max(dot(normal, normalize(vec3<f32>(-0.60, -0.50, 0.35))), 0.0);
-    let fill_light = max(dot(normal, normalize(vec3<f32>(0.45, 0.35, 0.75))), 0.0);
-    let view_light = abs(dot(normal, -normalize(camera.cam_forward.xyz)));
-    let intensity = 0.28 + 0.18 * view_light + 0.42 * key_light + 0.12 * fill_light;
-    return vec4<f32>(rgb * intensity, alpha);
+    return shade_block(vec4<f32>(rgb, alpha), normal, in.local_position, in.clip_position.xy);
 }

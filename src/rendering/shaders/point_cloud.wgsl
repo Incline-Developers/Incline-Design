@@ -20,6 +20,8 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     // Distance from the section plane, flat: the splat is kept or dropped whole.
     @location(1) @interpolate(flat) section_offset: f32,
+    // Model-space splat centre, for the cinematic lighting.
+    @location(2) @interpolate(flat) world: vec3<f32>,
 };
 
 fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOutput {
@@ -38,6 +40,7 @@ fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOu
     out.clip_position = clip;
     out.color = color;
     out.section_offset = section_plane_offset(splat_center);
+    out.world = splat_center;
     return out;
 }
 
@@ -57,5 +60,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if outside_section_slab(in.section_offset) {
         discard;
     }
-    return in.color;
+    return shade_point(in.color, in.world, in.clip_position.xy);
 }

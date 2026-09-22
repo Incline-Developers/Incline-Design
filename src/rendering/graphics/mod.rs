@@ -50,6 +50,7 @@ pub(crate) mod init;
 pub(crate) mod passes;
 pub(crate) mod plot;
 pub(crate) mod projections;
+pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
 pub(crate) mod targets;
@@ -292,23 +293,31 @@ impl GridUniform {
     }
 }
 
+/// The scene pass's inputs while it draws the cinematic view: the lit
+/// pipelines, the camera-plus-lighting bind group they take at group 0, the
+/// half-float multisample target they draw into.
+pub(crate) struct ActiveScene {
+    pub(crate) pipelines: Arc<scene_pipelines::ScenePipelines>,
+    pub(crate) camera_bind_group: wgpu::BindGroup,
+    pub(crate) msaa_view: wgpu::TextureView,
+}
+
 pub(crate) struct Graphics<'a> {
     // GPU resource owners are declared before device/surface/window so they
     // are dropped first during shutdown.
     pub(super) gui: Gui,
     pub(super) text_system: TextSystem,
-    pub(super) surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) grid_render_pipeline: wgpu::RenderPipeline,
-    pub(super) section_grid_render_pipeline: wgpu::RenderPipeline,
-    pub(super) raster_plane_render_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_render_pipeline: wgpu::RenderPipeline,
+    /// The pipelines the ordinary scene pass and the editor overlay draw with.
+    pub(super) scene_pipelines: Arc<scene_pipelines::ScenePipelines>,
+    /// What the scene pass draws with and into while `frame::render` diverts
+    /// it into the cinematic view's lit target. `None` everywhere else, so
+    /// every other pass - the overlay, the previews, the plot - draws with the
+    /// ordinary view's pipelines; see [`Self::pipes`].
+    pub(super) active_scene: Option<ActiveScene>,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_transparency_composite_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_volume_upscale_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_volume_upscale_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_composite_bind_group_layout: wgpu::BindGroupLayout,
@@ -325,21 +334,7 @@ pub(crate) struct Graphics<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_document_fill_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_render_pipeline: wgpu::RenderPipeline,
-    pub(super) opaque_stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) edge_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_colored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_uncolored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) design_point_render_pipeline: wgpu::RenderPipeline,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) overlay_render_pipeline: wgpu::RenderPipeline,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
     pub(super) stroke_vertex_gpu: wgpu::Buffer,
