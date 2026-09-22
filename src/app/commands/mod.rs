@@ -556,7 +556,7 @@ impl<'a> App<'a> {
                         return Ok(());
                     }
                 };
-                // Both labels are rendered once here, not each frame: the
+                // The labels are rendered once here, not each frame: the
                 // dialog reports the input it was opened on, which cannot
                 // change under it.
                 let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
@@ -572,15 +572,29 @@ impl<'a> App<'a> {
                         .map(|object| tr_format!(literal = "%kind% on '%layer%'", kind = object.kind_name(), layer = layer_name(object.layer())))
                         .unwrap_or_else(|| tr!(literal = "No extent")),
                 };
+                let controls_label = match input.controls.len() {
+                    0 => tr!(literal = "No control strings"),
+                    count => {
+                        let mut control_layers = input.controls.iter().map(|id| self.scene_document.get_object(*id).map(|object| object.layer()));
+                        match control_layers.next().flatten() {
+                            Some(layer) if control_layers.all(|other| other == Some(layer)) => {
+                                tr_format!(literal = "%count% control string(s) on '%layer%'", count = count, layer = layer_name(layer))
+                            }
+                            _ => tr_format!(literal = "%count% control string(s)", count = count),
+                        }
+                    }
+                };
                 self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
                     points: input.points,
+                    controls: input.controls,
                     extent: input.extent,
                     points_label,
+                    controls_label,
                     extent_label,
                 });
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, extent } => self.build_reference_surface(points, extent),
+            UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
             UiCommand::OpenModellingSettings => {
                 self.editor.show_modelling_settings = true;
                 Ok(())

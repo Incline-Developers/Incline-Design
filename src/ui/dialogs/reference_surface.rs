@@ -34,6 +34,14 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             ui.add_space(4.0);
             selected_source_field(
                 ui,
+                tr!(literal = "Controls"),
+                draft.controls_label.clone(),
+                tr!(literal = "The selected open strings the surface is made to pass through, as selected when the dialog opened. Close the dialog to select different ones."),
+                width,
+            );
+            ui.add_space(4.0);
+            selected_source_field(
+                ui,
                 tr!(literal = "Extent"),
                 draft.extent_label.clone(),
                 tr!(literal = "The selected closed string the finished surface is clipped to; points outside it still shape the surface."),
@@ -54,6 +62,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
     if build {
         commands.push(UiCommand::BuildReferenceSurface {
             points: draft.points.clone(),
+            controls: draft.controls.clone(),
             extent: draft.extent,
         });
         open = false;

@@ -3392,9 +3392,11 @@ pub(crate) enum UiCommand {
     OpenReferencePoints,
     OpenReferenceSurface,
     /// A new triangulation from the selected points the command was opened
-    /// on, clipped to an optional closed-string extent.
+    /// on, made to pass through the selected open strings, clipped to an
+    /// optional closed-string extent.
     BuildReferenceSurface {
         points: Vec<ObjectId>,
+        controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
     },
     OpenModellingSettings,
@@ -3902,11 +3904,19 @@ impl UiCommand {
                 radius_scale, min_pixel_diameter, ..
             } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
             Self::BuildReferencePoints { holes, value, side, .. } => report(tr!(literal = "Build Reference Points"), format!("{value} {}, {} hole(s)", side.label(), holes.len())),
-            Self::BuildReferenceSurface { points, extent } => report(
+            Self::BuildReferenceSurface { points, controls, extent } => report(
                 tr!(literal = "Build Surface"),
                 match extent {
-                    Some(_) => tr_format!(literal = "%count% point(s), clipped to the extent string", count = points.len()),
-                    None => tr_format!(literal = "%count% point(s), unclipped", count = points.len()),
+                    Some(_) => tr_format!(
+                        literal = "%count% point(s) · %controls% control string(s) · clipped to the extent string",
+                        count = points.len(),
+                        controls = controls.len()
+                    ),
+                    None => tr_format!(
+                        literal = "%count% point(s) · %controls% control string(s) · unclipped",
+                        count = points.len(),
+                        controls = controls.len()
+                    ),
                 },
             ),
             Self::SetProjectCoordinateSystem(stored) => report(
@@ -4454,8 +4464,9 @@ pub(crate) enum DataMenu {
     Geotiff,
 }
 
-/// What the build surface dialog was opened on: the selected points, the one
-/// closed string clipping them, and the text it reports them as.
+/// What the build surface dialog was opened on: the selected points, the
+/// open strings the surface passes through, the one closed string clipping
+/// them, and the text it reports each as.
 ///
 /// Snapshotted when the command opens and never re-derived: the viewport and
 /// the tree stop taking selection while it is up, so what the dialog reports
@@ -4463,10 +4474,12 @@ pub(crate) enum DataMenu {
 #[derive(Clone, Debug)]
 pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points: Vec<ObjectId>,
+    pub(crate) controls: Vec<ObjectId>,
     pub(crate) extent: Option<ObjectId>,
     /// Rendered at open time rather than each frame, the same as the other
     /// select-first tools' input labels.
     pub(crate) points_label: String,
+    pub(crate) controls_label: String,
     pub(crate) extent_label: String,
 }
 
