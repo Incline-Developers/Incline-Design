@@ -802,6 +802,23 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The point clouds a selection rectangle takes, on the same
+    /// left-to-right cross / right-to-left window convention as the design
+    /// box selection.
+    pub(crate) fn point_clouds_in_screen_rect(
+        &self,
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<SceneEntityId> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let rect = (DVec2::new(rect.min_x, rect.min_y), DVec2::new(rect.max_x, rect.max_y));
+        self.point_cloud_gpu
+            .entities_in_screen_rect(&self.view_proj(), self.screen_size(), rect, cross_select, hidden, frozen, self.section_slab())
+    }
+
     /// The individual drill holes a selection rectangle takes.
     ///
     /// The same left-to-right / right-to-left convention the design box
