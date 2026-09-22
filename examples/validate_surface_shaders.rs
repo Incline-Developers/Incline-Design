@@ -11,7 +11,9 @@ fn main() {
         }
         source += &read("surface.wgsl");
         let module = wgpu::naga::front::wgsl::parse_str(&source).unwrap();
-        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all()).validate(&module).unwrap();
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap();
         println!("Validated {} surface shader", if cinematic { "cinematic" } else { "standard" });
     }
 }
