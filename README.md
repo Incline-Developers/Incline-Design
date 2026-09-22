@@ -46,9 +46,9 @@ Incline Design is licensed under the [MIT License](LICENSE.md).
 
 ## Maintainers
 
-- **Leo Timmins**, github: *leotimmins1974*, email: `leo@inclinedesign.net`.
-- **Lucas Timmins**, github: *trimental*, email: `lucas@inclinedesign.net`.
+- **Leo Timmins**, **GitHub:** [@leotimmins1974](https://github.com/leotimmins1974), email: `leo@inclinedesign.net`.
+- **Lucas Timmins**, **GitHub:** [@trimental](https://github.com/trimental), email: `lucas@inclinedesign.net`.
 
 ## Committers
 
-- **Norman Heckscher**, github: *normanheckscher*.
+- **Norman Heckscher**, **GitHub:** [@normanheckscher](https://github.com/normanheckscher).
