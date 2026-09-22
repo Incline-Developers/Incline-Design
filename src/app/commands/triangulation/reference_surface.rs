@@ -278,8 +278,10 @@ fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
 }
 
 /// Two controls reading one plan position at two heights: which two, where,
-/// and how far apart, for the geologist to decide between.
+/// and how far apart, for the geologist to decide between. The string
+/// selected first is named first, each height beside its own string.
 fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high: f64) -> String {
+    let (left, right, low, high) = if left <= right { (left, right, low, high) } else { (right, left, high, low) };
     tr_format!(
         literal = "Control strings %a% and %b% disagree at (%x%, %y%): %za% m against %zb% m, %difference% m apart",
         a = left + 1,
@@ -295,6 +297,7 @@ fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high:
 /// Two controls sharing a stretch of plan rather than a point: every position
 /// along it is claimed twice, which is a job of its own.
 fn controls_along_each_other(left: usize, right: usize) -> String {
+    let (left, right) = (left.min(right), left.max(right));
     tr_format!(
         literal = "Control strings %a% and %b% run along each other in plan; that is not supported yet",
         a = left + 1,
@@ -464,8 +467,14 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     }
     // Both read before any vertex goes in, so a refusal names the shape and
     // builds nothing.
-    validate_controls(controls, cancelled)?;
-    let crossings = control_crossings(controls, cancelled)?;
+    // Controls in an order read off their own geometry, so the build cannot
+    // depend on the order they were selected in; `names` keeps each one's
+    // place in the selection for the messages.
+    let names = canonical_order(controls);
+    let ordered: Vec<Vec<DVec3>> = names.iter().map(|&index| controls[index].clone()).collect();
+    let controls = ordered.as_slice();
+    validate_controls(controls, &names, cancelled)?;
+    let crossings = control_crossings(controls, &names, cancelled)?;
     let mut tin = SurfaceTriangulation::new();
     let mut coincident = 0usize;
     for point in points {
@@ -493,6 +502,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     }
     let triangulated = tin.num_vertices();
     let mut support = 0usize;
+    let bands = extent.map(RingBands::new);
 
     if let Some(ring) = extent {
         // A ring that crosses or touches itself bounds no single area, so
@@ -508,10 +518,9 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
         support = tin
             .vertices()
             .filter(|vertex| {
-                !matches!(
-                    kernel::point_in_polyline(plan(vertex.position()), ring.iter().copied()),
-                    PolyContainment::Inside | PolyContainment::OnBoundary
-                )
+                !bands
+                    .as_ref()
+                    .is_some_and(|bands| matches!(bands.contains(plan(vertex.position())), PolyContainment::Inside | PolyContainment::OnBoundary))
             })
             .count();
         let inside = triangulated - support;
@@ -522,13 +531,15 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
 
     // Every control vertex goes in at its own x, y and z, a pick sharing its
     // plan position giving way to it.
-    let mut owned: HashSet<usize> = HashSet::new();
+    let mut owned = Owners::default();
     let mut overridden: Vec<(DVec2, f64, f64)> = Vec::new();
+    let mut grid = VertexGrid::new(&tin, controls);
     let mut chains: Vec<Vec<FixedVertexHandle>> = Vec::with_capacity(controls.len());
-    for control in controls {
+    for (index, control) in controls.iter().enumerate() {
+        stop_if_cancelled(cancelled)?;
         let mut chain = Vec::with_capacity(control.len());
         for vertex in control {
-            chain.push(insert_control_vertex(&mut tin, &mut owned, &mut overridden, *vertex)?);
+            chain.push(insert_control_vertex(&mut tin, &mut grid, &mut owned, &mut overridden, names[index], *vertex)?);
         }
         chains.push(chain);
     }
@@ -548,9 +559,17 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
         let owns = crossing.sides.iter().find_map(|side| side.vertex.map(|vertex| chains[side.control][vertex]));
         let handle = match owns {
             Some(handle) => handle,
-            None => insert_control_vertex(&mut tin, &mut owned, &mut overridden, crossing.position.extend(crossing.z))?,
+            None => insert_control_vertex(
+                &mut tin,
+                &mut grid,
+                &mut owned,
+                &mut overridden,
+                names[crossing.sides[0].control],
+                crossing.position.extend(crossing.z),
+            )?,
         };
         for side in &crossing.sides {
+            owned.add(handle.index(), names[side.control]);
             if side.vertex.is_none() {
                 control_splits[side.control][side.segment].push((side.along, handle));
             }
@@ -558,15 +577,19 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     }
 
     if let Some(ring) = extent {
+        let edges = BoxGrid::new((0..ring.len()).map(|edge| segment_box(ring[edge], ring[(edge + 1) % ring.len()])).collect());
+        let mut near = Vec::new();
         for (index, control) in controls.iter().enumerate() {
             stop_if_cancelled(cancelled)?;
             for segment in 0..control.len() - 1 {
                 let (start, end) = (control[segment], control[segment + 1]);
-                for edge in 0..ring.len() {
+                let (low, high) = segment_box(start.truncate(), end.truncate());
+                edges.overlapping(low, high, &mut near);
+                for &edge in &near {
                     let (corner, next) = (ring[edge], ring[(edge + 1) % ring.len()]);
                     let (point, along, across) = match kernel::segment_segment(start.truncate(), end.truncate(), corner, next) {
                         SegSeg::Disjoint => continue,
-                        SegSeg::CollinearOverlap { .. } => anyhow::bail!("{}", control_along_extent(index)),
+                        SegSeg::CollinearOverlap { .. } => anyhow::bail!("{}", control_along_extent(names[index])),
                         SegSeg::Crossing { point, t, u } | SegSeg::Touching { point, t, u } => (point, t, u),
                     };
                     let at_control_vertex = nearer_end(point, start.truncate(), end.truncate()).map(|end| chains[index][segment + end]);
@@ -583,7 +606,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
                         // control and the ring run through it.
                         (None, Some(pinned)) => {
                             let vertex = ring[pinned].extend(elevation_along(start, end, along));
-                            let handle = insert_control_vertex(&mut tin, &mut owned, &mut overridden, vertex)?;
+                            let handle = insert_control_vertex(&mut tin, &mut grid, &mut owned, &mut overridden, names[index], vertex)?;
                             ring_pinned[pinned] = Some(handle);
                             control_splits[index][segment].push((along, handle));
                         }
@@ -592,7 +615,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
                         // clip runs through it.
                         (None, None) => {
                             let vertex = point.extend(elevation_along(start, end, along));
-                            let handle = insert_control_vertex(&mut tin, &mut owned, &mut overridden, vertex)?;
+                            let handle = insert_control_vertex(&mut tin, &mut grid, &mut owned, &mut overridden, names[index], vertex)?;
                             control_splits[index][segment].push((along, handle));
                             ring_splits[edge].push((across, handle));
                         }
@@ -603,22 +626,28 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     }
     // A pick under a control segment takes the elevation the segment has
     // above it, so the crease runs along the whole string rather than
-    // stopping at the picks it passes over.
+    // stopping at the picks it passes over. Another control's vertex there
+    // is shared when the two agree on its height, whichever came first.
     for (index, control) in controls.iter().enumerate() {
         stop_if_cancelled(cancelled)?;
         for segment in 0..control.len() - 1 {
             let (start, end) = (control[segment], control[segment + 1]);
-            for (along, handle) in vertices_along(&tin, &owned, start.truncate(), end.truncate()) {
-                take_over_vertex(&mut tin, &mut owned, &mut overridden, handle, elevation_along(start, end, along));
+            let ends = [chains[index][segment], chains[index][segment + 1]];
+            for (along, handle) in vertices_along(&grid, start.truncate(), end.truncate()) {
+                if ends.contains(&handle) || owned.has(handle.index(), names[index]) || control_splits[index][segment].iter().any(|(_, split)| *split == handle) {
+                    continue;
+                }
+                take_over_vertex(&mut tin, &mut owned, &mut overridden, names[index], handle, elevation_along(start, end, along))?;
                 control_splits[index][segment].push((along, handle));
             }
         }
     }
     let control_vertices = owned.len();
     for (index, chain) in chains.iter().enumerate() {
+        stop_if_cancelled(cancelled)?;
         for segment in 0..chain.len() - 1 {
             let through = std::mem::take(&mut control_splits[index][segment]);
-            constrain_chain(&mut tin, chain[segment], through, chain[segment + 1], || control_not_added(index))?;
+            constrain_chain(&mut tin, chain[segment], through, chain[segment + 1], || control_not_added(names[index]))?;
         }
     }
 
@@ -634,7 +663,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
                     let position = spade::Point2::new(vertex.x, vertex.y);
                     let z = trend
                         .interpolate(|vertex| vertex.data().z, position)
-                        .or_else(|| nearest_pick_z(&tin, position))
+                        .or_else(|| nearest_pick_z(&tin, &grid, position))
                         .unwrap_or_default();
                     SurfaceVertex { position, z }
                 })
@@ -669,7 +698,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     // clip rather than ground inside it, so only strictly inside is kept.
     let (vertices, faces) = clipped_mesh(
         &tin,
-        |centroid| extent.is_none_or(|ring| kernel::point_in_polyline(centroid, ring.iter().copied()) == PolyContainment::Inside),
+        |centroid| bands.as_ref().is_none_or(|bands| bands.contains(centroid) == PolyContainment::Inside),
         cancelled,
     )?;
     if faces.is_empty() {
@@ -693,24 +722,39 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     })
 }
 
+/// The controls' indices sorted by their vertices, x then y then z at each
+/// in turn, a string that runs out first coming first.
+fn canonical_order(controls: &[Vec<DVec3>]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..controls.len()).collect();
+    order.sort_by(|&left, &right| {
+        let (left, right) = (&controls[left], &controls[right]);
+        left.iter()
+            .zip(right)
+            .map(|(a, b)| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).then(a.z.total_cmp(&b.z)))
+            .find(|order| order.is_ne())
+            .unwrap_or_else(|| left.len().cmp(&right.len()))
+    });
+    order
+}
+
 /// Refuse a control too short to make a segment, closed without the flag,
 /// or crossing or doubling back on itself. Two controls crossing are
 /// [`control_crossings`]'s concern.
-fn validate_controls(controls: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<()> {
+fn validate_controls(controls: &[Vec<DVec3>], names: &[usize], cancelled: &dyn Fn() -> bool) -> Result<()> {
     for (index, control) in controls.iter().enumerate() {
         stop_if_cancelled(cancelled)?;
         if control.len() < MINIMUM_CONTROL_VERTICES {
-            anyhow::bail!("{}", too_few_control_vertices(index, control.len()));
+            anyhow::bail!("{}", too_few_control_vertices(names[index], control.len()));
         }
         let plan: Vec<DVec2> = control.iter().map(|vertex| vertex.truncate()).collect();
         if plan.len() >= 4 && plan[0].distance(plan[plan.len() - 1]) <= kernel::XY_TOL {
-            anyhow::bail!("{}", control_ends_where_it_starts(index));
+            anyhow::bail!("{}", control_ends_where_it_starts(names[index]));
         }
         if doubles_back(&plan) {
-            anyhow::bail!("{}", control_doubles_back(index));
+            anyhow::bail!("{}", control_doubles_back(names[index]));
         }
         if self_intersects(&plan, false) {
-            anyhow::bail!("{}", control_self_crossing(index));
+            anyhow::bail!("{}", control_self_crossing(names[index]));
         }
     }
     Ok(())
@@ -757,42 +801,96 @@ struct CrossingSide {
 /// Every plan position two different controls run through, each with the
 /// elevation both give it. Read off the strings themselves, before anything is
 /// inserted, so controls that disagree leave no half-built surface behind.
-fn control_crossings(controls: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<Vec<Crossing>> {
+fn control_crossings(controls: &[Vec<DVec3>], names: &[usize], cancelled: &dyn Fn() -> bool) -> Result<Vec<Crossing>> {
     let mut crossings: Vec<Crossing> = Vec::new();
+    // Every segment of every control on one grid, so only segments that come
+    // near each other are compared; the pairs are then taken in the order a
+    // walk over every pair would meet them, so the first refusal is the same.
+    let segments: Vec<(usize, usize)> = controls
+        .iter()
+        .enumerate()
+        .flat_map(|(index, control)| (0..control.len() - 1).map(move |segment| (index, segment)))
+        .collect();
+    let grid = BoxGrid::new(
+        segments
+            .iter()
+            .map(|&(index, segment)| segment_box(controls[index][segment].truncate(), controls[index][segment + 1].truncate()))
+            .collect(),
+    );
+    let mut found = CrossingCells::default();
+    let (mut near, mut pairs) = (Vec::new(), Vec::new());
     for (left, first) in controls.iter().enumerate() {
         stop_if_cancelled(cancelled)?;
-        for (right, second) in controls.iter().enumerate().skip(left + 1) {
-            for a in 0..first.len() - 1 {
-                for b in 0..second.len() - 1 {
-                    let meeting = kernel::segment_segment(first[a].truncate(), first[a + 1].truncate(), second[b].truncate(), second[b + 1].truncate());
-                    // A string ending on another reads the same as one running
-                    // across it: one plan position, two interpretations of it.
-                    let (point, t, u) = match meeting {
-                        SegSeg::Disjoint => continue,
-                        SegSeg::CollinearOverlap { .. } => anyhow::bail!("{}", controls_along_each_other(left, right)),
-                        SegSeg::Crossing { point, t, u } | SegSeg::Touching { point, t, u } => (point, t, u),
-                    };
-                    let (one, one_z) = crossing_side(first, left, a, t, point);
-                    let (other, other_z) = crossing_side(second, right, b, u, point);
-                    if (one_z - other_z).abs() > CONTROL_AGREEMENT {
-                        anyhow::bail!("{}", controls_disagree(left, right, point, one_z, other_z));
-                    }
-                    match crossings.iter_mut().find(|crossing| crossing.position.distance(point) <= kernel::XY_TOL) {
-                        Some(crossing) => {
-                            crossing.add(one);
-                            crossing.add(other);
-                        }
-                        None => crossings.push(Crossing {
-                            position: point,
-                            z: one_z,
-                            sides: vec![one, other],
-                        }),
-                    }
+        pairs.clear();
+        for a in 0..first.len() - 1 {
+            let (low, high) = segment_box(first[a].truncate(), first[a + 1].truncate());
+            grid.overlapping(low, high, &mut near);
+            pairs.extend(near.iter().map(|&other| segments[other]).filter(|&(right, _)| right > left).map(|(right, b)| (right, a, b)));
+        }
+        pairs.sort_unstable();
+        for &(right, a, b) in &pairs {
+            let second = &controls[right];
+            let meeting = kernel::segment_segment(first[a].truncate(), first[a + 1].truncate(), second[b].truncate(), second[b + 1].truncate());
+            // A string ending on another reads the same as one running
+            // across it: one plan position, two interpretations of it.
+            let (point, t, u) = match meeting {
+                SegSeg::Disjoint => continue,
+                SegSeg::CollinearOverlap { .. } => anyhow::bail!("{}", controls_along_each_other(names[left], names[right])),
+                SegSeg::Crossing { point, t, u } | SegSeg::Touching { point, t, u } => (point, t, u),
+            };
+            let (one, one_z) = crossing_side(first, left, a, t, point);
+            let (other, other_z) = crossing_side(second, right, b, u, point);
+            if (one_z - other_z).abs() > CONTROL_AGREEMENT {
+                anyhow::bail!("{}", controls_disagree(names[left], names[right], point, one_z, other_z));
+            }
+            match found.first_near(&crossings, point) {
+                Some(index) => {
+                    crossings[index].add(one);
+                    crossings[index].add(other);
+                }
+                None => {
+                    found.add(point, crossings.len());
+                    crossings.push(Crossing {
+                        position: point,
+                        z: one_z,
+                        sides: vec![one, other],
+                    });
                 }
             }
         }
     }
     Ok(crossings)
+}
+
+/// The crossings found so far, filed by plan position so a new meeting finds
+/// the first one within the kernel's tolerance without walking them all.
+#[derive(Default)]
+struct CrossingCells {
+    cells: HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl CrossingCells {
+    /// Cells are a metre across, far wider than the tolerance, so a match is
+    /// always in the cell a position falls in or one beside it.
+    fn key(position: DVec2) -> (i64, i64) {
+        (position.x.floor() as i64, position.y.floor() as i64)
+    }
+
+    fn add(&mut self, position: DVec2, index: usize) {
+        self.cells.entry(Self::key(position)).or_default().push(index);
+    }
+
+    /// The earliest crossing within [`kernel::XY_TOL`] of a position.
+    fn first_near(&self, crossings: &[Crossing], position: DVec2) -> Option<usize> {
+        let (column, row) = Self::key(position);
+        (column.saturating_sub(1)..=column.saturating_add(1))
+            .flat_map(|column| (row.saturating_sub(1)..=row.saturating_add(1)).map(move |row| (column, row)))
+            .filter_map(|key| self.cells.get(&key))
+            .flatten()
+            .copied()
+            .filter(|&index| crossings[index].position.distance(position) <= kernel::XY_TOL)
+            .min()
+    }
 }
 
 /// One control's part in a crossing, with the elevation it reads there: its
@@ -820,77 +918,235 @@ fn crossing_side(control: &[DVec3], index: usize, segment: usize, along: f64, po
 /// position two elevations, and a ring doing so bounds no single area.
 fn self_intersects(points: &[DVec2], closed: bool) -> bool {
     let count = points.len();
-    let segments = if closed { count } else { count - 1 };
+    let segments = if closed { count } else { count.saturating_sub(1) };
+    let grid = BoxGrid::new((0..segments).map(|segment| segment_box(points[segment], points[(segment + 1) % count])).collect());
+    let mut near = Vec::new();
     (0..segments).any(|first| {
-        ((first + 2)..segments)
-            .filter(|second| !(closed && first == 0 && *second == segments - 1))
-            .any(|second| kernel::segment_segment(points[first], points[first + 1], points[second], points[(second + 1) % count]) != SegSeg::Disjoint)
+        let (low, high) = segment_box(points[first], points[(first + 1) % count]);
+        grid.overlapping(low, high, &mut near);
+        near.iter()
+            .filter(|&&second| second >= first + 2 && !(closed && first == 0 && second == segments - 1))
+            .any(|&second| kernel::segment_segment(points[first], points[first + 1], points[second], points[(second + 1) % count]) != SegSeg::Disjoint)
     })
+}
+
+/// How far a box is widened for the grids below: twice the kernel's plan
+/// tolerance, so rounding can never hide a pair the kernel would call close.
+const SEARCH_MARGIN: f64 = 2.0 * kernel::XY_TOL;
+
+/// A segment's plan box, widened by [`SEARCH_MARGIN`].
+fn segment_box(start: DVec2, end: DVec2) -> (DVec2, DVec2) {
+    (start.min(end) - DVec2::splat(SEARCH_MARGIN), start.max(end) + DVec2::splat(SEARCH_MARGIN))
+}
+
+/// Boxes filed on a uniform grid, so only boxes sharing a cell are compared.
+struct BoxGrid {
+    low: DVec2,
+    cell: f64,
+    columns: usize,
+    rows: usize,
+    /// Where each cell's run of `members` starts, one more than the cells.
+    starts: Vec<usize>,
+    members: Vec<usize>,
+    boxes: Vec<(DVec2, DVec2)>,
+}
+
+impl BoxGrid {
+    fn new(boxes: Vec<(DVec2, DVec2)>) -> Self {
+        let (low, high) = boxes
+            .iter()
+            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(low, high), (from, to)| (low.min(*from), high.max(*to)));
+        let (low, span) = if boxes.is_empty() { (DVec2::ZERO, DVec2::ZERO) } else { (low, high - low) };
+        let cell = grid_cell(span, boxes.len());
+        let (columns, rows) = (cells_across(span.x, cell), cells_across(span.y, cell));
+        let mut grid = Self {
+            low,
+            cell,
+            columns,
+            rows,
+            starts: vec![0; columns * rows + 1],
+            members: Vec::new(),
+            boxes,
+        };
+        for index in 0..grid.boxes.len() {
+            for cell in grid.cells(grid.boxes[index]) {
+                grid.starts[cell + 1] += 1;
+            }
+        }
+        for cell in 0..columns * rows {
+            grid.starts[cell + 1] += grid.starts[cell];
+        }
+        let mut next = grid.starts.clone();
+        let mut members = vec![0; grid.starts[columns * rows]];
+        for index in 0..grid.boxes.len() {
+            for cell in grid.cells(grid.boxes[index]) {
+                members[next[cell]] = index;
+                next[cell] += 1;
+            }
+        }
+        grid.members = members;
+        grid
+    }
+
+    /// The cells a box covers, clamped to the grid.
+    fn cells(&self, (from, to): (DVec2, DVec2)) -> impl Iterator<Item = usize> + use<> {
+        let columns = self.columns;
+        let (first_column, last_column) = (cell_of(from.x, self.low.x, self.cell, columns), cell_of(to.x, self.low.x, self.cell, columns));
+        let (first_row, last_row) = (cell_of(from.y, self.low.y, self.cell, self.rows), cell_of(to.y, self.low.y, self.cell, self.rows));
+        (first_row..=last_row).flat_map(move |row| (first_column..=last_column).map(move |column| row * columns + column))
+    }
+
+    /// The boxes overlapping the one from `from` to `to`, ascending and each
+    /// once, into `found`.
+    fn overlapping(&self, from: DVec2, to: DVec2, found: &mut Vec<usize>) {
+        found.clear();
+        for cell in self.cells((from, to)) {
+            for &index in &self.members[self.starts[cell]..self.starts[cell + 1]] {
+                let (low, high) = self.boxes[index];
+                if low.x <= to.x && from.x <= high.x && low.y <= to.y && from.y <= high.y {
+                    found.push(index);
+                }
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+    }
+}
+
+/// A cell size giving a grid about as many cells as it holds items, never so
+/// fine along a thin span that one axis outnumbers them. A span that is not
+/// a finite size gets one cell.
+fn grid_cell(span: DVec2, count: usize) -> f64 {
+    let count = count.max(1) as f64;
+    let cell = (span.x * span.y / count).sqrt().max(span.x.max(span.y) / count);
+    if cell.is_finite() && cell > 0.0 { cell } else { f64::INFINITY }
+}
+
+fn cells_across(span: f64, cell: f64) -> usize {
+    ((span / cell).floor() as usize).saturating_add(1)
+}
+
+/// The cell a coordinate falls in along one axis, clamped to the grid.
+fn cell_of(value: f64, low: f64, cell: f64, count: usize) -> usize {
+    (((value - low) / cell).floor().max(0.0) as usize).min(count - 1)
 }
 
 /// Put a control's vertex into the triangulation. A vertex already within the
 /// kernel's plan tolerance keeps its place and takes the control's
 /// elevation: the string wins, and a pick it wins over is reported.
-fn insert_control_vertex(tin: &mut SurfaceTriangulation, owned: &mut HashSet<usize>, overridden: &mut Vec<(DVec2, f64, f64)>, vertex: DVec3) -> Result<FixedVertexHandle> {
+fn insert_control_vertex(
+    tin: &mut SurfaceTriangulation,
+    grid: &mut VertexGrid,
+    owned: &mut Owners,
+    overridden: &mut Vec<(DVec2, f64, f64)>,
+    control: usize,
+    vertex: DVec3,
+) -> Result<FixedVertexHandle> {
     use spade::Triangulation as _;
 
-    if let Some(handle) = nearest_plan_vertex(tin, vertex.truncate()) {
-        take_over_vertex(tin, owned, overridden, handle, vertex.z);
+    if let Some(handle) = nearest_plan_vertex(grid, vertex.truncate()) {
+        take_over_vertex(tin, owned, overridden, control, handle, vertex.z)?;
         return Ok(handle);
     }
+    let before = tin.num_vertices();
     let handle = tin
         .insert(SurfaceVertex {
             position: spade::Point2::new(vertex.x, vertex.y),
             z: vertex.z,
         })
         .map_err(|error| anyhow::anyhow!("{}", insert_failed(error)))?;
-    owned.insert(handle.index());
+    if tin.num_vertices() > before {
+        grid.add(plan(tin.vertex(handle).position()), handle);
+    }
+    owned.add(handle.index(), control);
     Ok(handle)
 }
 
-/// Give a vertex already in the mesh a control's elevation. A control's own
-/// vertex keeps its first; a pick's is replaced, and reported when the two
-/// differ by more than [`kernel::Z_TOL`].
-fn take_over_vertex(tin: &mut SurfaceTriangulation, owned: &mut HashSet<usize>, overridden: &mut Vec<(DVec2, f64, f64)>, handle: FixedVertexHandle, z: f64) {
+/// The controls each control vertex belongs to, by vertex index and each
+/// control's place in the selection. The first to reach it gave it its
+/// elevation.
+#[derive(Default)]
+struct Owners {
+    first: HashMap<usize, usize>,
+    also: HashSet<(usize, usize)>,
+}
+
+impl Owners {
+    fn has(&self, vertex: usize, control: usize) -> bool {
+        self.first.get(&vertex) == Some(&control) || self.also.contains(&(vertex, control))
+    }
+
+    fn add(&mut self, vertex: usize, control: usize) {
+        match self.first.get(&vertex) {
+            None => {
+                self.first.insert(vertex, control);
+            }
+            Some(&first) if first != control => {
+                self.also.insert((vertex, control));
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.first.len()
+    }
+}
+
+/// Give a vertex already in the mesh a control's elevation. A pick's is
+/// replaced, and reported when the two differ by more than
+/// [`kernel::Z_TOL`]; a control's own vertex keeps its first, and another
+/// control reaching it must agree with it or the build is refused.
+fn take_over_vertex(tin: &mut SurfaceTriangulation, owned: &mut Owners, overridden: &mut Vec<(DVec2, f64, f64)>, control: usize, handle: FixedVertexHandle, z: f64) -> Result<()> {
     use spade::Triangulation as _;
 
-    if !owned.insert(handle.index()) {
-        return;
-    }
     let vertex = tin.vertex_data_mut(handle);
-    if (z - vertex.z).abs() > kernel::Z_TOL {
-        overridden.push((plan(vertex.position), vertex.z, z));
+    match owned.first.get(&handle.index()).copied() {
+        None => {
+            if (z - vertex.z).abs() > kernel::Z_TOL {
+                overridden.push((plan(vertex.position), vertex.z, z));
+            }
+            vertex.z = z;
+        }
+        Some(_) if owned.has(handle.index(), control) => {}
+        Some(owner) if (z - vertex.z).abs() > CONTROL_AGREEMENT => {
+            anyhow::bail!("{}", controls_disagree(owner, control, plan(vertex.position), vertex.z, z));
+        }
+        Some(_) => {}
     }
-    vertex.z = z;
+    owned.add(handle.index(), control);
+    Ok(())
 }
 
-/// The vertex within the kernel's plan tolerance of a position, if any.
-/// Walked because spade's own lookup matches exact coordinates only.
-fn nearest_plan_vertex(tin: &SurfaceTriangulation, position: DVec2) -> Option<FixedVertexHandle> {
-    use spade::Triangulation as _;
-
-    tin.vertices()
-        .map(|vertex| (vertex.fix(), plan(vertex.position()).distance_squared(position)))
-        .filter(|(_, distance)| *distance <= kernel::XY_TOL * kernel::XY_TOL)
-        .min_by(|left, right| left.1.total_cmp(&right.1))
-        .map(|(handle, _)| handle)
+/// The vertex within the kernel's plan tolerance of a position, if any; of
+/// two as near, the earlier. Looked up on the grid because spade's own lookup
+/// matches exact coordinates only.
+fn nearest_plan_vertex(grid: &VertexGrid, position: DVec2) -> Option<FixedVertexHandle> {
+    let mut nearest: Option<(f64, FixedVertexHandle)> = None;
+    grid.within(position - DVec2::splat(SEARCH_MARGIN), position + DVec2::splat(SEARCH_MARGIN), |at, handle| {
+        let distance = at.distance_squared(position);
+        if distance <= kernel::XY_TOL * kernel::XY_TOL && nearest.is_none_or(|kept| (distance, handle.index()) < (kept.0, kept.1.index())) {
+            nearest = Some((distance, handle));
+        }
+    });
+    nearest.map(|(_, handle)| handle)
 }
 
-/// The vertices no control owns that lie along a segment in plan, each with
+/// The vertices that lie along a segment in plan, in mesh order, each with
 /// where along it they fall. The ends are left out: a vertex there is the
 /// control's own.
-fn vertices_along(tin: &SurfaceTriangulation, owned: &HashSet<usize>, start: DVec2, end: DVec2) -> Vec<(f64, FixedVertexHandle)> {
-    use spade::Triangulation as _;
-
-    tin.vertices()
-        .filter(|vertex| !owned.contains(&vertex.fix().index()))
-        .filter_map(|vertex| {
-            let position = plan(vertex.position());
-            let (closest, along) = kernel::project_onto_segment(position, start, end);
-            let interior = nearer_end(closest, start, end).is_none();
-            (interior && position.distance(closest) <= kernel::XY_TOL).then_some((along, vertex.fix()))
-        })
-        .collect()
+fn vertices_along(grid: &VertexGrid, start: DVec2, end: DVec2) -> Vec<(f64, FixedVertexHandle)> {
+    let (low, high) = segment_box(start, end);
+    let mut found = Vec::new();
+    grid.within(low, high, |position, handle| {
+        let (closest, along) = kernel::project_onto_segment(position, start, end);
+        let interior = nearer_end(closest, start, end).is_none();
+        if interior && position.distance(closest) <= kernel::XY_TOL {
+            found.push((along, handle));
+        }
+    });
+    found.sort_unstable_by_key(|(_, handle)| handle.index());
+    found
 }
 
 /// Which end of a segment a point coincides with in plan, when it coincides
@@ -962,13 +1218,231 @@ fn plan(position: spade::Point2<f64>) -> DVec2 {
 
 /// The elevation of the pick nearest a plan position. Beyond the picks' hull
 /// there is no triangle to interpolate on, so the nearest pick stands in.
-fn nearest_pick_z(tin: &SurfaceTriangulation, position: spade::Point2<f64>) -> Option<f64> {
+/// Of two as near, the earlier.
+fn nearest_pick_z(tin: &SurfaceTriangulation, grid: &VertexGrid, position: spade::Point2<f64>) -> Option<f64> {
     use spade::Triangulation as _;
 
-    let distance = |vertex: spade::Point2<f64>| (vertex.x - position.x).powi(2) + (vertex.y - position.y).powi(2);
-    tin.vertices()
-        .min_by(|left, right| distance(left.position()).total_cmp(&distance(right.position())))
-        .map(|vertex| vertex.data().z)
+    let distance = |vertex: DVec2| (vertex.x - position.x).powi(2) + (vertex.y - position.y).powi(2);
+    grid.nearest(plan(position), distance).map(|handle| tin.vertex(handle).data().z)
+}
+
+/// The mesh's vertices filed by plan position on a uniform grid, kept in step
+/// with the mesh as control vertices go in.
+struct VertexGrid {
+    low: DVec2,
+    cell: f64,
+    cells: HashMap<(i64, i64), Vec<(DVec2, FixedVertexHandle)>>,
+    /// The lowest and highest occupied cells.
+    occupied: Option<((i64, i64), (i64, i64))>,
+}
+
+impl VertexGrid {
+    /// Sized for the picks already in the mesh and the control vertices to
+    /// come, filled with the picks.
+    fn new(tin: &SurfaceTriangulation, controls: &[Vec<DVec3>]) -> Self {
+        use spade::Triangulation as _;
+
+        let positions = tin
+            .vertices()
+            .map(|vertex| plan(vertex.position()))
+            .chain(controls.iter().flatten().map(|vertex| vertex.truncate()));
+        let (low, high, count) = positions.fold((DVec2::INFINITY, DVec2::NEG_INFINITY, 0usize), |(low, high, count), position| {
+            (low.min(position), high.max(position), count + 1)
+        });
+        let (low, span) = if count == 0 { (DVec2::ZERO, DVec2::ZERO) } else { (low, high - low) };
+        let mut grid = Self {
+            low,
+            cell: grid_cell(span, count),
+            cells: HashMap::new(),
+            occupied: None,
+        };
+        for vertex in tin.vertices() {
+            grid.add(plan(vertex.position()), vertex.fix());
+        }
+        grid
+    }
+
+    fn key(&self, position: DVec2) -> (i64, i64) {
+        (
+            ((position.x - self.low.x) / self.cell).floor() as i64,
+            ((position.y - self.low.y) / self.cell).floor() as i64,
+        )
+    }
+
+    fn add(&mut self, position: DVec2, handle: FixedVertexHandle) {
+        let key = self.key(position);
+        self.cells.entry(key).or_default().push((position, handle));
+        self.occupied = Some(match self.occupied {
+            None => (key, key),
+            Some((low, high)) => ((low.0.min(key.0), low.1.min(key.1)), (high.0.max(key.0), high.1.max(key.1))),
+        });
+    }
+
+    /// Every vertex in the cells the box from `from` to `to` touches, in no
+    /// particular order.
+    fn within(&self, from: DVec2, to: DVec2, mut visit: impl FnMut(DVec2, FixedVertexHandle)) {
+        let Some((low, high)) = self.occupied else {
+            return;
+        };
+        let (first, last) = (self.key(from), self.key(to));
+        let (first, last) = ((first.0.max(low.0), first.1.max(low.1)), (last.0.min(high.0), last.1.min(high.1)));
+        if first.0 > last.0 || first.1 > last.1 {
+            return;
+        }
+        let covered = (last.0 as f64 - first.0 as f64 + 1.0) * (last.1 as f64 - first.1 as f64 + 1.0);
+        let in_range = |key: &(i64, i64)| (first.0..=last.0).contains(&key.0) && (first.1..=last.1).contains(&key.1);
+        // A box wider than the vertices are spread is cheaper walked cell by
+        // occupied cell than by every empty one it covers.
+        if covered > self.cells.len() as f64 {
+            for (_, members) in self.cells.iter().filter(|(key, _)| in_range(key)) {
+                members.iter().for_each(|&(position, handle)| visit(position, handle));
+            }
+            return;
+        }
+        for column in first.0..=last.0 {
+            for row in first.1..=last.1 {
+                if let Some(members) = self.cells.get(&(column, row)) {
+                    members.iter().for_each(|&(position, handle)| visit(position, handle));
+                }
+            }
+        }
+    }
+
+    /// The vertex `distance` puts nearest a position, the earlier of two as
+    /// near. The search widens until the nearest found is closer than any
+    /// vertex outside it could be.
+    fn nearest(&self, position: DVec2, distance: impl Fn(DVec2) -> f64) -> Option<FixedVertexHandle> {
+        let (low, high) = self.occupied?;
+        let occupied_from = self.low + DVec2::new(low.0 as f64, low.1 as f64) * self.cell;
+        let occupied_to = self.low + DVec2::new(high.0 as f64 + 1.0, high.1 as f64 + 1.0) * self.cell;
+        let mut reach = (position.clamp(occupied_from, occupied_to).distance(position) + self.cell).min(f64::MAX);
+        loop {
+            let (from, to) = (position - DVec2::splat(reach + SEARCH_MARGIN), position + DVec2::splat(reach + SEARCH_MARGIN));
+            let everything = !reach.is_finite() || {
+                let (first, last) = (self.key(from), self.key(to));
+                first.0 <= low.0 && first.1 <= low.1 && last.0 >= high.0 && last.1 >= high.1
+            };
+            let mut nearest: Option<(f64, FixedVertexHandle)> = None;
+            let mut consider = |at: DVec2, handle: FixedVertexHandle| {
+                let squared = distance(at);
+                if (everything || squared <= reach * reach) && nearest.is_none_or(|kept| (squared, handle.index()) < (kept.0, kept.1.index())) {
+                    nearest = Some((squared, handle));
+                }
+            };
+            if everything {
+                self.cells.values().flatten().for_each(|&(at, handle)| consider(at, handle));
+            } else {
+                self.within(from, to, consider);
+            }
+            if nearest.is_some() || everything {
+                return nearest.map(|(_, handle)| handle);
+            }
+            reach *= 2.0;
+        }
+    }
+}
+
+/// The most band entries a mask edge may make on average, so a ring of tall
+/// edges cannot make the index outgrow the ring many times over.
+const BAND_ENTRIES_PER_EDGE: usize = 8;
+
+/// A ring's edges filed by the horizontal bands they span, so a point is
+/// tested only against the edges level with it. Answers exactly as
+/// [`kernel::point_in_polyline`] does over the whole ring.
+struct RingBands<'a> {
+    ring: &'a [DVec2],
+    low: f64,
+    height: f64,
+    /// Where each band's run of `members` starts, one more than the bands.
+    starts: Vec<usize>,
+    members: Vec<usize>,
+    /// Edges of non-zero length; under three and nothing is inside.
+    edges: usize,
+}
+
+impl<'a> RingBands<'a> {
+    fn new(ring: &'a [DVec2]) -> Self {
+        let count = ring.len();
+        let edge = |index: usize| (ring[index], ring[(index + 1) % count]);
+        let span = |index: usize| {
+            let (a, b) = edge(index);
+            (a.y.min(b.y) - SEARCH_MARGIN, a.y.max(b.y) + SEARCH_MARGIN)
+        };
+        let (low, high) = (0..count)
+            .map(span)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), (from, to)| (low.min(from), high.max(to)));
+        let (low, mut height) = if count == 0 {
+            (0.0, f64::INFINITY)
+        } else {
+            (low, grid_cell(DVec2::new(0.0, high - low), count))
+        };
+        let mut bands = cells_across(high - low, height).min(count.max(1));
+        // Tall edges sit in many bands, so bands are widened until the index
+        // holds a few entries per edge; one band is the plain walk.
+        let filed = |height: f64, bands: usize| {
+            (0..count)
+                .map(span)
+                .map(|(from, to)| cell_of(to, low, height, bands) - cell_of(from, low, height, bands) + 1)
+                .sum::<usize>()
+        };
+        while bands > 1 && filed(height, bands) > BAND_ENTRIES_PER_EDGE * count {
+            height *= 2.0;
+            bands = cells_across(high - low, height).min(count.max(1));
+        }
+        let mut starts = vec![0; bands + 1];
+        let band_of = |y: f64| cell_of(y, low, height, bands);
+        for index in 0..count {
+            let (from, to) = span(index);
+            for band in band_of(from)..=band_of(to) {
+                starts[band + 1] += 1;
+            }
+        }
+        for band in 0..bands {
+            starts[band + 1] += starts[band];
+        }
+        let mut next = starts.clone();
+        let mut members = vec![0; starts[bands]];
+        for index in 0..count {
+            let (from, to) = span(index);
+            for band in band_of(from)..=band_of(to) {
+                members[next[band]] = index;
+                next[band] += 1;
+            }
+        }
+        Self {
+            ring,
+            low,
+            height,
+            starts,
+            members,
+            edges: (0..count).filter(|&index| edge(index).0 != edge(index).1).count(),
+        }
+    }
+
+    fn contains(&self, point: DVec2) -> PolyContainment {
+        let count = self.ring.len();
+        if count == 0 {
+            return PolyContainment::Outside;
+        }
+        let band = cell_of(point.y, self.low, self.height, self.starts.len() - 1);
+        let mut inside = false;
+        for &index in &self.members[self.starts[band]..self.starts[band + 1]] {
+            let (a, b) = (self.ring[index], self.ring[(index + 1) % count]);
+            if a == b {
+                continue;
+            }
+            let (closest, _) = kernel::project_onto_segment(point, a, b);
+            if point.distance(closest) <= kernel::XY_TOL {
+                return PolyContainment::OnBoundary;
+            }
+            let upward = a.y <= point.y && point.y < b.y;
+            let downward = b.y <= point.y && point.y < a.y;
+            if (upward && kernel::orient2d(a, b, point) > 0.0) || (downward && kernel::orient2d(a, b, point) < 0.0) {
+                inside = !inside;
+            }
+        }
+        if self.edges >= 3 && inside { PolyContainment::Inside } else { PolyContainment::Outside }
+    }
 }
 
 /// The vertical box the surface is modelled in: the surface's own range R
