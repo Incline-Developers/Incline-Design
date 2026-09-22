@@ -56,10 +56,27 @@ fn surface_shading_normal(geometric: vec3<f32>, smooth_normal: vec3<f32>) -> vec
     return normal;
 }
 
+const GRADE_START_COMPRESSION: f32 = 0.76;
+const GRADE_DESATURATION: f32 = 0.15;
+
 // Applied inline in standard materials; cinematic applies it after AO in its
 // composite. No HDR target or extra fullscreen pass is needed in standard mode.
+//
+// Khronos PBR Neutral: a surface's colour is data, so hue and saturation pass
+// through untouched below the compression knee, and only highlights roll off
+// toward white. A per-channel filmic curve would skew a grade ramp away from
+// its legend.
 fn grade_scene(color: vec3<f32>, exposure: f32) -> vec3<f32> {
-    let exposed = color * exposure;
-    let mapped = clamp((exposed * (2.51 * exposed + 0.03)) / (exposed * (2.43 * exposed + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-    return clamp(mix(mapped, mapped * mapped * (3.0 - 2.0 * mapped), 0.18), vec3<f32>(0.0), vec3<f32>(1.0));
+    var mapped = max(color * exposure, vec3<f32>(0.0));
+    let low = min(mapped.r, min(mapped.g, mapped.b));
+    mapped -= select(0.04, low - 6.25 * low * low, low < 0.08);
+    let peak = max(mapped.r, max(mapped.g, mapped.b));
+    if peak < GRADE_START_COMPRESSION {
+        return mapped;
+    }
+    let d = 1.0 - GRADE_START_COMPRESSION;
+    let new_peak = 1.0 - d * d / (peak + d - GRADE_START_COMPRESSION);
+    mapped *= new_peak / peak;
+    let g = 1.0 - 1.0 / (GRADE_DESATURATION * (peak - new_peak) + 1.0);
+    return mix(mapped, vec3<f32>(new_peak), g);
 }

@@ -30,7 +30,10 @@ pub(super) const SKY_INTENSITY: f32 = 0.3;
 pub(super) const GROUND_COLOR: u32 = 0xd8d4cc;
 pub(super) const GROUND_INTENSITY: f32 = 0.12;
 
-pub(super) const SCENE_EXPOSURE: f32 = 0.65;
+/// PBR Neutral is linear below its knee, so this lands flat, sunlit white
+/// ground (about 0.93 before exposure) near 0.7: a light grey under the white
+/// design strings.
+pub(super) const SCENE_EXPOSURE: f32 = 0.8;
 
 /// The bind group layouts the scene pipelines are laid out against. Everything
 /// but `camera` is shared by both copies; `camera` is the plain camera layout
