@@ -117,6 +117,9 @@ impl App<'_> {
                         if object.encloses_area() {
                             counts.clip_boundaries += 1;
                         }
+                        if matches!(object, Object::Point { .. }) {
+                            counts.surface_points += 1;
+                        }
                     }
                 }
                 SceneEntityId::Triangulation(id) => {
@@ -136,6 +139,11 @@ impl App<'_> {
                 _ => {}
             }
         }
+        // Holes are named by the viewport as well as by the tree, so this
+        // one is counted through the same walk the tool runs on.
+        let mut reference_holes = 0usize;
+        self.for_each_reference_hole(|_| reference_holes += 1);
+        counts.reference_holes = reference_holes;
         self.editor.selection_counts = counts;
     }
 

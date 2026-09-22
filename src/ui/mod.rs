@@ -1235,6 +1235,9 @@ fn draw_global_dialogs(
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, commands);
+    dialogs::modelling_settings::draw_modelling_settings_dialog(root_ui, editor, project, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
 
     // Exit confirmation

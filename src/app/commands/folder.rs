@@ -1,4 +1,4 @@
-//! Explorer folder commands, shared by all six sections.
+//! Explorer folder commands, shared by every section.
 //!
 //! Design layers and the five project-item kinds each get their own folder
 //! list under [`SectionKind`], but the create/delete/rename/move mechanics
@@ -10,7 +10,8 @@ use anyhow::Result;
 use crate::{
     app::App,
     i18n::{tr, tr_format},
-    model::{Command, Folder, FolderId, FolderMember, ItemRef, MemberTarget, SectionKind},
+    model::{Command, Folder, FolderId, FolderMember, ItemRef, MemberTarget, Placement, SectionKind},
+    ui::state::ExplorerSection,
     userspace_log, userspace_warn,
 };
 
@@ -110,53 +111,59 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr_format!(literal = "Renamed collection '%before%' to '%after%'", before = before, after = requested));
     }
 
-    /// Move a layer or a project item into `folder`, or back to the root of
-    /// the section it is shown under with `None`.
+    /// Move a layer or a project item into `folder` under `section`, or to
+    /// that section's root with `None`.
     ///
-    /// The section used is read fresh from the layer or item itself, not
-    /// from `member`'s carried tag, which a stale view may have outlived.
-    pub(crate) fn move_to_folder(&mut self, member: FolderMember, folder: Option<FolderId>) {
+    /// Where the member sits now is read fresh from the layer or item itself,
+    /// not from `member`'s carried tag, which a stale view may have outlived.
+    /// Where it may go is decided by `section` and the member's kind: a kind
+    /// never changes, and any section admitting it may hold it, so a target in
+    /// another section is a move between sections rather than a refusal.
+    pub(crate) fn move_to_folder(&mut self, member: FolderMember, section: SectionKind, folder: Option<FolderId>) {
         let Some(project) = self.workspace.active_project() else {
             return;
         };
-        let (section, before) = match member.target() {
+        let before = match member.target() {
             MemberTarget::Layer(layer_id) => match project.project.document.layer(layer_id) {
-                Some(layer) => (layer.section, layer.folder),
+                Some(layer) => Placement::new(layer.section, layer.folder),
                 None => return,
             },
             MemberTarget::Item(item) => match self.project_item_state(item) {
-                Some(state) => (state.section, state.folder),
+                Some(state) => Placement::new(state.section, state.folder),
                 None => return,
             },
         };
+        // A section with no row for this kind would show the member nowhere.
+        if !section.admits(member.kind()) {
+            userspace_warn!("{}", tr!(literal = "That section cannot hold this item"));
+            return;
+        }
         if let Some(id) = folder
             && !project.project.folders.contains(section, id)
         {
             userspace_warn!("{}", tr!(literal = "That collection no longer exists"));
             return;
         }
-        let folder_name = folder.and_then(|id| project.project.folders.name(section, id)).map(ToOwned::to_owned);
-        if before == folder {
+        let after = Placement::new(section, folder);
+        if before == after {
             return;
         }
+        let folder_name = folder.and_then(|id| project.project.folders.name(section, id)).map(ToOwned::to_owned);
+        let section_name = ExplorerSection::from_kind(section).label();
         match member.target() {
-            MemberTarget::Layer(layer_id) => self.execute_edit(Command::SetLayerFolder {
-                id: layer_id,
-                before,
-                after: folder,
-            }),
-            MemberTarget::Item(item) => self.execute_edit(Command::SetItemFolder { item, before, after: folder }),
+            MemberTarget::Layer(id) => self.execute_edit(Command::SetLayerPlacement { id, before, after }),
+            MemberTarget::Item(item) => self.execute_edit(Command::SetItemPlacement { item, before, after }),
         }
         userspace_log!(
             "{}",
             match &folder_name {
                 Some(name) => tr_format!(literal = "Moved item into collection '%name%'", name = name),
-                None => tr!(literal = "Moved item to root"),
+                None => tr_format!(literal = "Moved item to the root of %section%", section = section_name),
             }
         );
     }
 }
 
 // `App` is not constructible in a unit test (it borrows a live wgpu/winit
-// context), so its guards (the same-kind check in `move_to_folder`, the
+// context), so its guards (the admission check in `move_to_folder`, the
 // missing-folder-name refusal in `rename_folder`) are verified by reading.

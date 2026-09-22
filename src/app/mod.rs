@@ -579,6 +579,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
+            MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
+            MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1604,6 +1606,7 @@ impl<'a> App<'a> {
             #[cfg(target_arch = "wasm32")]
             matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
             project.project.metadata.name.hash(&mut hasher);
+            project.project.metadata.coordinate_reference_system.hash(&mut hasher);
             project.lossy_save_warnings.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
@@ -1613,7 +1616,7 @@ impl<'a> App<'a> {
             for layer in project.project.document.layers() {
                 layer.hash_row(&mut hasher);
             }
-            // All six sections at once: the registry is shared project
+            // Every section at once: the registry is shared project
             // content, not just the Designs tree's.
             project.project.folders.hash_into(&mut hasher);
         }
@@ -1864,6 +1867,11 @@ impl<'a> App<'a> {
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
+        let coordinate_reference_system = self
+            .workspace
+            .active_project()
+            .map(|p| p.project.metadata.coordinate_reference_system.clone())
+            .unwrap_or_default();
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
         // A section's item membership can stay byte-identical while its
         // folder list changes - a folder created and left empty, say - so
@@ -1875,10 +1883,27 @@ impl<'a> App<'a> {
                 .active_project()
                 .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
         };
-        let triangulations_membership_dirty = !same_membership(
-            &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
-            &self.project_asset_baseline.triangulations,
-        ) || section_folders_dirty(SectionKind::Triangulations);
+        // Triangulations sit under two sections and the baseline records no
+        // section, so an added or moved id marks the section it is in now,
+        // and a deleted one marks every section its kind can sit in.
+        let section_membership_dirty = |section: SectionKind, current: &[(u64, SectionKind)], saved: &[(u64, u64)]| {
+            let added = current
+                .iter()
+                .any(|(id, item_section)| *item_section == section && !saved.iter().any(|(saved_id, _)| saved_id == id));
+            let deleted = saved.iter().any(|(saved_id, _)| !current.iter().any(|(id, _)| id == saved_id));
+            added || deleted
+        };
+        let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
+        let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Triangulations);
+        // Modelling's own half of the same question. Its layers belong here
+        // rather than with the rows: a deleted one has no row left to mark.
+        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Modelling)
+            || self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -1903,6 +1928,7 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
+            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
@@ -1910,6 +1936,7 @@ impl<'a> App<'a> {
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
+            coordinate_reference_system,
             active_triangulation_for_menu,
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });

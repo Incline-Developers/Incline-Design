@@ -2,7 +2,7 @@ pub(crate) mod block_model;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
-pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for all six sections
+pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
@@ -28,7 +28,7 @@ use crate::{
     i18n::{tr, tr_format},
     model::{Command, SceneEntityId},
     ui::state::{ActiveTool, TriCreatePhase, UiCommand},
-    userspace_error, userspace_warn,
+    userspace_error, userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -119,6 +119,12 @@ impl<'a> App<'a> {
                 | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel
+                | UiCommand::OpenReferencePoints
+                | UiCommand::OpenReferenceSurface
+                | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::OpenModellingSettings
+                | UiCommand::SetProjectCoordinateSystem(_)
+                | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -331,8 +337,8 @@ impl<'a> App<'a> {
             UiCommand::CreateLayer { name } => self.create_layer(name),
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
-            UiCommand::MoveToFolder { member, folder } => {
-                self.move_to_folder(member, folder);
+            UiCommand::MoveToFolder { member, section, folder } => {
+                self.move_to_folder(member, section, folder);
                 Ok(())
             }
             UiCommand::AddDelayProduct { delay_ms, name, color } => {
@@ -522,6 +528,88 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenDrillHoleColorDialog(id) => {
                 self.editor.drill_hole_color_dialog = Some(id);
+                Ok(())
+            }
+            UiCommand::OpenReferencePoints => {
+                // Select first, then act: the points are placed on the holes
+                // selected when it opens, not on a dataset picked inside the
+                // dialog. Both ways of naming holes feed it.
+                let mut holes = Vec::new();
+                self.for_each_reference_hole(|hole| holes.push(hole));
+                if holes.is_empty() {
+                    userspace_warn!("{}", tr!(literal = "Select the holes to place reference points on"));
+                    return Ok(());
+                }
+                // The selection is two unordered sets; sorting here keeps the
+                // layer's points and the flagged list in a settled order.
+                holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
+                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, ..Default::default() });
+                Ok(())
+            }
+            UiCommand::OpenReferenceSurface => {
+                // Two inputs of different kinds, so the selection names both
+                // without anything having to say which is which.
+                let input = match crate::app::commands::triangulation::reference_surface::surface_input(&self.scene_document, &self.editor.selected_handles) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        userspace_warn!("{}", format!("{error:#}"));
+                        return Ok(());
+                    }
+                };
+                // Both labels are rendered once here, not each frame: the
+                // dialog reports the input it was opened on, which cannot
+                // change under it.
+                let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
+                let points_label = match input.layers.as_slice() {
+                    [layer] => tr_format!(literal = "%count% point(s) on '%layer%'", count = input.points.len(), layer = layer_name(*layer)),
+                    layers => tr_format!(literal = "%count% point(s) across %layers% layers", count = input.points.len(), layers = layers.len()),
+                };
+                let extent_label = match input.extent {
+                    None => tr!(literal = "No extent"),
+                    Some(id) => self
+                        .scene_document
+                        .get_object(id)
+                        .map(|object| tr_format!(literal = "%kind% on '%layer%'", kind = object.kind_name(), layer = layer_name(object.layer())))
+                        .unwrap_or_else(|| tr!(literal = "No extent")),
+                };
+                self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
+                    points: input.points,
+                    extent: input.extent,
+                    points_label,
+                    extent_label,
+                });
+                Ok(())
+            }
+            UiCommand::BuildReferenceSurface { points, extent } => self.build_reference_surface(points, extent),
+            UiCommand::OpenModellingSettings => {
+                self.editor.show_modelling_settings = true;
+                Ok(())
+            }
+            UiCommand::SetProjectCoordinateSystem(stored) => {
+                let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                    let metadata = &mut project.project.metadata;
+                    if metadata.coordinate_reference_system == stored {
+                        false
+                    } else {
+                        metadata.coordinate_reference_system = stored.clone();
+                        true
+                    }
+                });
+                if changed {
+                    self.touch_active_project_content();
+                    userspace_log!(
+                        "{}",
+                        if stored.is_empty() {
+                            tr!(literal = "Project coordinate system cleared")
+                        } else {
+                            tr_format!(literal = "Project coordinate system set to %system%", system = stored)
+                        }
+                    );
+                }
+                Ok(())
+            }
+            UiCommand::BuildReferencePoints { holes, field, value, side } => {
+                self.build_reference_points(holes, field, value, side);
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),

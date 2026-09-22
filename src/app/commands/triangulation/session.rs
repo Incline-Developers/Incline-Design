@@ -325,6 +325,15 @@ impl<'a> App<'a> {
     /// it. The heavy build (mesh assembly + BVH) is done by
     /// `build_generated_triangulation`, which can run on a worker thread.
     pub(crate) fn insert_generated_triangulation(&mut self, built: crate::model::triangulation::GeneratedTriangulation) {
+        self.insert_generated_triangulation_in(built, crate::model::SectionKind::natural_for(MemberKind::Triangulation));
+    }
+
+    /// The same, for a tool that knows where its surface belongs.
+    ///
+    /// A derived surface is born beside what it was derived from when that
+    /// section can show one - see [`crate::model::SectionKind::derived_for`] -
+    /// and always at the section root, never in one of its collections.
+    pub(crate) fn insert_generated_triangulation_in(&mut self, built: crate::model::triangulation::GeneratedTriangulation, section: crate::model::SectionKind) {
         let crate::model::triangulation::GeneratedTriangulation {
             name,
             mesh,
@@ -343,7 +352,7 @@ impl<'a> App<'a> {
         let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.triangulations.push(OpenTriangulation {
             id,
-            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section),
             name: name.clone(),
             mesh,
             spatial,

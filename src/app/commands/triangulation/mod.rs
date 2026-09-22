@@ -26,6 +26,7 @@ mod cuts;
 mod geometry;
 mod include;
 mod point_cloud_tin;
+pub(crate) mod reference_surface;
 pub(crate) mod session;
 
 use geometry::*;

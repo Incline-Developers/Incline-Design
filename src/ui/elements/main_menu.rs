@@ -608,6 +608,20 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
                     ui.close();
                 }
+                // Select first, then act: placed on the holes selected at open.
+                let can_build_points = editor.selection_counts.reference_holes > 0;
+                if ContextMenuAction::new(tr!(literal = "Reference Points...")).enabled(can_build_points).show(ui).clicked() {
+                    commands.push(UiCommand::OpenReferencePoints);
+                    ui.close();
+                }
+                // Select first, then act: the surface is built from the points
+                // that are selected when it opens, not from a layer picked
+                // inside the dialog.
+                let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
+                if ContextMenuAction::new(tr!(literal = "Build Surface...")).enabled(can_build_surface).show(ui).clicked() {
+                    commands.push(UiCommand::OpenReferenceSurface);
+                    ui.close();
+                }
             });
             return;
         }

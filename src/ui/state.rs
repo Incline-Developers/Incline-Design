@@ -177,6 +177,8 @@ impl EditorState {
             || self.point_cloud_join_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.reference_points_dialog.is_some()
+            || self.reference_surface_dialog.is_some()
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -295,6 +297,8 @@ pub(crate) struct SelectionCounts {
     /// Selected design objects that enclose an area, and so can serve as a
     /// clipping boundary.
     pub(crate) clip_boundaries: usize,
+    /// Selected design points, which a surface can be triangulated from.
+    pub(crate) surface_points: usize,
     /// Selected triangulations that are loaded, and so have a mesh to work on.
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
@@ -302,6 +306,9 @@ pub(crate) struct SelectionCounts {
     /// Selected drill-hole datasets that are loaded, and so have intervals to
     /// estimate from.
     pub(crate) drill_holes: usize,
+    /// Selected holes, a dataset taken whole standing for every hole in it,
+    /// which reference points are placed on.
+    pub(crate) reference_holes: usize,
     /// Selected block models that are loaded, and so have blocks to work on.
     pub(crate) block_models: usize,
 }
@@ -1702,6 +1709,12 @@ pub(crate) struct EditorState {
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
     pub(crate) drill_hole_color_dialog: Option<DrillHoleId>,
+    /// The reference points dialog's working choices while it is open.
+    pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
+    /// The build surface dialog's snapshot of its input while it is open.
+    pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    /// The Modelling branch's settings dialog: the datum the model is built in.
+    pub(crate) show_modelling_settings: bool,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -2019,6 +2032,9 @@ impl EditorState {
             || self.show_import
             || self.show_export
             || self.drill_hole_color_dialog.is_some()
+            || self.reference_points_dialog.is_some()
+            || self.reference_surface_dialog.is_some()
+            || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
@@ -2273,6 +2289,9 @@ impl EditorState {
         self.tri_cut_poly_open = false;
         self.tri_cut_poly_object_id = None;
         self.tri_cut_poly_object_name.clear();
+        // Snapshotted object ids, and a hold on the selection while it is up:
+        // neither can outlive the project they were taken from.
+        self.reference_surface_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -2633,6 +2652,9 @@ impl EditorState {
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
+            reference_points_dialog: None,
+            reference_surface_dialog: None,
+            show_modelling_settings: false,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -3197,9 +3219,14 @@ pub(crate) enum UiCommand {
         section: SectionKind,
         folder: FolderId,
     },
-    /// Move an item into a folder, or back to the section root with `None`.
+    /// Move an item into a collection of `section`, or to that section's root
+    /// with `None`.
+    ///
+    /// `section` is where the item is going, which need not be where it is:
+    /// any section admitting the member's kind may hold it.
     MoveToFolder {
         member: FolderMember,
+        section: SectionKind,
         folder: Option<FolderId>,
     },
     /// Add a product to the Drill & Blast palette, as the New Product dialog
@@ -3362,6 +3389,26 @@ pub(crate) enum UiCommand {
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
+    OpenReferencePoints,
+    OpenReferenceSurface,
+    /// A new triangulation from the selected points the command was opened
+    /// on, clipped to an optional closed-string extent.
+    BuildReferenceSurface {
+        points: Vec<ObjectId>,
+        extent: Option<ObjectId>,
+    },
+    OpenModellingSettings,
+    /// The project's coordinate system, in its stored spelling; empty clears
+    /// it.
+    SetProjectCoordinateSystem(String),
+    /// One point per hole at the chosen boundary of a working section, as a
+    /// new layer, on the holes the command was opened on.
+    BuildReferencePoints {
+        holes: Vec<DrillHoleRef>,
+        field: String,
+        value: String,
+        side: crate::model::drill_hole::ReferenceSide,
+    },
     /// Sends one named hole to the inspector and shows the panel, bypassing
     /// the lock since this is an explicit request.
     InspectDrillHole(DrillHoleRef),
@@ -3652,6 +3699,9 @@ impl UiCommand {
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::OpenDrillHoleColorDialog(_)
+            | Self::OpenReferencePoints
+            | Self::OpenReferenceSurface
+            | Self::OpenModellingSettings
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
@@ -3731,11 +3781,20 @@ impl UiCommand {
                     section = ExplorerSection::from_kind(*section).label()
                 ),
             ),
-            Self::MoveToFolder { member, folder } => report(
+            Self::MoveToFolder { member, section, folder } => report(
                 tr!(literal = "Move to Collection"),
                 match folder {
-                    Some(folder) => tr_format!(literal = "%member% into %folder%", member = format!("{member:?}"), folder = format!("{folder:?}")),
-                    None => tr_format!(literal = "%member% to root", member = format!("{member:?}")),
+                    Some(folder) => tr_format!(
+                        literal = "%member% into %folder% in %section%",
+                        member = format!("{member:?}"),
+                        folder = format!("{folder:?}"),
+                        section = ExplorerSection::from_kind(*section).label()
+                    ),
+                    None => tr_format!(
+                        literal = "%member% to the root of %section%",
+                        member = format!("{member:?}"),
+                        section = ExplorerSection::from_kind(*section).label()
+                    ),
                 },
             ),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
@@ -3842,6 +3901,18 @@ impl UiCommand {
             Self::SetDrillHoleWidth {
                 radius_scale, min_pixel_diameter, ..
             } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
+            Self::BuildReferencePoints { holes, value, side, .. } => report(tr!(literal = "Build Reference Points"), format!("{value} {}, {} hole(s)", side.label(), holes.len())),
+            Self::BuildReferenceSurface { points, extent } => report(
+                tr!(literal = "Build Surface"),
+                match extent {
+                    Some(_) => tr_format!(literal = "%count% point(s), clipped to the extent string", count = points.len()),
+                    None => tr_format!(literal = "%count% point(s), unclipped", count = points.len()),
+                },
+            ),
+            Self::SetProjectCoordinateSystem(stored) => report(
+                tr!(literal = "Set Project Coordinate System"),
+                if stored.is_empty() { tr!(literal = "None") } else { stored.clone() },
+            ),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!(literal = "Create Ore Triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!(literal = "Export Engineering Drawing"), tr!(literal = "Choose a destination")),
@@ -4007,6 +4078,7 @@ pub(crate) enum ExplorerSection {
     PointClouds,
     BlockModels,
     DrillHoles,
+    Modelling,
 }
 
 impl ExplorerSection {
@@ -4019,6 +4091,7 @@ impl ExplorerSection {
             Self::PointClouds => tr!(literal = "Point Clouds"),
             Self::BlockModels => tr!(literal = "Block Models"),
             Self::DrillHoles => tr!(literal = "Drill Holes"),
+            Self::Modelling => tr!(literal = "Modelling"),
         }
     }
 
@@ -4032,6 +4105,7 @@ impl ExplorerSection {
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
             Self::DrillHoles => SectionKind::DrillHoles,
+            Self::Modelling => SectionKind::Modelling,
         }
     }
 
@@ -4045,6 +4119,7 @@ impl ExplorerSection {
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
             SectionKind::DrillHoles => Self::DrillHoles,
+            SectionKind::Modelling => Self::Modelling,
         }
     }
 }
@@ -4140,6 +4215,10 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
     pub(crate) triangulations_membership_dirty: bool,
+    /// Modelling's unsaved work that no Modelling row shows: its folders,
+    /// which triangulations it holds, and the layers tagged with it - a
+    /// deleted layer has no row left to carry a mark.
+    pub(crate) modelling_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,
@@ -4148,9 +4227,11 @@ pub(crate) struct UiProjectView {
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
+    /// The active project's coordinate system as stored; empty when unset.
+    pub(crate) coordinate_reference_system: String,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
-    /// Every explorer folder, across all six sections.
+    /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
 }
 
@@ -4371,4 +4452,35 @@ pub(crate) enum DataMenu {
     CsvBlockModel,
     CsvDrillHole,
     Geotiff,
+}
+
+/// What the build surface dialog was opened on: the selected points, the one
+/// closed string clipping them, and the text it reports them as.
+///
+/// Snapshotted when the command opens and never re-derived: the viewport and
+/// the tree stop taking selection while it is up, so what the dialog reports
+/// is what the build runs on. `None` extent means the whole triangulation.
+#[derive(Clone, Debug)]
+pub(crate) struct ReferenceSurfaceDraft {
+    pub(crate) points: Vec<ObjectId>,
+    pub(crate) extent: Option<ObjectId>,
+    /// Rendered at open time rather than each frame, the same as the other
+    /// select-first tools' input labels.
+    pub(crate) points_label: String,
+    pub(crate) extent_label: String,
+}
+
+/// What the reference points dialog holds while open: the holes it was
+/// opened on, the categorical field standing in for the working section, its
+/// value, and the side. Transient, like every dialog draft.
+///
+/// The holes are snapshotted when the command opens and never re-derived:
+/// the viewport and the tree stop taking selection while it is up, so what
+/// the dialog reports is what the build runs on.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReferencePointsDraft {
+    pub(crate) holes: Vec<DrillHoleRef>,
+    pub(crate) field: Option<String>,
+    pub(crate) value: Option<String>,
+    pub(crate) side: crate::model::drill_hole::ReferenceSide,
 }

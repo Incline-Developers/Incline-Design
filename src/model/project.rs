@@ -260,9 +260,9 @@ pub(crate) struct ProjectFile {
     pub(crate) format_version: u32,
     pub(crate) document: Document,
     pub(crate) metadata: ProjectMetadata,
-    /// Every explorer folder in the project, for all six sections.
+    /// Every explorer folder in the project, for every section.
     ///
-    /// Beside the document: five of the six sections hold items the `App`
+    /// Beside the document: most sections hold items the `App`
     /// owns, not layers, so there's nowhere else to save their empty
     /// folders from.
     #[serde(default)]
@@ -444,13 +444,27 @@ impl OpenProject {
     /// Comparing the complete layer-hash maps catches deleted layers after
     /// their explorer rows have disappeared.
     pub(crate) fn designs_dirty(&self, saved_folders: &FolderRegistry) -> bool {
-        if self.project.folders.names(SectionKind::Designs) != saved_folders.names(SectionKind::Designs) {
+        self.section_layers_dirty(SectionKind::Designs, saved_folders)
+    }
+
+    /// The same for any section that shows layers, reading only the layers
+    /// tagged with it. The baseline records no section, so a moved layer is
+    /// unsaved work where it lands, and a deleted one in every section a
+    /// layer can sit in: nothing left says which held it.
+    pub(crate) fn section_layers_dirty(&self, section: SectionKind, saved_folders: &FolderRegistry) -> bool {
+        const LOCAL_MASK: u64 = u32::MAX as u64;
+        if self.project.folders.names(section) != saved_folders.names(section) {
             return true;
         }
-        match &self.saved_layer_hashes {
-            None => !self.project.document.layers().is_empty(),
-            Some(saved) => self.current_layer_hashes() != *saved,
-        }
+        let Some(saved) = &self.saved_layer_hashes else {
+            return self.project.document.layers().iter().any(|layer| layer.section == section);
+        };
+        let current = self.current_layer_hashes();
+        let tagged_changed = self.project.document.layers().iter().any(|layer| {
+            let key = layer.id.0 & LOCAL_MASK;
+            layer.section == section && saved.get(&key) != current.get(&key)
+        });
+        tagged_changed || saved.keys().any(|key| !current.contains_key(key))
     }
 }
 

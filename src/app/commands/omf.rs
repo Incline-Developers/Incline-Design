@@ -70,7 +70,7 @@ enum FolderScope {
     Referenced,
 }
 
-/// Every folder id a snapshot's own content sits in, across all six sections.
+/// Every folder id a snapshot's own content sits in, across every section.
 fn referenced_folders(snapshot: &ProjectSnapshot) -> std::collections::HashSet<FolderId> {
     let mut referenced = std::collections::HashSet::new();
     if let Some(design) = &snapshot.designs {
@@ -208,7 +208,7 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
-        // Merged once, for all six sections, before anything is installed:
+        // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
         for imported in designs {
@@ -535,7 +535,7 @@ impl<'a> App<'a> {
                 );
             }
 
-            // Merged once, for all six sections, before any design, layer or
+            // Merged once, for every section, before any design, layer or
             // item below looks its own membership up in the same map. Unlike
             // opening a whole project, the target registry already has
             // content of its own, so an incoming name is never assumed to be

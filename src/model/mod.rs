@@ -29,7 +29,7 @@ pub(crate) mod triangulation;
 
 use std::{borrow::Cow, collections::HashMap};
 
-pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, SectionKind};
+pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, Placement, SectionKind};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
@@ -1527,7 +1527,7 @@ pub(crate) struct EditTarget<'a> {
     pub(crate) document: &'a mut Document,
     /// Every explorer folder in the project. Borrowed here, beside the
     /// document and the item collections, so one undo timeline covers the
-    /// folders of all six sections and their members in the same step.
+    /// folders of every section and their members in the same step.
     pub(crate) folders: &'a mut FolderRegistry,
     pub(crate) content: &'a mut project::ProjectContentState,
     pub(crate) triangulations: &'a mut Vec<triangulation::OpenTriangulation>,
@@ -1598,17 +1598,35 @@ impl EditTarget<'_> {
         self.touch_item(item);
     }
 
-    /// The folder a layer may actually be put in, which is `None` unless the
-    /// section the layer is shown under still has it.
-    fn placeable_layer_folder(&self, id: LayerId, folder: Option<FolderId>) -> Option<FolderId> {
-        let section = self.document.layer(id)?.section;
-        folder.filter(|folder| self.folders.contains(section, *folder))
+    /// Put a layer where `placement` says, as far as the project can honour it:
+    /// the section first, because retagging clears the collection the old
+    /// section minted, then the collection within it.
+    fn place_layer(&mut self, id: LayerId, placement: Placement) {
+        let placement = placement.placeable(MemberKind::Layer, self.folders);
+        self.document.set_layer_section(id, placement.section);
+        self.document.set_layer_folder(id, placement.folder);
+        self.effects.document_changed = true;
     }
 
-    /// The same guard for a project item. See [`Self::placeable_layer_folder`].
-    fn placeable_item_folder(&self, item: ItemRef, folder: Option<FolderId>) -> Option<FolderId> {
-        let section = self.item_state(item)?.section;
-        folder.filter(|folder| self.folders.contains(section, *folder))
+    /// The same for a project item. Both halves go through `touch_item`, so a
+    /// move dirties the item as any other edit to it would - a section change
+    /// is unsaved work, since the file records it.
+    fn place_item(&mut self, item: ItemRef, placement: Placement) {
+        let placement = placement.placeable(item.kind(), self.folders);
+        self.set_item_section(item, placement.section);
+        self.set_item_folder(item, placement.folder);
+    }
+
+    /// Show a project item under `section`. Moving it clears the collection it
+    /// was in: an id belongs to the section that minted it.
+    fn set_item_section(&mut self, item: ItemRef, section: SectionKind) {
+        let Some(state) = self.item_state_mut(item) else { return };
+        if state.section == section {
+            return;
+        }
+        state.section = section;
+        state.folder = None;
+        self.touch_item(item);
     }
 
     fn item_state(&self, item: ItemRef) -> Option<&project::ProjectItemState> {
@@ -1628,26 +1646,25 @@ impl EditTarget<'_> {
         }
         for item in self.all_item_refs() {
             let Some(state) = self.item_state(item) else { continue };
-            let (was_section, was_folder) = (state.section, state.folder);
+            let was = Placement::new(state.section, state.folder);
             // Same two repairs the document's layers get, in the same order:
             // an unadmitted tag would leave the item under no heading, and a
             // retag leaves its folder behind because an id belongs to the
             // section that minted it.
-            let section = was_section.healed_for(item.kind());
-            let folder = was_folder.filter(|folder| section == was_section && self.folders.contains(section, *folder));
-            if (section, folder) == (was_section, was_folder) {
+            let placement = was.placeable(item.kind(), self.folders);
+            if placement == was {
                 continue;
             }
-            if section != was_section {
+            if placement.section != was.section {
                 log::warn!(
                     "an item is tagged for {}, which does not show items of its kind; showing it under {}",
-                    was_section.key(),
-                    section.key()
+                    was.section.key(),
+                    placement.section.key()
                 );
             }
             if let Some(state) = self.item_state_mut(item) {
-                state.section = section;
-                state.folder = folder;
+                state.section = placement.section;
+                state.folder = placement.folder;
             }
         }
     }
@@ -2004,21 +2021,21 @@ pub(crate) enum Command {
         before: String,
         after: String,
     },
-    /// Move a design layer into a folder, or back to the root.
-    SetLayerFolder {
+    /// Move a design layer to a section and a folder within it, as one step.
+    SetLayerPlacement {
         id: LayerId,
-        before: Option<FolderId>,
-        after: Option<FolderId>,
+        before: Placement,
+        after: Placement,
     },
-    /// Move a project item into a folder of its own section, or back to the
-    /// root. Separate from [`Self::SetLayerFolder`] because the two halves
-    /// store membership in different places - a layer in the document, an item
-    /// in its [`project::ProjectItemState`] - and dirty differently for it.
+    /// Move a project item to a section and a folder within it, as one step.
+    /// Separate from [`Self::SetLayerPlacement`] because the two halves store
+    /// membership in different places - a layer in the document, an item in
+    /// its [`project::ProjectItemState`] - and dirty differently for it.
     #[serde(skip)]
-    SetItemFolder {
+    SetItemPlacement {
         item: ItemRef,
-        before: Option<FolderId>,
-        after: Option<FolderId>,
+        before: Placement,
+        after: Placement,
     },
     /// Show or hide a design layer.
     SetLayerLoaded {
@@ -2169,7 +2186,7 @@ impl Command {
                     .saturating_add(layers.len().saturating_mul(size_of::<LayerId>()))
                     .saturating_add(items.len().saturating_mul(size_of::<ItemRef>())),
                 Command::RenameFolder { before, after, .. } => before.len().saturating_add(after.len()),
-                Command::SetLayerFolder { .. } | Command::SetItemFolder { .. } => 0,
+                Command::SetLayerPlacement { .. } | Command::SetItemPlacement { .. } => 0,
                 Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
@@ -2304,7 +2321,7 @@ impl Command {
                     into.push(*item);
                 }
             }
-            Command::SetItemFolder { item, .. } => {
+            Command::SetItemPlacement { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
                 }
@@ -2338,7 +2355,7 @@ impl Command {
             | Command::SetObjectHidden { .. }
             | Command::AddFolder { .. }
             | Command::RenameFolder { .. }
-            | Command::SetLayerFolder { .. } => {}
+            | Command::SetLayerPlacement { .. } => {}
         }
     }
 
@@ -2449,14 +2466,11 @@ impl Command {
                     }
                 }
             }
-            Command::SetLayerFolder { id, after, .. } => {
-                let after = target.placeable_layer_folder(*id, *after);
-                target.document.set_layer_folder(*id, after);
-                target.effects.document_changed = true;
+            Command::SetLayerPlacement { id, after, .. } => {
+                target.place_layer(*id, *after);
             }
-            Command::SetItemFolder { item, after, .. } => {
-                let after = target.placeable_item_folder(*item, *after);
-                target.set_item_folder(*item, after);
+            Command::SetItemPlacement { item, after, .. } => {
+                target.place_item(*item, *after);
             }
             Command::SetLayerLoaded { id, after, .. } => {
                 target.document.set_layer_loaded(*id, *after);
@@ -2596,14 +2610,11 @@ impl Command {
                     }
                 }
             }
-            Command::SetLayerFolder { id, before, .. } => {
-                let before = target.placeable_layer_folder(*id, *before);
-                target.document.set_layer_folder(*id, before);
-                target.effects.document_changed = true;
+            Command::SetLayerPlacement { id, before, .. } => {
+                target.place_layer(*id, *before);
             }
-            Command::SetItemFolder { item, before, .. } => {
-                let before = target.placeable_item_folder(*item, *before);
-                target.set_item_folder(*item, before);
+            Command::SetItemPlacement { item, before, .. } => {
+                target.place_item(*item, *before);
             }
             Command::SetLayerLoaded { id, before, .. } => {
                 target.document.set_layer_loaded(*id, *before);

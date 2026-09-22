@@ -385,3 +385,109 @@ impl<'a> App<'a> {
         Ok(())
     }
 }
+
+impl<'a> App<'a> {
+    /// Every hole the reference tools run on, each once: a hole picked in
+    /// the viewport names itself, a dataset selected whole names all of its.
+    /// A visitor, because the menus count this each frame.
+    pub(crate) fn for_each_reference_hole(&self, mut visit: impl FnMut(DrillHoleRef)) {
+        for dataset in self.drill_holes.iter().filter(|dataset| dataset.state.loaded) {
+            if self.editor.selected_handles.contains(&SceneEntityId::DrillHole(dataset.id)) {
+                for hole in 0..dataset.dataset.holes.len() {
+                    visit(DrillHoleRef { dataset: dataset.id, hole });
+                }
+                continue;
+            }
+            // Holes picked one at a time, skipped above so a dataset named
+            // both ways does not place two points on the one hole.
+            for hole in self.editor.selected_drill_holes.iter().filter(|hole| hole.dataset == dataset.id) {
+                if hole.hole < dataset.dataset.holes.len() {
+                    visit(*hole);
+                }
+            }
+        }
+    }
+
+    /// One reference point per hole for `value` in `field`, on `side`, as a
+    /// new layer of points: the first step of a reference surface. Points are
+    /// derived from the holes and never edited; running again makes another
+    /// layer, so a corrected pick shows up as a new set beside the old.
+    ///
+    /// Runs on the holes the dialog was opened on, which may span datasets.
+    pub(crate) fn build_reference_points(&mut self, holes: Vec<DrillHoleRef>, field: String, value: String, side: crate::model::drill_hole::ReferenceSide) {
+        let mut picks = Vec::new();
+        let mut absent = 0usize;
+        let mut flagged: Vec<String> = Vec::new();
+        for reference in &holes {
+            // Unloaded or removed under the open dialog: the hole is not
+            // there to pick from, so it counts as one that gave nothing.
+            let Some(hole) = self
+                .drill_holes
+                .iter()
+                .find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+                .and_then(|dataset| dataset.dataset.holes.get(reference.hole))
+            else {
+                absent += 1;
+                continue;
+            };
+            let pick = crate::model::drill_hole::reference_pick(hole, &field, &value, side);
+            let Some(depth) = pick.depth else {
+                absent += 1;
+                continue;
+            };
+            if pick.runs > 1 {
+                flagged.push(hole.dhid.clone());
+            }
+            match hole.position_at_depth(depth) {
+                Some(position) => picks.push(position),
+                None => absent += 1,
+            }
+        }
+        if picks.is_empty() {
+            userspace_warn!("{}", tr_format!(literal = "No hole holds '%value%' in that field", value = value));
+            return;
+        }
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let document = &mut project.project.document;
+        let layer_id = document.allocate_layer_id();
+        let layer = crate::model::Layer {
+            id: layer_id,
+            name: tr_format!(literal = "%value% %side%", value = value.clone(), side = side.label()),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            elevation: 0.0,
+            folder: None,
+            // Derived from the holes, so it is tagged for Modelling rather
+            // than left where a hand-drawn layer lands.
+            section: crate::model::SectionKind::Modelling,
+        };
+        let objects: Vec<crate::model::Object> = picks
+            .iter()
+            .map(|&pos| crate::model::Object::Point {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                pos,
+                color: crate::model::ObjectColor::ByLayer,
+            })
+            .collect();
+        let used = objects.len();
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Reference points: %used% holes placed, %absent% without '%value%', %flagged% flagged as possible fault repeats",
+                used = used.to_string(),
+                absent = absent.to_string(),
+                value = value,
+                flagged = flagged.len().to_string()
+            )
+        );
+        if !flagged.is_empty() {
+            userspace_warn!("{}", tr_format!(literal = "Uppermost run used, flagged: %holes%", holes = flagged.join(", ")));
+        }
+        self.invalidate_geometry();
+    }
+}

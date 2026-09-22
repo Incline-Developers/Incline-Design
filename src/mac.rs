@@ -41,6 +41,12 @@ struct MenuState {
     /// Whether exactly one loaded drill-hole collection is selected, which is
     /// what block-model estimation runs on.
     can_create_block_model: bool,
+    /// Whether any hole is selected, which is what reference points are
+    /// placed on.
+    can_build_reference_points: bool,
+    /// Whether enough design points are selected to triangulate a surface
+    /// from, which is what Build Surface runs on.
+    can_build_reference_surface: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -100,6 +106,10 @@ pub(crate) enum MacMenuAction {
     ShowProjectInFileManager,
     /// The Drillholes menu's row; the View menu's copy rides [`VIEW_TOGGLES`].
     ToggleBoreholeInspector,
+    /// The Drillholes menu's row that opens the reference points dialog.
+    OpenReferencePoints,
+    /// The Drillholes menu's row that opens the build surface dialog.
+    OpenReferenceSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -168,6 +178,8 @@ impl MacMenuAction {
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
         Self::ToggleBoreholeInspector,
+        Self::OpenReferencePoints,
+        Self::OpenReferenceSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -500,6 +512,16 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_separator(&drill_hole_menu, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!(literal = "Reference Points..."),
+        "",
+        MacMenuAction::OpenReferencePoints,
+        &target,
+        mtm,
+    );
+    add_action(&drill_hole_menu, &tr!(literal = "Build Surface..."), "", MacMenuAction::OpenReferenceSurface, &target, mtm);
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 
@@ -634,6 +656,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         one_surface_selected: editor.selection_counts.triangulations == 1,
         can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
         can_create_block_model: editor.selection_counts.drill_holes == 1,
+        can_build_reference_points: editor.selection_counts.reference_holes > 0,
+        can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
@@ -673,6 +697,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     // opened with rather than on a pick list filled inside their dialog.
     set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
+    set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
+    set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);

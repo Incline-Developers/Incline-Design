@@ -1395,3 +1395,74 @@ pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategor
         .collect::<Vec<_>>();
     CategoryTable::new(colors).into()
 }
+
+/// Which boundary of a working section a reference surface is built from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ReferenceSide {
+    #[default]
+    Roof,
+    Floor,
+}
+
+impl ReferenceSide {
+    pub(crate) const ALL: [Self; 2] = [Self::Roof, Self::Floor];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Roof => tr!(literal = "Roof"),
+            Self::Floor => tr!(literal = "Floor"),
+        }
+    }
+}
+
+/// What one hole contributes to a reference surface for one working section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ReferencePick {
+    /// Down-hole depth of the chosen boundary, or `None` where the hole never
+    /// holds the value.
+    pub(crate) depth: Option<f64>,
+    /// How many separate runs of the value the hole holds. Two or more is a
+    /// possible fault repeat: the uppermost run is used and the hole flagged.
+    pub(crate) runs: usize,
+}
+
+/// The pick a hole gives for `value` in `field`, on `side`.
+///
+/// Intervals carrying the value form runs. An interval with no value in that
+/// field sits inside a run without breaking it, since a parting is still the
+/// same working section, while a different value ends it. The roof is the
+/// top of a run's first interval, the floor its deepest base; with more
+/// than one run the uppermost is taken and `runs` says so.
+pub(crate) fn reference_pick(hole: &DrillHole, field: &str, value: &str, side: ReferenceSide) -> ReferencePick {
+    let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
+    intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut open: Option<(f64, f64)> = None;
+    for interval in intervals {
+        match interval.values.get(field) {
+            Some(DrillValue::Category(code)) if code == value => {
+                // A nested or duplicated row sorts after the interval that
+                // contains it, so the base is the deepest `to` in the run.
+                open = Some(match open {
+                    Some((top, base)) => (top, base.max(interval.to)),
+                    None => (interval.from, interval.to),
+                });
+            }
+            Some(DrillValue::Category(code)) if code.trim().is_empty() => {}
+            None => {}
+            Some(_) => {
+                if let Some(run) = open.take() {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+    if let Some(run) = open {
+        runs.push(run);
+    }
+    let depth = runs.first().map(|&(top, base)| match side {
+        ReferenceSide::Roof => top,
+        ReferenceSide::Floor => base,
+    });
+    ReferencePick { depth, runs: runs.len() }
+}
