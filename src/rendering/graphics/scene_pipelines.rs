@@ -239,7 +239,7 @@ pub(crate) fn create_scene_pipelines(
     let surface_vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<SurfaceVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Snorm16x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
     })];
     // One instance per block: lower.xyz + grade, then upper.xyz + pad.
     // The shader expands vertex_index 0..36 into the cube's faces.

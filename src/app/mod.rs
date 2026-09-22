@@ -324,6 +324,10 @@ pub(crate) struct App<'a> {
     /// still moving. See `take_resize_to_apply`.
     last_resize_event: Option<Instant>,
     last_render_time: Option<Instant>,
+    /// When the last rendered frame finished, and when a redraw was first
+    /// wanted after it: the frame counter's clock. See `record_frame_time`.
+    last_frame_end: Option<Instant>,
+    frame_demanded_at: Option<Instant>,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -463,6 +467,8 @@ impl<'a> Default for App<'a> {
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
+            last_frame_end: None,
+            frame_demanded_at: None,
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -1322,6 +1328,34 @@ impl<'a> App<'a> {
     /// a cap the refresh rate does not divide evenly just makes every frame
     /// miss its slot and wait for the next one (144 on a 165 Hz display
     /// presents 82.5 times a second, not 144).
+    /// Count one frame, begun at `frame_start`, toward the frame counter.
+    ///
+    /// Rendering is on demand, so the time between two frames is often the app
+    /// waiting for input, not drawing. Only time from when a redraw was first
+    /// wanted to when its frame finished counts: back-to-back frames still add
+    /// up to the full display interval (the vsync wait and the frame limiter
+    /// included), while a pause of any length adds nothing. A redraw asked for
+    /// outside `about_to_wait` (winit, the compositor, a direct request) is
+    /// timed from the frame's own start.
+    ///
+    /// Published once per window of busy time so the readout is legible;
+    /// averaging instantaneous rates instead would be dominated by the short
+    /// frame of each vsync pair (16 ms + 0.8 ms reads as 600+ fps).
+    fn record_frame_time(&mut self, frame_start: Instant) {
+        const WINDOW_SECONDS: f32 = 0.2;
+        let end = Instant::now();
+        let demanded = self.frame_demanded_at.take().unwrap_or(frame_start).min(frame_start);
+        let busy_from = self.last_frame_end.map_or(demanded, |last_end| last_end.max(demanded));
+        self.last_frame_end = Some(end);
+        let (frames, elapsed) = &mut self.editor.frame_rate_window;
+        *frames += 1;
+        *elapsed += end.saturating_duration_since(busy_from).as_secs_f32();
+        if *elapsed >= WINDOW_SECONDS {
+            self.editor.measured_fps = Some(*frames as f32 / *elapsed);
+            self.editor.frame_rate_window = (0, 0.0);
+        }
+    }
+
     fn frame_interval(&self) -> Duration {
         if self.surface_retry_pending {
             // Failed acquisition never reaches present, so vsync cannot pace it.
@@ -2072,6 +2106,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             }
         }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
+        if self.redraw_requested || continuous_redraw {
+            self.frame_demanded_at.get_or_insert(now);
+        }
 
         if (self.redraw_requested || continuous_redraw)
             && let Some(window) = self.window.as_ref()

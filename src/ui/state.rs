@@ -1160,8 +1160,8 @@ pub(crate) struct EditorState {
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
-    /// is published once per window rather than every frame. See the note
-    /// where it is updated.
+    /// is published once per window rather than every frame. See
+    /// `App::record_frame_time`.
     pub(crate) frame_rate_window: (u32, f32),
     /// Developer view: colour each surface chunk distinctly to visualise the
     /// Morton spatial chunking (and drive the chunk-cull stats readout).

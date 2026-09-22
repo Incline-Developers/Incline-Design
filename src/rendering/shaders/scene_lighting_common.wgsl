@@ -45,17 +45,6 @@ fn surface_geometric_normal(flat_normal: vec3<f32>, world: vec3<f32>) -> vec3<f3
     return select(-normal, normal, dot(normal, view) >= 0.0);
 }
 
-// Use the same crease-aware normals in both quality modes. Orient the smooth
-// normal with the visible geometric side, not independently toward the eye.
-fn surface_shading_normal(geometric: vec3<f32>, smooth_normal: vec3<f32>) -> vec3<f32> {
-    var normal = geometric;
-    if dot(smooth_normal, smooth_normal) > 0.25 {
-        let shading = normalize(smooth_normal);
-        normal = select(-shading, shading, dot(shading, geometric) >= 0.0);
-    }
-    return normal;
-}
-
 const GRADE_START_COMPRESSION: f32 = 0.76;
 const GRADE_DESATURATION: f32 = 0.15;
 

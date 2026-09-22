@@ -1489,10 +1489,6 @@ fn build_surface_chunks(
     // per local vertex, whether a face has already claimed it.
     let mut provoking_claimed: Vec<bool> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    // Built for the whole mesh before chunking: a vertex on a chunk boundary
-    // has faces on both sides, and averaging only one side's would put a
-    // shading seam along every chunk edge.
-    let vertex_normals = accumulate_vertex_normals(mesh, source);
 
     for (chunk_index, run) in order.chunks(faces_per_chunk).enumerate() {
         vertices.clear();
@@ -1538,21 +1534,15 @@ fn build_surface_chunks(
 
             let mut local = [0u32; 3];
             for (slot, global_index) in face.into_iter().enumerate() {
-                // Every corner that takes its vertex's average shares one GPU
-                // vertex; a corner across a crease keeps the face's own normal
-                // and so needs a vertex of its own.
-                let (smooth, shared) = corner_shading_normal(vertex_normals[global_index], face_normal.as_vec3());
-                local[slot] = if shared && remap[global_index] != u32::MAX {
+                local[slot] = if remap[global_index] != u32::MAX {
                     remap[global_index]
                 } else {
                     let point = source[global_index];
                     let index = vertices.len() as u32;
-                    vertices.push(surface_vertex(point, chunk_origin, normal, smooth));
+                    vertices.push(surface_vertex(point, chunk_origin, normal));
                     provoking_claimed.push(false);
-                    if shared {
-                        remap[global_index] = index;
-                        dirty.push(global_index);
-                    }
+                    remap[global_index] = index;
+                    dirty.push(global_index);
                     index
                 };
             }
@@ -1564,7 +1554,6 @@ fn build_surface_chunks(
                     let duplicate = SurfaceVertex {
                         pos: vertices[local[0] as usize].pos,
                         normal,
-                        smooth_normal: vertices[local[0] as usize].smooth_normal,
                     };
                     local[0] = vertices.len() as u32;
                     vertices.push(duplicate);
@@ -1631,63 +1620,11 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
-/// Faces meeting at more than this angle keep a hard edge between them in the
-/// smooth shading shared by both quality modes. Chosen below the break between a berm and
-/// a batter - the flattest pit batters still turn well over 40 degrees at the
-/// crest - and above the facet-to-facet wander of a triangulated natural
-/// surface, which is what the smoothing is there to hide.
-const SMOOTH_SHADING_CREASE_DEGREES: f32 = 32.0;
-
-/// Area-weighted face normals summed onto each vertex. The cross product's
-/// length is twice the triangle's area, so summing it unnormalised is the
-/// weighting. Faces are oriented `z >= 0` first, the same convention as the
-/// flat normal: a mine surface faces up almost everywhere, so this agrees
-/// across neighbours regardless of how the source file wound its triangles.
-fn accumulate_vertex_normals(mesh: &mesh_data::Triangulation, source: &[mesh_data::Vertex]) -> Vec<Vec3> {
-    let mut sums = vec![Vec3::ZERO; source.len()];
-    for face in mesh.face_vertex_indices_iter() {
-        let [Some(a), Some(b), Some(c)] = face.map(|index| source.get(index)) else {
-            continue;
-        };
-        let pa = DVec3::new(a.x, a.y, a.z);
-        let mut weighted = (DVec3::new(b.x, b.y, b.z) - pa).cross(DVec3::new(c.x, c.y, c.z) - pa);
-        if weighted.z < 0.0 {
-            weighted = -weighted;
-        }
-        let weighted = weighted.as_vec3();
-        for index in face {
-            sums[index] += weighted;
-        }
-    }
-    sums
-}
-
-/// The shading normal for one face corner, and whether it is the vertex's
-/// shared average (so the corner can share the vertex with the others that
-/// took it). Where the average leans past the crease angle from this face -
-/// the corner sits on a crest or toe, or the vertex is where inconsistent
-/// faces cancel out - the face keeps its flat normal there instead.
-fn corner_shading_normal(vertex_sum: Vec3, face_normal: Vec3) -> ([i16; 4], bool) {
-    let average = vertex_sum.normalize_or_zero();
-    let crease_cos = SMOOTH_SHADING_CREASE_DEGREES.to_radians().cos();
-    if average != Vec3::ZERO && average.dot(face_normal) >= crease_cos {
-        (pack_snorm16(average), true)
-    } else {
-        (pack_snorm16(face_normal), false)
-    }
-}
-
-fn pack_snorm16(normal: Vec3) -> [i16; 4] {
-    let pack = |value: f32| (value.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
-    [pack(normal.x), pack(normal.y), pack(normal.z), 0]
-}
-
-fn surface_vertex(point: mesh_data::Vertex, chunk_origin: DVec3, normal: [f32; 3], smooth_normal: [i16; 4]) -> SurfaceVertex {
+fn surface_vertex(point: mesh_data::Vertex, chunk_origin: DVec3, normal: [f32; 3]) -> SurfaceVertex {
     let local = DVec3::new(point.x, point.y, point.z) - chunk_origin;
     SurfaceVertex {
         pos: local.as_vec3().to_array(),
         normal,
-        smooth_normal,
     }
 }
 

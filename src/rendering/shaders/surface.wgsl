@@ -31,8 +31,6 @@ var<uniform> raster_map: RasterMap;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    // Crease-aware shading normal (Snorm16x4, w unused), shared by both modes.
-    @location(2) smooth_normal: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -47,7 +45,6 @@ struct VertexOutput {
     @location(2) surface_xy: vec2<f32>,
     // Distance from the section plane; affine in position, so interpolation is exact.
     @location(3) section_offset: f32,
-    @location(4) smooth_normal: vec3<f32>,
     // Model-space position, for the cinematic lighting's shadow lookups.
     @location(5) world: vec3<f32>,
 };
@@ -57,7 +54,6 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = surface_style.color;
     out.normal = model.normal;
-    out.smooth_normal = model.smooth_normal.xyz;
     let scene_position = model.position + chunk.offset.xyz;
     out.world = scene_position;
     out.surface_xy = scene_position.xy;
@@ -101,7 +97,7 @@ fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @l
             );
         }
     }
-    let shaded = shade_surface(surface_color, in.normal, in.smooth_normal, in.world, in.clip_position.xy);
+    let shaded = shade_surface(surface_color, in.normal, in.world, in.clip_position.xy);
     // Unlit, like the instanced edges it replaces.
     return vec4<f32>(mix(shaded.rgb, surface_style.wire_color.rgb, wire), max(shaded.a, wire));
 }

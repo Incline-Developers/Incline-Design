@@ -247,27 +247,6 @@ impl<'a> App<'a> {
                         let last_render_time = *self.last_render_time.get_or_insert(now);
                         let dt = now - last_render_time;
                         self.last_render_time = Some(now);
-                        if !dt.is_zero() {
-                            // Count frames over a fixed window and divide by the time
-                            // they took, publishing once per window so the readout is
-                            // legible. Averaging instantaneous 1/dt would be dominated
-                            // by the short frame of each vsync pair (16 ms + 0.8 ms
-                            // reads as 600+ fps). Rendering is on demand, so a long gap
-                            // is the app idling between redraws, not a slow frame:
-                            // leave it out rather than dragging the rate down.
-                            const WINDOW_SECONDS: f32 = 0.2;
-                            const IDLE_GAP_SECONDS: f32 = 0.25;
-                            let seconds = dt.as_secs_f32();
-                            let (frames, elapsed) = &mut self.editor.frame_rate_window;
-                            if seconds < IDLE_GAP_SECONDS {
-                                *frames += 1;
-                                *elapsed += seconds;
-                            }
-                            if *elapsed >= WINDOW_SECONDS {
-                                self.editor.measured_fps = Some(*frames as f32 / *elapsed);
-                                self.editor.frame_rate_window = (0, 0.0);
-                            }
-                        }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
                         graphics.update(dt, self.editor.rotation_centre);
@@ -444,6 +423,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    self.record_frame_time(now);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));

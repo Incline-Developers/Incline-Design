@@ -19,10 +19,9 @@ fn cinematic_light(albedo: vec3<f32>, normal: vec3<f32>, geometric: vec3<f32>, w
 
 // --- Materials -------------------------------------------------------------
 
-fn shade_surface(color: vec4<f32>, flat_normal: vec3<f32>, smooth_normal: vec3<f32>, world: vec3<f32>, pixel: vec2<f32>) -> vec4<f32> {
-    let geometric = surface_geometric_normal(flat_normal, world);
-    let normal = surface_shading_normal(geometric, smooth_normal);
-    return vec4<f32>(cinematic_light(color.rgb, normal, geometric, world, pixel, 24.0), color.a);
+fn shade_surface(color: vec4<f32>, flat_normal: vec3<f32>, world: vec3<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    let normal = surface_geometric_normal(flat_normal, world);
+    return vec4<f32>(cinematic_light(color.rgb, normal, normal, world, pixel, 24.0), color.a);
 }
 
 // `normal` already faces the camera, and a block's faces are flat.
