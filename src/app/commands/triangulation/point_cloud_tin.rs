@@ -891,13 +891,14 @@ fn build_quadtree(leaves: &[(u64, PlaneMoments, DVec3, bool)]) -> QuadTree {
 /// Select at most `budget` quadtree nodes as output vertices, each becoming one
 /// vertex.
 ///
-/// Phase 1 refines every branch touching the footprint edge down to fine cells
-/// so the boundary keeps its shape instead of collapsing into a few large
-/// triangles - but only while the budget has room for the extra vertices a
-/// split introduces. `count` tracks the eventual active-node total (the roots,
-/// plus one extra per split beyond the node it replaces), so descent stops
-/// before it can exceed `budget`; a fragmented footprint that makes nearly
-/// every cell a boundary cell then refines only as far as the budget allows
+/// Phase 1 refines every branch touching the footprint edge down to fine cells,
+/// one level at a time across the whole tree, so the boundary keeps its shape
+/// instead of collapsing into a few large triangles - but only while the budget
+/// has room for the extra vertices a split introduces. `count` tracks the
+/// eventual active-node total (the roots, plus one extra per split beyond the
+/// node it replaces), so descent stops before it can exceed `budget`; a
+/// fragmented footprint that makes nearly every cell a boundary cell then
+/// refines only as far as the budget allows, evenly across the footprint,
 /// rather than blowing past it. Phase 2 spends any remaining budget refining the
 /// highest residual-per-vertex interior nodes.
 fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
@@ -905,16 +906,41 @@ fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
     // The eventual active-node count: descent replaces one prospective vertex
     // with its occupied children, a net gain of `occupied - 1`.
     let mut count = tree.roots.len();
-    let mut stack: Vec<usize> = tree.roots.iter().map(|&root| root as usize).collect();
-    while let Some(node) = stack.pop() {
-        let entry = &tree.nodes[node];
-        let occupied = entry.child_indices().count();
-        if entry.contains_boundary && entry.has_children() && count + (occupied - 1) <= budget {
-            count += occupied - 1;
-            stack.extend(entry.child_indices());
-        } else {
+    // Descend a whole level at a time. A depth-first walk spends the entire
+    // budget fully refining whichever branch it reaches first, leaving one
+    // patch of the cloud dense and the rest a handful of huge triangles.
+    // Frontiers stay in Morton order, since each is its parents' children in turn.
+    let mut frontier: Vec<usize> = tree.roots.iter().map(|&root| root as usize).collect();
+    while !frontier.is_empty() {
+        let added = |node: usize| tree.nodes[node].child_indices().count().saturating_sub(1);
+        let (refine, settled): (Vec<usize>, Vec<usize>) = frontier.iter().partition(|&&node| tree.nodes[node].contains_boundary && tree.nodes[node].has_children());
+        for node in settled {
             active[node] = true;
         }
+        let level_cost: usize = refine.iter().map(|&node| added(node)).sum();
+        if count + level_cost <= budget {
+            count += level_cost;
+            frontier = refine.iter().flat_map(|&node| tree.nodes[node].child_indices()).collect();
+            continue;
+        }
+        // The level does not fit: split an evenly spaced subset of it so the
+        // leftover budget is spread across the footprint rather than spent on
+        // the first nodes in Morton order, which all sit in one corner.
+        let spare = budget - count;
+        let mut credit = 0.0;
+        for node in refine {
+            credit += spare as f64 / level_cost as f64 * added(node) as f64;
+            if credit >= added(node) as f64 && count + added(node) <= budget {
+                credit -= added(node) as f64;
+                count += added(node);
+                for child in tree.nodes[node].child_indices() {
+                    active[child] = true;
+                }
+            } else {
+                active[node] = true;
+            }
+        }
+        break;
     }
 
     // Phase 2 - residual: refine the highest error-per-vertex interior nodes
