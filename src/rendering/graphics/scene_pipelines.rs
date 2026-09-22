@@ -93,7 +93,7 @@ impl SceneShading {
     /// A shader that shades through the scene lighting prelude: the
     /// `shade_*` functions the material shaders call are the ordinary view's
     /// sun/sky lighting in both, with shadow sampling added in cinematic.
-    fn lit_shader(self, device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+    fn lit_shader(self, device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
         let camera = include_str!("../shaders/camera_common.wgsl");
         let common = include_str!("../shaders/scene_lighting_common.wgsl");
         let source = match self {
@@ -124,6 +124,19 @@ impl SceneShading {
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
         })
     }
+}
+
+/// `surface.wgsl`, with its fragment barycentrics swapped for a constant that
+/// never reaches an edge when the device cannot provide them: naga rejects the
+/// builtin outright without the feature, even left unused.
+fn surface_shader_body(device: &wgpu::Device) -> String {
+    let body = include_str!("../shaders/surface.wgsl");
+    if device.features().contains(wgpu::Features::SHADER_BARYCENTRICS) {
+        return body.to_owned();
+    }
+    const INPUT: &str = ", @builtin(barycentric) barycentric: vec3<f32>";
+    debug_assert!(body.contains(INPUT), "surface.wgsl's barycentric input moved");
+    format!("const barycentric = vec3<f32>(1.0);\n{}", body.replace(INPUT, ""))
 }
 
 /// Every pipeline that draws into the scene pass's colour attachment. The
@@ -165,7 +178,7 @@ pub(crate) fn create_scene_pipelines(
     shading: SceneShading,
 ) -> ScenePipelines {
     let shader = make_shader(device, "../shaders/shader.wgsl", include_str!("../shaders/shader.wgsl"));
-    let surface_shader = shading.lit_shader(device, "../shaders/surface.wgsl", include_str!("../shaders/surface.wgsl"));
+    let surface_shader = shading.lit_shader(device, "../shaders/surface.wgsl", &surface_shader_body(device));
     let grid_shader = make_shader(device, "../shaders/grid.wgsl", include_str!("../shaders/grid.wgsl"));
     let section_grid_shader = make_shader(device, "../shaders/section_grid.wgsl", include_str!("../shaders/section_grid.wgsl"));
     let block_model_shader = shading.lit_shader(device, "../shaders/block_model.wgsl", include_str!("../shaders/block_model.wgsl"));

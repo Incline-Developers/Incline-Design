@@ -100,7 +100,9 @@ pub(crate) struct EdgeInstance {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SurfaceStyleUniform {
     color: [f32; 4],
+    /// x: raster blend opacity; y: in-shader wireframe width in pixels.
     params: [f32; 4],
+    wire_color: [f32; 4],
 }
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
@@ -1273,6 +1275,10 @@ impl TriangulationGpuCache {
         // A drape survives unloading and hiding the raster, so the texture a
         // surface actually samples is the drape filtered by what can be drawn.
         let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
+        // With fragment barycentrics the surface shader draws its own edges and
+        // the instanced edge chunks are never built: on a dense surface they
+        // cost six vertices per edge, several times the surface itself.
+        let shader_wireframe = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
         let loaded: HashSet<_> = triangulations.iter().filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
         for triangulation in triangulations {
@@ -1304,15 +1310,29 @@ impl TriangulationGpuCache {
             } else {
                 0.0
             };
+            let instanced_edges = edge_width > 0.0 && !shader_wireframe;
+            let surface_style = SurfaceStyleUniform {
+                color,
+                params: [
+                    if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
+                    if shader_wireframe { edge_width } else { 0.0 },
+                    0.0,
+                    0.0,
+                ],
+                wire_color: line_color,
+            };
 
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
                 // A different mesh under the same id: the vertices on the GPU
                 // are not this surface's any more and have to be replaced.
                 let geometry_dirty = !std::sync::Arc::ptr_eq(&cached.mesh, &triangulation.mesh);
-                let surface_dirty = cached.color != color || cached.raster_texture != raster_texture || cached.raster_opacity != triangulation.raster_opacity;
                 // Rebuild edge geometry only when edges flip between present and absent.
                 let edge_geom_dirty = geometry_dirty || (cached.edge_width == 0.0) != (edge_width == 0.0);
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
+                let surface_dirty = cached.color != color
+                    || cached.raster_texture != raster_texture
+                    || cached.raster_opacity != triangulation.raster_opacity
+                    || (shader_wireframe && edge_style_dirty);
 
                 if !geometry_dirty && !surface_dirty && !edge_geom_dirty && !edge_style_dirty {
                     continue;
@@ -1325,17 +1345,13 @@ impl TriangulationGpuCache {
                 }
 
                 if surface_dirty {
-                    let style = SurfaceStyleUniform {
-                        color,
-                        params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
-                    };
-                    queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
+                    queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&surface_style));
                     cached.color = color;
                     cached.raster_texture = raster_texture;
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
 
-                if (edge_geom_dirty || geometry_dirty) && edge_width > 0.0 && cached.edge_chunks.is_empty() {
+                if (edge_geom_dirty || geometry_dirty) && instanced_edges && cached.edge_chunks.is_empty() {
                     cached.edge_chunks = build_edge_chunks(device, scene_origin, triangulation);
                 }
 
@@ -1355,10 +1371,6 @@ impl TriangulationGpuCache {
                     continue;
                 }
 
-                let surface_style = SurfaceStyleUniform {
-                    color,
-                    params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
-                };
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Surface Style Uniform"),
                     contents: bytemuck::bytes_of(&surface_style),
@@ -1373,7 +1385,7 @@ impl TriangulationGpuCache {
                     label: Some("Surface Style Bind Group"),
                 });
 
-                let edge_chunks = if edge_width > 0.0 {
+                let edge_chunks = if instanced_edges {
                     build_edge_chunks(device, scene_origin, triangulation)
                 } else {
                     Vec::new()
@@ -1723,6 +1735,7 @@ fn upload_surface_chunk(
     let debug_style = SurfaceStyleUniform {
         color: chunk_debug_color(chunk_index),
         params: [0.0; 4],
+        wire_color: [0.0; 4],
     };
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),

@@ -1,7 +1,9 @@
 struct SurfaceStyle {
     color: vec4<f32>,
-    // x: raster blend opacity; remaining lanes reserved.
+    // x: raster blend opacity; y: wireframe width in pixels, 0 for none;
+    // remaining lanes reserved.
     params: vec4<f32>,
+    wire_color: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> surface_style: SurfaceStyle;
@@ -64,8 +66,21 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     return out;
 }
 
+// Coverage of the triangle's own edges, `width` pixels wide centred on each
+// edge (half falls in each neighbour), antialiased over one pixel.
+// `surface_shader_body` (scene_pipelines.rs) removes the `barycentric` input and supplies
+// a constant with no edge in reach where the device lacks barycentrics; the
+// cache then draws instanced edges instead and leaves `width` at zero.
+fn wire_coverage(barycentric: vec3<f32>, width: f32) -> f32 {
+    let pixels = barycentric / max(fwidth(barycentric), vec3<f32>(1e-6));
+    let nearest = min(pixels.x, min(pixels.y, pixels.z));
+    return select(0.0, 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, nearest), width > 0.0);
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @location(0) vec4<f32> {
+    // Derivatives before anything that can end the invocation.
+    let wire = wire_coverage(barycentric, surface_style.params.y) * surface_style.wire_color.a;
     if outside_section_slab(in.section_offset) {
         discard;
     }
@@ -86,5 +101,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
         }
     }
-    return shade_surface(surface_color, in.normal, in.smooth_normal, in.world, in.clip_position.xy);
+    let shaded = shade_surface(surface_color, in.normal, in.smooth_normal, in.world, in.clip_position.xy);
+    // Unlit, like the instanced edges it replaces.
+    return vec4<f32>(mix(shaded.rgb, surface_style.wire_color.rgb, wire), max(shaded.a, wire));
 }

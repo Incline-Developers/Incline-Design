@@ -131,7 +131,10 @@ impl<'a> Graphics<'a> {
             );
         }
 
-        let required_features = wgpu::Features::empty();
+        // Fragment barycentrics let a surface draw its own wireframe instead of
+        // six instanced vertices per edge. Optional: the surface shader falls
+        // back to instanced edges where it is missing (always, on WebGPU).
+        let required_features = adapter.features() & wgpu::Features::SHADER_BARYCENTRICS;
         let experimental_features = wgpu::ExperimentalFeatures::disabled();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
