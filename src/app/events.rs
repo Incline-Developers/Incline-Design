@@ -248,17 +248,25 @@ impl<'a> App<'a> {
                         let dt = now - last_render_time;
                         self.last_render_time = Some(now);
                         if !dt.is_zero() {
-                            // Smooth the frame *interval* and invert it once, rather
-                            // than averaging instantaneous rates: frames arrive in
-                            // pairs, one blocked on the display and one taken straight
-                            // from the swapchain's spare image, and an average of 1/dt
-                            // is dominated by the short one. Alternating 16 ms and
-                            // 0.8 ms frames average to 60 rendered frames a second but
-                            // to over 600 instantaneous ones.
+                            // Count frames over a fixed window and divide by the time
+                            // they took, publishing once per window so the readout is
+                            // legible. Averaging instantaneous 1/dt would be dominated
+                            // by the short frame of each vsync pair (16 ms + 0.8 ms
+                            // reads as 600+ fps). Rendering is on demand, so a long gap
+                            // is the app idling between redraws, not a slow frame:
+                            // leave it out rather than dragging the rate down.
+                            const WINDOW_SECONDS: f32 = 0.2;
+                            const IDLE_GAP_SECONDS: f32 = 0.25;
                             let seconds = dt.as_secs_f32();
-                            let interval = self.editor.smoothed_frame_interval.map_or(seconds, |previous| previous * 0.9 + seconds * 0.1);
-                            self.editor.smoothed_frame_interval = Some(interval);
-                            self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
+                            let (frames, elapsed) = &mut self.editor.frame_rate_window;
+                            if seconds < IDLE_GAP_SECONDS {
+                                *frames += 1;
+                                *elapsed += seconds;
+                            }
+                            if *elapsed >= WINDOW_SECONDS {
+                                self.editor.measured_fps = Some(*frames as f32 / *elapsed);
+                                self.editor.frame_rate_window = (0, 0.0);
+                            }
                         }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
