@@ -2414,7 +2414,7 @@ impl EditorState {
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
-            cinematic_enabled: !cfg!(target_arch = "wasm32"),
+            cinematic_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
             vertical_exaggeration_input: 1.,

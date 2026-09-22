@@ -31,14 +31,26 @@ fn scene_light(albedo: vec3<f32>, normal: vec3<f32>, geometric: vec3<f32>, shini
     return albedo * (sun_light + sky_light(normal, sky, ground)) + sun_light * highlight;
 }
 
-// Use the same crease-aware normals in both quality modes.
-fn surface_shading_normal(flat_normal: vec3<f32>, smooth_normal: vec3<f32>) -> vec3<f32> {
-    let geometric = toward_viewer(normalize(flat_normal));
+// Surface normals and positions are stored before vertical exaggeration.
+// Transform the view direction into that space before choosing the visible
+// side. Perspective rays vary across the screen; the central camera direction
+// can classify a visible grazing face as its underside.
+fn surface_geometric_normal(flat_normal: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    let scale = vec3<f32>(1.0, 1.0, max(camera.cam_forward.w, 1.0e-6));
+    var view = -camera.cam_forward.xyz / scale;
+    if camera.cam_position.w > 0.5 {
+        view = camera.cam_position.xyz / scale - world;
+    }
+    let normal = normalize(flat_normal);
+    return select(-normal, normal, dot(normal, view) >= 0.0);
+}
+
+// Use the same crease-aware normals in both quality modes. Orient the smooth
+// normal with the visible geometric side, not independently toward the eye.
+fn surface_shading_normal(geometric: vec3<f32>, smooth_normal: vec3<f32>) -> vec3<f32> {
     var normal = geometric;
     if dot(smooth_normal, smooth_normal) > 0.25 {
         let shading = normalize(smooth_normal);
-        // Both normals were oriented z >= 0 on the CPU; keep them on the same
-        // side after `toward_viewer` has flipped the face.
         normal = select(-shading, shading, dot(shading, geometric) >= 0.0);
     }
     return normal;
