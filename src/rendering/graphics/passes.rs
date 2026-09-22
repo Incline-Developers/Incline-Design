@@ -198,12 +198,12 @@ impl<'a> Graphics<'a> {
         if self.drill_hole_gpu.is_empty() {
             return;
         }
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
         if draw_traces {
             render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
+                &self.pipes().xray_drill_hole_render_pipeline
             } else {
-                &self.drill_hole_render_pipeline
+                &self.pipes().drill_hole_render_pipeline
             });
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
@@ -238,9 +238,9 @@ impl<'a> Graphics<'a> {
         // nothing to come back from.
         if editor.shows_tie_ins() {
             render_pass.set_pipeline(if xray_enabled {
-                &self.xray_drill_hole_render_pipeline
+                &self.pipes().xray_drill_hole_render_pipeline
             } else {
-                &self.drill_hole_render_pipeline
+                &self.pipes().drill_hole_render_pipeline
             });
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
@@ -259,9 +259,9 @@ impl<'a> Graphics<'a> {
         // Collar markers go over the traces they cap, in their own pass so the
         // pipeline switch happens once rather than per dataset.
         render_pass.set_pipeline(if xray_enabled {
-            &self.xray_drill_collar_render_pipeline
+            &self.pipes().xray_drill_collar_render_pipeline
         } else {
-            &self.drill_collar_render_pipeline
+            &self.pipes().drill_collar_render_pipeline
         });
         for dataset in drill_holes {
             if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
@@ -324,19 +324,19 @@ impl<'a> Graphics<'a> {
         for batch in batches {
             if bound_primitive != Some(batch.primitive) {
                 let pipeline = match (stage, batch.primitive, xray_enabled) {
-                    (_, DocumentPrimitive::Fill, true) => &self.xray_render_pipeline,
-                    (DocumentRenderStage::AlwaysVisible, DocumentPrimitive::Fill, false) => &self.xray_render_pipeline,
-                    (DocumentRenderStage::Opaque, DocumentPrimitive::Fill, false) | (DocumentRenderStage::Overlay, DocumentPrimitive::Fill, false) => &self.render_pipeline,
-                    (DocumentRenderStage::Translucent, DocumentPrimitive::Fill, false) => &self.transparent_document_fill_pipeline,
-                    (_, DocumentPrimitive::Stroke, true) => &self.overlay_render_pipeline,
-                    (DocumentRenderStage::AlwaysVisible, DocumentPrimitive::Stroke, false) => &self.overlay_render_pipeline,
-                    (DocumentRenderStage::Opaque, DocumentPrimitive::Stroke, false) => &self.opaque_stroke_render_pipeline,
+                    (_, DocumentPrimitive::Fill, true) => &self.pipes().xray_render_pipeline,
+                    (DocumentRenderStage::AlwaysVisible, DocumentPrimitive::Fill, false) => &self.pipes().xray_render_pipeline,
+                    (DocumentRenderStage::Opaque, DocumentPrimitive::Fill, false) | (DocumentRenderStage::Overlay, DocumentPrimitive::Fill, false) => &self.pipes().render_pipeline,
+                    (DocumentRenderStage::Translucent, DocumentPrimitive::Fill, false) => &self.pipes().transparent_document_fill_pipeline,
+                    (_, DocumentPrimitive::Stroke, true) => &self.pipes().overlay_render_pipeline,
+                    (DocumentRenderStage::AlwaysVisible, DocumentPrimitive::Stroke, false) => &self.pipes().overlay_render_pipeline,
+                    (DocumentRenderStage::Opaque, DocumentPrimitive::Stroke, false) => &self.pipes().opaque_stroke_render_pipeline,
                     (DocumentRenderStage::Translucent, DocumentPrimitive::Stroke, false) | (DocumentRenderStage::Overlay, DocumentPrimitive::Stroke, false) => {
-                        &self.stroke_render_pipeline
+                        &self.pipes().stroke_render_pipeline
                     }
                 };
                 render_pass.set_pipeline(pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
                 match batch.primitive {
                     DocumentPrimitive::Fill => {
                         render_pass.set_vertex_buffer(0, self.lyon_vertex_gpu.slice(..));
@@ -366,12 +366,12 @@ impl<'a> Graphics<'a> {
             return;
         }
         let pipeline = match stage {
-            DocumentRenderStage::Opaque => &self.render_pipeline,
-            DocumentRenderStage::Translucent | DocumentRenderStage::Overlay => &self.transparent_document_fill_pipeline,
-            DocumentRenderStage::AlwaysVisible => &self.xray_render_pipeline,
+            DocumentRenderStage::Opaque => &self.pipes().render_pipeline,
+            DocumentRenderStage::Translucent | DocumentRenderStage::Overlay => &self.pipes().transparent_document_fill_pipeline,
+            DocumentRenderStage::AlwaysVisible => &self.pipes().xray_render_pipeline,
         };
         render_pass.set_pipeline(pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
         render_pass.set_vertex_buffer(0, self.text_vertex_gpu.slice(..));
         render_pass.set_index_buffer(self.text_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
         for batch in batches {
@@ -386,11 +386,11 @@ impl<'a> Graphics<'a> {
             return;
         }
         render_pass.set_pipeline(if xray_enabled {
-            &self.overlay_render_pipeline
+            &self.pipes().overlay_render_pipeline
         } else {
-            &self.opaque_stroke_render_pipeline
+            &self.pipes().opaque_stroke_render_pipeline
         });
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
         for chunk in self.static_strokes.chunks() {
             if !chunk.drawable() {
                 continue;
@@ -417,6 +417,25 @@ impl<'a> Graphics<'a> {
 
     /// Whether the camera is looking exactly down in orthographic mode - the
     /// only view in which flat plan-view raster images are drawn.
+    /// The pipelines the scene pass draws with: the cinematic view's lit set
+    /// while `frame::render` has diverted the pass into its target, the
+    /// ordinary view's otherwise.
+    pub(super) fn pipes(&self) -> &scene_pipelines::ScenePipelines {
+        self.active_scene.as_ref().map_or(&self.scene_pipelines, |active| &active.pipelines)
+    }
+
+    /// Group 0 for [`Self::pipes`]: the camera, plus the sun and its shadows
+    /// in the cinematic view. Pipelines outside that set - the volume raycast,
+    /// its beam pre-pass, the transparency fallback - always take the plain
+    /// camera bind group.
+    pub(super) fn scene_camera_bind_group(&self) -> &wgpu::BindGroup {
+        self.active_scene.as_ref().map_or(&self.camera_bind_group, |active| &active.camera_bind_group)
+    }
+
+    pub(super) fn scene_msaa_view(&self) -> &wgpu::TextureView {
+        self.active_scene.as_ref().map_or(&self.msaa_view, |active| &active.msaa_view)
+    }
+
     fn plan_view_active(&self) -> bool {
         !self.projection.is_perspective() && self.camera.forward().z <= -(1.0 - 1.0e-6)
     }
@@ -467,7 +486,7 @@ impl<'a> Graphics<'a> {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.msaa_view,
+                view: self.scene_msaa_view(),
                 resolve_target: Some(view),
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -495,6 +514,11 @@ impl<'a> Graphics<'a> {
 
         let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
+        // The cinematic view leaves drill holes, design strings, fills and labels out of
+        // its lit image and draws them over the graded result instead
+        // (`render_cinematic_documents`): they are annotation, and lit and
+        // tone mapped they sank into the surfaces they lie on.
+        let draw_documents = self.active_scene.is_none();
 
         // Block model chunks carry their own AABB, so cheaply skip GPU draw
         // calls for chunks that are entirely outside the current view
@@ -525,8 +549,8 @@ impl<'a> Graphics<'a> {
                     continue;
                 };
                 if !pipeline_bound {
-                    render_pass.set_pipeline(&self.raster_plane_render_pipeline);
-                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    render_pass.set_pipeline(&self.pipes().raster_plane_render_pipeline);
+                    render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
                     pipeline_bound = true;
                 }
                 render_pass.set_bind_group(1, bind_group, &[]);
@@ -541,8 +565,8 @@ impl<'a> Graphics<'a> {
         // the grid rather than being cut through by it. It is an editor-only
         // aid: plot and slice-preview passes omit it.
         if include_editor_overlays && editor.show_xy_grid && self.slice_view.is_none() {
-            render_pass.set_pipeline(&self.grid_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipes().grid_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.grid_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
@@ -561,12 +585,12 @@ impl<'a> Graphics<'a> {
                 };
                 if colored_pipeline_active != Some(cached.colored) {
                     let pipeline = if cached.colored {
-                        &self.point_cloud_colored_render_pipeline
+                        &self.pipes().point_cloud_colored_render_pipeline
                     } else {
-                        &self.point_cloud_uncolored_render_pipeline
+                        &self.pipes().point_cloud_uncolored_render_pipeline
                     };
                     render_pass.set_pipeline(pipeline);
-                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
                     colored_pipeline_active = Some(cached.colored);
                 }
                 render_pass.set_bind_group(1, &cached.style_bind_group, &[]);
@@ -636,22 +660,22 @@ impl<'a> Graphics<'a> {
 
         // Ordinarily drillholes are opaque, depth-writing scene assets. In
         // x-ray mode they move to the late overlay pass instead.
-        if !editor.xray_enabled {
+        if draw_documents && !editor.xray_enabled {
             self.draw_drill_holes(&mut render_pass, drill_holes, editor, false, true, !editor.tying_holes(), include_editor_overlays);
         }
 
         // Opaque document fills and strokes must establish colour and depth
         // before any translucent surface or block-model composite. X-ray
         // intentionally remains an editor overlay and is deferred.
-        if !editor.xray_enabled {
+        if !editor.xray_enabled && draw_documents {
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, false);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Stroke));
         }
 
         if !self.triangulation_gpu.is_empty() || !self.block_model_gpu.is_empty() {
-            render_pass.set_pipeline(&self.surface_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipes().surface_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             for triangulation in triangulations {
                 let entity = triangulation.entity_id();
                 if !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
@@ -703,8 +727,8 @@ impl<'a> Graphics<'a> {
                 if cached.surface_chunks.is_empty() {
                     continue;
                 }
-                render_pass.set_pipeline(&self.block_model_render_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_pipeline(&self.pipes().block_model_render_pipeline);
+                render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
                 render_pass.set_bind_group(1, &cached.surface_style_bind_group, &[]);
                 // Draw chunks nearest-first: the block shader contains
                 // `discard`, so depth writes happen late, but the early depth
@@ -731,8 +755,8 @@ impl<'a> Graphics<'a> {
                     render_pass.set_vertex_buffer(0, chunk.gpu.instance_buffer.slice(..));
                     render_pass.draw(0..36, 0..chunk.gpu.instance_count);
                 }
-                render_pass.set_pipeline(&self.surface_render_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_pipeline(&self.pipes().surface_render_pipeline);
+                render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             }
         }
 
@@ -740,8 +764,8 @@ impl<'a> Graphics<'a> {
         // depth on, so whatever sits in front of the plane hides it and
         // whatever sits behind shows it. Its labels stay with egui.
         if include_editor_overlays && editor.slice_grid_enabled && self.slice_view.is_some() {
-            render_pass.set_pipeline(&self.section_grid_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipes().section_grid_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.section_grid_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
@@ -764,7 +788,7 @@ impl<'a> Graphics<'a> {
                 let bd = (DVec3::new(bc.x, bc.y, bc.z) - self.camera.position).dot(forward);
                 bd.total_cmp(&ad)
             });
-            render_pass.set_pipeline(&self.transparent_surface_render_pipeline);
+            render_pass.set_pipeline(&self.pipes().transparent_surface_render_pipeline);
             for triangulation in transparent {
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
                     continue;
@@ -835,7 +859,7 @@ impl<'a> Graphics<'a> {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Document Transparency and Overlay Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.msaa_view,
+                view: self.scene_msaa_view(),
                 resolve_target: Some(view),
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -860,29 +884,20 @@ impl<'a> Graphics<'a> {
         // unclipped across the whole window instead of the visible canvas.
         render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
 
-        if editor.xray_enabled {
+        if draw_documents && editor.xray_enabled {
             // X-ray deliberately bypasses scene depth and stays above all
             // composited transparency. Drillholes draw first so design strings
             // and their outlines remain the topmost x-ray content.
             self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, true, true, include_editor_overlays);
-            self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
-            self.draw_static_document_strokes(&mut render_pass, true);
-            self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
-        } else {
-            if editor.tying_holes() {
-                self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, false, true, include_editor_overlays);
-            }
-            // Alpha document primitives test the complete opaque depth buffer
-            // but never update it, so farther translucent fills still blend.
-            self.draw_document_batches(&mut render_pass, DocumentRenderStage::Translucent, false, None);
-            self.draw_document_batches(&mut render_pass, DocumentRenderStage::Overlay, false, None);
-            if include_editor_overlays {
-                self.draw_text_batches(&mut render_pass, DocumentRenderStage::Overlay, false);
-            }
+        } else if draw_documents && editor.tying_holes() {
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, false, true, include_editor_overlays);
+        }
+        if draw_documents {
+            self.draw_late_documents(&mut render_pass, editor, include_editor_overlays);
         }
 
-        render_pass.set_pipeline(&self.edge_render_pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_pipeline(&self.pipes().edge_render_pipeline);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
         for triangulation in triangulations {
             let entity = triangulation.entity_id();
             if !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
@@ -918,9 +933,35 @@ impl<'a> Graphics<'a> {
             }
         }
 
+        if draw_documents {
+            self.draw_design_points_and_labels(&mut render_pass, editor, include_editor_overlays);
+        }
+    }
+
+    /// Document geometry drawn once the scene's own is down: x-ray content,
+    /// translucent fills, and the overlay stage.
+    fn draw_late_documents<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>, editor: &EditorState, include_editor_overlays: bool) {
+        if editor.xray_enabled {
+            self.draw_document_batches(render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
+            self.draw_static_document_strokes(render_pass, true);
+            self.draw_document_batches(render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
+        } else {
+            // Alpha document primitives test the complete opaque depth buffer
+            // but never update it, so farther translucent fills still blend.
+            self.draw_document_batches(render_pass, DocumentRenderStage::Translucent, false, None);
+            self.draw_document_batches(render_pass, DocumentRenderStage::Overlay, false, None);
+            if include_editor_overlays {
+                self.draw_text_batches(render_pass, DocumentRenderStage::Overlay, false);
+            }
+        }
+    }
+
+    /// Vertex markers, then the always-visible text and document stage: the
+    /// last of the scene pass.
+    fn draw_design_points_and_labels<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>, editor: &EditorState, include_editor_overlays: bool) {
         if include_editor_overlays && !self.design_point_gpu.chunks.is_empty() {
-            render_pass.set_pipeline(&self.design_point_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipes().design_point_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             // Draw a black outer square followed by a smaller white square so
             // vertices stay legible against both light and dark geometry.
             for style in [&self.design_point_gpu.outer_style_bind_group, &self.design_point_gpu.inner_style_bind_group] {
@@ -936,9 +977,97 @@ impl<'a> Graphics<'a> {
         // scene edges and tool previews, then its box last. In global x-ray
         // mode every text batch follows this same final always-visible path.
         if include_editor_overlays {
-            self.draw_text_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, editor.xray_enabled);
+            self.draw_text_batches(render_pass, DocumentRenderStage::AlwaysVisible, editor.xray_enabled);
         }
-        self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, false, None);
+        self.draw_document_batches(render_pass, DocumentRenderStage::AlwaysVisible, false, None);
+    }
+
+    /// Designs and drill holes excluded from cinematic shading, drawn with the
+    /// ordinary pipelines over the finished image in the scene cache and
+    /// depth-tested against the depth the lit pass left behind. The colours
+    /// come out exactly as the ordinary view draws them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn render_cinematic_documents(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: ViewportRect,
+        editor: &EditorState,
+        drill_holes: &[OpenDrillHoleDataset],
+        include_editor_overlays: bool,
+    ) {
+        // The graded image is only in the cache; bring it into the
+        // multisample target whole, background included. A pass of its own:
+        // the one below resolves back into the cache, and a pass cannot both
+        // sample a texture and write it.
+        {
+            let mut restore_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cinematic Document Restore Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.msaa_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                // The blit pipeline is laid out against the scene depth
+                // buffer; it never writes it.
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            restore_pass.set_pipeline(&self.scene_cache_blit_pipeline);
+            restore_pass.set_bind_group(0, &self.scene_cache.bind_group, &[]);
+            restore_pass.draw(0..3, 0..1);
+        }
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Cinematic Document Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.msaa_view,
+                resolve_target: Some(&self.scene_cache.view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+        render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
+        if !editor.xray_enabled {
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, false, true, !editor.tying_holes(), include_editor_overlays);
+            self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Fill));
+            self.draw_static_document_strokes(&mut render_pass, false);
+            self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Stroke));
+        }
+        if editor.xray_enabled {
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, true, true, include_editor_overlays);
+        } else if editor.tying_holes() {
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, false, true, include_editor_overlays);
+        }
+        self.draw_late_documents(&mut render_pass, editor, include_editor_overlays);
+        self.draw_design_points_and_labels(&mut render_pass, editor, include_editor_overlays);
     }
 
     /// The editor content that changes on its own every frame - the live tool
@@ -1002,19 +1131,19 @@ impl<'a> Graphics<'a> {
 
         if !self.dynamic_vertex_buf.is_empty() && !self.dynamic_index_buf.is_empty() {
             render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
-                &self.overlay_render_pipeline
+                &self.pipes().overlay_render_pipeline
             } else {
-                &self.stroke_render_pipeline
+                &self.pipes().stroke_render_pipeline
             });
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_vertex_buffer(0, self.dynamic_vertex_gpu.slice(..));
             render_pass.set_index_buffer(self.dynamic_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.dynamic_index_buf.len() as u32, 0, 0..1);
         }
 
         if !self.overlay_vertex_buf.is_empty() && !self.overlay_index_buf.is_empty() {
-            render_pass.set_pipeline(&self.overlay_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_vertex_buffer(0, self.overlay_vertex_gpu.slice(..));
             render_pass.set_index_buffer(self.overlay_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.overlay_index_buf.len() as u32, 0, 0..1);
@@ -1217,7 +1346,7 @@ impl<'a> Graphics<'a> {
         let mut upscale_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Block Model Volume Upscale Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.msaa_view,
+                view: self.scene_msaa_view(),
                 resolve_target: Some(view),
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -1232,7 +1361,7 @@ impl<'a> Graphics<'a> {
         });
         let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         upscale_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
-        upscale_pass.set_pipeline(&self.block_model_volume_upscale_pipeline);
+        upscale_pass.set_pipeline(&self.pipes().block_model_volume_upscale_pipeline);
         upscale_pass.set_bind_group(0, &volume_target.bind_group, &[]);
         upscale_pass.draw(0..3, 0..1);
     }
@@ -1329,7 +1458,7 @@ impl<'a> Graphics<'a> {
         let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Block Model Transparency Composite Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.msaa_view,
+                view: self.scene_msaa_view(),
                 resolve_target: Some(view),
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -1344,7 +1473,7 @@ impl<'a> Graphics<'a> {
         });
         let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         composite_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
-        composite_pass.set_pipeline(&self.block_model_transparency_composite_pipeline);
+        composite_pass.set_pipeline(&self.pipes().block_model_transparency_composite_pipeline);
         composite_pass.set_bind_group(0, &transparency_targets.composite_bind_groups[0], &[]);
         composite_pass.draw(0..3, 0..1);
     }

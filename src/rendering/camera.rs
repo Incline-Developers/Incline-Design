@@ -308,12 +308,12 @@ impl CameraUniform {
         self.view_proj = view_proj.as_mat4().to_cols_array_2d();
         self.inv_view_proj = view_proj.inverse().as_mat4().to_cols_array_2d();
         let forward = camera.forward();
-        self.cam_forward = [forward.x as f32, forward.y as f32, forward.z as f32, 0.];
+        self.cam_forward = [forward.x as f32, forward.y as f32, forward.z as f32, vertical_exaggeration as f32];
         self.cam_position = [
             (camera.position.x - scene_origin.x) as f32,
             (camera.position.y - scene_origin.y) as f32,
             (camera.position.z - scene_origin.z) as f32,
-            0.,
+            if projection.is_perspective() { 1.0 } else { 0.0 },
         ];
     }
 

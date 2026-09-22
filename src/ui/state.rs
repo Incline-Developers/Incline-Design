@@ -1159,10 +1159,10 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
-    /// Smoothed seconds between rendered frames, which `measured_fps` is the
-    /// reciprocal of. See the note where it is updated: the average has to be
-    /// taken over the interval, never over the instantaneous rate.
-    pub(crate) smoothed_frame_interval: Option<f32>,
+    /// Frames and busy seconds counted towards the next `measured_fps`, which
+    /// is published once per window rather than every frame. See
+    /// `App::record_frame_time`.
+    pub(crate) frame_rate_window: (u32, f32),
     /// Developer view: colour each surface chunk distinctly to visualise the
     /// Morton spatial chunking (and drive the chunk-cull stats readout).
     pub(crate) debug_chunk_coloring: bool,
@@ -2327,7 +2327,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
-            smoothed_frame_interval: None,
+            frame_rate_window: (0, 0.0),
             debug_chunk_coloring: false,
             debug_chunk_stats: None,
             debug_clip_plane_distances: None,
@@ -2414,7 +2414,7 @@ impl EditorState {
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
-            cinematic_enabled: !cfg!(target_arch = "wasm32"),
+            cinematic_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
             vertical_exaggeration_input: 1.,

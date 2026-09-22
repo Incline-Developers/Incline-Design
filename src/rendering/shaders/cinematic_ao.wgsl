@@ -5,8 +5,8 @@
 // darkening into the corner where a batter meets a berm, under a block model
 // sitting on topography, and along every crest and toe. Nothing about it needs
 // the scene re-drawn - the depth buffer the scene pass already filled is the
-// only input - so it costs one pass per camera movement and nothing at all
-// while the view is parked on the cached scene image.
+// only input - so it costs one half-resolution pass per changed frame and nothing
+// once the view has settled on the cached scene image.
 
 @group(2) @binding(0)
 var scene_depth: texture_depth_multisampled_2d;
@@ -18,42 +18,11 @@ const GOLDEN_ANGLE: f32 = 2.39996323;
 /// Scales the cosine-weighted sum into the 0..1 the curve below expects.
 const OCCLUSION_GAIN: f32 = 4.0;
 
-fn load_depth(pixel: vec2<i32>) -> f32 {
-    return textureLoad(scene_depth, pixel, 0);
-}
-
-/// Face orientation rebuilt from the depth buffer. Taking the *nearer* of the
-/// two neighbours on each axis keeps the derivative on the near side of a
-/// silhouette instead of straddling it, which would otherwise ring every edge
-/// in the scene with a band of false occlusion.
-fn reconstruct_normal(pixel: vec2<i32>, centre: vec3<f32>, centre_depth: f32) -> vec3<f32> {
-    let left_depth = load_depth(pixel + vec2<i32>(-1, 0));
-    let right_depth = load_depth(pixel + vec2<i32>(1, 0));
-    let down_depth = load_depth(pixel + vec2<i32>(0, -1));
-    let up_depth = load_depth(pixel + vec2<i32>(0, 1));
-
-    let left = world_from_depth(vec2<f32>(pixel + vec2<i32>(-1, 0)) + 0.5, left_depth);
-    let right = world_from_depth(vec2<f32>(pixel + vec2<i32>(1, 0)) + 0.5, right_depth);
-    let down = world_from_depth(vec2<f32>(pixel + vec2<i32>(0, -1)) + 0.5, down_depth);
-    let up = world_from_depth(vec2<f32>(pixel + vec2<i32>(0, 1)) + 0.5, up_depth);
-
-    let dx = select(centre - left, right - centre, abs(right_depth - centre_depth) < abs(centre_depth - left_depth));
-    let dy = select(centre - down, up - centre, abs(up_depth - centre_depth) < abs(centre_depth - down_depth));
-
-    var normal = cross(dx, dy);
-    let length_squared = dot(normal, normal);
-    if length_squared < 1.0e-18 {
-        return -camera.cam_forward.xyz;
-    }
-    normal = normal * inverseSqrt(length_squared);
-    // Surfaces are two-sided and the reconstruction has no winding to go on,
-    // so orient towards the viewer rather than trusting the cross product.
-    return select(-normal, normal, dot(normal, -camera.cam_forward.xyz) > 0.0);
-}
-
 @fragment
-fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
-    let pixel = vec2<i32>(position.xy);
+fn fs_main(@builtin(position) half_position: vec4<f32>) -> @location(0) f32 {
+    // Match the full-resolution depth sample used by the bilateral upsample.
+    let pixel = min(vec2<i32>(half_position.xy) * 2, vec2<i32>(textureDimensions(scene_depth)) - 1);
+    let position = vec4<f32>(vec2<f32>(pixel) + 0.5, 0.0, 1.0);
     let centre_depth = load_depth(pixel);
     // Nothing was drawn here: sky, and sky is never occluded.
     if centre_depth <= 0.0 || !inside_viewport(position.xy) {
@@ -77,7 +46,8 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
         return 1.0;
     }
 
-    let rotation = dither(position.xy) * 6.2831853;
+    // A fixed spatial rotation avoids temporal flicker without accumulation.
+    let rotation = cinematic_noise(position.xy, 0.0) * 6.2831853;
     var occlusion = 0.0;
     for (var i = 0; i < SAMPLE_COUNT; i = i + 1) {
         let index = f32(i) + 0.5;
@@ -94,6 +64,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
 
         let projected = target_pixel_from_world(sample_world);
         let sample_pixel = vec2<i32>(projected.xy);
+        if !inside_viewport(projected.xy) { continue; }
         let occluder_depth = load_depth(sample_pixel);
         if occluder_depth <= 0.0 {
             continue;
