@@ -11,6 +11,14 @@ struct PointCloudStyle {
 @group(1) @binding(0)
 var<uniform> style: PointCloudStyle;
 
+struct PointChunkDraw {
+    // x: full-resolution points each drawn point stands for, at least 1 -
+    // the chunk's full count over the LOD prefix being drawn.
+    params: vec4<f32>,
+};
+@group(1) @binding(1)
+var<uniform> chunk_draw: PointChunkDraw;
+
 struct ColoredPointInput {
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
@@ -23,8 +31,9 @@ struct VertexOutput {
     @location(1) @interpolate(flat) section_offset: f32,
     // Model-space splat centre, for the cinematic lighting.
     @location(2) @interpolate(flat) world: vec3<f32>,
-    // Share of a pixel's samples the splat's true size would cover, below 1
-    // only once `MIN_SPLAT_PIXELS` has grown it (see `coverage_mask`).
+    // Share of a pixel's samples the splat covers, counting the points it
+    // stands in for; below 1 only once `MIN_SPLAT_PIXELS` has grown it (see
+    // `coverage_mask`), and clamped there.
     @location(3) @interpolate(flat) coverage: f32,
     // Stable per-point hash that picks which samples a partial splat lights.
     @location(4) @interpolate(flat) seed: u32,
@@ -111,7 +120,12 @@ fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOu
     out.color = depth_cue(color, splat_center);
     out.section_offset = section_plane_offset(splat_center);
     out.world = splat_center;
-    out.coverage = 1.0 / (grow * grow);
+    // A thinned-out point also stands in for the points its LOD prefix
+    // skipped, so it carries their coverage too. The LOD keeps about one
+    // point per pixel once splats are sub-pixel, which brings this back
+    // towards a full pixel instead of fading the cloud as the camera pulls
+    // away.
+    out.coverage = min(chunk_draw.params.x / (grow * grow), 1.0);
     out.seed = point_seed(pos);
     return out;
 }

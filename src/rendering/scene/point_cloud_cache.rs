@@ -36,6 +36,18 @@ struct PointCloudStyleUniform {
     origin: [f32; 4],
 }
 
+/// Mirrors `PointChunkDraw` in `point_cloud.wgsl`: per-draw values for one
+/// chunk, one aligned slot per chunk in the cloud's draw buffer.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PointChunkDrawUniform {
+    /// x: full-resolution points each drawn point stands for (full count /
+    /// drawn count, at least 1). yzw: padding.
+    params: [f32; 4],
+}
+
+pub(crate) const POINT_CHUNK_DRAW_UNIFORM_SIZE: u64 = size_of::<PointChunkDrawUniform>() as u64;
+
 pub(crate) struct CachedPointChunk {
     /// Suballocated vertex region. Draw and upload address `slot.buffer()` at
     /// `slot.offset()`; the slot returns to the arena on eviction.
@@ -71,6 +83,10 @@ pub(crate) struct CachedPointCloudGpu {
     /// evicted, keeping render and CPU-pick ranges aligned.
     pub(crate) chunks: Vec<Option<CachedPointChunk>>,
     pub(crate) style_bind_group: wgpu::BindGroup,
+    /// One `PointChunkDrawUniform` per prepared chunk, `chunk_draw_stride`
+    /// apart, bound at binding 1 of `style_bind_group` by dynamic offset.
+    chunk_draw_buffer: wgpu::Buffer,
+    chunk_draw_stride: u32,
     pub(crate) colored: bool,
     pub(crate) origin_scene: Vec3,
     style_buffer: wgpu::Buffer,
@@ -179,6 +195,23 @@ struct ResidencyCandidate {
     /// Coarser resident chunks refine before already-detailed ones.
     resident_level: usize,
     distance_squared: f32,
+}
+
+impl CachedPointCloudGpu {
+    /// Record how many points chunk `index` draws this frame and return the
+    /// dynamic offset that binds its slot. A drawn point stands for the
+    /// full-resolution points its LOD prefix skipped, so the shader gives a
+    /// sub-pixel point their combined coverage: thinning then keeps the
+    /// cloud's on-screen density instead of fading it out with zoom.
+    pub(crate) fn write_chunk_draw(&self, queue: &wgpu::Queue, index: usize, full_count: u32, drawn_count: u32) -> u32 {
+        let represented = full_count as f32 / drawn_count.max(1) as f32;
+        let uniform = PointChunkDrawUniform {
+            params: [represented.max(1.0), 0.0, 0.0, 0.0],
+        };
+        let offset = self.chunk_draw_stride * index as u32;
+        queue.write_buffer(&self.chunk_draw_buffer, u64::from(offset), bytemuck::bytes_of(&uniform));
+        offset
+    }
 }
 
 impl PointCloudGpuCache {
@@ -446,12 +479,29 @@ impl PointCloudGpuCache {
                 contents: bytemuck::bytes_of(&style),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
+            let chunk_draw_stride = (POINT_CHUNK_DRAW_UNIFORM_SIZE as u32).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+            let chunk_draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Point Cloud Chunk Draw Uniform"),
+                size: u64::from(chunk_draw_stride) * cloud.prepared.chunks.len().max(1) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
             let style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: style_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: style_buffer.as_entire_binding(),
-                }],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: style_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &chunk_draw_buffer,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(POINT_CHUNK_DRAW_UNIFORM_SIZE),
+                        }),
+                    },
+                ],
                 label: Some("Point Cloud Style Bind Group"),
             });
             self.clouds.insert(
@@ -459,6 +509,8 @@ impl PointCloudGpuCache {
                 CachedPointCloudGpu {
                     style_buffer,
                     style_bind_group,
+                    chunk_draw_buffer,
+                    chunk_draw_stride,
                     colored: cloud.prepared.colored,
                     origin_scene: (cloud.prepared.origin - scene_origin).as_vec3(),
                     color: cloud.color,
