@@ -581,6 +581,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
+            MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),

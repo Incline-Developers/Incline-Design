@@ -548,8 +548,9 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             });
 
             MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
-                // Both entries run on the selected clouds: one is reconstructed
-                // at a time, and a join needs two or more to join.
+                // Every entry runs on the selected clouds: one is reconstructed
+                // at a time, a join needs two or more to join, and classifying
+                // takes any number.
                 let selected_clouds = editor.selection_counts.point_clouds;
                 if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
                     .enabled(selected_clouds == 1)
@@ -561,6 +562,10 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
                 if ContextMenuAction::new(tr!(literal = "Join...")).enabled(selected_clouds >= 2).show(ui).clicked() {
                     commands.push(UiCommand::OpenPointCloudJoin);
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!(literal = "Classify...")).enabled(selected_clouds >= 1).show(ui).clicked() {
+                    commands.push(UiCommand::OpenPointCloudClassify);
                     ui.close();
                 }
             });
