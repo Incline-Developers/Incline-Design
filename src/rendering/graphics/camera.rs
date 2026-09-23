@@ -1272,7 +1272,11 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
 
-        let bounds = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        // One fresh bounds pass, shared with the depth fit below: a fit is the
+        // user asking for everything visible now, so no cached bounds.
+        self.invalidate_scene_bounds();
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let bounds = self.cached_scene_bounds;
         let (center, zoom) = match bounds {
             Some((min, max)) => {
                 let center = (min + max) * 0.5;
@@ -1305,13 +1309,23 @@ impl<'a> Graphics<'a> {
         if bounds.is_none() {
             self.translate_view_by_pixels(self.window_centring_offset_px());
         }
-        self.scene_origin = center;
-        self.triangulation_gpu.clear();
-        self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
-        self.geometry_dirty = true;
+        self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Move the floating origin to the framed centre. Vertical exaggeration
+    /// pivots on it, so the fit needs it exactly there - but refitting an
+    /// unchanged scene lands on the same centre, and then nothing is marked
+    /// dirty. When it does move, the per-item GPU caches notice the new origin
+    /// themselves and rewrite only what depends on it; clearing them here
+    /// would re-upload every dense surface and block model on each fit.
+    fn rebase_scene_origin(&mut self, center: DVec3) {
+        if self.scene_origin != center {
+            self.scene_origin = center;
+            self.geometry_dirty = true;
+            self.overlay_dirty = true;
+        }
     }
 
     /// World-space bounds of everything currently visible, for callers that
@@ -1346,7 +1360,9 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) {
-        let Some((min, max)) = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) else {
+        self.invalidate_scene_bounds();
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let Some((min, max)) = self.cached_scene_bounds else {
             return;
         };
         if self.slice_view.is_some() {
@@ -1390,11 +1406,7 @@ impl<'a> Graphics<'a> {
             zoom
         };
         self.camera.frame_keep_orientation(center, camera_distance);
-        self.scene_origin = center;
-        self.triangulation_gpu.clear();
-        self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
-        self.geometry_dirty = true;
+        self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
     }
