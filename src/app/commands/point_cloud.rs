@@ -1,4 +1,4 @@
-//! Point cloud import, load/unload and explorer commands.
+//! Point cloud import, load/unload, explorer commands, joining and classification.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -16,8 +16,9 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
-        MemberKind, SceneEntityId,
+        Command, ItemRef, MemberKind, OpenItem, SceneEntityId,
         formats::point_cloud::try_vec_with_capacity,
+        ground_filter::{GroundFilterOutput, GroundFilterParams, classify_ground},
         point_cloud::{LoadedPointCloud, OpenPointCloud, PointCloudId, finite_bounds, prepare_for_render},
     },
     userspace_log, userspace_warn,
@@ -304,6 +305,128 @@ impl<'a> App<'a> {
             Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to join point clouds: %error%", error = format!("{error:#}"))),
         };
         self.spawn_job_reporting_progress(tr_format!(literal = "Joining %name%", name = &name), keys, compute, apply);
+        Ok(())
+    }
+
+    /// Open the Classify dialog on the selected clouds.
+    pub(crate) fn open_point_cloud_classify(&mut self) {
+        let sources = self.selected_point_clouds();
+        if sources.is_empty() {
+            userspace_warn!("{}", tr!(literal = "Select one or more loaded point clouds before classifying them"));
+            return;
+        }
+        // The sparsest cloud sets the recommendation: a cloth fine enough for
+        // the densest would leave the sparsest's particles with nothing under
+        // them.
+        self.editor.point_cloud_classify_spacing = self
+            .point_clouds
+            .iter()
+            .filter(|cloud| sources.contains(&cloud.id))
+            .filter_map(|cloud| crate::model::ground_filter::plan_spacing(&cloud.points))
+            .reduce(f64::max);
+        self.editor.point_cloud_classify_extents = self
+            .point_clouds
+            .iter()
+            .filter(|cloud| sources.contains(&cloud.id))
+            .map(|cloud| (cloud.id, (cloud.bounds.1 - cloud.bounds.0).truncate()))
+            .collect();
+        self.editor.point_cloud_classify_open = true;
+        self.editor.point_cloud_classify_sources = sources;
+    }
+
+    /// Classify ground and noise in each cloud and rewrite its codes in place.
+    ///
+    /// The cloud keeps its identity, name and style - only what its points are
+    /// changes - so every cloud lands as a replacement of itself, all of them
+    /// in one undo step.
+    pub(crate) fn run_point_cloud_classify(&mut self, cloud_ids: Vec<PointCloudId>, params: GroundFilterParams) -> anyhow::Result<()> {
+        let runtime_id = self
+            .workspace
+            .active_project()
+            .map(|project| project.runtime_id)
+            .context("Open a project before classifying point clouds")?;
+        let mut sources = Vec::with_capacity(cloud_ids.len());
+        for id in &cloud_ids {
+            let cloud = self
+                .point_clouds
+                .iter()
+                .find(|cloud| cloud.id == *id)
+                .filter(|cloud| cloud.state.loaded && cloud.state.deferred.is_none())
+                .ok_or_else(|| anyhow::anyhow!("A selected point cloud is no longer loaded"))?;
+            sources.push(cloud.clone());
+        }
+        if sources.is_empty() {
+            anyhow::bail!("Select at least one point cloud to classify");
+        }
+        let revisions: Vec<_> = sources.iter().map(|cloud| (ItemRef::PointCloud(cloud.id), cloud.state.revision())).collect();
+        let keys = cloud_ids.iter().map(|id| crate::app::jobs::JobKey::PointCloud(*id)).collect();
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<Vec<(OpenPointCloud, GroundFilterOutput)>> {
+            let total: usize = sources.iter().map(|cloud| cloud.points.len()).sum::<usize>().max(1);
+            let mut done = 0usize;
+            let mut classified = Vec::with_capacity(sources.len());
+            for mut cloud in sources {
+                let start = done as f32 / total as f32;
+                let span = cloud.points.len() as f32 / total as f32;
+                // Filtering is the bulk of the work; rebuilding the render
+                // chunks with the new codes is the rest.
+                let phase = progress.phase(start, start + span * 0.85);
+                let mut output = classify_ground(&cloud.points, &params, cancel, &phase).with_context(|| format!("Failed to classify {}", cloud.name))?;
+                if cancel.is_cancelled() {
+                    anyhow::bail!("Cancelled");
+                }
+                cloud.prepared = std::sync::Arc::new(prepare_for_render(
+                    &cloud.points,
+                    cloud.colors.as_deref().map(Vec::as_slice),
+                    Some(&output.codes),
+                    cloud.bounds,
+                ));
+                cloud.classifications = Some(std::sync::Arc::new(std::mem::take(&mut output.codes)));
+                done += cloud.points.len();
+                progress.set_fraction(done as f32 / total as f32);
+                classified.push((cloud, output));
+            }
+            Ok(classified)
+        };
+        let apply = move |app: &mut App, result: anyhow::Result<Vec<(OpenPointCloud, GroundFilterOutput)>>| {
+            let classified = match result {
+                Ok(classified) => classified,
+                Err(error) => {
+                    userspace_warn!("{}", tr_format!(literal = "Failed to classify point clouds: %error%", error = format!("{error:#}")));
+                    return;
+                }
+            };
+            // A cloud edited, unloaded or moved to another project while the
+            // filter ran would have its change silently undone by the result.
+            let stale = !app.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
+                || revisions.iter().any(|(item, revision)| {
+                    !app.project_item_state(*item)
+                        .is_some_and(|state| state.revision() == *revision && state.loaded && state.deferred.is_none())
+                });
+            if stale {
+                userspace_warn!("{}", tr!(literal = "Point cloud classification discarded: a cloud changed while it ran. Run it again."));
+                return;
+            }
+            let mut commands = Vec::with_capacity(classified.len());
+            for (cloud, output) in classified {
+                userspace_log!(
+                    "{}",
+                    tr_format!(
+                        literal = "Classified %name%: %ground% ground, %vegetation% vegetation and %noise% noise of %count% points",
+                        name = cloud.name.clone(),
+                        ground = output.ground,
+                        vegetation = output.vegetation,
+                        noise = output.noise,
+                        count = cloud.points.len()
+                    )
+                );
+                commands.push(Command::ReplaceItem {
+                    item: ItemRef::PointCloud(cloud.id),
+                    other: Some(OpenItem::PointCloud(Box::new(cloud))),
+                });
+            }
+            app.execute_edit_for(runtime_id, Command::Batch(commands));
+        };
+        self.spawn_job_reporting_progress(tr!(literal = "Classifying point clouds"), keys, compute, apply);
         Ok(())
     }
 }

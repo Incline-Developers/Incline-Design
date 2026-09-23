@@ -335,6 +335,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
+    pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
     pub(super) stroke_vertex_gpu: wgpu::Buffer,

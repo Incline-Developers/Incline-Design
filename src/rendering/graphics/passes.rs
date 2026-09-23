@@ -625,8 +625,7 @@ impl<'a> Graphics<'a> {
                     render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
                     colored_pipeline_active = Some(cached.colored);
                 }
-                render_pass.set_bind_group(1, &cached.style_bind_group, &[]);
-                for chunk in cached.chunks.iter().filter_map(Option::as_ref) {
+                for (chunk_index, chunk) in cached.chunks.iter().enumerate().filter_map(|(index, chunk)| Some((index, chunk.as_ref()?))) {
                     let bounds_min = chunk.bounds_min + cached.origin_scene;
                     let bounds_max = chunk.bounds_max + cached.origin_scene;
                     // Projected bounds are conservative and include raster
@@ -684,6 +683,8 @@ impl<'a> Graphics<'a> {
                             chunk.last_display_update.set(display_now);
                         }
                     }
+                    let draw_offset = cached.write_chunk_draw(&self.queue, chunk_index, chunk.level_counts[0], instance_count);
+                    render_pass.set_bind_group(1, &cached.style_bind_group, &[draw_offset]);
                     render_pass.set_vertex_buffer(0, chunk.slot.buffer().slice(chunk.slot.vertex_range()));
                     render_pass.draw(0..4, 0..instance_count);
                 }

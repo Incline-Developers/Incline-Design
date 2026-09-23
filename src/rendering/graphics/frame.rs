@@ -241,7 +241,7 @@ impl<'a> Graphics<'a> {
             (self.camera.position - self.scene_origin).as_vec3(),
             point_clouds,
             editor,
-            &self.edge_style_bind_group_layout,
+            &self.point_cloud_style_bind_group_layout,
         );
         self.design_point_gpu.sync(
             &self.device,

@@ -29,11 +29,24 @@ use crate::{
 struct PointCloudStyleUniform {
     color: [f32; 4],
     /// x: screen-facing splat width in world units; y: draw `color` in place of
-    /// the instances' own colour channel.
+    /// the instances' own colour channel; z: fade splats by distance from the
+    /// eye (fly mode).
     options: [f32; 4],
     /// Cloud-local origin relative to the current floating scene origin.
     origin: [f32; 4],
 }
+
+/// Mirrors `PointChunkDraw` in `point_cloud.wgsl`: per-draw values for one
+/// chunk, one aligned slot per chunk in the cloud's draw buffer.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PointChunkDrawUniform {
+    /// x: full-resolution points each drawn point stands for (full count /
+    /// drawn count, at least 1). yzw: padding.
+    params: [f32; 4],
+}
+
+pub(crate) const POINT_CHUNK_DRAW_UNIFORM_SIZE: u64 = size_of::<PointChunkDrawUniform>() as u64;
 
 pub(crate) struct CachedPointChunk {
     /// Suballocated vertex region. Draw and upload address `slot.buffer()` at
@@ -70,6 +83,10 @@ pub(crate) struct CachedPointCloudGpu {
     /// evicted, keeping render and CPU-pick ranges aligned.
     pub(crate) chunks: Vec<Option<CachedPointChunk>>,
     pub(crate) style_bind_group: wgpu::BindGroup,
+    /// One `PointChunkDrawUniform` per prepared chunk, `chunk_draw_stride`
+    /// apart, bound at binding 1 of `style_bind_group` by dynamic offset.
+    chunk_draw_buffer: wgpu::Buffer,
+    chunk_draw_stride: u32,
     pub(crate) colored: bool,
     pub(crate) origin_scene: Vec3,
     style_buffer: wgpu::Buffer,
@@ -81,6 +98,7 @@ pub(crate) struct CachedPointCloudGpu {
     selected: bool,
     /// Whether `color` is drawn in place of the instances' colour channel.
     uniform_color: bool,
+    depth_cue: bool,
     /// Whether the resident instances had classification colours staged over
     /// the source RGB they were prepared with. Flipping this re-streams the
     /// cloud, so it is settled per cloud in [`PointCloudGpuCache::sync`] and
@@ -177,6 +195,23 @@ struct ResidencyCandidate {
     /// Coarser resident chunks refine before already-detailed ones.
     resident_level: usize,
     distance_squared: f32,
+}
+
+impl CachedPointCloudGpu {
+    /// Record how many points chunk `index` draws this frame and return the
+    /// dynamic offset that binds its slot. A drawn point stands for the
+    /// full-resolution points its LOD prefix skipped, so the shader gives a
+    /// sub-pixel point their combined coverage: thinning then keeps the
+    /// cloud's on-screen density instead of fading it out with zoom.
+    pub(crate) fn write_chunk_draw(&self, queue: &wgpu::Queue, index: usize, full_count: u32, drawn_count: u32) -> u32 {
+        let represented = full_count as f32 / drawn_count.max(1) as f32;
+        let uniform = PointChunkDrawUniform {
+            params: [represented.max(1.0), 0.0, 0.0, 0.0],
+        };
+        let offset = self.chunk_draw_stride * index as u32;
+        queue.write_buffer(&self.chunk_draw_buffer, u64::from(offset), bytemuck::bytes_of(&uniform));
+        offset
+    }
 }
 
 impl PointCloudGpuCache {
@@ -296,6 +331,77 @@ impl PointCloudGpuCache {
         nearest
     }
 
+    /// The clouds a selection rectangle takes, judged on the splats the
+    /// latest render pass drew. `cross_select` takes a cloud with any point in
+    /// the box; a window select takes one only when every point is inside.
+    /// `rect` is `(min, max)` in viewport pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn entities_in_screen_rect(
+        &self,
+        view_proj: &DMat4,
+        screen: (f32, f32),
+        rect: (DVec2, DVec2),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        slab: Option<SectionSlab>,
+    ) -> Vec<SceneEntityId> {
+        let (rect_min, rect_max) = rect;
+        let inside = |point: DVec2| point.cmpge(rect_min).all() && point.cmple(rect_max).all();
+        let mut hits = Vec::new();
+        for (&id, cached) in self.clouds.iter().filter(|(_, cached)| cached.visible) {
+            let entity = SceneEntityId::PointCloud(id);
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            // Cross: any drawn point inside. Window: at least one drawn point, and none outside.
+            let mut any = false;
+            let mut all = true;
+            'chunks: for (chunk_index, chunk) in cached.chunks.iter().enumerate().filter_map(|(index, chunk)| chunk.as_ref().map(|chunk| (index, chunk))) {
+                let Some(prepared) = cached.prepared.chunks.get(chunk_index) else {
+                    continue;
+                };
+                let count = chunk.displayed_count.get() as usize;
+                for group in prepared.pick_groups.iter().filter(|group| (group.start as usize) < count) {
+                    let bounds_min = cached.prepared.origin + group.bounds_min.as_dvec3();
+                    let bounds_max = cached.prepared.origin + group.bounds_max.as_dvec3();
+                    let projected = projected_bounds(view_proj, screen, bounds_min, bounds_max);
+                    if let Some((min, max)) = projected {
+                        let disjoint = max.cmplt(rect_min).any() || min.cmpgt(rect_max).any();
+                        if cross_select && disjoint {
+                            continue;
+                        }
+                        // A group wholly inside settles the window test for all of its points; only whether the section shows any of them is left.
+                        if !cross_select && inside(min) && inside(max) && (any || slab.is_none()) {
+                            any = true;
+                            continue;
+                        }
+                    }
+                    let end = (group.end as usize).min(count);
+                    for index in group.start as usize..end {
+                        let Some(local) = prepared.data.position(index) else {
+                            continue;
+                        };
+                        let world = cached.prepared.origin + DVec3::from_array(local.map(f64::from));
+                        if slab.is_some_and(|slab| !slab.contains(world)) {
+                            continue;
+                        }
+                        let taken = crate::rendering::pick::world_to_screen(view_proj, world, screen).is_some_and(inside);
+                        any |= taken;
+                        all &= taken;
+                        if (cross_select && any) || (!cross_select && !all) {
+                            break 'chunks;
+                        }
+                    }
+                }
+            }
+            if any && (cross_select || all) {
+                hits.push(entity);
+            }
+        }
+        hits
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sync(
         &mut self,
@@ -318,6 +424,7 @@ impl PointCloudGpuCache {
         self.rejected_chunks.retain(|key| loaded.contains(&key.cloud));
 
         let classify = editor.colors_points_by_classification();
+        let depth_cue = editor.fly_mode_enabled;
 
         for cloud in point_clouds {
             if !cloud.state.loaded {
@@ -351,8 +458,9 @@ impl PointCloudGpuCache {
                     || cached.scene_origin != scene_origin
                     || cached.selected != selected
                     || cached.uniform_color != uniform_color
+                    || cached.depth_cue != depth_cue
                 {
-                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
+                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = cloud.color;
                     cached.point_size = point_size;
@@ -360,22 +468,40 @@ impl PointCloudGpuCache {
                     cached.origin_scene = (cloud.prepared.origin - scene_origin).as_vec3();
                     cached.selected = selected;
                     cached.uniform_color = uniform_color;
+                    cached.depth_cue = depth_cue;
                 }
                 continue;
             }
 
-            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
+            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
             let style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Point Cloud Style Uniform"),
                 contents: bytemuck::bytes_of(&style),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
+            let chunk_draw_stride = (POINT_CHUNK_DRAW_UNIFORM_SIZE as u32).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+            let chunk_draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Point Cloud Chunk Draw Uniform"),
+                size: u64::from(chunk_draw_stride) * cloud.prepared.chunks.len().max(1) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
             let style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: style_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: style_buffer.as_entire_binding(),
-                }],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: style_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &chunk_draw_buffer,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(POINT_CHUNK_DRAW_UNIFORM_SIZE),
+                        }),
+                    },
+                ],
                 label: Some("Point Cloud Style Bind Group"),
             });
             self.clouds.insert(
@@ -383,6 +509,8 @@ impl PointCloudGpuCache {
                 CachedPointCloudGpu {
                     style_buffer,
                     style_bind_group,
+                    chunk_draw_buffer,
+                    chunk_draw_stride,
                     colored: cloud.prepared.colored,
                     origin_scene: (cloud.prepared.origin - scene_origin).as_vec3(),
                     color: cloud.color,
@@ -393,6 +521,7 @@ impl PointCloudGpuCache {
                     visible: cloud.state.loaded,
                     selected,
                     uniform_color,
+                    depth_cue,
                     staged_classification,
                 },
             );
@@ -636,32 +765,39 @@ fn sort_candidates_for_upload(candidates: &mut [ResidencyCandidate]) {
 }
 
 fn projected_bounds_overlap(view_proj: &DMat4, screen: (f32, f32), point: DVec2, padding: f64, min: DVec3, max: DVec3) -> bool {
+    let Some((projected_min, projected_max)) = projected_bounds(view_proj, screen, min, max) else {
+        return true;
+    };
+    point.x >= projected_min.x - padding && point.x <= projected_max.x + padding && point.y >= projected_min.y - padding && point.y <= projected_max.y + padding
+}
+
+/// Screen-space bounds of a world box, or `None` when a corner is behind the
+/// camera and the projection cannot bound it.
+fn projected_bounds(view_proj: &DMat4, screen: (f32, f32), min: DVec3, max: DVec3) -> Option<(DVec2, DVec2)> {
     let mut projected_min = DVec2::splat(f64::INFINITY);
     let mut projected_max = DVec2::splat(f64::NEG_INFINITY);
-    let mut projected_any = false;
     for x in [min.x, max.x] {
         for y in [min.y, max.y] {
             for z in [min.z, max.z] {
                 let clip = *view_proj * DVec3::new(x, y, z).extend(1.0);
                 if clip.w <= f64::EPSILON {
-                    return true;
+                    return None;
                 }
                 let ndc = clip.truncate() / clip.w;
                 let screen_point = DVec2::new((ndc.x * 0.5 + 0.5) * f64::from(screen.0), (0.5 - ndc.y * 0.5) * f64::from(screen.1));
                 projected_min = projected_min.min(screen_point);
                 projected_max = projected_max.max(screen_point);
-                projected_any = true;
             }
         }
     }
-    projected_any && point.x >= projected_min.x - padding && point.x <= projected_max.x + padding && point.y >= projected_min.y - padding && point.y <= projected_max.y + padding
+    Some((projected_min, projected_max))
 }
 
-fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool) -> PointCloudStyleUniform {
+fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool, depth_cue: bool) -> PointCloudStyleUniform {
     let origin = (cloud.prepared.origin - scene_origin).as_vec3();
     PointCloudStyleUniform {
         color: if selected { crate::ui::SELECTION_COLOR_F32 } else { cloud.color },
-        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, 0.0, 0.0],
+        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, if depth_cue { 1.0 } else { 0.0 }, 0.0],
         origin: [origin.x, origin.y, origin.z, 0.0],
     }
 }

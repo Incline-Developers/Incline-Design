@@ -49,6 +49,7 @@ pub(crate) struct ScenePipelineLayouts<'a> {
     pub(crate) surface_chunk: &'a wgpu::BindGroupLayout,
     pub(crate) raster_surface: &'a wgpu::BindGroupLayout,
     pub(crate) edge_style: &'a wgpu::BindGroupLayout,
+    pub(crate) point_cloud_style: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_transparency_composite: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_volume_upscale: &'a wgpu::BindGroupLayout,
     /// The drill selection bitset, group 1 of both drill pipelines.
@@ -245,6 +246,11 @@ pub(crate) fn create_scene_pipelines(
         bind_group_layouts: &[Some(layouts.camera), Some(layouts.edge_style)],
         immediate_size: 0,
     });
+    let point_cloud_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Point Cloud Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera), Some(layouts.point_cloud_style)],
+        immediate_size: 0,
+    });
 
     let vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
@@ -374,12 +380,11 @@ pub(crate) fn create_scene_pipelines(
         multiview_mask: None,
         cache: None,
     });
-    // Point splats reuse the edge pipeline layout (camera + one style
-    // uniform) but write depth so clouds occlude correctly against
-    // meshes and themselves.
+    // Point splats write depth so clouds occlude correctly against meshes
+    // and themselves.
     let point_cloud_colored_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Colored Point Cloud Pipeline"),
-        layout: Some(&edge_pipeline_layout),
+        layout: Some(&point_cloud_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &point_cloud_shader,
             entry_point: Some("vs_colored"),
@@ -419,7 +424,7 @@ pub(crate) fn create_scene_pipelines(
     });
     let point_cloud_uncolored_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Uncolored Point Cloud Pipeline"),
-        layout: Some(&edge_pipeline_layout),
+        layout: Some(&point_cloud_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &point_cloud_shader,
             entry_point: Some("vs_uncolored"),

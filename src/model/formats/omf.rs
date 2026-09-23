@@ -131,6 +131,8 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) loaded: LoadedTriangulation,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
+    /// The archive element the payload was read from; see [`PayloadSource`].
+    pub(crate) payload_source: Option<DeferredAsset>,
     pub(crate) color: [f32; 4],
     pub(crate) line_color: [f32; 4],
     pub(crate) line_weight: Option<f32>,
@@ -168,6 +170,8 @@ pub(crate) struct ImportedPointCloud {
     pub(crate) loaded: LoadedPointCloud,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
+    /// The archive element the payload was read from; see [`PayloadSource`].
+    pub(crate) payload_source: Option<DeferredAsset>,
     pub(crate) color: [f32; 4],
     pub(crate) point_size: f32,
     pub(crate) folder: Option<FolderId>,
@@ -297,16 +301,24 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         complete += 1;
         progress.set_items(complete, total);
     }
+    // Unchanged payloads are copied out of the archive they were read from,
+    // still compressed. Compression is nearly all the cost of a save, and an
+    // unloaded payload would otherwise be read back in just to encode it.
+    let mut sources = SourceArchives::default();
     for triangulation in &snapshot.triangulations {
-        let restored;
-        let triangulation = if triangulation.state.deferred.is_some() {
-            restored = crate::model::OpenItem::Triangulation(Box::new(triangulation.clone())).materialize()?;
-            let crate::model::OpenItem::Triangulation(item) = &restored else { unreachable!() };
-            item.as_ref()
-        } else {
-            triangulation
+        let copied = match sources.unchanged(&triangulation.state, &PayloadIdentity::triangulation(triangulation)) {
+            Some((reader, element)) => copy_surface(&mut writer, reader, element)?,
+            None => None,
         };
-        let mut element = write_triangulation(&mut writer, triangulation)?;
+        let mut element = match copied {
+            Some(geometry) => triangulation_element(triangulation, geometry),
+            None if triangulation.state.deferred.is_some() => {
+                let restored = crate::model::OpenItem::Triangulation(Box::new(triangulation.clone())).materialize()?;
+                let crate::model::OpenItem::Triangulation(item) = &restored else { unreachable!() };
+                write_triangulation(&mut writer, item)?
+            }
+            None => write_triangulation(&mut writer, triangulation)?,
+        };
         tag_folder(&mut element, &snapshot.folders, triangulation.state.section, triangulation.state.folder);
         tag_section(&mut element, MemberKind::Triangulation, triangulation.state.section);
         elements.push(element);
@@ -347,15 +359,19 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         progress.set_items(complete, total);
     }
     for point_cloud in &snapshot.point_clouds {
-        let restored;
-        let point_cloud = if point_cloud.state.deferred.is_some() {
-            restored = crate::model::OpenItem::PointCloud(Box::new(point_cloud.clone())).materialize()?;
-            let crate::model::OpenItem::PointCloud(item) = &restored else { unreachable!() };
-            item.as_ref()
-        } else {
-            point_cloud
+        let copied = match sources.unchanged(&point_cloud.state, &PayloadIdentity::point_cloud(point_cloud)) {
+            Some((reader, element)) => copy_point_set(&mut writer, reader, element)?,
+            None => None,
         };
-        let mut element = write_point_cloud(&mut writer, point_cloud)?;
+        let mut element = match copied {
+            Some((geometry, attributes)) => point_cloud_element(point_cloud, geometry, attributes),
+            None if point_cloud.state.deferred.is_some() => {
+                let restored = crate::model::OpenItem::PointCloud(Box::new(point_cloud.clone())).materialize()?;
+                let crate::model::OpenItem::PointCloud(item) = &restored else { unreachable!() };
+                write_point_cloud(&mut writer, item)?
+            }
+            None => write_point_cloud(&mut writer, point_cloud)?,
+        };
         tag_folder(&mut element, &snapshot.folders, point_cloud.state.section, point_cloud.state.folder);
         tag_section(&mut element, MemberKind::PointCloud, point_cloud.state.section);
         elements.push(element);
@@ -647,10 +663,13 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     let mesh = &triangulation.mesh;
     let vertices = mesh.vertices().iter().map(|vertex| vertex.as_array());
     let triangles = mesh.face_vertex_indices_iter().map(|face| face.map(|index| index as u32));
-    let mut element = omf_crate::Element::new(
-        triangulation.name.clone(),
-        omf_crate::Surface::new(writer.array_vertices(vertices)?, writer.array_triangles(triangles)?),
-    );
+    let geometry = omf_crate::Surface::new(writer.array_vertices(vertices)?, writer.array_triangles(triangles)?);
+    Ok(triangulation_element(triangulation, geometry.into()))
+}
+
+/// Everything about a triangulation's element except its arrays.
+fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate::Geometry) -> omf_crate::Element {
+    let mut element = omf_crate::Element::new(triangulation.name.clone(), geometry);
     element.color = Some(rgba8(triangulation.color));
     put(&mut element, META_KIND, "triangulation");
     put_item_identity(
@@ -672,25 +691,30 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
             "raster_texture_id": triangulation.raster_texture.map(|id| id.0),
         }),
     );
-    Ok(element)
+    element
 }
 
 fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, cloud: &OpenPointCloud) -> Result<omf_crate::Element> {
-    let mut element = omf_crate::Element::new(
-        cloud.name.clone(),
-        omf_crate::PointSet::new(writer.array_vertices(cloud.points.iter().map(|point| point.to_array()))?),
-    );
-    element.color = Some(rgba8(cloud.color));
+    let geometry = omf_crate::PointSet::new(writer.array_vertices(cloud.points.iter().map(|point| point.to_array()))?);
+    let mut attributes = Vec::new();
     if let Some(colors) = cloud.colors.as_ref().filter(|colors| colors.len() == cloud.points.len()) {
-        element.attributes.push(omf_crate::Attribute::from_colors(
+        attributes.push(omf_crate::Attribute::from_colors(
             "Color",
             omf_crate::Location::Vertices,
             writer.array_colors(colors.iter().map(|color| Some(color.to_le_bytes())))?,
         ));
     }
     if let Some(codes) = cloud.classifications.as_ref().filter(|codes| codes.len() == cloud.points.len()) {
-        element.attributes.push(write_point_classification(writer, codes)?);
+        attributes.push(write_point_classification(writer, codes)?);
     }
+    Ok(point_cloud_element(cloud, geometry.into(), attributes))
+}
+
+/// Everything about a point cloud's element except its arrays.
+fn point_cloud_element(cloud: &OpenPointCloud, geometry: omf_crate::Geometry, attributes: Vec<omf_crate::Attribute>) -> omf_crate::Element {
+    let mut element = omf_crate::Element::new(cloud.name.clone(), geometry);
+    element.color = Some(rgba8(cloud.color));
+    element.attributes = attributes;
     put(&mut element, META_KIND, "point_cloud");
     put_item_identity(
         &mut element,
@@ -704,7 +728,7 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         META_STYLE,
         json!({ "loaded": cloud.state.loaded, "color": cloud.color, "point_size": cloud.point_size }),
     );
-    Ok(element)
+    element
 }
 
 /// Write ASPRS point classifications as an OMF category attribute.
@@ -1205,16 +1229,7 @@ impl DeferredAsset {
         let mut reader = omf_crate::file::Reader::new(self.backing.read()?)?;
         reader.set_limits(reader_limits());
         let (project, _) = reader.project()?;
-        let mut elements = project.elements.as_slice();
-        let mut selected = None;
-        for &index in &self.element_path {
-            let element = elements.get(index).context("unloaded asset is missing from its backing archive")?;
-            selected = Some(element);
-            elements = match &element.geometry {
-                omf_crate::Geometry::Composite(group) => &group.elements,
-                _ => &[],
-            };
-        }
+        let selected = locate_element(&project.elements, &self.element_path).context("unloaded asset is missing from its backing archive")?;
         let mut decoder = Decoder {
             reader: &reader,
             project_origin: DVec3::from_array(project.origin),
@@ -1226,9 +1241,259 @@ impl DeferredAsset {
             backing: None,
             element_path: Vec::new(),
         };
-        decoder.walk(selected.context("unloaded asset has no locator")?)?;
+        decoder.walk(selected)?;
         decoder.finish()
     }
+}
+
+/// Follow `path` through nested composite elements.
+fn locate_element<'a>(elements: &'a [omf_crate::Element], path: &[usize]) -> Option<&'a omf_crate::Element> {
+    let (&first, rest) = path.split_first()?;
+    let mut element = elements.get(first)?;
+    for &index in rest {
+        let omf_crate::Geometry::Composite(group) = &element.geometry else {
+            return None;
+        };
+        element = group.elements.get(index)?;
+    }
+    Some(element)
+}
+
+/// The archive element an item's payload was read from, and which payload
+/// that was, so a save can copy the element's already-compressed arrays
+/// rather than compress an unchanged payload all over again.
+///
+/// Payloads are identified by allocation, not content: an edit replaces the
+/// payload `Arc`s rather than mutating them. Holding a `Weak` to each keeps
+/// the allocation reserved, so a later payload can never land at the same
+/// address and pass for the original, and it makes `Arc::make_mut` copy
+/// instead of writing in place.
+#[derive(Clone, Debug)]
+pub(crate) struct PayloadSource {
+    asset: DeferredAsset,
+    /// The payload decoded from `asset`, or `None` while the item is
+    /// unloaded - a payload that only exists in a backing cannot change.
+    resident: Option<PayloadIdentity>,
+}
+
+impl PayloadSource {
+    /// Record `asset` as the source of `item`'s payload as it stands now.
+    pub(crate) fn for_triangulation(asset: Option<DeferredAsset>, item: &OpenTriangulation) -> Option<Self> {
+        Some(Self {
+            asset: asset?,
+            resident: item.state.deferred.is_none().then(|| PayloadIdentity::triangulation(item)),
+        })
+    }
+
+    /// Record `asset` as the source of `item`'s payload as it stands now.
+    pub(crate) fn for_point_cloud(asset: Option<DeferredAsset>, item: &OpenPointCloud) -> Option<Self> {
+        Some(Self {
+            asset: asset?,
+            resident: item.state.deferred.is_none().then(|| PayloadIdentity::point_cloud(item)),
+        })
+    }
+
+    /// The archive element that still holds exactly the payload `current`
+    /// names, if there is one.
+    fn unchanged(&self, deferred: bool, current: &PayloadIdentity) -> Option<&DeferredAsset> {
+        let unchanged = match &self.resident {
+            Some(resident) => !deferred && resident.same(current),
+            None => deferred,
+        };
+        unchanged.then_some(&self.asset)
+    }
+
+    /// Carry the record across the payload being unloaded. It survives only
+    /// if the payload being dropped is still the one read from the archive.
+    pub(crate) fn released(self, current: &PayloadIdentity) -> Option<Self> {
+        match &self.resident {
+            Some(resident) if resident.same(current) => Some(Self { resident: None, ..self }),
+            _ => None,
+        }
+    }
+
+    /// Carry the record across an unloaded payload being read back in.
+    pub(crate) fn restored(self, current: PayloadIdentity) -> Option<Self> {
+        self.resident.is_none().then_some(Self { resident: Some(current), ..self })
+    }
+}
+
+/// Which payload allocations an item holds; see [`PayloadSource`].
+#[derive(Clone, Debug)]
+pub(crate) enum PayloadIdentity {
+    Triangulation(std::sync::Weak<Triangulation>),
+    PointCloud {
+        points: std::sync::Weak<Vec<DVec3>>,
+        colors: Option<std::sync::Weak<Vec<u32>>>,
+        classifications: Option<std::sync::Weak<Vec<u8>>>,
+    },
+}
+
+impl PayloadIdentity {
+    pub(crate) fn triangulation(item: &OpenTriangulation) -> Self {
+        Self::Triangulation(Arc::downgrade(&item.mesh))
+    }
+
+    pub(crate) fn point_cloud(item: &OpenPointCloud) -> Self {
+        Self::PointCloud {
+            points: Arc::downgrade(&item.points),
+            colors: item.colors.as_ref().map(Arc::downgrade),
+            classifications: item.classifications.as_ref().map(Arc::downgrade),
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        fn same_optional<T>(a: &Option<std::sync::Weak<T>>, b: &Option<std::sync::Weak<T>>) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                _ => false,
+            }
+        }
+        match (self, other) {
+            (Self::Triangulation(a), Self::Triangulation(b)) => a.ptr_eq(b),
+            (
+                Self::PointCloud {
+                    points: a,
+                    colors: a_colors,
+                    classifications: a_classes,
+                },
+                Self::PointCloud {
+                    points: b,
+                    colors: b_colors,
+                    classifications: b_classes,
+                },
+            ) => a.ptr_eq(b) && same_optional(a_colors, b_colors) && same_optional(a_classes, b_classes),
+            _ => false,
+        }
+    }
+}
+
+type SourceReader = omf_crate::file::Reader<crate::model::asset_storage::BackingData>;
+
+/// Archives a save copies unchanged payloads out of, each opened and its
+/// index parsed once however many items it holds.
+#[derive(Default)]
+struct SourceArchives(Vec<(crate::model::asset_storage::Backing, SourceReader, omf_crate::Project)>);
+
+impl SourceArchives {
+    /// The archive element holding `state`'s payload, when `current` is still
+    /// exactly the payload read from it.
+    ///
+    /// A backing that cannot be read is logged and treated as no source: the
+    /// payload can still be encoded afresh, so it must not fail the save.
+    fn unchanged(&mut self, state: &project::ProjectItemState, current: &PayloadIdentity) -> Option<(&SourceReader, &omf_crate::Element)> {
+        let asset = state.payload_source.as_ref()?.unchanged(state.deferred.is_some(), current)?;
+        let index = match self.0.iter().position(|(backing, ..)| backing.same(&asset.backing)) {
+            Some(index) => index,
+            None => {
+                let opened = asset.backing.open().and_then(|data| {
+                    let mut reader = omf_crate::file::Reader::new(data)?;
+                    reader.set_limits(reader_limits());
+                    let (project, _) = reader.project()?;
+                    Ok((reader, project))
+                });
+                match opened {
+                    Ok((reader, project)) => self.0.push((asset.backing.clone(), reader, project)),
+                    Err(error) => {
+                        log::warn!("Encoding an unchanged item afresh: its source archive could not be read: {error:#}");
+                        return None;
+                    }
+                }
+                self.0.len() - 1
+            }
+        };
+        let (_, reader, project) = &self.0[index];
+        // Saved coordinates are relative to a zero project origin; arrays
+        // stored against any other origin would move.
+        if project.origin != [0.0; 3] {
+            return None;
+        }
+        Some((reader, locate_element(&project.elements, &asset.element_path)?))
+    }
+}
+
+/// Copy an unchanged triangulation's arrays from the element it was read
+/// from. `None` when that element is not exactly what [`write_triangulation`]
+/// would produce, so the caller encodes the mesh instead.
+fn copy_surface<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, reader: &SourceReader, element: &omf_crate::Element) -> Result<Option<omf_crate::Geometry>> {
+    let omf_crate::Geometry::Surface(surface) = &element.geometry else {
+        return Ok(None);
+    };
+    if kind(element) != Some("triangulation") || surface.origin != [0.0; 3] || !element.attributes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        omf_crate::Surface::new(writer.array_copy(reader, &surface.vertices)?, writer.array_copy(reader, &surface.triangles)?).into(),
+    ))
+}
+
+/// Copy an unchanged point cloud's arrays from the element it was read from.
+/// `None` when that element is not in the shape [`write_point_cloud`]
+/// produces, so the caller encodes the cloud instead.
+///
+/// The payload itself is not consulted - an unloaded one is not there to
+/// consult - and needn't be: it is whatever the decoder made of this element,
+/// and will be again when the copy is opened.
+fn copy_point_set<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    reader: &SourceReader,
+    element: &omf_crate::Element,
+) -> Result<Option<(omf_crate::Geometry, Vec<omf_crate::Attribute>)>> {
+    let omf_crate::Geometry::PointSet(points) = &element.geometry else {
+        return Ok(None);
+    };
+    let written_by_incline = |attribute: &omf_crate::Attribute| {
+        attribute.location == omf_crate::Location::Vertices
+            && match &attribute.data {
+                omf_crate::AttributeData::Color { .. } => attribute.name == "Color",
+                omf_crate::AttributeData::Category { attributes, .. } => {
+                    attribute.name == POINT_CLASSIFICATION_ATTRIBUTE && attributes.iter().all(|code| matches!(code.data, omf_crate::AttributeData::Number { colormap: None, .. }))
+                }
+                _ => false,
+            }
+    };
+    if kind(element) != Some("point_cloud") || points.origin != [0.0; 3] || !element.attributes.iter().all(written_by_incline) {
+        return Ok(None);
+    }
+    let mut attributes = Vec::with_capacity(element.attributes.len());
+    for attribute in &element.attributes {
+        let data = match &attribute.data {
+            omf_crate::AttributeData::Color { values } => omf_crate::AttributeData::Color {
+                values: writer.array_copy(reader, values)?,
+            },
+            omf_crate::AttributeData::Category {
+                values,
+                names,
+                gradient,
+                attributes: codes,
+            } => {
+                let mut copied_codes = Vec::with_capacity(codes.len());
+                for code in codes {
+                    let omf_crate::AttributeData::Number { values, .. } = &code.data else {
+                        unreachable!("checked above");
+                    };
+                    let mut copied = code.clone();
+                    copied.data = omf_crate::AttributeData::Number {
+                        values: writer.array_copy(reader, values)?,
+                        colormap: None,
+                    };
+                    copied_codes.push(copied);
+                }
+                omf_crate::AttributeData::Category {
+                    values: writer.array_copy(reader, values)?,
+                    names: writer.array_copy(reader, names)?,
+                    gradient: gradient.as_ref().map(|gradient| writer.array_copy(reader, gradient)).transpose()?,
+                    attributes: copied_codes,
+                }
+            }
+            _ => unreachable!("checked above"),
+        };
+        let mut copied = attribute.clone();
+        copied.data = data;
+        attributes.push(copied);
+    }
+    Ok(Some((omf_crate::PointSet::new(writer.array_copy(reader, &points.vertices)?).into(), attributes)))
 }
 
 fn reader_limits() -> omf_crate::file::Limits {
@@ -1439,6 +1704,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         section.healed_for(kind)
     }
 
+    /// Where the element being walked sits in the opened archive, when there
+    /// is a backing copy of it to find it in again.
+    fn payload_locator(&self) -> Option<DeferredAsset> {
+        Some(DeferredAsset {
+            backing: self.backing.clone()?,
+            element_path: self.element_path.clone(),
+        })
+    }
+
     /// Construct only explorer metadata. In particular, do not read any
     /// Parquet arrays, mesh accelerators, drill traces or raster pixels here.
     fn defer_element(&mut self, element: &omf_crate::Element) -> Result<bool> {
@@ -1527,6 +1801,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     source_name,
                     source_format,
                     is_loaded: false,
+                    payload_source: Some(locator.clone()),
                     deferred: Some((
                         locator,
                         AssetSummary {
@@ -1560,6 +1835,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     source_name,
                     source_format,
                     is_loaded: false,
+                    payload_source: Some(locator.clone()),
                     deferred: Some((
                         locator,
                         AssetSummary {
@@ -1977,6 +2253,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 surface_face_order,
             },
             deferred: None,
+            payload_source: self.payload_locator(),
             is_loaded: style_loaded(style),
             color,
             line_color: style_value(style, "line_color").unwrap_or([0.05, 0.08, 0.10, 1.0]),
@@ -2034,6 +2311,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 bounds,
             },
             deferred: None,
+            payload_source: self.payload_locator(),
             is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
             point_size: style_f32(style, "point_size").unwrap_or(0.1),

@@ -1,32 +1,73 @@
-use std::{collections::TryReserveError, io::Write};
+use std::{collections::TryReserveError, sync::Arc};
 
+use bytes::Bytes;
 use parquet::{
     basic::Repetition,
+    column::writer::{ColumnCloseResult, get_column_writer, get_typed_column_writer},
     data_type::DataType,
     errors::ParquetError,
-    file::writer::{SerializedColumnWriter, SerializedRowGroupWriter},
-    schema::types::Type,
+    file::{
+        properties::WriterPropertiesPtr,
+        writer::{SerializedPageWriter, TrackedWrite},
+    },
+    schema::types::{ColumnDescPtr, Type},
 };
 
 use super::array_type::PqArrayType;
 
-pub trait RowGrouper {
-    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>, ParquetError>;
+/// One column chunk, encoded and compressed into its own buffer, ready to be spliced into a
+/// row group with `append_column`.
+pub struct EncodedColumn {
+    pub data: Bytes,
+    pub close: ColumnCloseResult,
 }
 
-impl<W: Write + Send> RowGrouper for SerializedRowGroupWriter<'_, W> {
-    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>, ParquetError> {
-        SerializedRowGroupWriter::next_column(self)
-    }
+/// Encodes one column chunk. Owns its values, so the chunks of a row group - and of several row
+/// groups - can be compressed on different threads.
+pub type ColumnJob = Box<
+    dyn FnOnce(ColumnDescPtr, WriterPropertiesPtr) -> Result<EncodedColumn, ParquetError> + Send,
+>;
+
+fn encode_column<T: DataType>(
+    descr: ColumnDescPtr,
+    props: WriterPropertiesPtr,
+    values: &[T::T],
+    def_levels: Option<&[i16]>,
+) -> Result<EncodedColumn, ParquetError> {
+    let mut sink = TrackedWrite::new(Vec::new());
+    let mut column = get_typed_column_writer::<T>(get_column_writer(
+        descr,
+        props,
+        Box::new(SerializedPageWriter::new(&mut sink)),
+    ));
+    column.write_batch(values, def_levels, None)?;
+    let close = column.close()?;
+    Ok(EncodedColumn {
+        data: sink.into_inner()?.into(),
+        close,
+    })
+}
+
+fn column_job<T: DataType>(values: Vec<T::T>, def_levels: Option<Arc<Vec<i16>>>) -> ColumnJob
+where
+    T::T: 'static,
+{
+    Box::new(move |descr, props| {
+        encode_column::<T>(
+            descr,
+            props,
+            &values,
+            def_levels.as_deref().map(Vec::as_slice),
+        )
+    })
 }
 
 pub trait Source {
     /// Parquet schema types that this source writes.
     fn types(&self) -> Vec<Type>;
-    /// Read up to `size` items into internal buffers, returning the number of items read.
-    fn buffer(&mut self, size: usize) -> usize;
-    /// Write data from the last `buffer()` call.
-    fn write(&mut self, row_group: &mut dyn RowGrouper) -> Result<(), ParquetError>;
+    /// Read up to `size` items, returning how many were read and one encode job per leaf
+    /// column, in schema order.
+    fn take(&mut self, size: usize) -> Result<(usize, Vec<ColumnJob>), ParquetError>;
 }
 
 fn single_type<P: PqArrayType>(name: &str, nullable: bool) -> Type {
@@ -47,6 +88,10 @@ fn row_group_vec<T>(n: usize) -> Result<Vec<T>, TryReserveError> {
     Ok(v)
 }
 
+fn reserve_error(error: TryReserveError) -> ParquetError {
+    ParquetError::General(format!("failed to reserve row group buffer: {error}"))
+}
+
 /// Capacity to reserve for buffers, from the iterator size hint.
 ///
 /// Reserving a whole row group up front costs several megabytes per column, which is wasted
@@ -62,24 +107,19 @@ pub trait PqArrayRow: 'static {
 
     fn types(names: &[&str]) -> Vec<Type>;
     fn make_buffer(capacity: usize) -> Result<Self::Buffer, TryReserveError>;
-    fn clear_buffer(buffer: &mut Self::Buffer);
     fn add_to_buffer(self, buffer: &mut Self::Buffer);
-    /// Write the buffer to `row_group`.
+    /// Split the buffer into one encode job per column.
     ///
     /// `def_levels` is `None` for required columns, where Parquet doesn't need definition
     /// levels at all.
-    fn write_buffer(
-        buffer: &Self::Buffer,
-        row_group: &mut dyn RowGrouper,
-        def_levels: Option<&[i16]>,
-    ) -> Result<(), ParquetError>;
+    fn column_jobs(buffer: Self::Buffer, def_levels: Option<Arc<Vec<i16>>>) -> Vec<ColumnJob>;
 }
 
 pub struct RowSource<R: PqArrayRow, I: Iterator<Item = R>> {
     row_types: Vec<Type>,
     iter: I,
-    buffer: R::Buffer,
-    count: usize,
+    capacity: usize,
+    _row: std::marker::PhantomData<R>,
 }
 
 impl<R: PqArrayRow, I: Iterator<Item = R>> RowSource<R, I> {
@@ -88,8 +128,8 @@ impl<R: PqArrayRow, I: Iterator<Item = R>> RowSource<R, I> {
         Ok(Self {
             row_types: R::types(names),
             iter,
-            buffer: R::make_buffer(capacity)?,
-            count: 0,
+            capacity,
+            _row: std::marker::PhantomData,
         })
     }
 }
@@ -99,27 +139,23 @@ impl<R: PqArrayRow, I: Iterator<Item = R>> Source for RowSource<R, I> {
         self.row_types.clone()
     }
 
-    fn buffer(&mut self, size: usize) -> usize {
-        R::clear_buffer(&mut self.buffer);
-        self.count = 0;
+    fn take(&mut self, size: usize) -> Result<(usize, Vec<ColumnJob>), ParquetError> {
+        let mut buffer = R::make_buffer(self.capacity.min(size)).map_err(reserve_error)?;
+        let mut count = 0;
         for row in self.iter.by_ref().take(size) {
-            row.add_to_buffer(&mut self.buffer);
-            self.count += 1;
+            row.add_to_buffer(&mut buffer);
+            count += 1;
         }
-        self.count
-    }
-
-    fn write(&mut self, row_group: &mut dyn RowGrouper) -> Result<(), ParquetError> {
         // These columns are all required, so Parquet doesn't need definition levels.
-        R::write_buffer(&self.buffer, row_group, None)
+        Ok((count, R::column_jobs(buffer, None)))
     }
 }
 
 pub struct NullableRowSource<R: PqArrayRow, I: Iterator<Item = Option<R>>> {
     ty: Type,
     iter: I,
-    buffer: R::Buffer,
-    def_levels: Vec<i16>,
+    capacity: usize,
+    _row: std::marker::PhantomData<R>,
 }
 
 impl<R: PqArrayRow, I: Iterator<Item = Option<R>>> NullableRowSource<R, I> {
@@ -137,8 +173,8 @@ impl<R: PqArrayRow, I: Iterator<Item = Option<R>>> NullableRowSource<R, I> {
                 .build()
                 .expect("valid type"),
             iter,
-            buffer: R::make_buffer(capacity)?,
-            def_levels: row_group_vec(capacity)?,
+            capacity,
+            _row: std::marker::PhantomData,
         })
     }
 
@@ -153,8 +189,8 @@ impl<R: PqArrayRow, I: Iterator<Item = Option<R>>> NullableRowSource<R, I> {
                 .build()
                 .expect("valid type"),
             iter,
-            buffer: R::make_buffer(capacity)?,
-            def_levels: row_group_vec(capacity)?,
+            capacity,
+            _row: std::marker::PhantomData,
         })
     }
 }
@@ -164,22 +200,20 @@ impl<R: PqArrayRow, I: Iterator<Item = Option<R>>> Source for NullableRowSource<
         vec![self.ty.clone()]
     }
 
-    fn buffer(&mut self, size: usize) -> usize {
-        self.def_levels.clear();
-        R::clear_buffer(&mut self.buffer);
+    fn take(&mut self, size: usize) -> Result<(usize, Vec<ColumnJob>), ParquetError> {
+        let capacity = self.capacity.min(size);
+        let mut buffer = R::make_buffer(capacity).map_err(reserve_error)?;
+        let mut def_levels = row_group_vec(capacity).map_err(reserve_error)?;
         for opt_row in self.iter.by_ref().take(size) {
             if let Some(row) = opt_row {
-                row.add_to_buffer(&mut self.buffer);
-                self.def_levels.push(1);
+                row.add_to_buffer(&mut buffer);
+                def_levels.push(1);
             } else {
-                self.def_levels.push(0);
+                def_levels.push(0);
             }
         }
-        self.def_levels.len()
-    }
-
-    fn write(&mut self, row_group: &mut dyn RowGrouper) -> Result<(), ParquetError> {
-        R::write_buffer(&self.buffer, row_group, Some(&self.def_levels))
+        let count = def_levels.len();
+        Ok((count, R::column_jobs(buffer, Some(Arc::new(def_levels)))))
     }
 }
 
@@ -200,31 +234,17 @@ impl<P: PqArrayType, const N: usize> PqArrayRow for [P; N] {
         Ok(buffer)
     }
 
-    fn clear_buffer(buffer: &mut Self::Buffer) {
-        for b in buffer {
-            b.clear();
-        }
-    }
-
     fn add_to_buffer(self, buffer: &mut Self::Buffer) {
         for (b, a) in buffer.iter_mut().zip(self) {
             b.push(a.to_parquet());
         }
     }
 
-    fn write_buffer(
-        buffer: &Self::Buffer,
-        row_group: &mut dyn RowGrouper,
-        def_levels: Option<&[i16]>,
-    ) -> Result<(), ParquetError> {
-        for b in buffer {
-            let mut column = row_group.next_column()?.expect("columns to match schema");
-            column
-                .typed::<P::DataType>()
-                .write_batch(b, def_levels, None)?;
-            column.close()?;
-        }
-        Ok(())
+    fn column_jobs(buffer: Self::Buffer, def_levels: Option<Arc<Vec<i16>>>) -> Vec<ColumnJob> {
+        buffer
+            .into_iter()
+            .map(|values| column_job::<P::DataType>(values, def_levels.clone()))
+            .collect()
     }
 }
 
@@ -250,27 +270,14 @@ macro_rules! row {
                 )*))
             }
 
-            fn clear_buffer(buffer: &mut Self::Buffer) {
-                $( buffer.$i.clear(); )*
-            }
-
             fn add_to_buffer(self, buffer: &mut Self::Buffer) {
                 $( buffer.$i.push(self.$i.to_parquet()); )*
             }
 
-            fn write_buffer(
-                buffer: &Self::Buffer,
-                row_group: &mut dyn RowGrouper,
-                def_levels: Option<&[i16]>,
-            ) -> Result<(), ParquetError> {
-                $(
-                    let mut column = row_group.next_column()?.expect("columns to match schema");
-                    column
-                        .typed::<$P::DataType>()
-                        .write_batch(&buffer.$i, def_levels, None)?;
-                    column.close()?;
-                )*
-                Ok(())
+            fn column_jobs(buffer: Self::Buffer, def_levels: Option<Arc<Vec<i16>>>) -> Vec<ColumnJob> {
+                vec![$(
+                    column_job::<$P::DataType>(buffer.$i, def_levels.clone()),
+                )*]
             }
         }
     };
