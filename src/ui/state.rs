@@ -173,6 +173,7 @@ impl EditorState {
             || self.tri_contour_open
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
+            || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
     }
@@ -1670,6 +1671,16 @@ pub(crate) struct EditorState {
     pub(crate) point_cloud_join_name_input: String,
     /// Remove the sources once the joined cloud is in the project.
     pub(crate) point_cloud_join_remove_sources: bool,
+    pub(crate) point_cloud_classify_open: bool,
+    /// Clouds the Classify dialog opened on, in the order the explorer lists them.
+    pub(crate) point_cloud_classify_sources: Vec<PointCloudId>,
+    pub(crate) point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams,
+    /// Plan spacing of the sparsest selected cloud, measured when the dialog
+    /// opens, from which the cloth resolution is recommended.
+    pub(crate) point_cloud_classify_spacing: Option<f64>,
+    /// Plan extent of each selected cloud, from which the dialog estimates
+    /// the cloth's memory.
+    pub(crate) point_cloud_classify_extents: Vec<(PointCloudId, glam::DVec2)>,
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
@@ -2019,6 +2030,7 @@ impl EditorState {
             || self.tri_contour_open
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
+            || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
             || {
@@ -2595,6 +2607,11 @@ impl EditorState {
             point_cloud_join_sources: Vec::new(),
             point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
             point_cloud_join_remove_sources: false,
+            point_cloud_classify_open: false,
+            point_cloud_classify_sources: Vec::new(),
+            point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams::default(),
+            point_cloud_classify_spacing: None,
+            point_cloud_classify_extents: Vec::new(),
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
             rotation_centre: None,
@@ -3415,6 +3432,13 @@ pub(crate) enum UiCommand {
         /// Delete the sources from the project once the join lands.
         remove_sources: bool,
     },
+    /// Open the "Classify Point Clouds" dialog (Point Cloud menu).
+    OpenPointCloudClassify,
+    /// Classify ground and noise in each cloud, rewriting its codes in place.
+    ExecutePointCloudClassify {
+        cloud_ids: Vec<PointCloudId>,
+        params: crate::model::ground_filter::GroundFilterParams,
+    },
     /// User confirmed deletion of all selected objects via the confirm dialog.
     ConfirmDeleteSelection,
     /// Open the "Cut Triangulation by Polyline" dialog.
@@ -3556,6 +3580,7 @@ impl UiCommand {
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin
+            | Self::OpenPointCloudClassify
             | Self::OpenCutTriangulationByPolyline
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
@@ -3780,6 +3805,7 @@ impl UiCommand {
                 tr!(literal = "Join Point Clouds"),
                 tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
             ),
+            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!(literal = "Classify Point Clouds"), tr_format!(literal = "%count% cloud(s)", count = cloud_ids.len())),
             Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
             Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(

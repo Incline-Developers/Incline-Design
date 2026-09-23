@@ -393,17 +393,24 @@ impl<'a> App<'a> {
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
         // Drill & Blast gives connectors first refusal on the marquee. If no
-        // tie-in is taken, it falls back to holes one at a time; production's
-        // marquee takes the design geometry over the same ground.
+        // tie-in is taken, it falls back to holes one at a time; Survey's
+        // marquee takes point clouds, and production's the design geometry
+        // over the same ground.
         if self.editor.active_workspace == Workspace::DrillAndBlast {
             self.finish_blast_box_selection(start, end, cross_select);
             return;
         }
+        // Move Design marquees only what it can move, the same as its clicks
+        // do - see `tool_accepts_pick`.
+        let objects_only = self.editor.active_tool == ActiveTool::Move;
+        let point_clouds_only = self.editor.active_workspace == Workspace::Survey && !objects_only;
         let mut enclosed = self
             .graphics
             .as_ref()
             .map(|graphics| {
-                if cross_select {
+                if point_clouds_only {
+                    graphics.point_clouds_in_screen_rect(start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                } else if cross_select {
                     graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
                 } else {
                     graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
@@ -411,9 +418,6 @@ impl<'a> App<'a> {
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
-        // Move Design marquees only what it can move, the same as its clicks
-        // do - see `tool_accepts_pick`.
-        let objects_only = self.editor.active_tool == ActiveTool::Move;
         enclosed.retain(|handle| match handle {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
             SceneEntityId::Triangulation(_) => !objects_only,

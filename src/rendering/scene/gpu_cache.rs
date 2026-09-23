@@ -49,6 +49,10 @@ pub(crate) struct CachedTriangulationGpu {
     /// compared by address alone so the allocation cannot be freed and a new
     /// mesh land on the same address.
     mesh: std::sync::Arc<crate::model::formats::mesh_data::Triangulation>,
+    /// The floating origin the chunk offsets, bounds and edge instances were
+    /// built against. A fit to extents moves it; the surface vertices are
+    /// chunk-local and survive that, so only the offsets are rewritten.
+    scene_origin: DVec3,
     pub(crate) surface_chunks: Vec<CachedSurfaceChunk>,
     pub(crate) surface_style_buffer: wgpu::Buffer,
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
@@ -77,6 +81,13 @@ pub(crate) struct CachedSurfaceChunk {
     /// Uniform bind group (group 2) holding this chunk's scene-origin-relative
     /// rebase offset; the bind group keeps the buffer alive.
     pub(crate) chunk_bind_group: wgpu::BindGroup,
+    /// The buffer behind `chunk_bind_group`, rewritten when the scene origin moves.
+    chunk_buffer: wgpu::Buffer,
+    /// World-space AABB and local origin, kept in `f64` so a rebase can
+    /// recompute the scene-relative values without touching the vertices.
+    world_min: DVec3,
+    world_max: DVec3,
+    world_origin: DVec3,
     /// A `SurfaceStyle` bind group holding a distinct per-chunk debug colour,
     /// bound instead of the mesh colour when the chunk-debug view is on.
     pub(crate) debug_style_bind_group: wgpu::BindGroup,
@@ -1326,8 +1337,16 @@ impl TriangulationGpuCache {
                 // A different mesh under the same id: the vertices on the GPU
                 // are not this surface's any more and have to be replaced.
                 let geometry_dirty = !std::sync::Arc::ptr_eq(&cached.mesh, &triangulation.mesh);
-                // Rebuild edge geometry only when edges flip between present and absent.
-                let edge_geom_dirty = geometry_dirty || (cached.edge_width == 0.0) != (edge_width == 0.0);
+                let origin_dirty = cached.scene_origin != scene_origin;
+                if origin_dirty && !geometry_dirty {
+                    for chunk in &mut cached.surface_chunks {
+                        chunk.rebase(queue, scene_origin);
+                    }
+                }
+                cached.scene_origin = scene_origin;
+                // Rebuild edge geometry when edges flip between present and
+                // absent, or when the origin baked into the instances moved.
+                let edge_geom_dirty = geometry_dirty || (cached.edge_width == 0.0) != (edge_width == 0.0) || (origin_dirty && !cached.edge_chunks.is_empty());
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
                 let surface_dirty = cached.color != color
                     || cached.raster_texture != raster_texture
@@ -1351,6 +1370,9 @@ impl TriangulationGpuCache {
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
 
+                if edge_geom_dirty && origin_dirty {
+                    cached.edge_chunks.clear();
+                }
                 if (edge_geom_dirty || geometry_dirty) && instanced_edges && cached.edge_chunks.is_empty() {
                     cached.edge_chunks = build_edge_chunks(device, scene_origin, triangulation);
                 }
@@ -1413,6 +1435,7 @@ impl TriangulationGpuCache {
                     triangulation.id,
                     CachedTriangulationGpu {
                         mesh: triangulation.mesh.clone(),
+                        scene_origin,
                         surface_chunks,
                         surface_style_buffer,
                         surface_style_bind_group,
@@ -1569,9 +1592,8 @@ fn build_surface_chunks(
             device,
             &vertices,
             &indices,
-            (world_min - scene_origin).as_vec3(),
-            (world_max - scene_origin).as_vec3(),
-            (chunk_origin - scene_origin).as_vec3(),
+            (world_min, world_max, chunk_origin),
+            scene_origin,
             chunk_index,
             surface_style_layout,
             surface_chunk_layout,
@@ -1633,9 +1655,8 @@ fn upload_surface_chunk(
     device: &wgpu::Device,
     vertices: &[SurfaceVertex],
     indices: &[u32],
-    bounds_min: Vec3,
-    bounds_max: Vec3,
-    chunk_offset: Vec3,
+    (world_min, world_max, world_origin): (DVec3, DVec3, DVec3),
+    scene_origin: DVec3,
     chunk_index: usize,
     surface_style_layout: &wgpu::BindGroupLayout,
     surface_chunk_layout: &wgpu::BindGroupLayout,
@@ -1688,11 +1709,10 @@ fn upload_surface_chunk(
         label: Some("Chunk Debug Style Bind Group"),
     });
     // Scene-origin-relative rebase offset re-added in the vertex shader.
-    let chunk_uniform: [f32; 4] = [chunk_offset.x, chunk_offset.y, chunk_offset.z, 0.0];
     let chunk_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Surface Chunk Offset Uniform"),
-        contents: bytemuck::bytes_of(&chunk_uniform),
-        usage: wgpu::BufferUsages::UNIFORM,
+        contents: bytemuck::bytes_of(&chunk_offset_uniform(world_origin, scene_origin)),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let chunk_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_chunk_layout,
@@ -1706,11 +1726,30 @@ fn upload_surface_chunk(
         vertex_buffer,
         index_buffer,
         index_count: indices.len() as u32,
-        bounds_min,
-        bounds_max,
+        bounds_min: (world_min - scene_origin).as_vec3(),
+        bounds_max: (world_max - scene_origin).as_vec3(),
         chunk_bind_group,
+        chunk_buffer,
+        world_min,
+        world_max,
+        world_origin,
         debug_style_bind_group,
     })
+}
+
+fn chunk_offset_uniform(world_origin: DVec3, scene_origin: DVec3) -> [f32; 4] {
+    let offset = (world_origin - scene_origin).as_vec3();
+    [offset.x, offset.y, offset.z, 0.0]
+}
+
+impl CachedSurfaceChunk {
+    /// Re-express this chunk against a new floating origin: a uniform write
+    /// and two AABB subtractions, where a rebuild re-uploads every vertex.
+    fn rebase(&mut self, queue: &wgpu::Queue, scene_origin: DVec3) {
+        queue.write_buffer(&self.chunk_buffer, 0, bytemuck::bytes_of(&chunk_offset_uniform(self.world_origin, scene_origin)));
+        self.bounds_min = (self.world_min - scene_origin).as_vec3();
+        self.bounds_max = (self.world_max - scene_origin).as_vec3();
+    }
 }
 
 fn build_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, triangulation: &OpenTriangulation) -> Vec<CachedEdgeChunk> {

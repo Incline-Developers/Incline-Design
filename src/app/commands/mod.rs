@@ -934,6 +934,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExecutePointCloudJoin { cloud_ids, name, remove_sources } => self.run_point_cloud_join(cloud_ids, name, remove_sources),
+            UiCommand::OpenPointCloudClassify => {
+                self.open_point_cloud_classify();
+                Ok(())
+            }
+            UiCommand::ExecutePointCloudClassify { cloud_ids, params } => self.run_point_cloud_classify(cloud_ids, params),
             UiCommand::OpenCutTriangulationByPolyline => {
                 // Two inputs, but of different kinds, so the selection names
                 // both without anything having to say which is which.

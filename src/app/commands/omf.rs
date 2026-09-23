@@ -11,7 +11,7 @@ use crate::{
     i18n::{tr, tr_format},
     model::{
         FolderId, FolderRegistry, LayerId, MemberKind, SectionKind,
-        formats::omf::{self, ImportBundle, ProjectSnapshot},
+        formats::omf::{self, ImportBundle, PayloadSource, ProjectSnapshot},
         project,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
@@ -276,6 +276,9 @@ impl<'a> App<'a> {
                 raster_texture,
                 raster_opacity: imported.raster_opacity,
             });
+            if let Some(open) = self.triangulations.last_mut() {
+                open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
+            }
             self.touch_active_project_content();
             if imported.is_loaded {
                 self.active_triangulation.get_or_insert(id);
@@ -329,6 +332,7 @@ impl<'a> App<'a> {
                 open.id = crate::model::point_cloud::PointCloudId(target_id);
                 open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
                 open.state.set_provenance(imported.source_name, imported.source_format);
+                open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
             }
         }
 
@@ -578,6 +582,9 @@ impl<'a> App<'a> {
                     raster_texture,
                     raster_opacity: imported.raster_opacity,
                 });
+                if let Some(open) = self.triangulations.last_mut() {
+                    open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
+                }
                 self.touch_active_project_content();
                 if self.active_triangulation.is_none() {
                     self.active_triangulation = Some(id);
@@ -634,6 +641,7 @@ impl<'a> App<'a> {
                 }
                 if let Some(open) = self.point_clouds.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
+                    open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
                 }
             }
             imported_items += count;

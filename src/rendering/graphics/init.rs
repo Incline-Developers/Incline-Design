@@ -561,6 +561,24 @@ impl<'a> Graphics<'a> {
             entries: &[style_bind_group_layout_entry],
             label: Some("edge_style_bind_group_layout"),
         });
+        // A cloud's style, plus one per-chunk draw uniform selected by dynamic
+        // offset as each chunk is drawn (see `PointChunkDrawUniform`).
+        let point_cloud_style_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                style_bind_group_layout_entry,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(crate::rendering::scene::point_cloud_cache::POINT_CHUNK_DRAW_UNIFORM_SIZE),
+                    },
+                    count: None,
+                },
+            ],
+            label: Some("point_cloud_style_bind_group_layout"),
+        });
 
         // One instance per block: lower.xyz + grade, then upper.xyz + pad.
         // The shader expands vertex_index 0..36 into the cube's faces.
@@ -580,6 +598,7 @@ impl<'a> Graphics<'a> {
                 surface_chunk: &surface_chunk_bind_group_layout,
                 raster_surface: &raster_surface_bind_group_layout,
                 edge_style: &edge_style_bind_group_layout,
+                point_cloud_style: &point_cloud_style_bind_group_layout,
                 block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
             },
@@ -761,6 +780,7 @@ impl<'a> Graphics<'a> {
             surface_chunk_bind_group_layout,
             raster_surface_bind_group_layout,
             edge_style_bind_group_layout,
+            point_cloud_style_bind_group_layout,
             lyon_vertex_gpu,
             lyon_index_gpu,
             stroke_vertex_gpu,

@@ -17,10 +17,14 @@ use crate::{
     validate::{Problems, Validate, Validator},
 };
 
-use super::zip_container::Builder;
+use super::{ReadAt, Reader, zip_container::Builder};
 
 /// Buffer size used between JSON serialization and compression.
 const JSON_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Buffer size for copying already-encoded arrays, large enough that copying a multi-gigabyte
+/// array isn't dominated by per-read overhead.
+const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Compression level to use. Applies to Parquet and JSON data in the OMF file.
 #[derive(Debug, Clone, Copy)]
@@ -130,7 +134,7 @@ impl<W: Write + Seek> Writer<W> {
         length: u64,
         bytes: &[u8],
     ) -> Result<Array<A>, Error> {
-        let file_type = check_header::<A>(bytes)?;
+        let file_type = check_header::<A>(bytes, true)?;
         let mut f = self.builder.open(file_type)?;
         let name = f.name().to_owned();
         f.write_all(bytes)?;
@@ -149,11 +153,12 @@ impl<W: Write + Seek> Writer<W> {
     ) -> Result<Array<A>, Error> {
         let mut header = [0_u8; 8];
         read.read_exact(&mut header)?;
-        let file_type = check_header::<A>(&header)?;
+        // Only the start is in hand; the trailing Parquet magic can't be checked here.
+        let file_type = check_header::<A>(&header, false)?;
         let mut f = self.builder.open(file_type)?;
         let name = f.name().to_owned();
         f.write_all(&header)?;
-        let mut buffer = vec![0_u8; 4096];
+        let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
         loop {
             let n = read.read(&mut buffer)?;
             if n == 0 {
@@ -162,6 +167,18 @@ impl<W: Write + Seek> Writer<W> {
             f.write_all(&buffer[..n])?;
         }
         Ok(Array::new(name, length))
+    }
+
+    /// Copy an array from another OMF file without decoding or re-encoding it.
+    ///
+    /// `array` must come from a project returned by `reader`. Returns the new array, which
+    /// holds the same items.
+    pub fn array_copy<A: ArrayType, R: ReadAt>(
+        &mut self,
+        reader: &Reader<R>,
+        array: &Array<A>,
+    ) -> Result<Array<A>, Error> {
+        self.array_bytes_from(array.item_count(), reader.array_bytes_reader(array)?)
     }
 
     /// Write an existing PNG or JPEG image from a slice without re-encoding it.
@@ -203,7 +220,9 @@ impl<W: Write + Seek> Writer<W> {
     }
 }
 
-fn check_header<A: ArrayType>(bytes: &[u8]) -> Result<FileType, Error> {
+/// Identify encoded array bytes from their magic numbers. `complete` says whether `bytes` is the
+/// whole file, so the trailing Parquet magic can be checked too.
+fn check_header<A: ArrayType>(bytes: &[u8], complete: bool) -> Result<FileType, Error> {
     const PNG_MAGIC: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     const JPEG_MAGIC: &[u8] = &[0xFF, 0xD8, 0xFF];
     const PARQUET_MAGIC: &[u8] = b"PAR1";
@@ -218,7 +237,7 @@ fn check_header<A: ArrayType>(bytes: &[u8]) -> Result<FileType, Error> {
             }
         }
         _ => {
-            if !bytes.starts_with(PARQUET_MAGIC) || !bytes.ends_with(PARQUET_MAGIC) {
+            if !bytes.starts_with(PARQUET_MAGIC) || (complete && !bytes.ends_with(PARQUET_MAGIC)) {
                 Err(Error::NotParquetData)
             } else {
                 Ok(FileType::Parquet)
