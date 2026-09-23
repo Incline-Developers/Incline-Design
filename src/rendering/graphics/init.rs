@@ -575,6 +575,8 @@ impl<'a> Graphics<'a> {
         })];
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
+        // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
         let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
             &device,
             &scene_pipelines::ScenePipelineLayouts {
