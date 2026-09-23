@@ -569,6 +569,8 @@ impl<'a> Graphics<'a> {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
         })];
+        // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
         let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
             &device,
             &scene_pipelines::ScenePipelineLayouts {
