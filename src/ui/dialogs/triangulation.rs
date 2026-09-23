@@ -124,7 +124,7 @@ fn estimate_tin_memory_bytes(target_vertices: usize, sampler: crate::app::comman
     candidate_cells.saturating_mul(bytes_per_cell) + target.saturating_mul(48)
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
     let bytes = bytes as f64;

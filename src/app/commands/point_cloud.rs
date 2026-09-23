@@ -324,6 +324,12 @@ impl<'a> App<'a> {
             .filter(|cloud| sources.contains(&cloud.id))
             .filter_map(|cloud| crate::model::ground_filter::plan_spacing(&cloud.points))
             .reduce(f64::max);
+        self.editor.point_cloud_classify_extents = self
+            .point_clouds
+            .iter()
+            .filter(|cloud| sources.contains(&cloud.id))
+            .map(|cloud| (cloud.id, (cloud.bounds.1 - cloud.bounds.0).truncate()))
+            .collect();
         self.editor.point_cloud_classify_open = true;
         self.editor.point_cloud_classify_sources = sources;
     }

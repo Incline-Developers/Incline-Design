@@ -43,10 +43,12 @@ use crate::{
 /// ASPRS "low point (noise)", which is what an isolated return is written as.
 pub(crate) const CLASS_LOW_NOISE: u8 = 7;
 
-/// Upper bound on cloth particles. Each costs a few dozen bytes while the
-/// filter runs, so this caps the working set in the hundreds of megabytes
-/// whatever the cloud's extent.
-const MAX_CLOTH_NODES: usize = 16_000_000;
+/// Working bytes per cloth particle at the filter's peak: collision heights,
+/// the settle pyramid and face bounds held together.
+const CLOTH_BYTES_PER_NODE: u64 = 48;
+/// Working bytes per point: validity and class flags, the per-particle sort
+/// and the noise pass's voxel keys.
+const CLOTH_BYTES_PER_POINT: u64 = 16;
 /// Upper bound on noise voxels per axis, set by the 21 bits each axis gets in
 /// the packed voxel key.
 const MAX_VOXELS_PER_AXIS: u64 = 1 << 21;
@@ -334,6 +336,23 @@ fn isolated_points(points: &[DVec3], eligible: &[bool], radius: f64, min_neighbo
     Ok(isolated)
 }
 
+/// Particle columns and rows of a cloth at `resolution` over a plan `extent`.
+fn cloth_dimensions(extent: DVec2, resolution: f64) -> (usize, usize) {
+    let span = (extent / resolution).ceil();
+    (span.x as usize + 1 + 2 * CLOTH_MARGIN, span.y as usize + 1 + 2 * CLOTH_MARGIN)
+}
+
+/// Rough peak working memory (bytes) for classifying a cloud of `point_count`
+/// points over a plan `extent` at `resolution`, so the dialog can warn before
+/// a fine cloth over a wide cloud risks the process.
+pub(crate) fn estimate_classify_memory_bytes(extent: DVec2, point_count: usize, resolution: f64) -> u64 {
+    if !(resolution.is_finite() && resolution > 0.0) {
+        return 0;
+    }
+    let (cols, rows) = cloth_dimensions(extent.max(DVec2::ZERO), resolution);
+    (cols as u64).saturating_mul(rows as u64).saturating_mul(CLOTH_BYTES_PER_NODE) + (point_count as u64).saturating_mul(CLOTH_BYTES_PER_POINT)
+}
+
 /// A settled cloth: particle heights on a regular XY grid.
 struct Cloth {
     origin: DVec2,
@@ -358,14 +377,11 @@ impl Cloth {
         else {
             bail!("The point cloud has no points left to find the ground in");
         };
-        let span = ((max - min) / resolution).ceil();
-        let (cols, rows) = (span.x as usize + 1 + 2 * CLOTH_MARGIN, span.y as usize + 1 + 2 * CLOTH_MARGIN);
-        if cols.saturating_mul(rows) > MAX_CLOTH_NODES {
-            bail!(
-                "A {resolution} m cloth over this cloud would need {} million particles; raise the cloth resolution",
-                cols.saturating_mul(rows) / 1_000_000
-            );
-        }
+        let (cols, rows) = cloth_dimensions(max - min, resolution);
+        ensure!(
+            cols.checked_mul(rows).is_some(),
+            "A {resolution} m cloth over this cloud is too large to hold; raise the cloth resolution"
+        );
         let origin = min - DVec2::splat(CLOTH_MARGIN as f64 * resolution);
 
         let floor = collision_heights(points, &include, origin, resolution, cols, rows);

@@ -43,7 +43,7 @@ struct VertexOutput {
 // washed towards white by `DEPTH_CUE_NEAR_WHITE`, ease down to
 // `DEPTH_CUE_FAR_BRIGHTNESS` of their colour by `DEPTH_CUE_FAR` metres, and
 // hold there beyond it.
-const DEPTH_CUE_NEAR: f32 = 50.0;
+const DEPTH_CUE_NEAR: f32 = 100.0;
 const DEPTH_CUE_FAR: f32 = 500.0;
 const DEPTH_CUE_NEAR_WHITE: f32 = 0.7;
 const DEPTH_CUE_FAR_BRIGHTNESS: f32 = 0.35;

@@ -1678,6 +1678,9 @@ pub(crate) struct EditorState {
     /// Plan spacing of the sparsest selected cloud, measured when the dialog
     /// opens, from which the cloth resolution is recommended.
     pub(crate) point_cloud_classify_spacing: Option<f64>,
+    /// Plan extent of each selected cloud, from which the dialog estimates
+    /// the cloth's memory.
+    pub(crate) point_cloud_classify_extents: Vec<(PointCloudId, glam::DVec2)>,
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
@@ -2608,6 +2611,7 @@ impl EditorState {
             point_cloud_classify_sources: Vec::new(),
             point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams::default(),
             point_cloud_classify_spacing: None,
+            point_cloud_classify_extents: Vec::new(),
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
             rotation_centre: None,
