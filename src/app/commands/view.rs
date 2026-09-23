@@ -187,7 +187,7 @@ impl<'a> App<'a> {
         self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
         if !preferences.frame_counter_enabled {
             self.editor.measured_fps = None;
-            self.editor.smoothed_frame_interval = None;
+            self.editor.frame_rate_window = (0, 0.0);
         }
         self.editor.debug_chunk_coloring = preferences.debug_chunk_coloring;
         if !preferences.debug_chunk_coloring {

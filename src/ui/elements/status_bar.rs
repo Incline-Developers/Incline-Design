@@ -113,7 +113,7 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 ui.separator();
                 if editor.frame_counter_enabled {
                     match editor.measured_fps {
-                        Some(fps) => ui.label(format!("{}: {fps:.1}", tr!(literal = "Frame rate"))),
+                        Some(fps) => ui.label(format!("{}: {fps:.0}", tr!(literal = "Frame rate"))),
                         None => ui.label(format!("{}: --", tr!(literal = "Frame rate"))),
                     };
                     ui.separator();

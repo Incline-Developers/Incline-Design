@@ -247,19 +247,6 @@ impl<'a> App<'a> {
                         let last_render_time = *self.last_render_time.get_or_insert(now);
                         let dt = now - last_render_time;
                         self.last_render_time = Some(now);
-                        if !dt.is_zero() {
-                            // Smooth the frame *interval* and invert it once, rather
-                            // than averaging instantaneous rates: frames arrive in
-                            // pairs, one blocked on the display and one taken straight
-                            // from the swapchain's spare image, and an average of 1/dt
-                            // is dominated by the short one. Alternating 16 ms and
-                            // 0.8 ms frames average to 60 rendered frames a second but
-                            // to over 600 instantaneous ones.
-                            let seconds = dt.as_secs_f32();
-                            let interval = self.editor.smoothed_frame_interval.map_or(seconds, |previous| previous * 0.9 + seconds * 0.1);
-                            self.editor.smoothed_frame_interval = Some(interval);
-                            self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
-                        }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
                         graphics.update(dt, self.editor.rotation_centre);
@@ -436,6 +423,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    self.record_frame_time(now);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));

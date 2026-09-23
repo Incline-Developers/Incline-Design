@@ -15,6 +15,8 @@ struct VertexOutput {
     @location(1) color: vec3<f32>,
     // Distance from the section plane; affine in position, so interpolation is exact.
     @location(2) section_offset: f32,
+    // Model-space position, for the cinematic lighting's shadow lookups.
+    @location(3) world: vec3<f32>,
 };
 
 fn ring(angle: f32) -> vec2<f32> { return vec2<f32>(cos(angle), sin(angle)); }
@@ -79,6 +81,7 @@ fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> 
     out.normal = normal;
     out.color = select(instance.color, selection.selection_color.rgb, selection_active(instance.selection_index));
     out.section_offset = section_plane_offset(world);
+    out.world = world;
     return out;
 }
 
@@ -87,7 +90,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if outside_section_slab(input.section_offset) {
         discard;
     }
-    let light = normalize(vec3<f32>(0.35, 0.45, 0.82));
-    let diffuse = 0.38 + 0.62 * abs(dot(normalize(input.normal), light));
-    return vec4<f32>(input.color * diffuse, 1.0);
+    return shade_drill_hole(input.color, input.normal, input.world, input.position.xy);
 }
