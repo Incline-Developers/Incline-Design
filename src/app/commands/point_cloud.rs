@@ -411,9 +411,10 @@ impl<'a> App<'a> {
                 userspace_log!(
                     "{}",
                     tr_format!(
-                        literal = "Classified %name%: %ground% ground and %noise% noise of %count% points",
+                        literal = "Classified %name%: %ground% ground, %vegetation% vegetation and %noise% noise of %count% points",
                         name = cloud.name.clone(),
                         ground = output.ground,
+                        vegetation = output.vegetation,
                         noise = output.noise,
                         count = cloud.points.len()
                     )

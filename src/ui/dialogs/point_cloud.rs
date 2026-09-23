@@ -202,7 +202,12 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                 .iter()
                 .filter_map(|cloud| {
                     let (_, extent) = editor.point_cloud_classify_extents.iter().find(|(id, _)| *id == cloud.id)?;
-                    Some(estimate_classify_memory_bytes(*extent, cloud.point_count, params.cloth_resolution))
+                    Some(estimate_classify_memory_bytes(
+                        *extent,
+                        cloud.point_count,
+                        params.cloth_resolution,
+                        params.classify_vegetation,
+                    ))
                 })
                 .max()
                 .unwrap_or(0);
@@ -235,6 +240,12 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                 .help_text(tr!(literal = "Let the cloth follow walls down from their crests, where its stiffness \
                      would otherwise hold it off the face. Turn off only on gentle ground \
                      crowded with plant."))
+                .show(ui);
+            MenuFieldBool::new(tr!(literal = "Classify vegetation"), &mut params.classify_vegetation)
+                .help_text(tr!(literal = "Sort the returns with a trained classifier that reads the shape of the \
+                     points around each one: ground, vegetation - banded low (under 1 m), medium \
+                     (under 3 m) or high by height - and everything else, such as buildings and \
+                     plant, left unclassified. Turn this off to use the cloth alone."))
                 .show(ui);
 
             ui.add_space(4.0);

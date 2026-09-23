@@ -21,27 +21,47 @@
 //!   below (see [`FaceBounds`]), which a roof or canopy never does.
 //!
 //! Ground points are then those within the threshold of the cloth measured
-//! across it, not straight down, so a wall is judged by its face.
+//! across it, not straight down, so a wall is judged by its face. Returns
+//! standing above it can then be banded into low, medium and high vegetation
+//! by their height over it.
 
 use std::{
     collections::VecDeque,
-    sync::atomic::{AtomicU32, AtomicU64, Ordering},
+    sync::{
+        LazyLock,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
 };
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, anyhow, bail, ensure};
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::{
     app::jobs::CancelFlag,
     model::{
+        forest::Forest,
         point_cloud::{CLASS_GROUND, CLASS_UNCLASSIFIED},
+        point_features::{EXTRA_FEATURES, FEATURE_COUNT, point_features},
         progress::Phase,
     },
 };
 
 /// ASPRS "low point (noise)", which is what an isolated return is written as.
 pub(crate) const CLASS_LOW_NOISE: u8 = 7;
+/// Classes the point forest predicts, as trained by `tools/point_forest`.
+const FOREST_GROUND: usize = 0;
+const FOREST_VEGETATION: usize = 1;
+/// ASPRS low, medium and high vegetation.
+const CLASS_LOW_VEGETATION: u8 = 3;
+const CLASS_MEDIUM_VEGETATION: u8 = 4;
+const CLASS_HIGH_VEGETATION: u8 = 5;
+/// Height over the ground, in metres, below which a return standing above it
+/// is low vegetation: grass, spinifex, low scrub.
+const LOW_VEGETATION_TOP: f64 = 1.0;
+/// Height over the ground, in metres, below which it is medium vegetation:
+/// shrubs and saplings. Anything taller is high vegetation.
+const MEDIUM_VEGETATION_TOP: f64 = 3.0;
 
 /// Working bytes per cloth particle at the filter's peak: collision heights,
 /// the settle pyramid and face bounds held together.
@@ -49,6 +69,9 @@ const CLOTH_BYTES_PER_NODE: u64 = 48;
 /// Working bytes per point: validity and class flags, the per-particle sort
 /// and the noise pass's voxel keys.
 const CLOTH_BYTES_PER_POINT: u64 = 16;
+/// Working bytes per point the point forest adds: the tile sort and a
+/// prediction per return.
+const FOREST_BYTES_PER_POINT: u64 = 16;
 /// Upper bound on noise voxels per axis, set by the 21 bits each axis gets in
 /// the packed voxel key.
 const MAX_VOXELS_PER_AXIS: u64 = 1 << 21;
@@ -119,6 +142,9 @@ pub(crate) struct GroundFilterParams {
     pub(crate) class_threshold: f64,
     /// Let the cloth settle onto steep ground its stiffness held it off.
     pub(crate) slope_recovery: bool,
+    /// Sort returns with the trained point forest into ground, vegetation
+    /// (banded by height) and everything else.
+    pub(crate) classify_vegetation: bool,
     /// Mark isolated returns as noise before the cloth runs.
     pub(crate) remove_noise: bool,
     /// Neighbourhood size the noise pass counts within, in metres.
@@ -134,6 +160,7 @@ impl Default for GroundFilterParams {
             cloth_resolution: 0.5,
             class_threshold: 0.5,
             slope_recovery: true,
+            classify_vegetation: true,
             remove_noise: true,
             noise_radius: 1.0,
             noise_min_neighbours: 3,
@@ -145,11 +172,77 @@ pub(crate) struct GroundFilterOutput {
     /// ASPRS codes in source order.
     pub(crate) codes: Vec<u8>,
     pub(crate) ground: usize,
+    pub(crate) vegetation: usize,
     pub(crate) noise: usize,
 }
 
-/// Classify `points` into ground, noise and unclassified.
+/// Classify `points` into ground, vegetation, noise and unclassified.
 pub(crate) fn classify_ground(points: &[DVec3], params: &GroundFilterParams, cancel: &CancelFlag, progress: &Phase) -> Result<GroundFilterOutput> {
+    let cloth_end = if params.classify_vegetation { 0.5 } else { 0.95 };
+    let Settled { mut codes, finite, noise, cloth } = settle(points, params, cancel, &progress.phase(0.0, cloth_end))?;
+
+    codes.par_iter_mut().enumerate().for_each(|(index, code)| {
+        if *code == CLASS_LOW_NOISE || !finite[index] {
+            return;
+        }
+        let point = points[index];
+        *code = if cloth.rise(point).abs() < params.class_threshold || cloth.on_face(point, params.class_threshold) {
+            CLASS_GROUND
+        } else {
+            CLASS_UNCLASSIFIED
+        };
+    });
+
+    if params.classify_vegetation {
+        let forest = point_forest()?;
+        let member: Vec<bool> = codes.par_iter().zip(finite.par_iter()).map(|(code, finite)| *finite && *code != CLASS_LOW_NOISE).collect();
+        let predictions = point_features(
+            points,
+            &member,
+            |index| member[index],
+            |index| cloth.features(points[index], params.class_threshold),
+            |features| forest.predict(features),
+            cancel,
+            &progress.phase(cloth_end, 0.98),
+        )?;
+        for (index, class) in predictions {
+            let point = points[index as usize];
+            codes[index as usize] = match class {
+                FOREST_GROUND => CLASS_GROUND,
+                FOREST_VEGETATION => {
+                    let height = point.z - cloth.surface_at(point.truncate()).0;
+                    if height < LOW_VEGETATION_TOP {
+                        CLASS_LOW_VEGETATION
+                    } else if height < MEDIUM_VEGETATION_TOP {
+                        CLASS_MEDIUM_VEGETATION
+                    } else {
+                        CLASS_HIGH_VEGETATION
+                    }
+                }
+                _ => CLASS_UNCLASSIFIED,
+            };
+        }
+    }
+    let ground = codes.par_iter().filter(|code| **code == CLASS_GROUND).count();
+    let vegetation = codes
+        .par_iter()
+        .filter(|code| matches!(**code, CLASS_LOW_VEGETATION | CLASS_MEDIUM_VEGETATION | CLASS_HIGH_VEGETATION))
+        .count();
+    progress.set_fraction(1.0);
+    Ok(GroundFilterOutput { codes, ground, vegetation, noise })
+}
+
+/// The noise pass and the settled cloth, which both the cloth's own ground
+/// test and the forest's features start from.
+struct Settled {
+    /// Noise marked, everything else unclassified.
+    codes: Vec<u8>,
+    finite: Vec<bool>,
+    noise: usize,
+    cloth: Cloth,
+}
+
+fn settle(points: &[DVec3], params: &GroundFilterParams, cancel: &CancelFlag, progress: &Phase) -> Result<Settled> {
     ensure!(
         params.cloth_resolution.is_finite() && params.cloth_resolution > 0.0,
         "The cloth resolution must be greater than zero"
@@ -177,27 +270,20 @@ pub(crate) fn classify_ground(points: &[DVec3], params: &GroundFilterParams, can
     ensure!(!cancel.is_cancelled(), "Cancelled");
 
     let cloth_points = |index: usize| finite[index] && codes[index] != CLASS_LOW_NOISE;
-    let cloth = Cloth::settle(points, cloth_points, params, cancel, &progress.phase(0.2, 0.95))?;
+    let cloth = Cloth::settle(points, cloth_points, params, cancel, &progress.phase(0.2, 1.0))?;
+    Ok(Settled { codes, finite, noise, cloth })
+}
 
-    codes.par_iter_mut().enumerate().for_each(|(index, code)| {
-        if *code == CLASS_LOW_NOISE || !finite[index] {
-            return;
+/// The embedded point classifier, parsed on first use.
+fn point_forest() -> Result<&'static Forest> {
+    static FOREST: LazyLock<Result<Forest, String>> = LazyLock::new(|| {
+        let forest = Forest::parse(include_bytes!("../../res/models/point_forest.bin")).map_err(|error| error.to_string())?;
+        if forest.feature_count() != FEATURE_COUNT {
+            return Err(format!("The classifier model takes {} features where {FEATURE_COUNT} are computed", forest.feature_count()));
         }
-        let point = points[index];
-        let (height, gradient) = cloth.surface_at(point.truncate());
-        // Distance across the cloth rather than straight down to it: on a 70
-        // degree wall a return a hand's width off a particle sits a metre
-        // above the cloth vertically while lying right on the face.
-        let distance = (point.z - height).abs() / (1.0 + gradient.length_squared()).sqrt();
-        *code = if distance < params.class_threshold || cloth.on_face(point, params.class_threshold) {
-            CLASS_GROUND
-        } else {
-            CLASS_UNCLASSIFIED
-        };
+        Ok(forest)
     });
-    let ground = codes.par_iter().filter(|code| **code == CLASS_GROUND).count();
-    progress.set_fraction(1.0);
-    Ok(GroundFilterOutput { codes, ground, noise })
+    FOREST.as_ref().map_err(|error| anyhow!("{error}"))
 }
 
 /// Returns sampled when measuring spacing. Occupancy on a grid a few spacings
@@ -345,12 +431,13 @@ fn cloth_dimensions(extent: DVec2, resolution: f64) -> (usize, usize) {
 /// Rough peak working memory (bytes) for classifying a cloud of `point_count`
 /// points over a plan `extent` at `resolution`, so the dialog can warn before
 /// a fine cloth over a wide cloud risks the process.
-pub(crate) fn estimate_classify_memory_bytes(extent: DVec2, point_count: usize, resolution: f64) -> u64 {
+pub(crate) fn estimate_classify_memory_bytes(extent: DVec2, point_count: usize, resolution: f64, forest: bool) -> u64 {
     if !(resolution.is_finite() && resolution > 0.0) {
         return 0;
     }
     let (cols, rows) = cloth_dimensions(extent.max(DVec2::ZERO), resolution);
-    (cols as u64).saturating_mul(rows as u64).saturating_mul(CLOTH_BYTES_PER_NODE) + (point_count as u64).saturating_mul(CLOTH_BYTES_PER_POINT)
+    let per_point = CLOTH_BYTES_PER_POINT + if forest { FOREST_BYTES_PER_POINT } else { 0 };
+    (cols as u64).saturating_mul(rows as u64).saturating_mul(CLOTH_BYTES_PER_NODE) + (point_count as u64).saturating_mul(per_point)
 }
 
 /// A settled cloth: particle heights on a regular XY grid.
@@ -427,6 +514,27 @@ impl Cloth {
         let (x, y) = (grid.x.clamp(0.0, (self.cols - 1) as f64) as usize, grid.y.clamp(0.0, (self.rows - 1) as f64) as usize);
         let (lowest, highest) = (faces.lowest[y * self.cols + x], faces.highest[y * self.cols + x]);
         highest - lowest >= FACE_MIN_STEP * threshold && point.z >= lowest - threshold && point.z <= highest + threshold
+    }
+
+    /// Height of `point` off the cloth measured across it rather than straight
+    /// down: on a 70 degree wall a return a hand's width off a particle sits a
+    /// metre above the cloth vertically while lying right on the face.
+    fn rise(&self, point: DVec3) -> f64 {
+        let (height, gradient) = self.surface_at(point.truncate());
+        (point.z - height) / (1.0 + gradient.length_squared()).sqrt()
+    }
+
+    /// The point forest's cloth features: rise across the cloth, height
+    /// straight up off it, the cloth's slope there, and whether the point
+    /// stands on a face.
+    fn features(&self, point: DVec3, threshold: f64) -> [f32; EXTRA_FEATURES] {
+        let (height, gradient) = self.surface_at(point.truncate());
+        [
+            ((point.z - height) / (1.0 + gradient.length_squared()).sqrt()) as f32,
+            (point.z - height) as f32,
+            gradient.length() as f32,
+            f32::from(u8::from(self.on_face(point, threshold))),
+        ]
     }
 
     /// Cloth height under `point`, bilinear between the four particles around
@@ -802,5 +910,76 @@ impl AtomicF64 {
 
     fn into_inner(self) -> f64 {
         f64::from_bits(self.0.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod training {
+    use std::io::{Read, Write};
+
+    use super::*;
+    use crate::model::progress::Progress;
+
+    /// Writes the point forest's training features; `tools/point_forest/train.py`
+    /// runs it. Input: u64 point count, that many f64 x y z, u64 wanted count,
+    /// that many ascending u32 indices. Output: a row of f32 features per
+    /// wanted index, in the same order.
+    #[test]
+    #[ignore = "run by tools/point_forest/train.py"]
+    fn dump_point_forest_features() {
+        let input = std::env::var("INCLINE_FOREST_INPUT").expect("INCLINE_FOREST_INPUT");
+        let output = std::env::var("INCLINE_FOREST_OUTPUT").expect("INCLINE_FOREST_OUTPUT");
+        let mut bytes = Vec::new();
+        std::fs::File::open(input).unwrap().read_to_end(&mut bytes).unwrap();
+        let count = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        let points: Vec<DVec3> = bytes[8..8 + count * 24]
+            .as_chunks::<24>()
+            .0
+            .iter()
+            .map(|xyz| {
+                let axis = |at: usize| f64::from_le_bytes(xyz[at..at + 8].try_into().unwrap());
+                DVec3::new(axis(0), axis(8), axis(16))
+            })
+            .collect();
+        let rest = &bytes[8 + count * 24..];
+        let wanted_count = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
+        let mut wanted = vec![false; count];
+        for index in rest[8..8 + wanted_count * 4].as_chunks::<4>().0 {
+            wanted[u32::from_le_bytes(*index) as usize] = true;
+        }
+        drop(bytes);
+
+        // The cloth the classify dialog recommends for this cloud.
+        let params = GroundFilterParams {
+            cloth_resolution: recommended_cloth_resolution(plan_spacing(&points).unwrap()),
+            ..GroundFilterParams::default()
+        };
+        eprintln!("cloth resolution {} m", params.cloth_resolution);
+        let progress = Progress::new();
+        let cancel = CancelFlag::default();
+        let Settled { codes, finite, cloth, .. } = settle(&points, &params, &cancel, &progress.phase(0.0, 0.5)).unwrap();
+        let member: Vec<bool> = codes.iter().zip(&finite).map(|(code, finite)| *finite && *code != CLASS_LOW_NOISE).collect();
+        let mut rows = point_features(
+            &points,
+            &member,
+            |index| wanted[index] && member[index],
+            |index| cloth.features(points[index], params.class_threshold),
+            |features| *features,
+            &cancel,
+            &progress.phase(0.5, 1.0),
+        )
+        .unwrap();
+        rows.sort_unstable_by_key(|(index, _)| *index);
+        // Noise rows are missing; the script matches rows back by index.
+        let mut file = std::io::BufWriter::new(std::fs::File::create(output).unwrap());
+        file.write_all(&(rows.len() as u64).to_le_bytes()).unwrap();
+        for (index, _) in &rows {
+            file.write_all(&index.to_le_bytes()).unwrap();
+        }
+        for (_, features) in &rows {
+            for feature in features {
+                file.write_all(&feature.to_le_bytes()).unwrap();
+            }
+        }
     }
 }
