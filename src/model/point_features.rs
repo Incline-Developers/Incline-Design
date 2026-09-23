@@ -346,11 +346,9 @@ fn symmetric_eigen(mut a: [[f64; 3]; 3]) -> ([f64; 3], [DVec3; 3]) {
                 row[p] = c * kp - s * kq;
                 row[q] = s * kp + c * kq;
             }
-            for k in 0..3 {
-                let (pk, qk) = (a[p][k], a[q][k]);
-                a[p][k] = c * pk - s * qk;
-                a[q][k] = s * pk + c * qk;
-            }
+            let (row_p, row_q) = (a[p], a[q]);
+            a[p] = std::array::from_fn(|k| c * row_p[k] - s * row_q[k]);
+            a[q] = std::array::from_fn(|k| s * row_p[k] + c * row_q[k]);
             for row in &mut v {
                 let (kp, kq) = (row[p], row[q]);
                 row[p] = c * kp - s * kq;
