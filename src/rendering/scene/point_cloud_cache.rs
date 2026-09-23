@@ -29,7 +29,8 @@ use crate::{
 struct PointCloudStyleUniform {
     color: [f32; 4],
     /// x: screen-facing splat width in world units; y: draw `color` in place of
-    /// the instances' own colour channel.
+    /// the instances' own colour channel; z: fade splats by distance from the
+    /// eye (fly mode).
     options: [f32; 4],
     /// Cloud-local origin relative to the current floating scene origin.
     origin: [f32; 4],
@@ -81,6 +82,7 @@ pub(crate) struct CachedPointCloudGpu {
     selected: bool,
     /// Whether `color` is drawn in place of the instances' colour channel.
     uniform_color: bool,
+    depth_cue: bool,
     /// Whether the resident instances had classification colours staged over
     /// the source RGB they were prepared with. Flipping this re-streams the
     /// cloud, so it is settled per cloud in [`PointCloudGpuCache::sync`] and
@@ -389,6 +391,7 @@ impl PointCloudGpuCache {
         self.rejected_chunks.retain(|key| loaded.contains(&key.cloud));
 
         let classify = editor.colors_points_by_classification();
+        let depth_cue = editor.fly_mode_enabled;
 
         for cloud in point_clouds {
             if !cloud.state.loaded {
@@ -422,8 +425,9 @@ impl PointCloudGpuCache {
                     || cached.scene_origin != scene_origin
                     || cached.selected != selected
                     || cached.uniform_color != uniform_color
+                    || cached.depth_cue != depth_cue
                 {
-                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
+                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = cloud.color;
                     cached.point_size = point_size;
@@ -431,11 +435,12 @@ impl PointCloudGpuCache {
                     cached.origin_scene = (cloud.prepared.origin - scene_origin).as_vec3();
                     cached.selected = selected;
                     cached.uniform_color = uniform_color;
+                    cached.depth_cue = depth_cue;
                 }
                 continue;
             }
 
-            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color);
+            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
             let style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Point Cloud Style Uniform"),
                 contents: bytemuck::bytes_of(&style),
@@ -464,6 +469,7 @@ impl PointCloudGpuCache {
                     visible: cloud.state.loaded,
                     selected,
                     uniform_color,
+                    depth_cue,
                     staged_classification,
                 },
             );
@@ -735,11 +741,11 @@ fn projected_bounds(view_proj: &DMat4, screen: (f32, f32), min: DVec3, max: DVec
     Some((projected_min, projected_max))
 }
 
-fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool) -> PointCloudStyleUniform {
+fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool, depth_cue: bool) -> PointCloudStyleUniform {
     let origin = (cloud.prepared.origin - scene_origin).as_vec3();
     PointCloudStyleUniform {
         color: if selected { crate::ui::SELECTION_COLOR_F32 } else { cloud.color },
-        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, 0.0, 0.0],
+        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, if depth_cue { 1.0 } else { 0.0 }, 0.0],
         origin: [origin.x, origin.y, origin.z, 0.0],
     }
 }
