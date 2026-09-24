@@ -5,7 +5,10 @@ use crate::{
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::{
         state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
-        widgets::menu,
+        widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup},
+            menu,
+        },
     },
 };
 
@@ -2086,8 +2089,22 @@ impl ViewportMiniMap {
     }
 }
 
-/// Width of the hole's ribbon in the log track.
-const LOG_COLUMN_WIDTH: f32 = 46.0;
+/// Width of the hole's ribbon in the log track; narrow, so readings can sit
+/// either side of it.
+const LOG_COLUMN_WIDTH: f32 = 14.0;
+/// Room under the plot for the sideways axis: tick labels, then its caption.
+const LOG_AXIS_HEIGHT: f32 = 30.0;
+/// Share of the track's free half-width a fitted hole may lean into.
+const LOG_FIT_SHARE: f64 = 0.9;
+/// Ratios a fitted squeeze is rounded up to, per decade, so the label stays
+/// readable and the picture steps rather than creeps as the window moves.
+const LOG_SQUEEZE_SERIES: [f64; 5] = [1.0, 2.0, 2.5, 5.0, 10.0];
+/// Fixed squeezes offered in the log's right-click menu.
+const LOG_SQUEEZE_CHOICES: [f64; 5] = [1.0, 2.0, 5.0, 10.0, 20.0];
+/// Points a sideways tick needs before its neighbour crowds it.
+const LOG_AXIS_TICK_MIN_GAP: f32 = 36.0;
+/// Points a ribbon edge may pass the track's side before it counts as cut.
+const LOG_CUT_TOLERANCE: f32 = 0.5;
 /// Room reserved down the left of the log for depth ticks and their labels.
 const LOG_SCALE_WIDTH: f32 = 52.0;
 /// Narrowest the depth scale is drawn; never dropped entirely, only squeezed.
@@ -2106,8 +2123,9 @@ const LOG_EDGE_MARGIN: f32 = 8.0;
 const LOG_PLOT_TOP_MARGIN: f32 = 14.0;
 /// Log width below which the header's compass shrinks to its smaller size.
 const LOG_NARROW_WIDTH: f32 = 240.0;
-/// Shortest the log is drawn, even with almost no panel height left.
-const LOG_MIN_HEIGHT: f32 = 120.0;
+/// Shortest the log is drawn, even with almost no panel height left; the
+/// sideways axis under the plot takes its room on top of the plot's own.
+const LOG_MIN_HEIGHT: f32 = 120.0 + LOG_AXIS_HEIGHT;
 /// Degrees of bearing per point of horizontal drag.
 const LOG_SPIN_PER_POINT: f32 = 0.5;
 /// Shallowest depth window the wheel will zoom to.
@@ -2159,7 +2177,9 @@ impl<'a> BoreholeLog<'a> {
         // The bearing and depth window live in egui's own per-id memory.
         let azimuth_id = self.id.with("azimuth");
         let view_id = self.id.with("depth_view");
+        let squeeze_id = self.id.with("squeeze");
         let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
+        let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
         // inspection moves, so the window may be from a different hole.
         let mut view = clamp_depth_view(ui.data(|data| data.get_temp::<(f64, f64)>(view_id)).unwrap_or(hole), hole);
@@ -2193,7 +2213,7 @@ impl<'a> BoreholeLog<'a> {
         let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0));
         let plot = egui::Rect::from_min_max(
             egui::pos2(body.left() + columns.scale, body.top() + LOG_PLOT_TOP_MARGIN),
-            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN),
+            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN - LOG_AXIS_HEIGHT),
         );
 
         // Over the plot: drag sideways spins, drag vertically walks the depth
@@ -2213,6 +2233,27 @@ impl<'a> BoreholeLog<'a> {
         if handle.double_clicked() {
             view = hole;
         }
+        context_menu_popup(&handle, tr!(literal = "Sideways scale"), |ui| {
+            let fit = ContextMenuAction::new(tr!(literal = "Fit the hole to the track"))
+                .checked(squeeze == LogSqueeze::Fit)
+                .show(ui)
+                .on_hover_text(tr!(literal = "Squeeze sideways just enough to keep the hole in view. Never stretches."));
+            if fit.clicked() {
+                squeeze = LogSqueeze::Fit;
+                ui.close();
+            }
+            for ratio in LOG_SQUEEZE_CHOICES {
+                let label = if ratio == 1.0 {
+                    tr!(literal = "1:1, true shape")
+                } else {
+                    tr_format!(literal = "1:%ratio%", ratio = crate::model::plot::format_quantity(ratio, 0))
+                };
+                if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
+                    squeeze = LogSqueeze::Fixed(ratio);
+                    ui.close();
+                }
+            }
+        });
         if handle.hovered() && plot.height() > 0.0 {
             // Read and then spent, so a scroll aimed at the log zooms it.
             let wheel = ui.input_mut(|input| {
@@ -2238,6 +2279,7 @@ impl<'a> BoreholeLog<'a> {
         ui.data_mut(|data| {
             data.insert_temp(azimuth_id, azimuth);
             data.insert_temp(view_id, view);
+            data.insert_temp(squeeze_id, squeeze);
         });
 
         let (top, bottom) = view;
@@ -2251,8 +2293,15 @@ impl<'a> BoreholeLog<'a> {
         if columns.strat > 0.0 {
             self.draw_strat(ui, &painter, strat, top, bottom);
         }
-        if track.is_positive() {
-            self.draw_column(ui, &painter, track, top, bottom, azimuth);
+        // No lean at all when the track has no room to lean in: better an
+        // empty track than a ratio the picture cannot keep.
+        let path = visible_path(self.hole, view);
+        let collar = self.hole.trace.first().map_or(glam::DVec2::ZERO, |station| station.position.truncate());
+        if let Some(stretch) = plan_stretch(&path, collar)
+            && let Some(lean) = LogLean::new(track, view, azimuth, squeeze, stretch)
+        {
+            self.draw_column(ui, &painter, lean, &path);
+            Self::draw_offset_axis(ui, &painter, lean);
         }
         draw_azimuth_compass(ui, &painter, compass, azimuth);
     }
@@ -2319,25 +2368,6 @@ impl<'a> BoreholeLog<'a> {
     fn y_at(plot: egui::Rect, top: f64, bottom: f64, depth: f64) -> f32 {
         let t = ((depth - top) / (bottom - top)).clamp(0.0, 1.0) as f32;
         plot.top() + t * plot.height()
-    }
-
-    /// How far the hole has wandered sideways at `depth`, seen from `azimuth`.
-    fn offset_at(&self, depth: f64, azimuth: f32) -> f32 {
-        match self.hole.position_at_depth(depth) {
-            Some(position) => self.sideways_offset(position, azimuth),
-            None => 0.0,
-        }
-    }
-
-    /// Sideways offset of `position` from the collar, seen from `azimuth`.
-    fn sideways_offset(&self, position: glam::DVec3, azimuth: f32) -> f32 {
-        let Some(collar) = self.hole.trace.first().map(|station| station.position) else {
-            return 0.0;
-        };
-        let (east, north) = (position.x - collar.x, position.y - collar.y);
-        let radians = f64::from(azimuth).to_radians();
-        // Screen right is the bearing turned a quarter turn clockwise.
-        (east * radians.cos() - north * radians.sin()) as f32
     }
 
     /// The field the strat column reads: the one chosen in the panel, else an
@@ -2463,13 +2493,8 @@ impl<'a> BoreholeLog<'a> {
     /// that is actually showing rather than for the whole hole.
     fn draw_scale(&self, ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect, columns: LogColumns, top: f64, bottom: f64) {
         let visuals = ui.visuals();
-        let step = log_tick_step(bottom - top, plot.height());
-        // Decimals enough to tell adjacent ticks apart at this step.
-        let places = if step.is_finite() && step > 0.0 && step < 1.0 {
-            (-step.log10()).ceil().clamp(0.0, 3.0) as usize
-        } else {
-            0
-        };
+        let step = log_tick_step(bottom - top, plot.height(), LOG_TICK_MIN_GAP);
+        let places = tick_places(step);
         let overhang = (columns.scale * 0.12).min(6.0);
         let gap = (columns.scale * 0.2).min(10.0);
 
@@ -2496,29 +2521,21 @@ impl<'a> BoreholeLog<'a> {
         }
     }
 
-    fn draw_column(&self, ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect, top: f64, bottom: f64, azimuth: f32) {
+    /// The hole down its track, `path` being its visible stretch, with its
+    /// sides traced. A fixed squeeze can carry it past the track's side; it
+    /// is cut there rather than pinned, and the side it left by is marked.
+    fn draw_column(&self, ui: &egui::Ui, painter: &egui::Painter, lean: LogLean, path: &[(f64, glam::DVec3)]) {
+        let painter = painter.with_clip_rect(lean.plot);
+        let visuals = ui.visuals();
         let field = self.dataset.color.active_field.as_deref().and_then(|key| self.dataset.dataset.field(key));
-        let centre = plot.center().x;
-        let half = (LOG_COLUMN_WIDTH * 0.5).min(plot.width() * 0.5 - 1.0).max(1.0);
-        let uncoloured = ui.visuals().widgets.inactive.bg_fill;
+        let uncoloured = visuals.widgets.inactive.bg_fill;
+        let (top, bottom) = lean.view;
 
-        let lean = LogLean::new(plot, top, bottom, half);
-
-        // The unlogged hole first, so logged intervals draw on top of it.
-        let mut ribbon = Vec::new();
-        for pair in self.hole.trace.windows(2) {
-            let [a, b] = [pair[0], pair[1]];
-            if b.depth <= top || a.depth >= bottom {
-                continue;
-            }
-            let (from, to) = (a.depth.max(top), b.depth.min(bottom));
-            let span = b.depth - a.depth;
-            let station_at = |depth: f64| a.position.lerp(b.position, if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 });
-            let x0 = lean.x(self.sideways_offset(station_at(from), azimuth));
-            let x1 = lean.x(self.sideways_offset(station_at(to), azimuth));
-            ribbon.push(Self::quad_between(plot, top, bottom, from, to, x0, x1, half, uncoloured));
-        }
-        painter.extend(ribbon);
+        // The unlogged hole first, so logged intervals draw on top of it;
+        // only as far as the survey reaches.
+        let toe = self.hole.trace.last().map_or(f64::NEG_INFINITY, |station| station.depth);
+        let runs = lean.runs(path);
+        painter.extend(runs.iter().filter(|(from, _)| from.0 < toe).map(|&(from, to)| lean.slab(from, to, uncoloured)));
 
         for interval in &self.hole.intervals {
             if interval.to <= top || interval.from >= bottom {
@@ -2532,66 +2549,331 @@ impl<'a> BoreholeLog<'a> {
                     })
                 })
                 .unwrap_or(uncoloured);
-            painter.add(self.quad(plot, top, bottom, interval.from, interval.to, azimuth, lean, color));
+            let end = |depth: f64| (depth, self.hole.position_at_depth(depth).map_or(lean.plot.center().x, |position| lean.x(position)));
+            painter.add(lean.slab(end(interval.from.max(top)), end(interval.to.min(bottom)), color));
         }
 
-        painter.rect_stroke(
-            egui::Rect::from_x_y_ranges(centre - half..=centre + half, plot.y_range()),
-            0.0,
-            egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.5)),
-            egui::StrokeKind::Inside,
+        // The ribbon's own sides, following the hole down the window.
+        if let Some(&(start, _)) = runs.first() {
+            let stroke = egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.5));
+            for side in [-lean.half, lean.half] {
+                let edge = std::iter::once(start)
+                    .chain(runs.iter().map(|&(_, to)| to))
+                    .map(|(depth, x)| egui::pos2(x + side, lean.y(depth)));
+                painter.add(egui::Shape::line(edge.collect(), stroke));
+            }
+        }
+
+        let warn = visuals.warn_fg_color;
+        for (spans, edge, outward) in [(lean.cut(&runs, -1.0), lean.plot.left(), -1.0), (lean.cut(&runs, 1.0), lean.plot.right(), 1.0)] {
+            for (y0, y1) in spans {
+                // A bar down the depths the hole is gone for, and an arrow
+                // at its middle pointing the way it went.
+                let bar = edge - outward * 1.5;
+                painter.line_segment([egui::pos2(bar, y0), egui::pos2(bar, y1)], egui::Stroke::new(3.0, warn));
+                let (middle, back) = (0.5 * (y0 + y1), edge - outward * 7.0);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![egui::pos2(edge, middle), egui::pos2(back, middle - 4.0), egui::pos2(back, middle + 4.0)],
+                    warn,
+                    egui::Stroke::NONE,
+                ));
+            }
+        }
+    }
+
+    /// Plan metres from the collar across the foot of the track, the
+    /// bearing screen-right looks toward, and the squeeze over the top of it.
+    fn draw_offset_axis(ui: &egui::Ui, painter: &egui::Painter, lean: LogLean) {
+        let track = lean.plot;
+        let visuals = ui.visuals();
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let ink = visuals.weak_text_color();
+        let foot = track.bottom();
+        painter.line_segment(
+            [egui::pos2(track.left(), foot), egui::pos2(track.right(), foot)],
+            egui::Stroke::new(1.0, ink.gamma_multiply(0.6)),
+        );
+
+        let (step, ticks) = lean.ticks();
+        let places = tick_places(step);
+        let mut label_bottom = foot + 4.0;
+        for (x, reading) in ticks {
+            painter.line_segment([egui::pos2(x, foot), egui::pos2(x, foot + 4.0)], egui::Stroke::new(1.0, ink.gamma_multiply(0.6)));
+            let galley = painter.layout_no_wrap(format!("{reading:.places$}"), font.clone(), ink);
+            let half_width = galley.size().x * 0.5;
+            // Labels spill into the track gap at most, never onto a neighbour.
+            if x - half_width < track.left() - LOG_TRACK_GAP * 0.5 || x + half_width > track.right() + LOG_EDGE_MARGIN * 0.5 {
+                continue;
+            }
+            label_bottom = label_bottom.max(foot + 5.0 + galley.size().y);
+            painter.galley(egui::pos2(x - half_width, foot + 5.0), galley, egui::Color32::PLACEHOLDER);
+        }
+
+        // Screen right is the bearing turned a quarter turn clockwise.
+        let bearing = format!("{:03}", ((lean.azimuth + 90.0).round() as i32).rem_euclid(360));
+        let caption = elided(
+            painter,
+            tr_format!(literal = "m from collar, toward %bearing%°", bearing = bearing),
+            font.clone(),
+            ink,
+            track.width(),
+        );
+        painter.galley(
+            egui::pos2(track.center().x - caption.size().x * 0.5, label_bottom + 1.0),
+            caption,
+            egui::Color32::PLACEHOLDER,
+        );
+
+        let ratio = elided(
+            painter,
+            // Written as the plot sheet writes its 1:N, bar a fitted 1:2.5.
+            tr_format!(literal = "H 1:%ratio%", ratio = trim_decimal_zeros(crate::model::plot::format_quantity(lean.ratio, 1))),
+            font,
+            ink,
+            track.width(),
+        );
+        painter.galley(
+            egui::pos2(track.right() - ratio.size().x, track.top() - 4.0 - ratio.size().y),
+            ratio,
+            egui::Color32::PLACEHOLDER,
         );
     }
+}
 
-    /// One depth slice of the ribbon, leaning by however far the hole has
-    /// deviated at each end of it.
-    #[allow(clippy::too_many_arguments)]
-    fn quad(&self, plot: egui::Rect, top: f64, bottom: f64, from: f64, to: f64, azimuth: f32, lean: LogLean, color: egui::Color32) -> egui::Shape {
-        let (from, to) = (from.max(top), to.min(bottom));
-        let (x0, x1) = (lean.x(self.offset_at(from, azimuth)), lean.x(self.offset_at(to, azimuth)));
-        Self::quad_between(plot, top, bottom, from, to, x0, x1, lean.half, color)
+/// How the log squeezes the hole's sideways wander against its depth.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+enum LogSqueeze {
+    /// Just enough to keep the visible stretch of hole inside the track.
+    #[default]
+    Fit,
+    /// Sideways metres drawn at one part in this many of the depth scale.
+    Fixed(f64),
+}
+
+/// Where a stretch of hole lies in plan: its middle, the furthest any of it
+/// lies from that middle, and the collar its axis is read from. Plan only,
+/// so spinning the view moves none of it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct LogStretch {
+    middle: glam::DVec2,
+    reach: f64,
+    collar: glam::DVec2,
+}
+
+/// The hole down the depth window `view` as (depth, position) samples: the
+/// window's two ends and every station between. The trace is straight
+/// between stations and held at the toe past the last, as
+/// [`crate::model::drill_hole::DrillHole::position_at_depth`] reads it.
+fn visible_path(hole: &crate::model::drill_hole::DrillHole, view: (f64, f64)) -> Vec<(f64, glam::DVec3)> {
+    let (top, bottom) = view;
+    let at = |depth: f64| hole.position_at_depth(depth).map(|position| (depth, position));
+    let inside = hole
+        .trace
+        .iter()
+        .filter(|station| station.depth > top && station.depth < bottom)
+        .map(|station| (station.depth, station.position));
+    at(top).into_iter().chain(inside).chain(at(bottom)).collect()
+}
+
+/// The plan stretch `path` covers. Its middle is where it lies on average
+/// down its depth; it runs straight between samples, so the samples bound
+/// how far it strays from that. `None` for an empty or non-finite path.
+fn plan_stretch(path: &[(f64, glam::DVec3)], collar: glam::DVec2) -> Option<LogStretch> {
+    // Summed from the first sample, so eastings in the millions keep their
+    // precision.
+    let base = path.first()?.1.truncate();
+    let (mut sum, mut weight) = (glam::DVec2::ZERO, 0.0);
+    for pair in path.windows(2) {
+        let length = pair[1].0 - pair[0].0;
+        if length > 0.0 {
+            sum += (pair[0].1.truncate() + pair[1].1.truncate() - 2.0 * base) * 0.5 * length;
+            weight += length;
+        }
+    }
+    let middle = if weight > 0.0 { base + sum / weight } else { base };
+    let reach = path.iter().map(|(_, position)| position.truncate().distance(middle)).fold(0.0, f64::max);
+    (middle.is_finite() && reach.is_finite()).then_some(LogStretch { middle, reach, collar })
+}
+
+/// A straight run of the hole down its track, as its (depth, x) ends.
+type LogRun = ((f64, f32), (f64, f32));
+
+/// Where the hole sits across its track: plan metres along the way screen
+/// right faces, from the middle of the visible hole on the track's centre
+/// line, at the depth axis's own scale divided by `ratio`. The ratio is
+/// never below 1: the log may squeeze the lean but never stretch it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct LogLean {
+    /// The hole's track, and the depth window drawn down it.
+    plot: egui::Rect,
+    view: (f64, f64),
+    /// Half the ribbon's width.
+    half: f32,
+    azimuth: f32,
+    /// Unit plan vector, east and north, toward screen right.
+    across: glam::DVec2,
+    stretch: LogStretch,
+    points_per_metre: f32,
+    ratio: f64,
+}
+
+impl LogLean {
+    /// The lean for `stretch` seen from `azimuth`, down `plot` over the depth
+    /// window `view`. `None` when there is no room to lean in or no depth to
+    /// scale by: nothing is drawn then, and no ratio is claimed.
+    fn new(plot: egui::Rect, view: (f64, f64), azimuth: f32, squeeze: LogSqueeze, stretch: LogStretch) -> Option<Self> {
+        let span = view.1 - view.0;
+        if !(plot.is_positive() && span.is_finite() && span > 0.0) {
+            return None;
+        }
+        let half = (LOG_COLUMN_WIDTH * 0.5).min(plot.width() * 0.5 - 1.0).max(1.0);
+        let room = f64::from(plot.width() * 0.5 - half) * LOG_FIT_SHARE;
+        let depth_points_per_metre = f64::from(plot.height()) / span;
+        let ratio = match squeeze {
+            LogSqueeze::Fit => fitted_squeeze(stretch.reach, depth_points_per_metre, room)?,
+            LogSqueeze::Fixed(ratio) => (room > 0.0 && ratio.is_finite()).then_some(ratio.max(1.0))?,
+        };
+        let points_per_metre = (depth_points_per_metre / ratio) as f32;
+        if !(points_per_metre.is_finite() && points_per_metre > 0.0) {
+            return None;
+        }
+        // Screen right is the bearing turned a quarter turn clockwise.
+        let radians = f64::from(azimuth).to_radians();
+        Some(Self {
+            plot,
+            view,
+            half,
+            azimuth,
+            across: glam::DVec2::new(radians.cos(), -radians.sin()),
+            stretch,
+            points_per_metre,
+            ratio,
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn quad_between(plot: egui::Rect, top: f64, bottom: f64, from: f64, to: f64, x0: f32, x1: f32, half: f32, color: egui::Color32) -> egui::Shape {
-        let (y0, y1) = (Self::y_at(plot, top, bottom, from), Self::y_at(plot, top, bottom, to));
+    /// Plan metres from the middle of the visible hole to `position`, along
+    /// the way screen right faces.
+    fn offset(self, position: glam::DVec3) -> f64 {
+        (position.truncate() - self.stretch.middle).dot(self.across)
+    }
+
+    /// Where `position` is drawn across the track.
+    fn x(self, position: glam::DVec3) -> f32 {
+        self.x_at_offset(self.offset(position))
+    }
+
+    fn x_at_offset(self, offset: f64) -> f32 {
+        self.plot.center().x + offset as f32 * self.points_per_metre
+    }
+
+    /// The offset drawn at `x`; the inverse of [`Self::x_at_offset`].
+    fn offset_at_x(self, x: f32) -> f64 {
+        f64::from((x - self.plot.center().x) / self.points_per_metre)
+    }
+
+    /// Plan metres from the collar to the track's centre line, along the
+    /// way screen right faces: what an offset gains when read from the
+    /// collar instead of the middle.
+    fn collar_shift(self) -> f64 {
+        (self.stretch.middle - self.stretch.collar).dot(self.across)
+    }
+
+    /// The sideways axis's ticks, with their spacing: where each is drawn,
+    /// and its reading in plan metres from the collar, so a reading keeps
+    /// its meaning wherever the window is.
+    fn ticks(self) -> (f64, Vec<(f32, f64)>) {
+        let track = self.plot;
+        let step = log_tick_step(f64::from(track.width()) / f64::from(self.points_per_metre), track.width(), LOG_AXIS_TICK_MIN_GAP);
+        let shift = self.collar_shift();
+        let first = ((self.offset_at_x(track.left()) + shift) / step).ceil() * step;
+        // Capped independently of step, as the depth scale is.
+        let max_ticks = (track.width() / LOG_AXIS_TICK_MIN_GAP) as usize + 2;
+        let ticks = (0..=max_ticks)
+            .map(|index| first + index as f64 * step)
+            .map(|reading| (self.x_at_offset(reading - shift), reading))
+            .take_while(|(x, _)| x.is_finite() && *x <= track.right() + 0.5)
+            // Snapped, or rounding writes the collar's own tick as "-0".
+            .map(|(x, reading)| (x, if reading.abs() < step * 1.0e-6 { 0.0 } else { reading }))
+            .collect();
+        (step, ticks)
+    }
+
+    /// The straight runs of `path` down the track.
+    fn runs(self, path: &[(f64, glam::DVec3)]) -> Vec<LogRun> {
+        path.windows(2).map(|pair| ((pair[0].0, self.x(pair[0].1)), (pair[1].0, self.x(pair[1].1)))).collect()
+    }
+
+    /// Where `depth` sits down the track.
+    fn y(self, depth: f64) -> f32 {
+        BoreholeLog::y_at(self.plot, self.view.0, self.view.1, depth)
+    }
+
+    /// One depth slice of the ribbon, between its (depth, x) ends.
+    fn slab(self, (from, x0): (f64, f32), (to, x1): (f64, f32), color: egui::Color32) -> egui::Shape {
+        let (y0, y1, half) = (self.y(from), self.y(to), self.half);
         egui::Shape::convex_polygon(
             vec![egui::pos2(x0 - half, y0), egui::pos2(x0 + half, y0), egui::pos2(x1 + half, y1), egui::pos2(x1 - half, y1)],
             color,
             egui::Stroke::NONE,
         )
     }
+
+    /// The (top, bottom) stretches down the page over which the ribbon of
+    /// `runs` passes the track's left side (`side` -1) or right side (1).
+    fn cut(self, runs: &[LogRun], side: f32) -> Vec<(f32, f32)> {
+        let edge = if side < 0.0 { self.plot.left() } else { self.plot.right() };
+        // Positive once the ribbon's outer edge is past the side.
+        let over = |x: f32| side * (x - edge) + self.half - LOG_CUT_TOLERANCE;
+        let mut spans: Vec<(f32, f32)> = Vec::new();
+        for &((from, x0), (to, x1)) in runs {
+            let Some(span) = outside_span((self.y(from), over(x0)), (self.y(to), over(x1))) else {
+                continue;
+            };
+            match spans.last_mut() {
+                Some(last) if span.0 <= last.1 + LOG_CUT_TOLERANCE => last.1 = last.1.max(span.1),
+                _ => spans.push(span),
+            }
+        }
+        spans
+    }
 }
 
-/// Metres of deviation as points across the track, at the scale the depth
-/// axis is drawn to, and never further out than the track's own edge.
-#[derive(Clone, Copy)]
-struct LogLean {
-    centre: f32,
-    half: f32,
-    points_per_metre: f32,
-    limit: f32,
+/// The squeeze, depth metres per sideways metre on the page, that fits a
+/// stretch lying within `reach` plan metres of its middle into `room` points
+/// either side of the track's centre line, with depth drawn at
+/// `points_per_metre`. 1 when it already fits, else rounded up to a
+/// readable ratio; `None` when there is no room or nothing to scale by.
+fn fitted_squeeze(reach: f64, points_per_metre: f64, room: f64) -> Option<f64> {
+    let needed = reach * points_per_metre / room;
+    if !(room > 0.0 && points_per_metre > 0.0 && reach >= 0.0 && needed.is_finite()) {
+        return None;
+    }
+    Some(if needed > 1.0 {
+        crate::model::plot::round_up_to_series(needed, &LOG_SQUEEZE_SERIES)
+    } else {
+        1.0
+    })
 }
 
-impl LogLean {
-    fn new(plot: egui::Rect, top: f64, bottom: f64, half: f32) -> Self {
-        let span = bottom - top;
-        let points_per_metre = if span.is_finite() && span > 0.0 {
-            (f64::from(plot.height()) / span) as f32
-        } else {
-            0.0
-        };
-        Self {
-            centre: plot.center().x,
-            half,
-            points_per_metre,
-            limit: (plot.width() * 0.5 - half).max(0.0),
+/// The part of a straight run from `a` to `b`, each a (y, over) pair, over
+/// which `over` is positive, as a (top, bottom) span of y.
+fn outside_span((y0, over0): (f32, f32), (y1, over1): (f32, f32)) -> Option<(f32, f32)> {
+    match (over0 > 0.0, over1 > 0.0) {
+        (true, true) => Some((y0, y1)),
+        (false, false) => None,
+        (first, _) => {
+            let crossing = y0 + (y1 - y0) * over0 / (over0 - over1);
+            Some(if first { (y0, crossing) } else { (crossing, y1) })
         }
     }
+}
 
-    fn x(self, offset: f32) -> f32 {
-        let lean = offset * self.points_per_metre;
-        self.centre + if lean.is_finite() { lean.clamp(-self.limit, self.limit) } else { 0.0 }
+/// Decimals enough to tell adjacent ticks `step` apart.
+fn tick_places(step: f64) -> usize {
+    if step.is_finite() && step > 0.0 && step < 1.0 {
+        (-step.log10()).ceil().clamp(0.0, 3.0) as usize
+    } else {
+        0
     }
 }
 
@@ -2670,12 +2952,13 @@ fn elided(painter: &egui::Painter, text: String, font: egui::FontId, ink: egui::
     painter.layout_job(job)
 }
 
-/// The tick spacing to read a `span` of depth over `height` points.
-fn log_tick_step(span: f64, height: f32) -> f64 {
-    if span <= 0.0 || height <= 0.0 {
+/// The tick spacing to read a `span` of metres over `length` points, with
+/// ticks no closer than `min_gap` points.
+fn log_tick_step(span: f64, length: f32, min_gap: f32) -> f64 {
+    if span <= 0.0 || length <= 0.0 {
         return 1.0;
     }
-    crate::model::plot::round_up_to_series(span * f64::from(LOG_TICK_MIN_GAP) / f64::from(height), &[1.0, 2.0, 5.0, 10.0])
+    crate::model::plot::round_up_to_series(span * f64::from(min_gap) / f64::from(length), &[1.0, 2.0, 5.0, 10.0])
 }
 
 /// A bearing turned by a drag across the page, wrapped back into 0..360.
