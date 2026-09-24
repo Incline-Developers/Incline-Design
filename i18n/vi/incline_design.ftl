@@ -146,7 +146,6 @@ tri-estimated-memory = Bộ nhớ đỉnh ước tính ~{ $estimate }. { $detail
 block-grid-summary = Lưới: { $x } × { $y } × { $z } = { $count } khối
 status-selected = Đã chọn: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunk: { $rendered }/{ $total } (đã loại { $culled })
 status-clip = Cắt gần/xa/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -212,7 +211,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chọn (các) tệp nguồn cần nhập.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chọn dữ liệu đầu vào này bằng cách nhấp vào một bề mặt đã tải trong khung nhìn
 literal-choose-9e53070883acbe06 = Chọn...
-literal-chunks-d8bf831735fec9eb = Chunk: --
 literal-clear-b4f1dffbb6be6302 = Xóa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Xóa kết cấu lưới tam giác đang hoạt động
 literal-clear-raster-ef94c7849961e88f = Xóa ảnh raster

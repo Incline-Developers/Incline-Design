@@ -3,6 +3,16 @@
 use super::{frustum::Frustum, *};
 use crate::model::point_cloud::POINT_CLOUD_LOD_LEVELS;
 
+/// See [`Graphics::chunk_bounds_outline`].
+pub(crate) struct ChunkBoundsOutline {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+}
+
+/// Width, in logical pixels, of the chunk-bounds debug outline.
+const CHUNK_BOUNDS_LINE_WIDTH: f32 = 1.5;
+
 /// Cheap conservative whole-model reject before walking any cube chunks.
 /// Bounds are stored in world space while the render frustum uses the
 /// scene-origin-relative coordinates uploaded to the GPU.
@@ -467,6 +477,86 @@ impl<'a> Graphics<'a> {
     /// slice-preview and screenshot paths share this pass but not the grid,
     /// the drill-pattern preview, the chunk statistics or volume residency
     /// streaming, all of which belong to the viewport the user is driving.
+    /// Rebuild [`Self::chunk_bounds_outline`]: the twelve edges of every
+    /// visible surface chunk's culling box, in the chunk's debug colour. The
+    /// same chunks the `(rendered, total)` readout counts, culled or not, so a
+    /// box poking into view explains a chunk the counter kept. Point-cloud
+    /// chunks are outlined the same way, resident or not. Each kind follows
+    /// its own chunk-debug view.
+    fn rebuild_chunk_bounds_outline(&mut self, editor: &EditorState, triangulations: &[OpenTriangulation], point_clouds: &[OpenPointCloud]) {
+        self.chunk_bounds_outline = None;
+        let triangulations = if editor.debug_surface_chunks { triangulations } else { &[] };
+        let point_clouds = if editor.debug_point_cloud_chunks { point_clouds } else { &[] };
+        if triangulations.is_empty() && point_clouds.is_empty() {
+            return;
+        }
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut unused_fill_vertices = Vec::new();
+        let mut unused_fill_indices = Vec::new();
+        let mut context = crate::rendering::geometry::DrawContext {
+            stroke_vertex_buf: &mut vertices,
+            stroke_index_buf: &mut indices,
+            fill_vertex_buf: &mut unused_fill_vertices,
+            fill_index_buf: &mut unused_fill_indices,
+            scene_origin: self.scene_origin,
+            scale_factor: self.window.scale_factor() as f32,
+        };
+        for triangulation in triangulations {
+            if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {
+                continue;
+            }
+            let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
+                continue;
+            };
+            for chunk in &cached.surface_chunks {
+                let corner = |index: usize| chunk.bounds.corner(index).as_dvec3() + self.scene_origin;
+                for from in 0..8 {
+                    for bit in [1, 2, 4] {
+                        if from & bit == 0 {
+                            crate::rendering::geometry::draw_line(&mut context, corner(from), corner(from | bit), CHUNK_BOUNDS_LINE_WIDTH, chunk.debug_color);
+                        }
+                    }
+                }
+            }
+        }
+        for point_cloud in point_clouds {
+            if !point_cloud.state.loaded || editor.hidden_handles.contains(&point_cloud.entity_id()) {
+                continue;
+            }
+            let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
+                continue;
+            };
+            for (chunk_index, bounds) in cached.chunk_bounds().enumerate() {
+                let color = crate::rendering::scene::gpu_cache::chunk_debug_color(chunk_index);
+                let corner = |index: usize| bounds.corner(index).as_dvec3() + self.scene_origin;
+                for from in 0..8 {
+                    for bit in [1, 2, 4] {
+                        if from & bit == 0 {
+                            crate::rendering::geometry::draw_line(&mut context, corner(from), corner(from | bit), CHUNK_BOUNDS_LINE_WIDTH, color);
+                        }
+                    }
+                }
+            }
+        }
+        if indices.is_empty() {
+            return;
+        }
+        self.chunk_bounds_outline = Some(ChunkBoundsOutline {
+            vertex_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chunk Bounds Outline Vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            index_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chunk Bounds Outline Indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: indices.len() as u32,
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_scene_pass(
         &mut self,
@@ -481,6 +571,11 @@ impl<'a> Graphics<'a> {
         rasters: &[OpenRasterTexture],
         include_editor_overlays: bool,
     ) {
+        // Only the main viewport's pass owns the outline: previews and
+        // screenshots render without editor overlays and must not drop it.
+        if include_editor_overlays {
+            self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
+        }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -529,10 +624,10 @@ impl<'a> Graphics<'a> {
         let viewport_dims = glam::vec2(vp_width as f32, vp_height as f32);
 
         // Developer chunk-debug view: colour each surface chunk distinctly and
-        // report how many chunks survive frustum culling.
-        let debug_chunks = editor.debug_chunk_coloring;
-        let mut rendered_chunks: u32 = 0;
-        let mut total_chunks: u32 = 0;
+        // report how many chunks and faces survive frustum culling.
+        let debug_chunks = editor.debug_surface_chunks;
+        let mut surface_stats = crate::rendering::scene::gpu_cache::SurfaceRenderStats::default();
+        let mut point_stats = crate::rendering::scene::point_cloud_cache::PointRenderStats::default();
 
         // Undraped rasters show as flat plan-view images: drawn before all
         // scene geometry, pinned to the far plane with depth writes off, and
@@ -583,6 +678,8 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
                     continue;
                 };
+                point_stats.total += cached.total_points();
+                point_stats.total_chunks += cached.chunk_count() as u32;
                 if colored_pipeline_active != Some(cached.colored) {
                     let pipeline = if cached.colored {
                         &self.pipes().point_cloud_colored_render_pipeline
@@ -594,6 +691,9 @@ impl<'a> Graphics<'a> {
                     colored_pipeline_active = Some(cached.colored);
                 }
                 for (chunk_index, chunk) in cached.chunks.iter().enumerate().filter_map(|(index, chunk)| Some((index, chunk.as_ref()?))) {
+                    if !frustum.intersects_obb(&chunk.bounds.translated(cached.origin_scene)) {
+                        continue;
+                    }
                     let bounds_min = chunk.bounds_min + cached.origin_scene;
                     let bounds_max = chunk.bounds_max + cached.origin_scene;
                     // Projected bounds are conservative and include raster
@@ -651,7 +751,11 @@ impl<'a> Graphics<'a> {
                             chunk.last_display_update.set(display_now);
                         }
                     }
-                    let draw_offset = cached.write_chunk_draw(&self.queue, chunk_index, chunk.level_counts[0], instance_count);
+                    point_stats.drawn += u64::from(instance_count);
+                    point_stats.target += u64::from(target_count);
+                    point_stats.drawn_chunks += 1;
+                    let debug_color = editor.debug_point_cloud_chunks.then(|| crate::rendering::scene::gpu_cache::chunk_debug_color(chunk_index));
+                    let draw_offset = cached.write_chunk_draw(&self.queue, chunk_index, chunk.level_counts[0], instance_count, debug_color);
                     render_pass.set_bind_group(1, &cached.style_bind_group, &[draw_offset]);
                     render_pass.set_vertex_buffer(0, chunk.slot.buffer().slice(chunk.slot.vertex_range()));
                     render_pass.draw(0..4, 0..instance_count);
@@ -688,7 +792,8 @@ impl<'a> Graphics<'a> {
                 if cached.color[3] < 0.999 {
                     continue;
                 }
-                total_chunks += cached.surface_chunks.len() as u32;
+                surface_stats.total_chunks += cached.surface_chunks.len() as u32;
+                surface_stats.total_faces += cached.surface_chunks.iter().map(|chunk| u64::from(chunk.index_count / 3)).sum::<u64>();
                 // Cheap whole-mesh reject before touching individual chunks.
                 let (aabb_min, aabb_max) = self.mesh_scene_aabb(&triangulation.mesh);
                 if !frustum.intersects_aabb(aabb_min, aabb_max) {
@@ -699,16 +804,17 @@ impl<'a> Graphics<'a> {
                 }
                 render_pass.set_bind_group(3, self.raster_gpu.bind_group(cached.raster_texture), &[]);
                 for chunk in &cached.surface_chunks {
-                    // Per-chunk frustum cull: chunks are Morton-spatial, so their
-                    // AABBs are tight enough for this to reject real geometry.
-                    if !frustum.intersects_aabb(chunk.bounds_min, chunk.bounds_max) {
+                    // Per-chunk frustum cull: chunks are kd-split and boxed along
+                    // their principal axes, so their bounds are tight enough for this to reject real geometry.
+                    if !frustum.intersects_obb(&chunk.bounds) {
                         continue;
                     }
                     if debug_chunks {
                         render_pass.set_bind_group(1, &chunk.debug_style_bind_group, &[]);
                     }
                     render_pass.set_bind_group(2, &chunk.chunk_bind_group, &[]);
-                    rendered_chunks += 1;
+                    surface_stats.drawn_chunks += 1;
+                    surface_stats.drawn_faces += u64::from(chunk.index_count / 3);
                     render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(chunk.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     render_pass.draw_indexed(0..chunk.index_count, 0, 0..1);
@@ -794,7 +900,8 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
                     continue;
                 };
-                total_chunks += cached.surface_chunks.len() as u32;
+                surface_stats.total_chunks += cached.surface_chunks.len() as u32;
+                surface_stats.total_faces += cached.surface_chunks.iter().map(|chunk| u64::from(chunk.index_count / 3)).sum::<u64>();
                 let (aabb_min, aabb_max) = self.mesh_scene_aabb(&triangulation.mesh);
                 if !frustum.intersects_aabb(aabb_min, aabb_max) {
                     continue;
@@ -804,14 +911,15 @@ impl<'a> Graphics<'a> {
                 }
                 render_pass.set_bind_group(3, self.raster_gpu.bind_group(cached.raster_texture), &[]);
                 for chunk in &cached.surface_chunks {
-                    if !frustum.intersects_aabb(chunk.bounds_min, chunk.bounds_max) {
+                    if !frustum.intersects_obb(&chunk.bounds) {
                         continue;
                     }
                     if debug_chunks {
                         render_pass.set_bind_group(1, &chunk.debug_style_bind_group, &[]);
                     }
                     render_pass.set_bind_group(2, &chunk.chunk_bind_group, &[]);
-                    rendered_chunks += 1;
+                    surface_stats.drawn_chunks += 1;
+                    surface_stats.drawn_faces += u64::from(chunk.index_count / 3);
                     render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(chunk.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     render_pass.draw_indexed(0..chunk.index_count, 0, 0..1);
@@ -827,7 +935,8 @@ impl<'a> Graphics<'a> {
         // every frame. Previews read whatever is resident and fall back to
         // brick aggregates elsewhere.
         if include_editor_overlays {
-            self.chunk_render_stats = (rendered_chunks, total_chunks);
+            self.surface_render_stats = surface_stats;
+            self.point_render_stats = point_stats;
         }
         let needs_volume_target = block_models.iter().any(|block_model| {
             let entity = block_model.entity_id();
@@ -1148,6 +1257,16 @@ impl<'a> Graphics<'a> {
             render_pass.set_vertex_buffer(0, self.overlay_vertex_gpu.slice(..));
             render_pass.set_index_buffer(self.overlay_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.overlay_index_buf.len() as u32, 0, 0..1);
+        }
+
+        // Depth-tested so geometry in front of a box hides it, like any other
+        // line in the scene.
+        if let Some(outline) = &self.chunk_bounds_outline {
+            render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            render_pass.set_vertex_buffer(0, outline.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(outline.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..outline.index_count, 0, 0..1);
         }
     }
 

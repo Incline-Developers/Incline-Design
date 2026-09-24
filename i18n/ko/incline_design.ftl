@@ -146,7 +146,6 @@ tri-estimated-memory = 예상 최대 메모리 사용량 ~{ $estimate }. { $deta
 block-grid-summary = 그리드: { $x } × { $y } × { $z } = 블록 { $count }개
 status-selected = 선택됨: { $count }
 status-fps = FPS: { $fps }
-status-chunks = 청크: { $rendered }/{ $total } ({ $culled }개 컬링됨)
 status-clip = 클립 근/원/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -212,7 +211,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = 가져올 원본 파일을 선택하세요.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = 뷰포트에서 로드된 표면을 클릭하여 이 입력을 선택하세요
 literal-choose-9e53070883acbe06 = 선택...
-literal-chunks-d8bf831735fec9eb = 청크: --
 literal-clear-b4f1dffbb6be6302 = 지우기
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = 활성 삼각망 텍스처 지우기
 literal-clear-raster-ef94c7849961e88f = 래스터 지우기

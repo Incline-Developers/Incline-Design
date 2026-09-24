@@ -78,7 +78,6 @@ tri-estimated-memory = Memória máxima estimada ~ { $estimate }. { $detail }
 block-grid-summary = Grade: { $x } × { $y } × { $z } = { $count } blocos
 status-selected = Selecionado: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Fragmentos: { $rendered }/{ $total } ({ $culled } abatido)
 status-clip = Recorte próximo/distante/Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -169,7 +168,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Escolha o ficheiro ou ficheiros de origem para importar.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Escolha esta entrada clicando numa superfície carregada na janela de visualização
 literal-choose-9e53070883acbe06 = Escolha...
-literal-chunks-d8bf831735fec9eb = Fragmentos: --
 literal-clear-b4f1dffbb6be6302 = Limpar
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Limpar textura da triangulação ativa
 literal-clear-raster-ef94c7849961e88f = Limpar raster

@@ -312,8 +312,9 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.frame_counter_enabled = defaults.frame_counter_enabled;
-    draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
+    draft.debug_surface_chunks = defaults.debug_surface_chunks;
     draft.debug_clip_planes = defaults.debug_clip_planes;
+    draft.debug_point_cloud_chunks = defaults.debug_point_cloud_chunks;
 }
 
 fn reset_camera_defaults(draft: &mut PreferencesDraft) {
@@ -516,13 +517,22 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             let mut changed = false;
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Frame counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Colour GPU chunks"), &mut draft.debug_chunk_coloring)
-                    .help_text(tr!(literal = "Visualises the Morton spatial chunking used for frustum culling."))
+                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
+                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
-                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
+                &MenuFieldBool::new(tr!(literal = "Surface chunk debug view"), &mut draft.debug_surface_chunks)
+                    .help_text(tr!(
+                        literal = "Colours each surface chunk, outlines the box it is frustum-culled by, and shows the faces drawn last frame against the visible total in the status bar."
+                    ))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new(tr!(literal = "Point cloud chunk debug view"), &mut draft.debug_point_cloud_chunks)
+                    .help_text(tr!(
+                        literal = "Colours each point-cloud chunk, outlines the box it is frustum-culled by, and shows the points drawn last frame against the level-of-detail target and the visible total in the status bar."
+                    ))
                     .show(ui),
             );
             changed

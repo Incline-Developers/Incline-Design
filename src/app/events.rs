@@ -281,7 +281,8 @@ impl<'a> App<'a> {
                                 }
                                 if let Some(graphics) = self.graphics.as_mut() {
                                     graphics.set_fly_mode_enabled(self.editor.fly_mode_enabled);
-                                    self.editor.debug_chunk_stats = Some(graphics.chunk_render_stats);
+                                    self.editor.debug_surface_stats = Some(graphics.surface_render_stats);
+                                    self.editor.debug_point_stats = Some(graphics.point_render_stats);
                                 }
                                 if completing_topology_load && !self.graphics.as_ref().is_some_and(|graphics| graphics.point_cloud_uploads_pending()) {
                                     self.finish_topology_load();

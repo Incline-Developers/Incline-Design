@@ -16,7 +16,7 @@ use crate::{
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
     },
-    rendering::{BlockInstance, SurfaceVertex},
+    rendering::{BlockInstance, SurfaceVertex, graphics::frustum::OrientedBox},
     ui::state::EditorState,
 };
 
@@ -67,30 +67,49 @@ pub(crate) struct CachedTriangulationGpu {
     pub(crate) edge_width: f32,
 }
 
+/// Last main-viewport frame's surface draw after chunk culling, for the
+/// developer surface-chunk readout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SurfaceRenderStats {
+    /// Faces in the chunks that survived frustum culling.
+    pub(crate) drawn_faces: u64,
+    /// Every face in the visible surfaces.
+    pub(crate) total_faces: u64,
+    /// Chunks drawn this frame, and every chunk in the visible surfaces.
+    pub(crate) drawn_chunks: u32,
+    pub(crate) total_chunks: u32,
+}
+
 pub(crate) struct CachedSurfaceChunk {
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) index_buffer: wgpu::Buffer,
     pub(crate) index_count: u32,
-    /// Scene-origin-relative AABB, for per-chunk frustum culling. Vertex
-    /// positions are stored relative to the chunk's own AABB centre instead
-    /// (small magnitudes keep f32 interpolation precise far from the scene
-    /// origin); the shader re-adds the scene-relative centre from the chunk
-    /// uniform in `chunk_bind_group`.
-    pub(crate) bounds_min: Vec3,
-    pub(crate) bounds_max: Vec3,
+    /// Scene-origin-relative bounding box, for per-chunk frustum culling:
+    /// fitted to the chunk's principal axes, so an inclined wall gets a thin
+    /// tilted slab (see [`super::bounds::fit_chunk_box`]). Vertex positions are stored
+    /// relative to the chunk's own AABB centre instead (small magnitudes keep
+    /// f32 interpolation precise far from the scene origin); the shader
+    /// re-adds the scene-relative centre from the chunk uniform in
+    /// `chunk_bind_group`.
+    pub(crate) bounds: OrientedBox,
     /// Uniform bind group (group 2) holding this chunk's scene-origin-relative
     /// rebase offset; the bind group keeps the buffer alive.
     pub(crate) chunk_bind_group: wgpu::BindGroup,
     /// The buffer behind `chunk_bind_group`, rewritten when the scene origin moves.
     chunk_buffer: wgpu::Buffer,
-    /// World-space AABB and local origin, kept in `f64` so a rebase can
+    /// World-space box centre and local origin, kept in `f64` so a rebase can
     /// recompute the scene-relative values without touching the vertices.
-    world_min: DVec3,
-    world_max: DVec3,
+    world_box_center: DVec3,
     world_origin: DVec3,
     /// A `SurfaceStyle` bind group holding a distinct per-chunk debug colour,
     /// bound instead of the mesh colour when the chunk-debug view is on.
     pub(crate) debug_style_bind_group: wgpu::BindGroup,
+    /// The buffer behind `debug_style_bind_group`, rewritten with the
+    /// surface's wireframe so selection still shows in the debug view.
+    debug_style_buffer: wgpu::Buffer,
+    /// The colour behind `debug_style_bind_group`, which the bounding-box
+    /// debug view outlines the chunk in so box and fill match.
+    pub(crate) debug_color: [f32; 4],
 }
 
 pub(crate) struct CachedEdgeChunk {
@@ -1363,6 +1382,11 @@ impl TriangulationGpuCache {
                     cached.mesh = triangulation.mesh.clone();
                 }
 
+                if surface_dirty || geometry_dirty {
+                    for chunk in &cached.surface_chunks {
+                        chunk.write_debug_style(queue, &surface_style);
+                    }
+                }
                 if surface_dirty {
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&surface_style));
                     cached.color = color;
@@ -1391,6 +1415,9 @@ impl TriangulationGpuCache {
                 let surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
                 if surface_chunks.is_empty() {
                     continue;
+                }
+                for chunk in &surface_chunks {
+                    chunk.write_debug_style(queue, &surface_style);
                 }
 
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1454,16 +1481,10 @@ impl TriangulationGpuCache {
     }
 }
 
-/// Target triangles per spatial chunk. Chunks are the granularity of frustum
-/// culling (and per-chunk debug colouring), so this trades culling precision
-/// (smaller = tighter) against per-chunk draw-call/AABB-test overhead
-/// (smaller = more). ~100k keeps a multi-million-face mesh in tens of chunks.
-const TARGET_FACES_PER_CHUNK: usize = 100_000;
-
 /// Upload indexed surface geometry as spatially-coherent chunks, walking faces
-/// in the precomputed XY-Morton order (`triangulation.surface_face_order`,
-/// built off-thread) so each chunk covers a compact region with a tight AABB
-/// the renderer can frustum-cull - rather than the old size-only split whose
+/// in the precomputed kd order (`triangulation.surface_face_order`, built
+/// off-thread) so each chunk covers a compact box with a tight AABB the
+/// renderer can frustum-cull - rather than the old size-only split whose
 /// chunks each spanned the whole mesh. No sorting happens here, so a huge
 /// mesh's first upload doesn't hitch the render thread. Colour is NOT baked in;
 /// it lives in a per-draw SurfaceStyle uniform (plus a per-chunk debug-colour
@@ -1494,12 +1515,14 @@ fn build_surface_chunks(
     let order = &triangulation.surface_face_order;
 
     // Chunk size: the target, capped so a chunk's vertex/index buffers fit the
-    // device limit and local indices stay within u32.
+    // device limit and local indices stay within u32. The order's leaves are
+    // exactly `SURFACE_CHUNK_FACES` long, so only the uncapped size gets its
+    // compact boxes - the cap is a safety net no real device reaches.
     let limit = (device.limits().max_buffer_size as usize).min(MAX_SURFACE_CHUNK_BYTES);
     let max_indices = limit / size_of::<u32>();
     let max_vertices = limit / size_of::<SurfaceVertex>();
     let faces_cap = (max_indices / 3).min(max_vertices / 3).min(u32::MAX as usize / 3).max(1);
-    let faces_per_chunk = TARGET_FACES_PER_CHUNK.min(faces_cap).max(1);
+    let faces_per_chunk = crate::model::triangulation::SURFACE_CHUNK_FACES.min(faces_cap).max(1);
 
     let mut chunks = Vec::new();
     // Dense sentinel remap reused across chunks: remap[global] == u32::MAX means
@@ -1588,11 +1611,19 @@ fn build_surface_chunks(
             provoking_claimed[provoking] = true;
             indices.extend_from_slice(&local);
         }
+        let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
+        let (world_box_center, axes, half_extents) = super::bounds::fit_chunk_box(
+            &vertices,
+            |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
+            &[mean_normal],
+            chunk_origin,
+            world_max - world_min,
+        );
         if let Some(chunk) = upload_surface_chunk(
             device,
             &vertices,
             &indices,
-            (world_min, world_max, chunk_origin),
+            (world_box_center, axes, half_extents, chunk_origin),
             scene_origin,
             chunk_index,
             surface_style_layout,
@@ -1620,7 +1651,7 @@ fn build_surface_chunks(
 }
 
 /// A distinct, well-spread debug colour per chunk index (golden-ratio hue).
-fn chunk_debug_color(chunk_index: usize) -> [f32; 4] {
+pub(crate) fn chunk_debug_color(chunk_index: usize) -> [f32; 4] {
     let hue = (chunk_index as f32 * 0.618_034).fract();
     let [r, g, b] = hsv_to_rgb(hue, 0.65, 0.95);
     [r, g, b, 1.0]
@@ -1655,7 +1686,7 @@ fn upload_surface_chunk(
     device: &wgpu::Device,
     vertices: &[SurfaceVertex],
     indices: &[u32],
-    (world_min, world_max, world_origin): (DVec3, DVec3, DVec3),
+    (world_box_center, axes, half_extents, world_origin): (DVec3, [Vec3; 3], Vec3, DVec3),
     scene_origin: DVec3,
     chunk_index: usize,
     surface_style_layout: &wgpu::BindGroupLayout,
@@ -1690,15 +1721,16 @@ fn upload_surface_chunk(
         usage: wgpu::BufferUsages::INDEX,
     });
     // Per-chunk debug colour uniform; the bind group keeps the buffer alive.
+    let debug_color = chunk_debug_color(chunk_index);
     let debug_style = SurfaceStyleUniform {
-        color: chunk_debug_color(chunk_index),
+        color: debug_color,
         params: [0.0; 4],
         wire_color: [0.0; 4],
     };
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),
         contents: bytemuck::bytes_of(&debug_style),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let debug_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_style_layout,
@@ -1726,14 +1758,18 @@ fn upload_surface_chunk(
         vertex_buffer,
         index_buffer,
         index_count: indices.len() as u32,
-        bounds_min: (world_min - scene_origin).as_vec3(),
-        bounds_max: (world_max - scene_origin).as_vec3(),
+        bounds: OrientedBox {
+            center: (world_box_center - scene_origin).as_vec3(),
+            axes,
+            half_extents,
+        },
         chunk_bind_group,
         chunk_buffer,
-        world_min,
-        world_max,
+        world_box_center,
         world_origin,
         debug_style_bind_group,
+        debug_style_buffer,
+        debug_color,
     })
 }
 
@@ -1744,11 +1780,21 @@ fn chunk_offset_uniform(world_origin: DVec3, scene_origin: DVec3) -> [f32; 4] {
 
 impl CachedSurfaceChunk {
     /// Re-express this chunk against a new floating origin: a uniform write
-    /// and two AABB subtractions, where a rebuild re-uploads every vertex.
+    /// and a box-centre subtraction, where a rebuild re-uploads every vertex.
     fn rebase(&mut self, queue: &wgpu::Queue, scene_origin: DVec3) {
         queue.write_buffer(&self.chunk_buffer, 0, bytemuck::bytes_of(&chunk_offset_uniform(self.world_origin, scene_origin)));
-        self.bounds_min = (self.world_min - scene_origin).as_vec3();
-        self.bounds_max = (self.world_max - scene_origin).as_vec3();
+        self.bounds.center = (self.world_box_center - scene_origin).as_vec3();
+    }
+
+    /// Carry the surface's in-shader wireframe into the debug colour uniform,
+    /// without the raster drape, which would hide the debug colour.
+    fn write_debug_style(&self, queue: &wgpu::Queue, surface_style: &SurfaceStyleUniform) {
+        let style = SurfaceStyleUniform {
+            color: self.debug_color,
+            params: [0.0, surface_style.params[1], 0.0, 0.0],
+            wire_color: surface_style.wire_color,
+        };
+        queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
     }
 }
 

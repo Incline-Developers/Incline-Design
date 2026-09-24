@@ -148,7 +148,6 @@ tri-estimated-memory = 推定ピークメモリ使用量 ~{ $estimate }。{ $det
 block-grid-summary = グリッド: { $x } × { $y } × { $z } = { $count } ブロック
 status-selected = 選択中: { $count }
 status-fps = FPS: { $fps }
-status-chunks = チャンク: { $rendered }/{ $total }（{ $culled } 個をカリング）
 status-clip = クリップ near/far/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -214,7 +213,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = インポートする元ファイルを選択してください。
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = ビューポート内の読み込み済み曲面をクリックしてこの入力を選択します
 literal-choose-9e53070883acbe06 = 選択...
-literal-chunks-d8bf831735fec9eb = チャンク: --
 literal-clear-b4f1dffbb6be6302 = クリア
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = アクティブな三角網のテクスチャをクリア
 literal-clear-raster-ef94c7849961e88f = ラスターをクリア

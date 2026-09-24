@@ -64,6 +64,10 @@ struct EditorSceneState {
     /// Survey draws classified point clouds in their class colours, which
     /// `PointCloudGpuCache::sync` resolves from the editor at draw time.
     colors_points_by_classification: bool,
+    /// The chunk-bounds outline is rebuilt by the scene pass, so switching
+    /// either chunk-debug view on has to force one.
+    debug_surface_chunks: bool,
+    debug_point_cloud_chunks: bool,
 }
 
 impl EditorSceneState {
@@ -79,6 +83,8 @@ impl EditorSceneState {
             shows_tie_ins: editor.shows_tie_ins(),
             cinematic_enabled: editor.cinematic_enabled,
             colors_points_by_classification: editor.colors_points_by_classification(),
+            debug_surface_chunks: editor.debug_surface_chunks,
+            debug_point_cloud_chunks: editor.debug_point_cloud_chunks,
         }
     }
 }

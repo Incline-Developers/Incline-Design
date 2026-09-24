@@ -153,7 +153,6 @@ tri-estimated-memory = Тооцоолсон дээд санах ой ~{ $estimat
 block-grid-summary = Тор: { $x } × { $y } × { $z } = { $count } блок
 status-selected = Сонгогдсон: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Хэсгүүд: { $rendered }/{ $total } ({ $culled } хасагдсан)
 status-clip = Огтлолын ойр/хол/Δ: { $near } / { $far } / { $delta } м
 
 ## Их давтамжтай эх кодын шууд мөрүүд
@@ -219,7 +218,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Импортлох эх файл(ууд)-ыг сонгоно уу.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Харагдах цонхон дахь ачаалагдсан гадаргуу дээр товшиж энэ оролтыг сонгоно уу
 literal-choose-9e53070883acbe06 = Сонгох...
-literal-chunks-d8bf831735fec9eb = Хэсгүүд: --
 literal-clear-b4f1dffbb6be6302 = Цэвэрлэх
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Идэвхтэй триангуляцын текстурыг цэвэрлэх
 literal-clear-raster-ef94c7849961e88f = Растерыг цэвэрлэх

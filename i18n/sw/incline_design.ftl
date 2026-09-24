@@ -144,7 +144,6 @@ tri-estimated-memory = Kumbukumbu ya juu inayokadiriwa ~{ $estimate }. { $detail
 block-grid-summary = Gridi: { $x } × { $y } × { $z } = vitalu { $count }
 status-selected = Vilivyochaguliwa: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Vipande: { $rendered }/{ $total } ({ $culled } vimeondolewa)
 status-clip = Kata karibu/mbali/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -210,7 +209,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chagua faili au faili za chanzo za kuingiza.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chagua chanzo hiki kwa kubofya uso uliopakiwa kwenye mwonekano
 literal-choose-9e53070883acbe06 = Chagua...
-literal-chunks-d8bf831735fec9eb = Vipande: --
 literal-clear-b4f1dffbb6be6302 = Futa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Futa Umbile la Utatuzi Hai
 literal-clear-raster-ef94c7849961e88f = Futa Rasta

@@ -17,7 +17,7 @@ pub(super) fn build_triangulation_indexes(
     progress.set_fraction(0.6);
     let edges = crate::model::triangulation::unique_edges(mesh);
     progress.set_fraction(0.8);
-    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::morton_surface_face_order(mesh));
+    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(mesh));
     progress.finish();
     (spatial, edges, surface_face_order)
 }
@@ -393,7 +393,7 @@ pub(crate) fn build_generated_triangulation(
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(tri_vertices, tri_faces)?;
     let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
     let edges = build_edges(&mesh);
-    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::morton_surface_face_order(&mesh));
+    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     Ok(crate::model::triangulation::GeneratedTriangulation {
         name,
         mesh: std::sync::Arc::new(mesh),

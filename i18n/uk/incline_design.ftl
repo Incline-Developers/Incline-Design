@@ -154,7 +154,6 @@ tri-estimated-memory = Очікуване пікове споживання па
 block-grid-summary = Сітка: { $x } × { $y } × { $z } = { $count } блоків
 status-selected = Вибрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменти: { $rendered }/{ $total } (приховано: { $culled })
 status-clip = Ближня/дальня площина/Δ: { $near } / { $far } / { $delta } м
 
 ## High-frequency source literals
@@ -220,7 +219,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Виберіть вихідний файл або файли для імпорту.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Виберіть цей вхід, клацнувши по завантаженій поверхні в області перегляду
 literal-choose-9e53070883acbe06 = Виберіть...
-literal-chunks-d8bf831735fec9eb = Фрагменти: --
 literal-clear-b4f1dffbb6be6302 = Очистити
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистити текстуру активної тріангуляції
 literal-clear-raster-ef94c7849961e88f = Очистити растр

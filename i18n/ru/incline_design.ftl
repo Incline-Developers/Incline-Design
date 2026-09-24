@@ -150,7 +150,6 @@ tri-estimated-memory = Пиковое потребление памяти: ок�
 block-grid-summary = Сетка: { $x } × { $y } × { $z } = { $count } блоков
 status-selected = Выбрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменты: { $rendered }/{ $total } (скрыто: { $culled })
 status-clip = Ближняя/дальняя плоскость/Δ: { $near } / { $far } / { $delta } м
 
 
@@ -217,7 +216,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Выберите исходный файл или файлы для импорта.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Выберите этот вход, щёлкнув по загруженной поверхности в области просмотра
 literal-choose-9e53070883acbe06 = Выберите...
-literal-chunks-d8bf831735fec9eb = Фрагменты: --
 literal-clear-b4f1dffbb6be6302 = Очистить
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистить текстуру активной триангуляции
 literal-clear-raster-ef94c7849961e88f = Очистить растр
