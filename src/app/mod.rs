@@ -673,6 +673,7 @@ impl<'a> App<'a> {
         self.editor.debug_chunk_coloring = config.debug_chunk_coloring;
         self.editor.debug_chunk_bounds = config.debug_chunk_bounds;
         self.editor.debug_clip_planes = config.debug_clip_planes;
+        self.editor.debug_point_counts = config.debug_point_counts;
         self.editor.plan_orbit_sensitivity = io::finite_clamped(config.plan_orbit_sensitivity, 0.0001, 0.02, io::default_plan_orbit_sensitivity());
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());
         self.editor.plan_invert_vertical_look = config.plan_invert_vertical_look;

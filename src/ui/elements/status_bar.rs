@@ -137,6 +137,20 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     };
                     ui.separator();
                 }
+                if editor.debug_point_counts {
+                    match editor.debug_point_stats {
+                        Some(stats) => ui.label(tr!(
+                            "status-points",
+                            drawn = stats.drawn.separate_with_commas(),
+                            target = stats.target.separate_with_commas(),
+                            total = stats.total.separate_with_commas(),
+                            drawn_chunks = stats.drawn_chunks,
+                            total_chunks = stats.total_chunks
+                        )),
+                        None => ui.label(tr!(literal = "Points: -- / -- of -- (--/-- chunks)")),
+                    };
+                    ui.separator();
+                }
                 let coord_width = coord_field_width(ui);
                 let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();
                 match editor.cursor_world.filter(|_| cursor_in_viewport) {

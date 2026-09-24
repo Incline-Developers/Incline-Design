@@ -18,7 +18,7 @@ use crate::{
     },
     rendering::{
         camera::SectionSlab,
-        graphics::frustum::Frustum,
+        graphics::frustum::{Frustum, OrientedBox},
         scene::point_buffer_arena::{PointBufferArena, PointSlot},
     },
 };
@@ -44,6 +44,8 @@ struct PointChunkDrawUniform {
     /// x: full-resolution points each drawn point stands for (full count /
     /// drawn count, at least 1). yzw: padding.
     params: [f32; 4],
+    /// Developer chunk colour, or all zero to draw the cloud's own colours.
+    debug_color: [f32; 4],
 }
 
 pub(crate) const POINT_CHUNK_DRAW_UNIFORM_SIZE: u64 = size_of::<PointChunkDrawUniform>() as u64;
@@ -72,6 +74,8 @@ pub(crate) struct CachedPointChunk {
     /// Bounds in cloud-local coordinates.
     pub(crate) bounds_min: Vec3,
     pub(crate) bounds_max: Vec3,
+    /// The prepared chunk's fitted culling box, relative to the cloud origin.
+    pub(crate) bounds: OrientedBox,
     /// Full-resolution nearest-neighbour spacing (cloud units) copied from the
     /// prepared chunk. The LOD pass scales it by decimation and projection to
     /// pick a gap-free prefix without any per-frame coverage measurement.
@@ -203,15 +207,45 @@ impl CachedPointCloudGpu {
     /// full-resolution points its LOD prefix skipped, so the shader gives a
     /// sub-pixel point their combined coverage: thinning then keeps the
     /// cloud's on-screen density instead of fading it out with zoom.
-    pub(crate) fn write_chunk_draw(&self, queue: &wgpu::Queue, index: usize, full_count: u32, drawn_count: u32) -> u32 {
+    pub(crate) fn write_chunk_draw(&self, queue: &wgpu::Queue, index: usize, full_count: u32, drawn_count: u32, debug_color: Option<[f32; 4]>) -> u32 {
         let represented = full_count as f32 / drawn_count.max(1) as f32;
         let uniform = PointChunkDrawUniform {
             params: [represented.max(1.0), 0.0, 0.0, 0.0],
+            debug_color: debug_color.unwrap_or_default(),
         };
         let offset = self.chunk_draw_stride * index as u32;
         queue.write_buffer(&self.chunk_draw_buffer, u64::from(offset), bytemuck::bytes_of(&uniform));
         offset
     }
+
+    /// Every point the cloud holds, resident or not.
+    pub(crate) fn total_points(&self) -> u64 {
+        self.prepared.chunks.iter().map(|chunk| u64::from(chunk.level_counts[0])).sum()
+    }
+
+    pub(crate) fn chunk_count(&self) -> usize {
+        self.prepared.chunks.len()
+    }
+
+    /// Scene-space culling box of every prepared chunk, resident or not.
+    pub(crate) fn chunk_bounds(&self) -> impl Iterator<Item = OrientedBox> + '_ {
+        self.prepared.chunks.iter().map(|chunk| chunk.bounds.translated(self.origin_scene))
+    }
+}
+
+/// Last main-viewport frame's point-cloud draw against the LOD, for the
+/// developer point readout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PointRenderStats {
+    /// Instances actually drawn, including any ramp towards the target.
+    pub(crate) drawn: u64,
+    /// Points the screen-space LOD asks for across the resident chunks.
+    pub(crate) target: u64,
+    /// Every point in the visible clouds.
+    pub(crate) total: u64,
+    /// Chunks drawn this frame, and every chunk in the visible clouds.
+    pub(crate) drawn_chunks: u32,
+    pub(crate) total_chunks: u32,
 }
 
 impl PointCloudGpuCache {
@@ -542,7 +576,7 @@ impl PointCloudGpuCache {
             for (chunk_index, prepared) in cloud.prepared.chunks.iter().enumerate() {
                 let min = prepared.bounds_min + cloud.origin_scene;
                 let max = prepared.bounds_max + cloud.origin_scene;
-                if !frustum.intersects_aabb(min, max) {
+                if !frustum.intersects_obb(&prepared.bounds.translated(cloud.origin_scene)) {
                     continue;
                 }
                 let key = ChunkKey {
@@ -629,7 +663,7 @@ impl PointCloudGpuCache {
             if candidate.upload_bytes > upload_budget {
                 continue;
             }
-            let (new_slot, level_counts, bounds_min, bounds_max, base_spacing) = {
+            let (new_slot, level_counts, bounds_min, bounds_max, bounds, base_spacing) = {
                 let cloud = &clouds[&candidate.key.cloud];
                 let prepared = &cloud.prepared.chunks[candidate.key.chunk];
                 let resident = cloud.chunks[candidate.key.chunk].as_ref();
@@ -665,7 +699,14 @@ impl PointCloudGpuCache {
                     None => &prepared.data.bytes()[candidate.upload_offset..upload_end],
                 };
                 queue.write_buffer(dest_buffer, dest_offset + candidate.upload_offset as u64, payload);
-                (new_slot, prepared.level_counts, prepared.bounds_min, prepared.bounds_max, prepared.base_spacing)
+                (
+                    new_slot,
+                    prepared.level_counts,
+                    prepared.bounds_min,
+                    prepared.bounds_max,
+                    prepared.bounds,
+                    prepared.base_spacing,
+                )
             };
             let cloud = clouds.get_mut(&candidate.key.cloud).expect("residency candidate cloud disappeared");
             if let Some(chunk) = cloud.chunks[candidate.key.chunk].as_mut() {
@@ -687,6 +728,7 @@ impl PointCloudGpuCache {
                     last_display_update: Cell::new(Instant::now()),
                     bounds_min,
                     bounds_max,
+                    bounds,
                     base_spacing,
                 });
             }

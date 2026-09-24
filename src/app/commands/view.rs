@@ -193,6 +193,7 @@ impl<'a> App<'a> {
         }
         self.editor.debug_chunk_bounds = preferences.debug_chunk_bounds;
         self.editor.debug_clip_planes = preferences.debug_clip_planes;
+        self.editor.debug_point_counts = preferences.debug_point_counts;
         self.editor.plan_orbit_sensitivity = preferences.plan_orbit_sensitivity;
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
@@ -341,6 +342,7 @@ pub(crate) fn config_from(
         debug_chunk_coloring: preferences.debug_chunk_coloring,
         debug_chunk_bounds: preferences.debug_chunk_bounds,
         debug_clip_planes: preferences.debug_clip_planes,
+        debug_point_counts: preferences.debug_point_counts,
         plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,

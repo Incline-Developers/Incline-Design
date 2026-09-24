@@ -162,6 +162,7 @@ status-selected = Selected: { $count }
 status-fps = FPS: { $fps }
 status-chunks = Chunks: { $rendered }/{ $total } ({ $culled } culled)
 status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
+status-points = Points: { $drawn } / { $target } of { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 
 ## High-frequency source literals
 

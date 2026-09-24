@@ -88,6 +88,13 @@ pub(crate) struct OrientedBox {
 }
 
 impl OrientedBox {
+    pub(crate) fn translated(self, offset: Vec3) -> Self {
+        Self {
+            center: self.center + offset,
+            ..self
+        }
+    }
+
     /// Corner `index` (0..8): bit `i` picks the positive end of axis `i`, so
     /// corners differing in exactly one bit share an edge.
     pub(crate) fn corner(&self, index: usize) -> Vec3 {

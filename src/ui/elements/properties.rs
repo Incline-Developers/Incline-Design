@@ -315,6 +315,7 @@ fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
     draft.debug_chunk_bounds = defaults.debug_chunk_bounds;
     draft.debug_clip_planes = defaults.debug_clip_planes;
+    draft.debug_point_counts = defaults.debug_point_counts;
 }
 
 fn reset_camera_defaults(draft: &mut PreferencesDraft) {
@@ -518,17 +519,26 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Frame counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
                 &MenuFieldBool::new(tr!(literal = "Colour GPU chunks"), &mut draft.debug_chunk_coloring)
-                    .help_text(tr!(literal = "Visualises the Morton spatial chunking used for frustum culling."))
+                    .help_text(tr!(
+                        literal = "Visualises the Morton spatial chunking used for frustum culling, on surfaces and point clouds."
+                    ))
                     .show(ui),
             );
             changed |= committed(
                 &MenuFieldBool::new(tr!(literal = "Chunk bounding boxes"), &mut draft.debug_chunk_bounds)
-                    .help_text(tr!(literal = "Outlines the box each surface chunk is frustum-culled by."))
+                    .help_text(tr!(literal = "Outlines the box each surface or point-cloud chunk is frustum-culled by."))
                     .show(ui),
             );
             changed |= committed(
                 &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
                     .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new(tr!(literal = "Point cloud counts"), &mut draft.debug_point_counts)
+                    .help_text(tr!(
+                        literal = "Shows the points drawn last frame against what the screen-space level of detail asks for, and the total in the visible clouds."
+                    ))
                     .show(ui),
             );
             changed

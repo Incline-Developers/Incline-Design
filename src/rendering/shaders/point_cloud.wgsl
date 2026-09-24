@@ -15,6 +15,9 @@ struct PointChunkDraw {
     // x: full-resolution points each drawn point stands for, at least 1 -
     // the chunk's full count over the LOD prefix being drawn.
     params: vec4<f32>,
+    // Developer chunk colour drawn in place of every other colour; alpha 0
+    // when chunk colouring is off.
+    debug_color: vec4<f32>,
 };
 @group(1) @binding(1)
 var<uniform> chunk_draw: PointChunkDraw;
@@ -117,7 +120,7 @@ fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOu
     var out: VertexOutput;
     let clip = center_clip + (corner.x * right_clip + corner.y * up_clip) * grow;
     out.clip_position = clip;
-    out.color = depth_cue(color, splat_center);
+    out.color = depth_cue(select(color, chunk_draw.debug_color, chunk_draw.debug_color.a > 0.0), splat_center);
     out.section_offset = section_plane_offset(splat_center);
     out.world = splat_center;
     // A thinned-out point also stands in for the points its LOD prefix

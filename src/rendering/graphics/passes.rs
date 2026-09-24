@@ -480,8 +480,9 @@ impl<'a> Graphics<'a> {
     /// Rebuild [`Self::chunk_bounds_outline`]: the twelve edges of every
     /// visible surface chunk's culling box, in the chunk's debug colour. The
     /// same chunks the `(rendered, total)` readout counts, culled or not, so a
-    /// box poking into view explains a chunk the counter kept.
-    fn rebuild_chunk_bounds_outline(&mut self, editor: &EditorState, triangulations: &[OpenTriangulation]) {
+    /// box poking into view explains a chunk the counter kept. Point-cloud
+    /// chunks are outlined the same way, resident or not.
+    fn rebuild_chunk_bounds_outline(&mut self, editor: &EditorState, triangulations: &[OpenTriangulation], point_clouds: &[OpenPointCloud]) {
         self.chunk_bounds_outline = None;
         if !editor.debug_chunk_bounds {
             return;
@@ -511,6 +512,25 @@ impl<'a> Graphics<'a> {
                     for bit in [1, 2, 4] {
                         if from & bit == 0 {
                             crate::rendering::geometry::draw_line(&mut context, corner(from), corner(from | bit), CHUNK_BOUNDS_LINE_WIDTH, chunk.debug_color);
+                        }
+                    }
+                }
+            }
+        }
+        for point_cloud in point_clouds {
+            if !point_cloud.state.loaded || editor.hidden_handles.contains(&point_cloud.entity_id()) {
+                continue;
+            }
+            let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
+                continue;
+            };
+            for (chunk_index, bounds) in cached.chunk_bounds().enumerate() {
+                let color = crate::rendering::scene::gpu_cache::chunk_debug_color(chunk_index);
+                let corner = |index: usize| bounds.corner(index).as_dvec3() + self.scene_origin;
+                for from in 0..8 {
+                    for bit in [1, 2, 4] {
+                        if from & bit == 0 {
+                            crate::rendering::geometry::draw_line(&mut context, corner(from), corner(from | bit), CHUNK_BOUNDS_LINE_WIDTH, color);
                         }
                     }
                 }
@@ -551,7 +571,7 @@ impl<'a> Graphics<'a> {
         // Only the main viewport's pass owns the outline: previews and
         // screenshots render without editor overlays and must not drop it.
         if include_editor_overlays {
-            self.rebuild_chunk_bounds_outline(editor, triangulations);
+            self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
         }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
@@ -605,6 +625,7 @@ impl<'a> Graphics<'a> {
         let debug_chunks = editor.debug_chunk_coloring;
         let mut rendered_chunks: u32 = 0;
         let mut total_chunks: u32 = 0;
+        let mut point_stats = crate::rendering::scene::point_cloud_cache::PointRenderStats::default();
 
         // Undraped rasters show as flat plan-view images: drawn before all
         // scene geometry, pinned to the far plane with depth writes off, and
@@ -655,6 +676,8 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
                     continue;
                 };
+                point_stats.total += cached.total_points();
+                point_stats.total_chunks += cached.chunk_count() as u32;
                 if colored_pipeline_active != Some(cached.colored) {
                     let pipeline = if cached.colored {
                         &self.pipes().point_cloud_colored_render_pipeline
@@ -666,6 +689,9 @@ impl<'a> Graphics<'a> {
                     colored_pipeline_active = Some(cached.colored);
                 }
                 for (chunk_index, chunk) in cached.chunks.iter().enumerate().filter_map(|(index, chunk)| Some((index, chunk.as_ref()?))) {
+                    if !frustum.intersects_obb(&chunk.bounds.translated(cached.origin_scene)) {
+                        continue;
+                    }
                     let bounds_min = chunk.bounds_min + cached.origin_scene;
                     let bounds_max = chunk.bounds_max + cached.origin_scene;
                     // Projected bounds are conservative and include raster
@@ -723,7 +749,11 @@ impl<'a> Graphics<'a> {
                             chunk.last_display_update.set(display_now);
                         }
                     }
-                    let draw_offset = cached.write_chunk_draw(&self.queue, chunk_index, chunk.level_counts[0], instance_count);
+                    point_stats.drawn += u64::from(instance_count);
+                    point_stats.target += u64::from(target_count);
+                    point_stats.drawn_chunks += 1;
+                    let debug_color = debug_chunks.then(|| crate::rendering::scene::gpu_cache::chunk_debug_color(chunk_index));
+                    let draw_offset = cached.write_chunk_draw(&self.queue, chunk_index, chunk.level_counts[0], instance_count, debug_color);
                     render_pass.set_bind_group(1, &cached.style_bind_group, &[draw_offset]);
                     render_pass.set_vertex_buffer(0, chunk.slot.buffer().slice(chunk.slot.vertex_range()));
                     render_pass.draw(0..4, 0..instance_count);
@@ -900,6 +930,7 @@ impl<'a> Graphics<'a> {
         // brick aggregates elsewhere.
         if include_editor_overlays {
             self.chunk_render_stats = (rendered_chunks, total_chunks);
+            self.point_render_stats = point_stats;
         }
         let needs_volume_target = block_models.iter().any(|block_model| {
             let entity = block_model.entity_id();

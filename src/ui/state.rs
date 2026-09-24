@@ -60,6 +60,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) debug_chunk_coloring: bool,
     pub(crate) debug_chunk_bounds: bool,
     pub(crate) debug_clip_planes: bool,
+    pub(crate) debug_point_counts: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -102,6 +103,7 @@ impl Default for PreferencesDraft {
             debug_chunk_coloring: false,
             debug_chunk_bounds: false,
             debug_clip_planes: false,
+            debug_point_counts: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -1178,6 +1180,10 @@ pub(crate) struct EditorState {
     /// developer clip-plane readout is enabled.
     pub(crate) debug_clip_plane_distances: Option<(f64, f64)>,
     pub(crate) debug_clip_planes: bool,
+    /// Last frame's point-cloud draw against the LOD target, shown in the
+    /// status bar when the developer point readout is enabled.
+    pub(crate) debug_point_stats: Option<crate::rendering::scene::point_cloud_cache::PointRenderStats>,
+    pub(crate) debug_point_counts: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -2287,6 +2293,7 @@ impl EditorState {
             debug_chunk_coloring: self.debug_chunk_coloring,
             debug_chunk_bounds: self.debug_chunk_bounds,
             debug_clip_planes: self.debug_clip_planes,
+            debug_point_counts: self.debug_point_counts,
             plan_orbit_sensitivity: self.plan_orbit_sensitivity,
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
             plan_invert_vertical_look: self.plan_invert_vertical_look,
@@ -2350,6 +2357,8 @@ impl EditorState {
             debug_chunk_bounds: false,
             debug_clip_plane_distances: None,
             debug_clip_planes: false,
+            debug_point_stats: None,
+            debug_point_counts: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
