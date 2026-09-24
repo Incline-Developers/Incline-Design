@@ -3099,6 +3099,10 @@ pub(crate) enum UiCommand {
     /// browser can do, so it is not offered there.
     #[cfg(not(target_arch = "wasm32"))]
     ShowProjectInFileManager,
+    /// Open the file manager on a remembered project's file, from the
+    /// splash's Recent list.
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowTrackedProjectInFileManager(PathBuf),
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
@@ -3635,6 +3639,8 @@ impl UiCommand {
             Self::RemoveTrackedProject(id) => report(tr!(literal = "Remove Project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ShowProjectInFileManager => report(tr!(literal = "Show Project"), tr!(literal = "Open the containing folder")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ShowTrackedProjectInFileManager(path) => report(tr!(literal = "Show Project"), path.display().to_string()),
             Self::ImportOmfPaths(paths) => report(tr!(literal = "Import OMF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportDxfPathsInto(paths) => report(tr!(literal = "Import DXF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportTriangulationPaths(paths) => report(tr!(literal = "Import Triangulation"), tr_format!(literal = "%count% file(s)", count = paths.len())),

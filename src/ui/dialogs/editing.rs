@@ -358,7 +358,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
             egui::Frame::new()
                 .fill(ui.visuals().window_fill())
                 .stroke(ui.visuals().window_stroke())
-                .corner_radius(egui::CornerRadius::ZERO)
+                .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
                     ui.set_width(PANEL_SIZE);
@@ -370,9 +370,14 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
                     // what is genuinely left rather than pushing this out of
                     // the frame. It still draws along the bottom edge.
                     egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
+                        // Housekeeping, not content: set back from the actions
+                        // the way the site sets back its platform line.
+                        let weak = splash_caption_color(ui);
                         ui.horizontal_centered(|ui| {
-                            ui.label(tr_format!(literal = "%app%: %release%", app = crate::APP_NAME, release = crate::APP_RELEASE));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(tr!(literal = "MIT License")));
+                            ui.label(egui::RichText::new(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE)).size(12.0).color(weak));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(tr!(literal = "MIT License")).size(12.0).color(weak))
+                            });
                         });
                     });
 
@@ -483,6 +488,12 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
         });
 }
 
+/// The splash's section headings and footer: set back from the actions, but a
+/// step darker than egui's weak text so they still read at a glance.
+fn splash_caption_color(ui: &egui::Ui) -> egui::Color32 {
+    ui.visuals().weak_text_color().lerp_to_gamma(ui.visuals().text_color(), 0.25)
+}
+
 fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTrackedProjectEntry], width: f32, height: f32, row_height: f32, commands: &mut Vec<UiCommand>) {
     const INSET: i8 = 3;
 
@@ -520,18 +531,6 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                         ui.available_width(),
                         row_height,
                     );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
-                    #[cfg(target_arch = "wasm32")]
-                    let row = row.on_hover_text(format!(
-                        "{}\n{}",
-                        entry.name,
-                        if entry.stored_in_browser {
-                            tr!(literal = "Saved in browser storage")
-                        } else {
-                            tr!(literal = "Not saved in browser storage")
-                        }
-                    ));
                     if row.clicked() {
                         #[cfg(not(target_arch = "wasm32"))]
                         commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
@@ -539,6 +538,11 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                         commands.push(UiCommand::ActivateTrackedProject(entry.id));
                     }
                     context_menu_popup(&row, entry.name.as_str(), |ui| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if ContextMenuAction::new(crate::ui::elements::main_menu::show_in_file_manager_label()).show(ui).clicked() {
+                            commands.push(UiCommand::ShowTrackedProjectInFileManager(entry.path.clone()));
+                            ui.close();
+                        }
                         if ContextMenuAction::new(tr!(literal = "Remove from List")).show(ui).clicked() {
                             #[cfg(not(target_arch = "wasm32"))]
                             commands.push(UiCommand::RemoveTrackedProject(entry.path.clone()));
@@ -563,7 +567,7 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
 fn select_project_action_column(ui: &mut egui::Ui, heading: impl Into<String>, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.set_width(width);
-        ui.label(egui::RichText::new(heading.into()).size(12.0).color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(heading.into()).size(12.0).color(splash_caption_color(ui)));
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
         add_contents(ui);
     });
@@ -574,24 +578,27 @@ fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, labe
 }
 
 fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: impl Into<String>, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
+    /// How far a hovered row's content steps right, in points.
+    const HOVER_NUDGE: f32 = 3.0;
+
     let label = label.into();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let hovered = response.hovered();
-    if fill != egui::Color32::TRANSPARENT || hovered {
-        ui.painter().rect_filled(
-            rect,
-            if hovered { egui::CornerRadius::same(2) } else { egui::CornerRadius::ZERO },
-            if hovered { ui.visuals().widgets.hovered.bg_fill } else { fill },
-        );
+    // The nudge is the whole hover cue - no fill behind the row. Eased in and
+    // out, so sweeping the pointer down the list reads as one motion rather
+    // than rows jumping.
+    let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
+    if fill != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, fill);
     }
+    let nudge = HOVER_NUDGE * hover;
 
     let icon_size = egui::vec2(22.0, 22.0);
-    let icon_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0, rect.center().y - icon_size.y / 2.0), icon_size);
+    let icon_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0 + nudge, rect.center().y - icon_size.y / 2.0), icon_size);
     icon.fit_to_exact_size(icon_size).paint_at(ui, icon_rect);
 
     // Rows are laid out to a fixed width, so long labels truncate rather than
-    // running beyond their action area. The full name stays on the hover text.
-    let text_left = rect.left() + 30.0;
+    // running beyond their action area.
+    let text_left = rect.left() + 30.0 + nudge;
     let text_color = ui.visuals().text_color();
     let mut job = egui::text::LayoutJob::single_section(label.to_owned(), egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color));
     job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - 4.0 - text_left).max(0.0));
