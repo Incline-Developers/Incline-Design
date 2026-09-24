@@ -35,6 +35,31 @@ pub(crate) enum ViewOnOpen {
 /// now belongs to: every saved colour is kept, every unnamed code gets a
 /// generated one, nothing is marked dirty, and the gap is reported.
 pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole::OpenDrillHoleDataset) {
+    let (kept, dropped) = crate::model::drill_hole::tidy_working_sections(std::mem::take(&mut open.color.working_sections), &open.dataset.fields);
+    open.color.working_sections = kept;
+    if !dropped.is_empty() {
+        let details = dropped
+            .iter()
+            .map(|section| tr_format!(literal = "'%name%': %reason%", name = section.name.clone(), reason = section.problem.message()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        userspace_warn!(
+            "{}",
+            tr_format!(
+                literal = "Dataset '%name%': %count% working section(s) could not be restored: %details%",
+                name = open.name.clone(),
+                count = dropped.len(),
+                details = details
+            )
+        );
+    }
+    if open.color.by_working_section
+        && let Some(field) = open.color.active_field.as_deref()
+        && !open.color.working_sections.iter().any(|section| section.field == field)
+    {
+        open.color.by_working_section = false;
+    }
+
     let Some(key) = open.color.active_field.clone() else { return };
     let dataset = std::sync::Arc::clone(&open.dataset);
     let Some(field) = dataset.field(&key) else { return };

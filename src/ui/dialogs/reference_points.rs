@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     i18n::{tr, tr_format},
-    model::drill_hole::{DrillField, DrillFieldKind, DrillValue, OpenDrillHoleDataset, ReferenceSide},
+    model::drill_hole::{DrillField, DrillFieldKind, DrillValue, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
     ui::{
         state::{EditorState, UiCommand},
         widgets::menu::{DragableMenu, MenuButton, MenuFieldCombo, selected_source_field},
@@ -109,18 +109,39 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     found.into_iter().collect()
                 }
             };
-            if !draft.value.as_deref().is_some_and(|value| categories.contains(&value)) {
-                draft.value = categories.first().map(|category| (*category).to_owned());
+            // Working sections named on the datasets come first: one of them
+            // picks its codes as one run. Only those these holes log show.
+            let mut sections: Vec<&str> = Vec::new();
+            if let Some(key) = draft.field.as_deref() {
+                for section in involved.iter().flat_map(|dataset| dataset.color.working_sections.iter()) {
+                    if section.field == key && section.codes.iter().any(|code| categories.contains(&code.as_str())) && !sections.contains(&section.name.as_str()) {
+                        sections.push(section.name.as_str());
+                    }
+                }
             }
-            let value_label = draft.value.clone().unwrap_or_else(|| tr!(literal = "No values"));
-            MenuFieldCombo::new(
-                "reference_points_value",
-                tr!(literal = "Working section"),
-                &mut draft.value,
-                value_label,
-                categories.iter().map(|category| (Some((*category).to_owned()), (*category).to_owned().into())),
-            )
-            .show(ui);
+            // A section and a code may share a name across datasets; the
+            // choice says which it is, so the two never stand for each other.
+            let known = |target: &ReferenceTarget| match target {
+                ReferenceTarget::Section(name) => sections.contains(&name.as_str()),
+                ReferenceTarget::Code(code) => categories.contains(&code.as_str()),
+            };
+            if !draft.value.as_ref().is_some_and(known) {
+                draft.value = sections
+                    .first()
+                    .map(|name| ReferenceTarget::Section((*name).to_owned()))
+                    .or_else(|| categories.first().map(|code| ReferenceTarget::Code((*code).to_owned())));
+            }
+            let value_label = draft.value.as_ref().map_or_else(|| tr!(literal = "No values"), ReferenceTarget::label);
+            let options = sections
+                .iter()
+                .map(|name| ReferenceTarget::Section((*name).to_owned()))
+                .chain(categories.iter().map(|code| ReferenceTarget::Code((*code).to_owned())))
+                .map(|target| {
+                    let label = target.label().into();
+                    (Some(target), label)
+                })
+                .collect::<Vec<_>>();
+            MenuFieldCombo::new("reference_points_value", tr!(literal = "Working section"), &mut draft.value, value_label, options).show(ui);
 
             let side_label = draft.side.label();
             MenuFieldCombo::new(
@@ -136,16 +157,16 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 literal = "One point per hole at that boundary, as a new layer. A hole holding the section twice gives its uppermost and is flagged."
             ));
             if ui.add(MenuButton::new(tr!(literal = "Make")).primary().enabled(draft.value.is_some())).clicked()
-                && let (Some(field), Some(value)) = (draft.field.clone(), draft.value.clone())
+                && let (Some(field), Some(target)) = (draft.field.clone(), draft.value.clone())
             {
-                build = Some((field, value, draft.side));
+                build = Some((field, target, draft.side));
             }
         });
-    if let Some((field, value, side)) = build {
+    if let Some((field, target, side)) = build {
         commands.push(UiCommand::BuildReferencePoints {
             holes: draft.holes.clone(),
             field,
-            value,
+            target,
             side,
         });
         open = false;

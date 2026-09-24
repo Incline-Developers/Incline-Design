@@ -622,8 +622,8 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
-            UiCommand::BuildReferencePoints { holes, field, value, side } => {
-                self.build_reference_points(holes, field, value, side);
+            UiCommand::BuildReferencePoints { holes, field, target, side } => {
+                self.build_reference_points(holes, field, target, side);
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
@@ -649,6 +649,14 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleCategoryColors { id, categories } => {
                 self.set_drill_hole_category_colors(id, categories);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleWorkingSections { id, sections } => {
+                self.set_drill_hole_working_sections(id, sections);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleColorByWorkingSection { id, field } => {
+                self.set_drill_hole_color_by_working_section(id, field);
                 Ok(())
             }
             UiCommand::OpenCreateBlockModel => {

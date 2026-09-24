@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel},
+    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -55,6 +55,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     (PropertyTab::Camera, tr!(literal = "Camera")),
                     (PropertyTab::Performance, tr!(literal = "Performance")),
                     (PropertyTab::Developer, tr!(literal = "Developer")),
+                    (PropertyTab::Drillholes, tr!(literal = "Drillholes")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
                         .selected(editor.active_property_tab == tab)
@@ -75,6 +76,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
+                        PropertyTab::Drillholes => draw_drillhole_settings(ui, editor, drill_holes, commands),
                     });
             });
         });
@@ -531,6 +533,33 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         },
         Some(reset_developer_defaults),
     );
+}
+
+fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!(literal = "Drillholes"));
+    let loaded: Vec<&OpenDrillHoleDataset> = drill_holes.iter().filter(|dataset| dataset.state.loaded).collect();
+    let Some(current) = loaded
+        .iter()
+        .find(|dataset| Some(dataset.id) == editor.preferences_drill_hole)
+        .or_else(|| loaded.first())
+        .copied()
+    else {
+        ui.label(egui::RichText::new(tr!(literal = "No drillhole datasets are open.")).weak());
+        return;
+    };
+    editor.preferences_drill_hole = Some(current.id);
+    MenuFieldCombo::new(
+        "preferences_drill_hole",
+        tr!(literal = "Dataset"),
+        &mut editor.preferences_drill_hole,
+        current.name.clone(),
+        loaded.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
+    )
+    .show(ui);
+    let Some(current) = loaded.iter().find(|dataset| Some(dataset.id) == editor.preferences_drill_hole).copied() else {
+        return;
+    };
+    crate::ui::dialogs::drill_hole::draw_drill_hole_color_editor(ui, current, commands, crate::ui::dialogs::drill_hole::ColorEditorHost::Page);
 }
 
 /// A labelled value the panel only reports, laid out like the editable fields

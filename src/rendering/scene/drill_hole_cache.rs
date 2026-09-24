@@ -611,6 +611,8 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
         }
     }
     dataset.color.categories.content_hash().hash(&mut hash);
+    dataset.color.working_sections.hash(&mut hash);
+    dataset.color.by_working_section.hash(&mut hash);
     hash.finish()
 }
 
@@ -708,6 +710,7 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
     let mut before_merge = 0usize;
     let cos_threshold = MERGE_MAX_DEVIATION_DEGREES.to_radians().cos();
     let field = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key));
+    let sections = dataset.color.section_lookup();
     for (index, hole) in dataset.dataset.holes.iter().enumerate() {
         stations += hole.trace.len();
         if hole.trace.len() < 2 {
@@ -780,7 +783,7 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
                 end,
                 radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5 * dataset.color.radius_scale) as f32),
                 color: field
-                    .and_then(|field| value.map(|value| evaluate_color_for(&field.kind, value, &dataset.color)))
+                    .and_then(|field| value.map(|value| evaluate_color_with(&field.kind, value, &dataset.color, &sections)))
                     .unwrap_or([1.0; 3]),
                 selection_index: index as u32,
             });
@@ -957,6 +960,23 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
 /// kind is borrowed: a categorical kind owns its whole code list.
 pub(crate) fn evaluate_color_for(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
     match (kind, value) {
+        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(state.display_code(value)).unwrap_or([1.0; 3]),
+        _ => evaluate_ramp(kind, value, state),
+    }
+}
+
+/// [`evaluate_color_for`] over a whole rebuild: the codes go through a
+/// section lookup built once, not a walk of the section list per interval.
+pub(crate) fn evaluate_color_with(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState, sections: &crate::model::drill_hole::SectionLookup<'_>) -> [f32; 3] {
+    match (kind, value) {
+        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(sections.display_code(value)).unwrap_or([1.0; 3]),
+        _ => evaluate_ramp(kind, value, state),
+    }
+}
+
+/// The numeric half of the two above; anything not numeric is white.
+fn evaluate_ramp(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
+    match (kind, value) {
         // A no-data sentinel falls through to white, the same as a missing
         // value: it is not the bottom of the ramp, it is nothing at all.
         (DrillFieldKind::Numeric { min, max }, DrillValue::Numeric(value)) if value.is_finite() && !crate::model::block_model::is_no_data_sentinel(*value) => {
@@ -967,9 +987,6 @@ pub(crate) fn evaluate_color_for(kind: &DrillFieldKind, value: &DrillValue, stat
             };
             evaluate_stops(t, &state.stops, state.smooth)
         }
-        // Binary search: once per interval per rebuild, over a dictionary that
-        // can run past a hundred codes.
-        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(value).unwrap_or([1.0; 3]),
         _ => [1.0; 3],
     }
 }

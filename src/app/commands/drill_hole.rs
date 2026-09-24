@@ -279,6 +279,7 @@ impl<'a> App<'a> {
         }
         self.set_drill_hole_color(id, |dataset, color| {
             color.active_field = field.clone();
+            color.by_working_section = false;
             color.preset = DrillColorPreset::Rainbow;
             color.smooth = true;
             color.stops = DrillColorPreset::Rainbow.stops();
@@ -314,6 +315,69 @@ impl<'a> App<'a> {
         // stop's is, so no NaN reaches the shader.
         let categories = categories.into_iter().filter(|category| category.color.iter().all(|value| value.is_finite())).collect();
         self.set_drill_hole_color(id, |_, color| color.set_categories(categories));
+    }
+
+    pub(crate) fn set_drill_hole_working_sections(&mut self, id: DrillHoleId, sections: Vec<crate::model::drill_hole::WorkingSection>) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let (sections, dropped) = crate::model::drill_hole::tidy_working_sections(sections, &dataset.dataset.fields);
+        if !dropped.is_empty() {
+            let reasons = dropped
+                .iter()
+                .map(|section| tr_format!(literal = "'%name%': %reason%", name = section.name.clone(), reason = section.problem.message()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Working sections not kept in '%dataset%'. %reasons%",
+                    dataset = dataset.name.clone(),
+                    reasons = reasons
+                )
+            );
+        }
+        // Nothing left to change is no undo step.
+        if sections == dataset.color.working_sections {
+            return;
+        }
+        self.set_drill_hole_color(id, |dataset, color| {
+            color.working_sections = sections;
+            // A field left with no sections has nothing to colour by.
+            if color.by_working_section
+                && !color
+                    .active_field
+                    .as_deref()
+                    .is_some_and(|field| color.working_sections.iter().any(|section| section.field == field))
+            {
+                color.by_working_section = false;
+            }
+            if let Some(field) = color.active_field.as_deref().and_then(|key| dataset.dataset.field(key)) {
+                color.reconcile_categories(field);
+            }
+        });
+    }
+
+    pub(crate) fn set_drill_hole_color_by_working_section(&mut self, id: DrillHoleId, field: String) {
+        let valid = self.drill_holes.iter().find(|item| item.id == id).is_some_and(|dataset| {
+            matches!(dataset.dataset.field(&field).map(|field| &field.kind), Some(DrillFieldKind::Categorical { .. }))
+                && dataset.color.working_sections.iter().any(|section| section.field == field)
+        });
+        if !valid {
+            return;
+        }
+        self.set_drill_hole_color(id, |dataset, color| {
+            if color.active_field.as_deref() != Some(field.as_str()) {
+                color.active_field = Some(field.clone());
+                color.preset = DrillColorPreset::Rainbow;
+                color.smooth = true;
+                color.stops = DrillColorPreset::Rainbow.stops();
+            }
+            color.by_working_section = true;
+            if let Some(field) = dataset.dataset.field(&field) {
+                color.reconcile_categories(field);
+            }
+        });
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {
@@ -414,23 +478,48 @@ impl<'a> App<'a> {
     /// layer, so a corrected pick shows up as a new set beside the old.
     ///
     /// Runs on the holes the dialog was opened on, which may span datasets.
-    pub(crate) fn build_reference_points(&mut self, holes: Vec<DrillHoleRef>, field: String, value: String, side: crate::model::drill_hole::ReferenceSide) {
+    pub(crate) fn build_reference_points(
+        &mut self,
+        holes: Vec<DrillHoleRef>,
+        field: String,
+        target: crate::model::drill_hole::ReferenceTarget,
+        side: crate::model::drill_hole::ReferenceSide,
+    ) {
+        let value = target.name().to_owned();
         let mut picks = Vec::new();
         let mut absent = 0usize;
         let mut flagged: Vec<String> = Vec::new();
+        let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
+        for reference in &holes {
+            if !involved.iter().any(|dataset| dataset.id == reference.dataset)
+                && let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+            {
+                involved.push(dataset);
+            }
+        }
+        let (codes_by_dataset, disagree) = reference_codes(&involved, &field, &target);
+        if disagree {
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Working section '%name%' is not the same in every selected dataset; each dataset's own was used.",
+                    name = value.clone()
+                )
+            );
+        }
         for reference in &holes {
             // Unloaded or removed under the open dialog: the hole is not
             // there to pick from, so it counts as one that gave nothing.
-            let Some(hole) = self
-                .drill_holes
-                .iter()
-                .find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
-                .and_then(|dataset| dataset.dataset.holes.get(reference.hole))
-            else {
+            let Some(dataset) = involved.iter().find(|dataset| dataset.id == reference.dataset) else {
                 absent += 1;
                 continue;
             };
-            let pick = crate::model::drill_hole::reference_pick(hole, &field, &value, side);
+            let Some(hole) = dataset.dataset.holes.get(reference.hole) else {
+                absent += 1;
+                continue;
+            };
+            let codes = codes_by_dataset.iter().find(|(id, _)| *id == dataset.id).map_or(&[][..], |(_, codes)| codes.as_slice());
+            let pick = crate::model::drill_hole::reference_pick(hole, &field, codes, side);
             let Some(depth) = pick.depth else {
                 absent += 1;
                 continue;
@@ -444,7 +533,7 @@ impl<'a> App<'a> {
             }
         }
         if picks.is_empty() {
-            userspace_warn!("{}", tr_format!(literal = "No hole holds '%value%' in that field", value = value));
+            userspace_warn!("{}", tr_format!(literal = "No hole holds '%value%' in that field", value = target.label()));
             return;
         }
         let Some(project) = self.workspace.active_project_mut() else {
@@ -490,4 +579,33 @@ impl<'a> App<'a> {
         }
         self.invalidate_geometry();
     }
+}
+
+/// The codes a reference pick on `target` looks for in each dataset, found
+/// once per dataset rather than per hole, and whether the datasets define
+/// the section differently. A code stands for itself. A working section
+/// stands for its codes as each dataset defines it; a dataset without one of
+/// that name on `field` borrows the first definition among the others. A
+/// section none of them defines picks nothing: its name is never looked
+/// for as a code.
+fn reference_codes(datasets: &[&OpenDrillHoleDataset], field: &str, target: &crate::model::drill_hole::ReferenceTarget) -> (Vec<(DrillHoleId, Vec<String>)>, bool) {
+    let name = match target {
+        crate::model::drill_hole::ReferenceTarget::Code(code) => return (datasets.iter().map(|dataset| (dataset.id, vec![code.clone()])).collect(), false),
+        crate::model::drill_hole::ReferenceTarget::Section(name) => name,
+    };
+    let own = datasets
+        .iter()
+        .map(|dataset| dataset.color.working_section_named(field, name).map(|section| section.codes.as_slice()))
+        .collect::<Vec<_>>();
+    fn as_set(codes: &[String]) -> std::collections::BTreeSet<&str> {
+        codes.iter().map(String::as_str).collect()
+    }
+    let first = own.iter().flatten().next().copied();
+    let disagree = first.is_some_and(|first| own.iter().flatten().any(|codes| as_set(codes) != as_set(first)));
+    let codes = datasets
+        .iter()
+        .zip(&own)
+        .map(|(dataset, codes)| (dataset.id, codes.or(first).map(<[String]>::to_vec).unwrap_or_default()))
+        .collect();
+    (codes, disagree)
 }

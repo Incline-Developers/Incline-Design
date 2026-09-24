@@ -1816,6 +1816,8 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Selected Preferences section.
     pub(crate) active_property_tab: PropertyTab,
+    /// The drillhole dataset the Drillholes preferences page edits.
+    pub(crate) preferences_drill_hole: Option<DrillHoleId>,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
@@ -2726,6 +2728,7 @@ impl EditorState {
             bezier_hover_cp: None,
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
+            preferences_drill_hole: None,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             survey: Default::default(),
@@ -3425,7 +3428,7 @@ pub(crate) enum UiCommand {
     BuildReferencePoints {
         holes: Vec<DrillHoleRef>,
         field: String,
-        value: String,
+        target: crate::model::drill_hole::ReferenceTarget,
         side: crate::model::drill_hole::ReferenceSide,
     },
     /// Sends one named hole to the inspector and shows the panel, bypassing
@@ -3453,6 +3456,16 @@ pub(crate) enum UiCommand {
     SetDrillHoleCategoryColors {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
+    },
+    /// Replace a dataset's working sections, every field's, as one undo step.
+    SetDrillHoleWorkingSections {
+        id: DrillHoleId,
+        sections: Vec<crate::model::drill_hole::WorkingSection>,
+    },
+    /// Colour a dataset by the working sections of one categorical field.
+    SetDrillHoleColorByWorkingSection {
+        id: DrillHoleId,
+        field: String,
     },
     /// Open Create Block Model on the selected drill holes. Like the other
     /// select-first tools it takes its input from the scene selection, so the
@@ -3725,6 +3738,7 @@ impl UiCommand {
             | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
+            | Self::SetDrillHoleWorkingSections { .. }
             | Self::OpenDrillHoleColorDialog(_)
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
@@ -3924,11 +3938,15 @@ impl UiCommand {
             Self::CloseDrillHole(id) => report(tr!(literal = "Unload Drillholes"), format!("{id:?}")),
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
+            Self::SetDrillHoleColorByWorkingSection { field, .. } => report(tr!(literal = "Colour Drillholes by Working Section"), field.clone()),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
             Self::SetDrillHoleWidth {
                 radius_scale, min_pixel_diameter, ..
             } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
-            Self::BuildReferencePoints { holes, value, side, .. } => report(tr!(literal = "Build Reference Points"), format!("{value} {}, {} hole(s)", side.label(), holes.len())),
+            Self::BuildReferencePoints { holes, target, side, .. } => report(
+                tr!(literal = "Build Reference Points"),
+                format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()),
+            ),
             Self::BuildReferenceSurface { points, controls, extent } => report(
                 tr!(literal = "Build Surface"),
                 match extent {
@@ -4472,6 +4490,7 @@ pub(crate) enum PropertyTab {
     Camera,
     Performance,
     Developer,
+    Drillholes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -4520,6 +4539,6 @@ pub(crate) struct ReferenceSurfaceDraft {
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) field: Option<String>,
-    pub(crate) value: Option<String>,
+    pub(crate) value: Option<crate::model::drill_hole::ReferenceTarget>,
     pub(crate) side: crate::model::drill_hole::ReferenceSide,
 }

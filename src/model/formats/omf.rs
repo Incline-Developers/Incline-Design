@@ -28,7 +28,7 @@ use crate::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset, skipped_working_sections},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
@@ -1713,6 +1713,24 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         })
     }
 
+    /// Warn once when a drill-hole dataset's saved `incline:style` JSON named
+    /// working sections the lenient reader had to pass over, so a malformed
+    /// entry stays visible without resetting the colours saved beside it.
+    /// Shared by the deferred and resident drill-hole read paths: `walk`
+    /// sends a given element through exactly one of them per decode, so
+    /// calling this from both never doubles the warning for one load.
+    fn warn_skipped_working_sections(&mut self, name: &str, style: Option<&Value>) {
+        let Some(color) = style.and_then(|style| style.get("color")) else { return };
+        let count = skipped_working_sections(color);
+        if count > 0 {
+            self.bundle.warnings.push(tr_format!(
+                literal = "Element '%name%' has %count% unreadable working section(s); they were left out",
+                name = name,
+                count = count
+            ));
+        }
+    }
+
     /// Construct only explorer metadata. In particular, do not read any
     /// Parquet arrays, mesh accelerators, drill traces or raster pixels here.
     fn defer_element(&mut self, element: &omf_crate::Element) -> Result<bool> {
@@ -1763,6 +1781,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             };
             let section = self.element_section(element, MemberKind::DrillHole);
             let folder = self.element_folder(element, section);
+            self.warn_skipped_working_sections(&name, style);
             self.bundle.drill_holes.push(ImportedDrillHoles {
                 preferred_id,
                 source_name,
@@ -2688,6 +2707,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let path = virtual_path(self.source_name, element_name(element), "omf");
         let section = self.element_section(element, MemberKind::DrillHole);
         let folder = self.element_folder(element, section);
+        let style = element.metadata.get(META_STYLE);
+        self.warn_skipped_working_sections(element_name(element), style);
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2701,8 +2722,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 dataset,
             },
             deferred: None,
-            is_loaded: style_loaded(element.metadata.get(META_STYLE)),
-            color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
+            is_loaded: style_loaded(style),
+            color: style_value(style, "color").unwrap_or_default(),
             folder,
             section,
         }))

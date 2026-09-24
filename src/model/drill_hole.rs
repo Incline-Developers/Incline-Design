@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::Arc,
@@ -9,7 +9,7 @@ use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState},
 };
 
@@ -1042,6 +1042,162 @@ pub(crate) struct DrillColorState {
     /// the eye is: below this it would flicker out rather than thin.
     #[serde(default = "default_min_pixel_diameter", deserialize_with = "clamped_min_pixel_diameter")]
     pub(crate) min_pixel_diameter: f32,
+    /// Named groups of codes mined together, kept per source field. They
+    /// travel with the colour state so a project written before them loads
+    /// with none.
+    #[serde(default, deserialize_with = "lenient_working_sections")]
+    pub(crate) working_sections: Vec<WorkingSection>,
+    /// Colour the active field by working section: a code in a group takes
+    /// the group's colour, any other code keeps its own.
+    #[serde(default)]
+    pub(crate) by_working_section: bool,
+}
+
+/// Seams or plies of one categorical field that are mined as one unit.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct WorkingSection {
+    pub(crate) name: String,
+    pub(crate) field: String,
+    pub(crate) codes: Vec<String>,
+}
+
+/// Why a working section cannot be kept as named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SectionProblem {
+    /// Blank once trimmed.
+    NoName,
+    /// A code of the field has the name, ignoring case: a pick or a colour
+    /// under it could mean either.
+    NameIsCode,
+    /// Another section of the field has the name, ignoring case.
+    DuplicateName,
+    /// Every code it lists is blank or already in an earlier section of the
+    /// field.
+    NoCodes,
+}
+
+impl SectionProblem {
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::NoName => tr!(literal = "A working section needs a name."),
+            Self::NameIsCode => tr!(literal = "A code of this field already has that name."),
+            Self::DuplicateName => tr!(literal = "Another working section of this field has that name."),
+            Self::NoCodes => tr!(literal = "Every code it lists is already in another working section."),
+        }
+    }
+}
+
+/// A section [`tidy_working_sections`] left out, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DroppedSection {
+    pub(crate) name: String,
+    pub(crate) problem: SectionProblem,
+}
+
+/// Case-blind comparison of two names, without allocating.
+fn same_name(a: &str, b: &str) -> bool {
+    a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// What stops `name` naming a new working section of `field`, given the
+/// field's codes and the sections already kept. The editor asks this before
+/// it offers to add one, and [`tidy_working_sections`] before it keeps one,
+/// so what the one allows the other keeps.
+pub(crate) fn working_section_name_problem(name: &str, field: &str, codes: &[String], sections: &[WorkingSection]) -> Option<SectionProblem> {
+    let name = name.trim();
+    if name.is_empty() {
+        Some(SectionProblem::NoName)
+    } else if codes.iter().any(|code| same_name(code, name)) {
+        Some(SectionProblem::NameIsCode)
+    } else if sections.iter().any(|section| section.field == field && same_name(&section.name, name)) {
+        Some(SectionProblem::DuplicateName)
+    } else {
+        None
+    }
+}
+
+/// The codes `fields` lists for `key`, or none for a field that is not
+/// categorical or not there.
+fn field_codes<'a>(fields: &'a [DrillField], key: &str) -> &'a [String] {
+    match fields.iter().find(|field| field.key == key).map(|field| &field.kind) {
+        Some(DrillFieldKind::Categorical { categories }) => categories,
+        _ => &[],
+    }
+}
+
+/// A list of working sections as the app keeps it: names trimmed, each code
+/// in at most one section per field (the first that claims it), and no
+/// section kept whose name is blank, is a code of its field, or repeats
+/// another's, ignoring case. What is left out comes back with the reason.
+/// A section of a field `fields` does not hold is kept as it is, as a colour
+/// for a code a shorter extract lacks is.
+pub(crate) fn tidy_working_sections(sections: Vec<WorkingSection>, fields: &[DrillField]) -> (Vec<WorkingSection>, Vec<DroppedSection>) {
+    let mut kept: Vec<WorkingSection> = Vec::new();
+    let mut dropped = Vec::new();
+    for mut section in sections {
+        section.name = section.name.trim().to_owned();
+        if let Some(problem) = working_section_name_problem(&section.name, &section.field, field_codes(fields, &section.field), &kept) {
+            dropped.push(DroppedSection { name: section.name, problem });
+            continue;
+        }
+        let mut codes: Vec<String> = Vec::new();
+        for code in section.codes {
+            let claimed = kept.iter().any(|other| other.field == section.field && other.codes.contains(&code));
+            if !code.trim().is_empty() && !claimed && !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+        if codes.is_empty() {
+            dropped.push(DroppedSection {
+                name: section.name,
+                problem: SectionProblem::NoCodes,
+            });
+            continue;
+        }
+        section.codes = codes;
+        kept.push(section);
+    }
+    (kept, dropped)
+}
+
+/// Reads the working sections an entry at a time, so one malformed entry,
+/// or a value that is not a list at all, costs only itself and not the
+/// colours saved beside it. [`skipped_working_sections`] counts what this
+/// passes over, for the loader to report.
+fn lenient_working_sections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<WorkingSection>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Section(WorkingSection),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Entries(Vec<Entry>),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match List::deserialize(deserializer)? {
+        List::Entries(entries) => entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Section(section) => Some(section),
+                Entry::Unreadable(_) => None,
+            })
+            .collect(),
+        List::Unreadable(_) => Vec::new(),
+    })
+}
+
+/// How many saved working sections the reader passes over in a colour
+/// state's JSON: each list entry that is not a section, or one for a value
+/// that is not a list. Nothing saved counts nothing.
+pub(crate) fn skipped_working_sections(color: &serde_json::Value) -> usize {
+    match color.get("working_sections") {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| WorkingSection::deserialize(*entry).is_err()).count(),
+        Some(_) => 1,
+    }
 }
 
 /// A dataset is drawn at its drilled width until someone says otherwise.
@@ -1090,6 +1246,8 @@ impl Default for DrillColorState {
             categories: CategoryTable::default(),
             radius_scale: default_radius_scale(),
             min_pixel_diameter: default_min_pixel_diameter(),
+            working_sections: Vec::new(),
+            by_working_section: false,
         }
     }
 }
@@ -1103,18 +1261,89 @@ impl DrillColorState {
             .map(|index| self.categories[index].color)
     }
 
+    /// The working section of `field` that holds `code`, if any.
+    pub(crate) fn working_section_of(&self, field: &str, code: &str) -> Option<&WorkingSection> {
+        self.working_sections
+            .iter()
+            .find(|section| section.field == field && section.codes.iter().any(|member| member == code))
+    }
+
+    /// The working section of `field` called `name`, if any.
+    pub(crate) fn working_section_named(&self, field: &str, name: &str) -> Option<&WorkingSection> {
+        self.working_sections.iter().find(|section| section.field == field && section.name == name)
+    }
+
+    /// The section each code is coloured as, gathered once for a rebuild;
+    /// empty unless colouring the active field by working section.
+    pub(crate) fn section_lookup(&self) -> SectionLookup<'_> {
+        let mut names = HashMap::new();
+        if self.by_working_section
+            && let Some(field) = self.active_field.as_deref()
+        {
+            for section in self.working_sections.iter().filter(|section| section.field == field) {
+                for code in &section.codes {
+                    names.entry(code.as_str()).or_insert(section.name.as_str());
+                }
+            }
+        }
+        SectionLookup { names }
+    }
+
+    /// The code an interval is coloured as: its working section's name when
+    /// colouring by section and the code is in one, otherwise the code. This
+    /// walks the section list; a pass over many intervals takes a
+    /// [`Self::section_lookup`] instead.
+    pub(crate) fn display_code<'a>(&'a self, code: &'a str) -> &'a str {
+        if !self.by_working_section {
+            return code;
+        }
+        self.active_field
+            .as_deref()
+            .and_then(|field| self.working_section_of(field, code))
+            .map_or(code, |section| section.name.as_str())
+    }
+
+    /// What the colour table lists for `field` coloured by section: every
+    /// section name, then each code no section holds, in the field's order.
+    pub(crate) fn working_section_view(&self, field: &str, categories: &[String]) -> Vec<String> {
+        let mut view: Vec<String> = self
+            .working_sections
+            .iter()
+            .filter(|section| section.field == field)
+            .map(|section| section.name.clone())
+            .collect();
+        for code in categories {
+            if self.working_section_of(field, code).is_none() && !view.contains(code) {
+                view.push(code.clone());
+            }
+        }
+        view
+    }
+
     /// Every write goes through here so the order the lookup searches holds.
     pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
         self.categories = CategoryTable::new(categories);
     }
 
-    /// Give every code in `field` a colour, keeping every colour already
-    /// chosen, and return how many were filled in. Entries for codes absent
-    /// from `field` stay: a shorter extract must not lose the full one's picks.
+    /// Give every code in `field`, and every working section of it, a
+    /// colour, keeping every colour already chosen, and return how many of
+    /// the field's codes were filled in; section names are not counted.
+    /// Entries for codes absent from `field` stay: a shorter extract must not
+    /// lose the full one's picks.
     pub(crate) fn reconcile_categories(&mut self, field: &DrillField) -> usize {
         let DrillFieldKind::Categorical { categories } = &field.kind else {
             return 0;
         };
+        let added = self.fill_category_colors(categories);
+        if self.working_sections.iter().any(|section| section.field == field.key) {
+            self.fill_category_colors(&self.working_section_view(&field.key, categories));
+        }
+        added
+    }
+
+    /// Give each of `categories` a colour where it has none, avoiding the
+    /// colours the others already hold, and return how many were filled in.
+    pub(crate) fn fill_category_colors(&mut self, categories: &[String]) -> usize {
         let mut table = Vec::from(std::mem::take(&mut self.categories));
         let mut used: Vec<[f32; 3]> = Vec::new();
         for value in categories {
@@ -1396,6 +1625,46 @@ pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategor
     CategoryTable::new(colors).into()
 }
 
+/// The section each code of the active field is coloured as; see
+/// [`DrillColorState::section_lookup`].
+pub(crate) struct SectionLookup<'a> {
+    names: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> SectionLookup<'a> {
+    /// `code`'s section name, or `code` where it is in none.
+    pub(crate) fn display_code<'b>(&'b self, code: &'b str) -> &'b str
+    where
+        'a: 'b,
+    {
+        self.names.get(code).copied().unwrap_or(code)
+    }
+}
+
+/// What a reference pick is made on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReferenceTarget {
+    /// One logged code.
+    Code(String),
+    /// Every code of the working section of this name.
+    Section(String),
+}
+
+impl ReferenceTarget {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Code(name) | Self::Section(name) => name,
+        }
+    }
+
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Code(code) => code.clone(),
+            Self::Section(name) => tr_format!(literal = "%name% (working section)", name = name.clone()),
+        }
+    }
+}
+
 /// Which boundary of a working section a reference surface is built from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ReferenceSide {
@@ -1433,14 +1702,17 @@ pub(crate) struct ReferencePick {
 /// same working section, while a different value ends it. The roof is the
 /// top of a run's first interval, the floor its deepest base; with more
 /// than one run the uppermost is taken and `runs` says so.
-pub(crate) fn reference_pick(hole: &DrillHole, field: &str, value: &str, side: ReferenceSide) -> ReferencePick {
+///
+/// `codes` is one code, or every code of a working section: consecutive
+/// intervals holding any of them form a single run.
+pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], side: ReferenceSide) -> ReferencePick {
     let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
     intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
     let mut runs: Vec<(f64, f64)> = Vec::new();
     let mut open: Option<(f64, f64)> = None;
     for interval in intervals {
         match interval.values.get(field) {
-            Some(DrillValue::Category(code)) if code == value => {
+            Some(DrillValue::Category(code)) if codes.contains(code) => {
                 // A nested or duplicated row sorts after the interval that
                 // contains it, so the base is the deepest `to` in the run.
                 open = Some(match open {

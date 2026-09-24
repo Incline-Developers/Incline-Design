@@ -1437,6 +1437,16 @@ impl ItemStyle {
                             .iter()
                             .map(|category| size_of::<drill_hole::DrillCategoryColor>() + category.value.len())
                             .fold(0usize, usize::saturating_add)
+                        + color
+                            .working_sections
+                            .iter()
+                            .map(|section| {
+                                size_of::<drill_hole::WorkingSection>()
+                                    + section.name.len()
+                                    + section.field.len()
+                                    + section.codes.iter().map(|code| size_of::<String>() + code.len()).fold(0usize, usize::saturating_add)
+                            })
+                            .fold(0usize, usize::saturating_add)
                 }
                 _ => 0,
             }

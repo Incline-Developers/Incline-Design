@@ -955,7 +955,7 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, commands);
+    elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
