@@ -42,6 +42,11 @@ pub(crate) struct PreferencesDraft {
     /// picker sends [`UiCommand::SetLanguage`], which comes through here so the
     /// language is saved with everything else - see [`crate::i18n`].
     pub(crate) language: crate::i18n::LanguageChoice,
+    /// Colours and scales for the borehole log's trace columns. Not edited in
+    /// the Preferences panel: the log's own colour pickers send
+    /// [`UiCommand::SetWellLogStyle`], which comes through here so a style
+    /// tweak is saved with everything else.
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
@@ -84,6 +89,7 @@ impl Default for PreferencesDraft {
     fn default() -> Self {
         Self {
             language: crate::app::io::default_language(),
+            well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -1144,6 +1150,9 @@ pub(crate) struct EditorState {
     /// chosen for: a choice about one set's columns says nothing about
     /// another's. `None` guesses by name. Transient, like the tab.
     pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
+    /// Colours and scales for the borehole log's trace columns. App-wide,
+    /// saved with the preferences - see [`crate::ui::widgets::log_traces`].
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
@@ -2311,6 +2320,7 @@ impl EditorState {
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
         PreferencesDraft {
             language: self.language,
+            well_log_style: self.well_log_style,
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
@@ -2373,6 +2383,7 @@ impl EditorState {
             show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
+            well_log_style: Default::default(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
@@ -3312,6 +3323,9 @@ pub(crate) enum UiCommand {
     /// Switch the UI language from the status bar's picker. Applied live and
     /// saved into the config, exactly as any other preference is.
     SetLanguage(crate::i18n::LanguageChoice),
+    /// Change the borehole log's trace colours or scales. Applied live and
+    /// saved into the config, exactly as any other preference is.
+    SetWellLogStyle(crate::ui::widgets::log_traces::WellLogStyle),
     /// Flip one view preference from the View menu. The application reads the
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
@@ -3707,6 +3721,7 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
+            | Self::SetWellLogStyle(_)
             | Self::OpenSurveyDefinitions
             | Self::OpenSurveyTransform
             | Self::SaveSurveyDefinition { .. }

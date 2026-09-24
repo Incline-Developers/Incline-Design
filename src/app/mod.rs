@@ -47,7 +47,7 @@ use crate::{
     model::{
         Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
         block_model::{BlockModelSource, OpenBlockModel},
-        drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
+        drill_hole::{CollarRotation, DrillHoleRef, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -316,6 +316,10 @@ pub(crate) struct App<'a> {
     tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
     #[cfg(not(target_arch = "wasm32"))]
     tracked_project_paths: Vec<PathBuf>,
+    /// Downhole geophysics traces, keyed by the loaded drill-hole dataset and
+    /// hole they were matched to and dropped with that dataset. Session only:
+    /// not saved with the project.
+    pub(crate) well_logs: crate::model::geophysics::GeophysicsStore,
     /// Latest non-zero window size awaiting surface reconfiguration. Resize
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
@@ -405,7 +409,6 @@ pub(crate) struct App<'a> {
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
-    pending_drill_hole_loads: Vec<PendingLoad<DrillHoleSource, crate::model::drill_hole::LoadedDrillHoleDataset>>,
     pending_point_cloud_loads: Vec<PendingLoad<PathBuf, crate::model::point_cloud::LoadedPointCloud>>,
     pending_raster_loads: Vec<PendingLoad<PathBuf, crate::model::raster::LoadedRasterTexture>>,
     /// project paths currently being parsed. They remain reserved until the job
@@ -426,6 +429,10 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
+    /// Set by a job's apply step that handed the renderer new geometry to
+    /// upload; read and cleared by `poll_jobs`, which keeps that job's busy
+    /// state until the GPU upload finishes instead of settling it early.
+    applied_job_needs_gpu: bool,
     #[cfg(target_arch = "wasm32")]
     web_import_files: Option<(crate::ui::state::DataMenu, Vec<crate::model::input::InputFile>)>,
     window_focused: bool,
@@ -464,6 +471,7 @@ impl<'a> Default for App<'a> {
             tracked_browser_projects: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
+            well_logs: Default::default(),
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
@@ -514,7 +522,6 @@ impl<'a> Default for App<'a> {
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
-            pending_drill_hole_loads: Vec::new(),
             pending_point_cloud_loads: Vec::new(),
             pending_raster_loads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -527,6 +534,7 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
+            applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
             window_focused: true,
@@ -663,6 +671,7 @@ impl<'a> App<'a> {
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
         crate::i18n::select_language(config.language);
+        self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
         self.editor.show_borehole_inspector = config.show_borehole_inspector;
@@ -1041,6 +1050,7 @@ impl<'a> App<'a> {
         }
         let drill_holes = &self.drill_holes;
         self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
+        self.well_logs.keep_datasets(drill_holes.iter().filter(|item| item.state.loaded).map(|item| item.id));
         if self
             .editor
             .initiation_dialog
@@ -1179,6 +1189,9 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // Drillhole loads are said by name, as a project switch says them;
+        // the rest go silently.
+        self.cancel_drill_hole_loads(|_| true);
         // A browser save already holds its own snapshot and still owes the
         // completion handler a result; cancelling it would strand the pending
         // flag and lose a save the user asked for.
@@ -1193,12 +1206,6 @@ impl<'a> App<'a> {
             }
         }
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_block_model_loads) {
-            self.cancel_background_task(ticket);
-            if let Some(report) = report {
-                report.cancel();
-            }
-        }
-        for (ticket, _, _, report) in std::mem::take(&mut self.pending_drill_hole_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
                 report.cancel();
@@ -1229,6 +1236,7 @@ impl<'a> App<'a> {
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();
+        self.well_logs.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
         self.next_point_cloud_id = 0;
@@ -1259,6 +1267,7 @@ impl<'a> App<'a> {
         self.editor.active_tool = active_tool;
         self.workspace.set_active_index(index);
         self.history.activate(self.workspace.projects[index].runtime_id);
+        self.cancel_drill_hole_loads_for_other_projects();
         self.persist_session();
         self.invalidate_overlay();
     }

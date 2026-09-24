@@ -172,6 +172,7 @@ impl Gui {
         project: &UiProjectView,
         block_models: &[OpenBlockModel],
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+        well_logs: &crate::model::geophysics::GeophysicsStore,
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
         rotation_centre: Option<(f32, f32)>,
@@ -231,6 +232,7 @@ impl Gui {
                 project,
                 block_models,
                 drill_holes,
+                well_logs,
                 &mut commands,
                 frame_context,
                 &mut canvas_rect_logical,
@@ -562,6 +564,7 @@ fn draw_ui(
     project: &UiProjectView,
     block_models: &[OpenBlockModel],
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+    well_logs: &crate::model::geophysics::GeophysicsStore,
     commands: &mut Vec<UiCommand>,
     frame_context: UiFrameContext<'_>,
     canvas_rect_out: &mut egui::Rect,
@@ -628,7 +631,7 @@ fn draw_ui(
     // preference, not on the active workspace.
     let borehole_inspector_rect = editor
         .show_borehole_inspector
-        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes, commands));
+        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes, well_logs, commands));
     if borehole_inspector_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical when this panel is absent, or every

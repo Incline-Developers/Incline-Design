@@ -201,7 +201,6 @@ impl<'a> App<'a> {
                 WindowEvent::RedrawRequested => {
                     self.poll_triangulation_loads();
                     self.poll_block_model_loads();
-                    self.poll_drill_hole_loads();
                     self.poll_point_cloud_loads();
                     self.poll_raster_loads();
                     self.poll_saves();
@@ -265,6 +264,7 @@ impl<'a> App<'a> {
                             triangulations: &self.triangulations,
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
+                            well_logs: &self.well_logs,
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
                             project: &project,

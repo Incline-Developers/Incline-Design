@@ -14,6 +14,7 @@ pub(crate) mod folders;
 pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
+pub(crate) mod geophysics;
 pub(crate) mod ground_filter;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod input;

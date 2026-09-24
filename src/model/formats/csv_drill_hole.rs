@@ -12,6 +12,7 @@ use std::{
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
+use super::csv_geophysics::{GeophysicsImport, GeophysicsReader, Records, StreamControl, cell_text};
 use crate::{
     model::drill_hole::{
         DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation, TraceStation, direction_orientation, resolve_trace,
@@ -26,6 +27,8 @@ pub(crate) enum CsvDrillFileRole {
     Survey,
     Interval,
     ExplicitSegments,
+    /// Downhole geophysics: one row per sample, read as a stream.
+    Geophysics,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -48,6 +51,12 @@ pub(crate) enum CsvDrillColumnRole {
     EndNorth,
     EndElevation,
     Diameter,
+    /// Natural gamma, API units.
+    Gamma,
+    /// Long-spaced density, g/cc.
+    LongDensity,
+    /// Short-spaced density, g/cc.
+    ShortDensity,
     Attribute(String),
 }
 
@@ -68,6 +77,8 @@ pub(crate) struct CsvDrillPreview {
 pub(crate) enum CsvDrillError {
     Io(std::io::Error),
     Invalid(String),
+    /// The import was cancelled while a file streamed.
+    Cancelled,
 }
 
 impl fmt::Display for CsvDrillError {
@@ -75,6 +86,7 @@ impl fmt::Display for CsvDrillError {
         match self {
             Self::Io(error) => error.fmt(f),
             Self::Invalid(message) => f.write_str(message),
+            Self::Cancelled => f.write_str(&crate::i18n::tr!(literal = "Cancelled")),
         }
     }
 }
@@ -86,31 +98,59 @@ impl From<std::io::Error> for CsvDrillError {
     }
 }
 
+/// Rows shown under a file's headers while it is mapped.
+const PREVIEW_ROWS: usize = 8;
+
+/// Most of a file read for its preview. A geophysics export runs to hundreds
+/// of megabytes and the preview shows its first rows only.
+const PREVIEW_HEAD_BYTES: usize = 1024 * 1024;
+
+/// Read buffer for a geophysics file streamed from disk.
+#[cfg(not(target_arch = "wasm32"))]
+const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+
+/// The header and first rows of a file, read from its head only.
 pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
-    let rows = parse_csv(bytes)?.rows;
-    let headers = rows.first().cloned().ok_or_else(|| CsvDrillError::Invalid("CSV file is empty".into()))?;
+    let mut head = &bytes[..bytes.len().min(PREVIEW_HEAD_BYTES)];
+    // A head cut short of the file ends at its last whole line.
+    if head.len() < bytes.len()
+        && let Some(end) = head.iter().rposition(|byte| *byte == b'\n')
+    {
+        head = &head[..=end];
+    }
+    // Repaired as a whole, as an import would be, so a legacy encoding or a
+    // binary file is refused here rather than shown cell by cell.
+    let (text, _) = decode_text(head)?;
+    let mut records = Records::new(&text[..])?;
+    let mut rows = Vec::new();
+    while rows.len() <= PREVIEW_ROWS && records.next()? {
+        rows.push((0..records.len()).map(|index| cell_text(records.cell(index)).into_owned()).collect::<Vec<_>>());
+    }
+    let mut rows = rows.into_iter();
+    let headers = rows.next().ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV file is empty")))?;
     if headers.is_empty() || headers.iter().all(|header| header.trim().is_empty()) {
-        return Err(CsvDrillError::Invalid("CSV header has no columns".into()));
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV header has no columns")));
     }
     let mut seen = std::collections::HashSet::new();
     for header in &headers {
         let key = strip_repair_marks(header).trim().to_ascii_lowercase();
         if key.is_empty() || !seen.insert(key) {
-            return Err(CsvDrillError::Invalid("CSV headers must be nonblank and unique".into()));
+            return Err(CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV headers must be nonblank and unique")));
         }
     }
-    Ok(CsvDrillPreview {
-        headers,
-        rows: rows.into_iter().skip(1).take(8).collect(),
-    })
+    Ok(CsvDrillPreview { headers, rows: rows.collect() })
 }
 
-pub(crate) fn unassigned_mapping(path: PathBuf, preview: &CsvDrillPreview) -> CsvDrillFileMapping {
-    CsvDrillFileMapping {
-        path,
-        columns: vec![CsvDrillColumnRole::Ignore; preview.headers.len()],
-        role: CsvDrillFileRole::Unassigned,
-    }
+/// A file's mapping before the user touches it: its purpose if the headers
+/// name one, with the columns that purpose recognises.
+pub(crate) fn initial_mapping(path: PathBuf, preview: &CsvDrillPreview) -> CsvDrillFileMapping {
+    let role = guess_role(&preview.headers);
+    let columns = if role == CsvDrillFileRole::Unassigned {
+        vec![CsvDrillColumnRole::Ignore; preview.headers.len()]
+    } else {
+        default_columns(role, &preview.headers)
+    };
+    CsvDrillFileMapping { path, role, columns }
 }
 
 pub(crate) fn default_columns(role: CsvDrillFileRole, headers: &[String]) -> Vec<CsvDrillColumnRole> {
@@ -200,6 +240,30 @@ fn role_alias(role: CsvDrillFileRole, header: &str) -> Option<(CsvDrillColumnRol
             "diameter" | "diam" => Some((CsvDrillColumnRole::Diameter, 0)),
             _ => None,
         },
+        CsvDrillFileRole::Geophysics => match header {
+            "depth" => Some((CsvDrillColumnRole::Depth, 0)),
+            "dep" | "md" => Some((CsvDrillColumnRole::Depth, 1)),
+            "gam" | "gamma" | "gr" | "grde" | "gamm" => Some((CsvDrillColumnRole::Gamma, 0)),
+            "lsd" | "denl" | "longdensity" | "longspaceddensity" => Some((CsvDrillColumnRole::LongDensity, 0)),
+            "ssd" | "denb" | "shortdensity" | "shortspaceddensity" => Some((CsvDrillColumnRole::ShortDensity, 0)),
+            _ => None,
+        },
+    }
+}
+
+/// The purpose a file's headers point to, if they point to one: a depth and
+/// a gamma or density column make a geophysics file. Other purposes are
+/// left for the user to choose.
+pub(crate) fn guess_role(headers: &[String]) -> CsvDrillFileRole {
+    let roles = headers
+        .iter()
+        .filter_map(|header| role_alias(CsvDrillFileRole::Geophysics, &normalize_header(header)))
+        .map(|(role, _)| role)
+        .collect::<Vec<_>>();
+    if roles.contains(&CsvDrillColumnRole::Depth) && roles.iter().any(|role| crate::model::formats::csv_geophysics::curve_kind(role).is_some()) {
+        CsvDrillFileRole::Geophysics
+    } else {
+        CsvDrillFileRole::Unassigned
     }
 }
 
@@ -238,22 +302,167 @@ fn normalize_header(header: &str) -> String {
     out
 }
 
+/// Only the head of the file is read: enough for the header and the rows
+/// the preview shows.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn preview_path(path: &Path) -> Result<CsvDrillPreview, CsvDrillError> {
-    preview(&std::fs::read(path)?)
+    use std::io::Read;
+
+    let mut head = Vec::new();
+    std::fs::File::open(path)?.take(PREVIEW_HEAD_BYTES as u64 + 1).read_to_end(&mut head)?;
+    preview(&head)
 }
 
+/// The file a bundle's holes are defined by, and its dataset named after:
+/// the collar file, else the explicit-segment file. A bundle with neither
+/// has no holes for geophysics to attach to.
+pub(crate) fn bundle_anchor<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) -> Option<&'a CsvDrillFileMapping> {
+    let mut segments = None;
+    for mapping in files {
+        match mapping.role {
+            CsvDrillFileRole::Collar => return Some(mapping),
+            CsvDrillFileRole::ExplicitSegments => segments = segments.or(Some(mapping)),
+            _ => {}
+        }
+    }
+    segments
+}
+
+/// A bundle's dataset and, when it carries geophysics files, their traces.
+pub(crate) struct ParsedBundle {
+    pub(crate) dataset: DrillHoleDataset,
+    pub(crate) geophysics: Option<GeophysicsImport>,
+}
+
+/// Every mapping is checked before any file is read, so a bad one fails the
+/// import at once; geophysics hangs off the holes the [`bundle_anchor`]
+/// defines, the same rule the import dialog applies.
+fn check_purposes<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) -> Result<(), CsvDrillError> {
+    let files: Vec<&CsvDrillFileMapping> = files.into_iter().collect();
+    for mapping in &files {
+        validate_roles(mapping)?;
+    }
+    let has_geophysics = files.iter().any(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
+    if has_geophysics && bundle_anchor(files.iter().copied()).is_none() {
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!(
+            literal = "Downhole geophysics needs a collar or explicit-segment file in the bundle, whose holes it attaches to"
+        )));
+    }
+    Ok(())
+}
+
+/// Tables are read whole; geophysics files are streamed from disk, never
+/// held whole.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn parse_paths(files: &[CsvDrillFileMapping]) -> Result<DrillHoleDataset, CsvDrillError> {
-    let buffers = files
+pub(crate) fn parse_paths(files: &[CsvDrillFileMapping], control: StreamControl<'_>) -> Result<ParsedBundle, CsvDrillError> {
+    check_purposes(files)?;
+    let (streams, tables): (Vec<_>, Vec<_>) = files.iter().partition(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
+    let buffers = tables
         .iter()
         .map(|mapping| std::fs::read(&mapping.path).map_err(CsvDrillError::Io))
         .collect::<Result<Vec<_>, _>>()?;
-    parse_bundle(files.iter().zip(buffers.iter()).map(|(mapping, bytes)| (mapping, bytes.as_slice())))
+    let sizes = streams
+        .iter()
+        .map(|mapping| std::fs::metadata(&mapping.path).map_or(0, |metadata| metadata.len()))
+        .collect::<Vec<_>>();
+    let mut work = BundleWork::new(buffers.iter().map(|bytes| bytes.len() as u64).sum(), sizes.iter().sum(), control);
+    let dataset = parse_tables(tables.iter().copied().zip(buffers.iter().map(Vec::as_slice)))?;
+    drop(buffers);
+    work.tables_done();
+    let opened = streams.into_iter().zip(sizes).map(|(mapping, size)| {
+        let reader = std::fs::File::open(&mapping.path)
+            .map(|file| std::io::BufReader::with_capacity(STREAM_BUFFER_BYTES, file))
+            .map_err(CsvDrillError::Io);
+        (mapping, size, reader)
+    });
+    let geophysics = read_geophysics(&dataset, opened, &mut work)?;
+    Ok(ParsedBundle { dataset, geophysics })
+}
+
+/// A bundle whose files are all in memory, as the browser hands them over.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the browser import uses this; native builds it only for tests"))]
+pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>, control: StreamControl<'_>) -> Result<ParsedBundle, CsvDrillError> {
+    let inputs = inputs.into_iter().collect::<Vec<_>>();
+    check_purposes(inputs.iter().map(|(mapping, _)| *mapping))?;
+    let (streams, tables): (Vec<_>, Vec<_>) = inputs.into_iter().partition(|(mapping, _)| mapping.role == CsvDrillFileRole::Geophysics);
+    let bytes = |files: &[(&CsvDrillFileMapping, &[u8])]| files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    let mut work = BundleWork::new(bytes(&tables), bytes(&streams), control);
+    let dataset = parse_tables(tables)?;
+    work.tables_done();
+    let streams = streams.into_iter().map(|(mapping, bytes)| (mapping, bytes.len() as u64, Ok(bytes)));
+    let geophysics = read_geophysics(&dataset, streams, &mut work)?;
+    Ok(ParsedBundle { dataset, geophysics })
+}
+
+/// A bundle's progress, as the share of its bytes read: the tables all at
+/// once when they are parsed, then the geophysics as it streams. A bundle
+/// without geophysics is done when its tables are.
+struct BundleWork<'c> {
+    control: StreamControl<'c>,
+    tables: u64,
+    whole: u64,
+    /// Geophysics bytes of the files already read.
+    streamed: u64,
+}
+
+impl<'c> BundleWork<'c> {
+    fn new(tables: u64, geophysics: u64, control: StreamControl<'c>) -> Self {
+        Self {
+            control,
+            tables,
+            whole: (tables + geophysics).max(1),
+            streamed: 0,
+        }
+    }
+
+    fn report(&self, geophysics: u64) {
+        (self.control.progress)(((self.tables + geophysics) as f64 / self.whole as f64).min(1.0) as f32);
+    }
+
+    fn tables_done(&self) {
+        self.report(0);
+    }
+}
+
+/// Stream every geophysics file into traces for the dataset's holes. The
+/// geophysics hangs off the dataset, not the other way round, and each file
+/// stands alone: one that fails is left out with a warning, the traces of
+/// the others are kept, and the drillholes load either way.
+fn read_geophysics<'m, R: std::io::BufRead>(
+    dataset: &DrillHoleDataset,
+    streams: impl IntoIterator<Item = (&'m CsvDrillFileMapping, u64, Result<R, CsvDrillError>)>,
+    work: &mut BundleWork<'_>,
+) -> Result<Option<GeophysicsImport>, CsvDrillError> {
+    let mut reader = None;
+    let mut any_read = false;
+    for (mapping, size, input) in streams {
+        if (work.control.cancelled)() {
+            return Err(CsvDrillError::Cancelled);
+        }
+        let reader = reader.get_or_insert_with(|| GeophysicsReader::new(dataset.holes.iter().map(|hole| hole.dhid.clone())));
+        let streamed = work.streamed;
+        let outcome = input.and_then(|input| reader.read(mapping, input, work.control.cancelled, &mut |bytes| work.report(streamed + bytes)));
+        work.streamed += size;
+        work.report(work.streamed);
+        match outcome {
+            Ok(()) => any_read = true,
+            Err(CsvDrillError::Cancelled) => return Err(CsvDrillError::Cancelled),
+            Err(error) => userspace_warn!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "%file% was left out of the downhole geophysics: %error%",
+                    file = mapping.path.display().to_string(),
+                    error = error.to_string()
+                )
+            ),
+        }
+    }
+    Ok(reader.filter(|_| any_read).map(GeophysicsReader::finish))
 }
 
 /// Enough to find the bad rows without burying the console.
-const SKIP_REPORT_LIMIT: usize = 10;
+pub(super) const SKIP_REPORT_LIMIT: usize = 10;
 
 /// Hole names on an overlap report are a pointer to go and look, not a census.
 const OVERLAP_EXAMPLE_LIMIT: usize = 3;
@@ -267,13 +476,11 @@ const NUL_SAMPLE_BYTES: usize = 4096;
 /// Written for an unreadable byte; in a repaired file it is never a value.
 const REPAIR_MARK: char = '\u{FFFD}';
 
-pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>) -> Result<DrillHoleDataset, CsvDrillError> {
+/// The collar, survey, interval and segment tables of a bundle.
+fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>) -> Result<DrillHoleDataset, CsvDrillError> {
     let mut inputs = inputs.into_iter().collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(CsvDrillError::Invalid("Select at least one CSV file".into()));
-    }
-    if let Some((mapping, _)) = inputs.iter().find(|(mapping, _)| mapping.role == CsvDrillFileRole::Unassigned) {
-        return Err(CsvDrillError::Invalid(format!("Choose a file purpose for {}", mapping.path.display())));
     }
     let collar_files = inputs.iter().filter(|(mapping, _)| mapping.role == CsvDrillFileRole::Collar).count();
     let survey_files = inputs.iter().filter(|(mapping, _)| mapping.role == CsvDrillFileRole::Survey).count();
@@ -338,7 +545,6 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                 headers.len()
             )));
         }
-        validate_roles(mapping)?;
         let file = CsvFile { mapping, headers, repaired };
         let stem = mapping.path.file_stem().and_then(|value| value.to_str()).unwrap_or("interval");
         // Values decide the sign: a column headed inclination is often signed
@@ -402,7 +608,7 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                     })
                     .filter_map(|(_, row)| row.get(index).map(|value| value.trim()))
                     .filter(|value| !value.is_empty() && !file.damaged(value))
-                    .all(|value| value.parse::<f64>().is_ok_and(f64::is_finite))
+                    .all(|value| finite_number(value).is_some())
             })
             .collect::<std::collections::HashSet<_>>();
         let mut row_count = 0usize;
@@ -647,6 +853,23 @@ fn validate_roles(mapping: &CsvDrillFileMapping) -> Result<(), CsvDrillError> {
                 require(role, label)?;
             }
         }
+        CsvDrillFileRole::Geophysics => {
+            require(CsvDrillColumnRole::Dhid, "DHID")?;
+            require(CsvDrillColumnRole::Depth, "depth")?;
+            let curves = [CsvDrillColumnRole::Gamma, CsvDrillColumnRole::LongDensity, CsvDrillColumnRole::ShortDensity].map(|role| count(&role));
+            if curves.iter().any(|mapped| *mapped > 1) {
+                return Err(CsvDrillError::Invalid(crate::i18n::tr_format!(
+                    literal = "%file% maps a gamma or density column twice",
+                    file = mapping.path.display().to_string()
+                )));
+            }
+            if curves.iter().all(|mapped| *mapped == 0) {
+                return Err(CsvDrillError::Invalid(crate::i18n::tr_format!(
+                    literal = "%file% requires a gamma or density column",
+                    file = mapping.path.display().to_string()
+                )));
+            }
+        }
     }
     if count(&CsvDrillColumnRole::Diameter) > 1 {
         return Err(CsvDrillError::Invalid(format!("{} has multiple diameter mappings", mapping.path.display())));
@@ -682,7 +905,7 @@ fn interval_row(
             label.to_owned()
         };
         let value = if numeric_attributes.contains(&index) {
-            DrillValue::Numeric(raw.parse::<f64>().expect("column-wide numeric inference validated this value"))
+            DrillValue::Numeric(finite_number(raw).expect("column-wide numeric inference validated this value"))
         } else {
             DrillValue::Category(raw.to_owned())
         };
@@ -735,7 +958,12 @@ fn angle_at(file: &CsvFile<'_>, row: &[String], index: usize) -> Option<f64> {
     if value.is_empty() || file.damaged(value) {
         return None;
     }
-    value.parse::<f64>().ok().filter(|number| number.is_finite())
+    finite_number(value)
+}
+
+/// A cell as a finite number, or `None` if it is blank or not one.
+pub(super) fn finite_number(text: &str) -> Option<f64> {
+    text.trim().parse::<f64>().ok().filter(|number| number.is_finite())
 }
 
 /// What one pass over a survey file's angle columns found.
@@ -997,11 +1225,7 @@ fn required_text(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, 
 
 fn required_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, row_index: usize) -> Result<f64, CsvDrillError> {
     let value = required_text(file, row, role, row_index)?;
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", file.mapping.path.display(), row_index + 1)))
+    finite_number(&value).ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", file.mapping.path.display(), row_index + 1)))
 }
 
 fn optional_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, row_index: usize) -> Result<Option<f64>, CsvDrillError> {
@@ -1012,10 +1236,7 @@ fn optional_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole
     if value.is_empty() || file.damaged(value) {
         return Ok(None);
     }
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
+    finite_number(value)
         .map(Some)
         .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", file.mapping.path.display(), row_index + 1)))
 }
@@ -1048,6 +1269,11 @@ struct ParsedCsv {
     repaired_cells: usize,
 }
 
+/// Refuse wide text from the head of a file that is streamed, not held.
+pub(super) fn check_encoding(head: &[u8]) -> Result<(), CsvDrillError> {
+    decode_entry(head).map(|_| ())
+}
+
 /// UTF-16 and UTF-32 exports are refused by name; a UTF-8 mark is dropped.
 fn decode_entry(bytes: &[u8]) -> Result<&[u8], CsvDrillError> {
     const WIDE_MARKS: [&[u8]; 4] = [&[0xFF, 0xFE, 0x00, 0x00], &[0x00, 0x00, 0xFE, 0xFF], &[0xFF, 0xFE], &[0xFE, 0xFF]];
@@ -1066,7 +1292,7 @@ fn decode_entry(bytes: &[u8]) -> Result<&[u8], CsvDrillError> {
 
 /// Repairs invalid UTF-8 keeping bad bytes distinct: a lossy decode would fold
 /// two hole IDs one stray byte apart into one key; each becomes mark plus hex.
-fn repair_utf8(bytes: &[u8], budget: usize) -> Option<(Vec<u8>, usize)> {
+pub(super) fn repair_utf8(bytes: &[u8], budget: usize) -> Option<(Vec<u8>, usize)> {
     const HEX: [u8; 16] = *b"0123456789ABCDEF";
     const MARK: [u8; 3] = [0xEF, 0xBF, 0xBD];
     let mut out = Vec::with_capacity(bytes.len());
@@ -1096,23 +1322,28 @@ fn repair_utf8(bytes: &[u8], budget: usize) -> Option<(Vec<u8>, usize)> {
     }
 }
 
-fn parse_csv(bytes: &[u8]) -> Result<ParsedCsv, CsvDrillError> {
-    // Old exports carry stray bytes from whatever encoding the logger used; one
-    // must not cost the file, so text is repaired; the caller reports it once.
+/// Text as UTF-8: wide text is refused by name and a UTF-8 mark dropped.
+/// Old exports carry stray bytes from whatever encoding the logger used; one
+/// must not cost the file, so they are repaired, up to a tenth of the text:
+/// past that it is a legacy encoding, or not text at all.
+fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvDrillError> {
     let bytes = decode_entry(bytes)?;
-    let repaired;
-    let (bytes, repaired_bytes) = match std::str::from_utf8(bytes) {
-        Ok(_) => (bytes, 0),
-        Err(_) => {
-            // A legacy encoding marks most rows; a binary is far past a tenth.
-            let budget = (bytes.len() / 10).max(MINIMUM_REPAIR_BUDGET);
-            let (fixed, count) = repair_utf8(bytes, budget).ok_or_else(|| {
-                CsvDrillError::Invalid("CSV has too many unreadable bytes to repair; it is probably in a legacy encoding, so save it as UTF-8 and import it again".into())
-            })?;
-            repaired = fixed;
-            (repaired.as_slice(), count)
-        }
-    };
+    if std::str::from_utf8(bytes).is_ok() {
+        return Ok((std::borrow::Cow::Borrowed(bytes), 0));
+    }
+    let budget = (bytes.len() / 10).max(MINIMUM_REPAIR_BUDGET);
+    let (fixed, count) = repair_utf8(bytes, budget).ok_or_else(|| {
+        CsvDrillError::Invalid(crate::i18n::tr!(
+            literal = "CSV has too many unreadable bytes to repair; it is probably in a legacy encoding, so save it as UTF-8 and import it again"
+        ))
+    })?;
+    Ok((std::borrow::Cow::Owned(fixed), count))
+}
+
+fn parse_csv(bytes: &[u8]) -> Result<ParsedCsv, CsvDrillError> {
+    // The caller reports a repair once per file.
+    let (bytes, repaired_bytes) = decode_text(bytes)?;
+    let bytes = &bytes[..];
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut field = Vec::new();

@@ -599,7 +599,7 @@ impl<'a> App<'a> {
                     for path in &self.editor.import_source_paths {
                         match crate::model::formats::csv_drill_hole::preview_path(path) {
                             Ok(preview) => {
-                                let mapping = crate::model::formats::csv_drill_hole::unassigned_mapping(path.clone(), &preview);
+                                let mapping = crate::model::formats::csv_drill_hole::initial_mapping(path.clone(), &preview);
                                 self.editor.import_drill_csv.push((mapping, preview));
                             }
                             Err(error) => {
@@ -646,7 +646,7 @@ impl<'a> App<'a> {
                         match crate::model::formats::csv_drill_hole::preview(&file.bytes) {
                             Ok(preview) => {
                                 let path = PathBuf::from(&file.source.name);
-                                let mapping = crate::model::formats::csv_drill_hole::unassigned_mapping(path, &preview);
+                                let mapping = crate::model::formats::csv_drill_hole::initial_mapping(path, &preview);
                                 self.editor.import_drill_csv.push((mapping, preview));
                             }
                             Err(error) => {
@@ -2599,6 +2599,9 @@ impl<'a> App<'a> {
             };
             if was_active {
                 app.history.activate(new_runtime_id);
+                // Loads started for the project as it was belong to the old
+                // runtime id.
+                app.cancel_drill_hole_loads_for_other_projects();
                 app.editor.active_layer = active_layer_local_id.and_then(|local_id| {
                     app.workspace.projects[index]
                         .project
@@ -2727,6 +2730,8 @@ impl<'a> App<'a> {
             Some(active) if active > index => self.workspace.active_index = Some(active - 1),
             _ => {}
         }
+        // The closed project's drillhole loads stop here, with a line each.
+        self.cancel_drill_hole_loads_for_other_projects();
         if was_active {
             self.history.deactivate();
             self.clear_editor_transient_state();

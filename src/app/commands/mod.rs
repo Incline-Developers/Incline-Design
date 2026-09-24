@@ -877,6 +877,7 @@ impl<'a> App<'a> {
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::SetLanguage(choice) => self.set_language(choice),
+            UiCommand::SetWellLogStyle(style) => self.set_well_log_style(style),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);

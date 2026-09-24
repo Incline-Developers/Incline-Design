@@ -6,7 +6,8 @@ use crate::{
     ui::{
         state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
         widgets::{
-            context_menu::{ContextMenuAction, context_menu_popup},
+            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields},
+            log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
             menu,
         },
     },
@@ -1524,15 +1525,46 @@ fn overlay_label_font() -> egui::FontId {
     egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()))
 }
 
-/// Draws `text` with a 1px outline pass behind the ink pass, readable with no solid backdrop.
-fn outlined_label(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, text: &str, font: &egui::FontId, ink: egui::Color32, outline: egui::Color32) {
+/// Ink for a strat run's code. A run is filled with whatever its palette and
+/// hatching give, pastel or dark, in either theme: white over a thin dark
+/// halo reads on all of them.
+const STRAT_LABEL_INK: egui::Color32 = egui::Color32::WHITE;
+
+/// The halo under a strat run's code.
+const STRAT_LABEL_HALO: egui::Color32 = egui::Color32::from_black_alpha(210);
+
+/// The outline laid behind overlay text, in its colour.
+#[derive(Clone, Copy)]
+enum Outline {
+    /// One copy offset down and right: a drop outline for scene overlays.
+    Shadow(egui::Color32),
+    /// Copies one point out in all eight directions: a halo that reads on any fill.
+    Halo(egui::Color32),
+}
+
+/// Draws `text` with an outline pass behind the ink pass, readable with no
+/// solid backdrop.
+fn outlined_label(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, text: &str, font: &egui::FontId, ink: egui::Color32, outline: Outline) {
     outlined_galley(painter, pos, align, painter.layout_no_wrap(text.to_owned(), font.clone(), ink), ink, outline);
 }
 
 /// [`outlined_label`] for a caller holding an already-laid-out galley.
-fn outlined_galley(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, galley: std::sync::Arc<egui::Galley>, ink: egui::Color32, outline: egui::Color32) {
+fn outlined_galley(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, galley: std::sync::Arc<egui::Galley>, ink: egui::Color32, outline: Outline) {
     let rect = align.anchor_size(pos, galley.size());
-    painter.galley_with_override_text_color(rect.min + egui::vec2(1.0, 1.0), galley.clone(), outline);
+    match outline {
+        Outline::Shadow(outline) => {
+            painter.galley_with_override_text_color(rect.min + egui::vec2(1.0, 1.0), galley.clone(), outline);
+        }
+        Outline::Halo(outline) => {
+            for dx in [-1.0, 0.0, 1.0] {
+                for dy in [-1.0, 0.0, 1.0] {
+                    if dx != 0.0 || dy != 0.0 {
+                        painter.galley_with_override_text_color(rect.min + egui::vec2(dx, dy), galley.clone(), outline);
+                    }
+                }
+            }
+        }
+    }
     painter.galley_with_override_text_color(rect.min, galley, ink);
 }
 
@@ -1600,7 +1632,7 @@ impl ViewportScaleBar {
                     let x = bar_rect.left() + bar_width * fraction as f32;
                     let label = &labels[index];
                     let position = egui::pos2(x, label_y);
-                    outlined_label(painter, position, egui::Align2::CENTER_TOP, label, &font, ink, outline);
+                    outlined_label(painter, position, egui::Align2::CENTER_TOP, label, &font, ink, Outline::Shadow(outline));
                 }
             });
     }
@@ -1716,7 +1748,7 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
             continue;
         }
         placed.push(label_rect);
-        outlined_galley(&painter, position, align, galley, ink, outline);
+        outlined_galley(&painter, position, align, galley, ink, Outline::Shadow(outline));
     }
 }
 
@@ -2115,8 +2147,16 @@ const LOG_STRAT_WIDTH: f32 = 64.0;
 const LOG_STRAT_MIN_WIDTH: f32 = 22.0;
 /// Narrowest the hole track is drawn before the strat column is dropped.
 const LOG_TRACK_MIN_WIDTH: f32 = 24.0;
-/// Gap between the stratigraphic column and the hole beside it.
+/// Gap between neighbouring columns: strat, density, the hole, gamma.
 const LOG_TRACK_GAP: f32 = 10.0;
+/// Narrowest a well-log trace column is drawn before it is dropped.
+const LOG_TRACE_MIN_WIDTH: f32 = 56.0;
+/// Width a trace column grows to before the hole takes the rest.
+const LOG_TRACE_WIDTH: f32 = 160.0;
+/// Narrowest the hole's track is kept while trace columns stand beside it.
+const LOG_TRACK_KEEP_WIDTH: f32 = 40.0;
+/// Width the hole's track grows to alongside the trace columns.
+const LOG_TRACK_WIDTH: f32 = 96.0;
 /// Margin down the right of the log and below it.
 const LOG_EDGE_MARGIN: f32 = 8.0;
 /// Room above the plot for the strat column's field name.
@@ -2149,6 +2189,12 @@ pub(crate) struct BoreholeLog<'a> {
     dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset,
     /// Read the strat column from this field rather than guessing by name.
     strat_field: Option<String>,
+    /// The hole's well-log traces, if any were loaded for it.
+    well_logs: Option<&'a crate::model::geophysics::HoleLogs>,
+    /// Whether any hole of the dataset has traces: only then is a hole
+    /// without one worth a note.
+    logs_loaded: bool,
+    well_log_style: WellLogStyle,
 }
 
 impl<'a> BoreholeLog<'a> {
@@ -2158,6 +2204,9 @@ impl<'a> BoreholeLog<'a> {
             hole,
             dataset,
             strat_field: None,
+            well_logs: None,
+            logs_loaded: false,
+            well_log_style: WellLogStyle::default(),
         }
     }
 
@@ -2166,23 +2215,40 @@ impl<'a> BoreholeLog<'a> {
         self
     }
 
+    /// The hole's traces, and whether its dataset has any at all.
+    pub(crate) fn well_logs(mut self, hole: Option<&'a crate::model::geophysics::HoleLogs>, loaded: bool) -> Self {
+        self.well_logs = hole;
+        self.logs_loaded = loaded;
+        self
+    }
+
+    pub(crate) fn well_log_style(mut self, style: WellLogStyle) -> Self {
+        self.well_log_style = style;
+        self
+    }
+
     /// Draw the log into what the panel has left. Nothing here may report a
     /// width larger than the panel gave it, or the log would slide the scene.
-    pub(crate) fn show(self, ui: &mut egui::Ui) {
+    /// Returns a trace style the reader finished editing, for the caller to
+    /// save.
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> Option<WellLogStyle> {
         let Some(hole) = self.depth_range() else {
             ui.weak(tr!(literal = "This hole has no trace to draw."));
-            return;
+            return None;
         };
 
         // The bearing and depth window live in egui's own per-id memory.
         let azimuth_id = self.id.with("azimuth");
         let view_id = self.id.with("depth_view");
         let squeeze_id = self.id.with("squeeze");
+        let menu_id = self.id.with("trace_menu");
         let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
         let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
         // inspection moves, so the window may be from a different hole.
         let mut view = clamp_depth_view(ui.data(|data| data.get_temp::<(f64, f64)>(view_id)).unwrap_or(hole), hole);
+        let density = ColumnTraces::of(TraceColumn::Density, self.well_logs);
+        let gamma = ColumnTraces::of(TraceColumn::Gamma, self.well_logs);
 
         let width = ui.available_width();
         let height = ui.available_height().max(LOG_MIN_HEIGHT);
@@ -2210,11 +2276,24 @@ impl<'a> BoreholeLog<'a> {
         }
 
         let body = egui::Rect::from_min_max(egui::pos2(rect.left(), header.bottom()), rect.max);
-        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0));
+        let strat_field = self.lithology_field();
+        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0), strat_field.is_some(), density.is_some(), gamma.is_some());
+        // Tall enough for the trace headers when there are any.
+        let line_height = ui.text_style_height(&egui::TextStyle::Small);
+        // Each note gets a line of its own across the log, under the axis.
+        let notes = self.trace_notes([density.is_some(), gamma.is_some()], columns);
+        let notes_height = notes.iter().flatten().count() as f32 * line_height;
+        let top_margin = [(density, columns.density), (gamma, columns.gamma)]
+            .into_iter()
+            .filter_map(|(traces, width)| traces.filter(|_| width > 0.0))
+            .map(|traces| log_traces::header_height(traces.column, line_height) + 4.0)
+            .fold(LOG_PLOT_TOP_MARGIN, f32::max);
         let plot = egui::Rect::from_min_max(
-            egui::pos2(body.left() + columns.scale, body.top() + LOG_PLOT_TOP_MARGIN),
-            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN - LOG_AXIS_HEIGHT),
+            egui::pos2(body.left() + columns.scale, body.top() + top_margin),
+            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN - LOG_AXIS_HEIGHT - notes_height),
         );
+        let lanes = columns.lanes(plot);
+        let trace_lanes = [(density, lanes.density), (gamma, lanes.gamma)];
 
         // Over the plot: drag sideways spins, drag vertically walks the depth
         // window, wheel zooms around the depth under the cursor.
@@ -2233,27 +2312,82 @@ impl<'a> BoreholeLog<'a> {
         if handle.double_clicked() {
             view = hole;
         }
-        context_menu_popup(&handle, tr!(literal = "Sideways scale"), |ui| {
-            let fit = ContextMenuAction::new(tr!(literal = "Fit the hole to the track"))
-                .checked(squeeze == LogSqueeze::Fit)
-                .show(ui)
-                .on_hover_text(tr!(literal = "Squeeze sideways just enough to keep the hole in view. Never stretches."));
-            if fit.clicked() {
-                squeeze = LogSqueeze::Fit;
-                ui.close();
-            }
-            for ratio in LOG_SQUEEZE_CHOICES {
-                let label = if ratio == 1.0 {
-                    tr!(literal = "1:1, true shape")
-                } else {
-                    tr_format!(literal = "1:%ratio%", ratio = crate::model::plot::format_quantity(ratio, 0))
-                };
-                if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
-                    squeeze = LogSqueeze::Fixed(ratio);
+
+        // A right-click over a trace column opens that column's own menu,
+        // anywhere else the squeeze menu. Which one is settled at the click
+        // and held while the menu stays open, with the style being edited.
+        if handle.secondary_clicked() {
+            let menu = handle
+                .interact_pointer_pos()
+                .and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
+                .map(|traces| TraceMenu {
+                    column: traces.column,
+                    draft: self.well_log_style,
+                    custom: log_traces::column_range(&self.well_log_style, &traces),
+                });
+            ui.data_mut(|data| data.insert_temp(menu_id, menu));
+        }
+        let mut saved = None;
+        let stored = ui.data(|data| data.get_temp::<Option<TraceMenu>>(menu_id)).flatten();
+        let open = stored.and_then(|menu| column_traces(menu.column, density, gamma).map(|traces| (menu, traces)));
+        let menu = if let Some((mut menu, traces)) = open {
+            let auto = log_traces::auto_range(menu.column, &traces);
+            let shown = context_menu_popup_with_fields(&handle, log_traces::menu_title(menu.column), |ui| {
+                log_traces::menu(ui, menu.column, &mut menu.draft, &mut menu.custom, auto);
+            });
+            shown.map(|_| {
+                // The one place an edit is saved: once it differs from what
+                // is saved and the pointer is up. A custom range reaches the
+                // draft only when its edit is finished, and a drag across the
+                // colour wheel saves once, on release.
+                menu.draft = menu.draft.sanitized();
+                if menu.draft != self.well_log_style && !ui.input(|input| input.pointer.any_down()) {
+                    saved = Some(menu.draft);
+                }
+                menu
+            })
+        } else if stored.is_some() {
+            // A trace menu was open but its column no longer has traces (the
+            // hole changed underneath it). Close the popup outright rather
+            // than switching its contents to the squeeze menu.
+            egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&handle));
+            None
+        } else {
+            context_menu_popup(&handle, tr!(literal = "Sideways scale"), |ui| {
+                let fit = ContextMenuAction::new(tr!(literal = "Fit the hole to the track"))
+                    .checked(squeeze == LogSqueeze::Fit)
+                    .show(ui)
+                    .on_hover_text(tr!(literal = "Squeeze sideways just enough to keep the hole in view. Never stretches."));
+                if fit.clicked() {
+                    squeeze = LogSqueeze::Fit;
                     ui.close();
                 }
-            }
-        });
+                for ratio in LOG_SQUEEZE_CHOICES {
+                    let label = if ratio == 1.0 {
+                        tr!(literal = "1:1, true shape")
+                    } else {
+                        tr_format!(literal = "1:%ratio%", ratio = crate::model::plot::format_quantity(ratio, 0))
+                    };
+                    if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
+                        squeeze = LogSqueeze::Fixed(ratio);
+                        ui.close();
+                    }
+                }
+            });
+            None
+        };
+        // Drawn with the style being edited while its menu is open, so a
+        // change shows before it is saved.
+        let style = menu.map_or(self.well_log_style, |menu| menu.draft);
+        // Held still over a trace column, the readings under the pointer.
+        if menu.is_none()
+            && !handle.dragged()
+            && let Some(traces) = handle.hover_pos().and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
+            && let Some(pointer) = handle.hover_pos()
+        {
+            let depth = depth_at(plot, view, pointer.y);
+            handle.clone().on_hover_ui_at_pointer(|ui| log_traces::readout(ui, &traces, depth, &style));
+        }
         if handle.hovered() && plot.height() > 0.0 {
             // Read and then spent, so a scroll aimed at the log zooms it.
             let wheel = ui.input_mut(|input| {
@@ -2280,21 +2414,29 @@ impl<'a> BoreholeLog<'a> {
             data.insert_temp(azimuth_id, azimuth);
             data.insert_temp(view_id, view);
             data.insert_temp(squeeze_id, squeeze);
+            data.insert_temp(menu_id, menu);
         });
 
         let (top, bottom) = view;
         if !plot.is_positive() {
             draw_azimuth_compass(ui, &painter, compass, azimuth);
-            return;
+            return saved;
         }
         self.draw_scale(ui, &painter, plot, columns, top, bottom);
-        let strat = egui::Rect::from_x_y_ranges(plot.left()..=plot.left() + columns.strat, plot.y_range());
-        let track = egui::Rect::from_x_y_ranges(plot.right() - columns.track..=plot.right(), plot.y_range());
-        if columns.strat > 0.0 {
-            self.draw_strat(ui, &painter, strat, top, bottom);
+        if let (Some(strat), Some(field)) = (lanes.strat, strat_field) {
+            self.draw_strat(ui, &painter, strat, field, top, bottom);
+        }
+        for (traces, lane) in trace_lanes {
+            if let (Some(traces), Some(lane)) = (traces, lane) {
+                let range = log_traces::column_range(&style, &traces);
+                let heading = egui::Rect::from_x_y_ranges(lane.x_range(), (plot.top() - top_margin + 2.0)..=(plot.top() - 2.0));
+                log_traces::draw_header(ui, &painter, heading, &traces, range, &style);
+                log_traces::draw_body(ui, &painter, lane, view, &traces, range, &style);
+            }
         }
         // No lean at all when the track has no room to lean in: better an
         // empty track than a ratio the picture cannot keep.
+        let track = lanes.track;
         let path = visible_path(self.hole, view);
         let collar = self.hole.trace.first().map_or(glam::DVec2::ZERO, |station| station.position.truncate());
         if let Some(stretch) = plan_stretch(&path, collar)
@@ -2303,7 +2445,33 @@ impl<'a> BoreholeLog<'a> {
             self.draw_column(ui, &painter, lean, &path);
             Self::draw_offset_axis(ui, &painter, lean);
         }
+        let area = egui::Rect::from_min_max(
+            egui::pos2(body.left() + 4.0, plot.bottom() + LOG_AXIS_HEIGHT),
+            egui::pos2(body.right() - LOG_EDGE_MARGIN, plot.bottom() + LOG_AXIS_HEIGHT + notes_height),
+        );
+        draw_trace_notes(ui, &painter, area, notes, line_height);
         draw_azimuth_compass(ui, &painter, compass, azimuth);
+        saved
+    }
+
+    /// Quiet notes for under the log: a curve this hole has no log for,
+    /// said only when the dataset has logs at all, and a column the panel is
+    /// too narrow for. `held` is whether the hole has density, then gamma.
+    fn trace_notes(&self, held: [bool; 2], columns: LogColumns) -> [Option<String>; 2] {
+        let missing = match held {
+            _ if !self.logs_loaded => None,
+            [false, false] => Some(tr!(literal = "No downhole geophysics for this hole")),
+            [false, true] => Some(tr!(literal = "No density log for this hole")),
+            [true, false] => Some(tr!(literal = "No gamma log for this hole")),
+            [true, true] => None,
+        };
+        let narrow = match (held[0] && columns.density <= 0.0, held[1] && columns.gamma <= 0.0) {
+            (true, true) => Some(tr!(literal = "Widen the panel to show density and gamma")),
+            (true, false) => Some(tr!(literal = "Widen the panel to show density")),
+            (false, true) => Some(tr!(literal = "Widen the panel to show gamma")),
+            (false, false) => None,
+        };
+        [missing, narrow]
     }
 
     /// The strip above the plot: reset button, depth/bearing readout, compass.
@@ -2356,11 +2524,19 @@ impl<'a> BoreholeLog<'a> {
         reset
     }
 
-    /// The depths the log spans, widened to cover any interval past the trace.
+    /// The depths the log spans, widened to cover any interval or well log
+    /// past the trace.
     fn depth_range(&self) -> Option<(f64, f64)> {
         let first = self.hole.trace.first()?.depth;
         let last = self.hole.trace.last()?.depth;
+        let logs = || {
+            self.well_logs
+                .into_iter()
+                .flat_map(|logs| crate::model::geophysics::LogKind::ALL.into_iter().filter_map(|kind| logs.trace(kind)))
+        };
+        let first = logs().map(|trace| trace.start_depth()).fold(first, f64::min);
         let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max);
+        let deepest = logs().map(|trace| trace.end_depth()).fold(deepest, f64::max);
         (deepest > first).then_some((first, deepest))
     }
 
@@ -2431,51 +2607,39 @@ impl<'a> BoreholeLog<'a> {
         runs
     }
 
-    /// Colour for one strat run, matched to the ribbon's own set.
-    fn strat_run_color(&self, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
-        if self.dataset.color.active_field.as_deref() == Some(field.key.as_str()) {
-            return self.dataset.color.category_color(code).unwrap_or([1.0, 1.0, 1.0]);
-        }
-        match &field.kind {
-            crate::model::drill_hole::DrillFieldKind::Categorical { categories } => categories
-                .iter()
-                .position(|category| category == code)
-                .map_or([1.0, 1.0, 1.0], crate::model::drill_hole::generated_category_color),
-            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => [1.0, 1.0, 1.0],
-        }
-    }
-
-    fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, top: f64, bottom: f64) {
+    fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) {
         let visuals = ui.visuals();
         let font = egui::TextStyle::Small.resolve(ui.style());
-        let Some(field) = self.lithology_field() else {
-            painter.text(strat.center_top(), egui::Align2::CENTER_TOP, tr!(literal = "No lithology"), font, visuals.weak_text_color());
-            return;
-        };
         for (from, to, value) in self.lithology_runs(field, top, bottom) {
             let block = egui::Rect::from_x_y_ranges(strat.x_range(), Self::y_at(strat, top, bottom, from)..=Self::y_at(strat, top, bottom, to));
             if block.height() <= 0.0 {
                 continue;
             }
-            let (fill, label) = match &value {
+            // A coded run is its palette colour under hatching, its code in
+            // white over a halo; an unlogged one is plain, its note quiet.
+            let (label, ink, outline) = match &value {
                 Some(code) => {
-                    let [red, green, blue] = self.strat_run_color(field, code);
-                    (crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]), code.clone())
+                    let [red, green, blue] = strat_run_color(&self.dataset.color, field, code);
+                    painter.rect_filled(block, 0.0, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
+                    hatch_placeholder(painter, block, visuals.weak_text_color().gamma_multiply(0.30));
+                    (code.clone(), STRAT_LABEL_INK, Some(Outline::Halo(STRAT_LABEL_HALO)))
                 }
-                None => (visuals.extreme_bg_color, tr!(literal = "Not logged")),
+                None => {
+                    painter.rect_filled(block, 0.0, visuals.extreme_bg_color);
+                    (tr!(literal = "Not logged"), visuals.weak_text_color(), None)
+                }
             };
-            painter.rect_filled(block, 0.0, fill);
-            if value.is_some() {
-                hatch_placeholder(painter, block, visuals.weak_text_color().gamma_multiply(0.30));
-            }
             painter.rect_stroke(block, 0.0, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.45)), egui::StrokeKind::Inside);
             // Only drawn once its galley is measured to fit; a squeezed
             // strat column goes quiet rather than spilling onto the hole.
             if block.height() >= font.size + 3.0 {
-                let ink = if value.is_some() { visuals.strong_text_color() } else { visuals.weak_text_color() };
                 let galley = painter.layout_no_wrap(label, font.clone(), ink);
                 if galley.size().x <= block.width() - 2.0 {
-                    painter.galley(block.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
+                    let origin = block.center() - 0.5 * galley.size();
+                    match outline {
+                        Some(outline) => outlined_galley(painter, origin, egui::Align2::LEFT_TOP, galley, ink, outline),
+                        None => painter.galley(origin, galley, egui::Color32::PLACEHOLDER),
+                    }
                 }
             }
         }
@@ -2886,29 +3050,168 @@ struct LogReadout {
     azimuth: f32,
 }
 
-/// How a log's width is shared between its three columns; a strat column
-/// of zero means there was no room for one.
+/// How a log's width is shared between its columns, left to right after the
+/// depth scale: strat, density, the hole, gamma. A width of zero means the
+/// column is dropped, for want of room or of data.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct LogColumns {
     scale: f32,
     strat: f32,
+    density: f32,
     track: f32,
+    gamma: f32,
 }
 
-/// Share `width` between the depth scale, the strat column and the hole.
-/// The scale is squeezed but never dropped; the strat column goes first.
-fn log_columns(width: f32) -> LogColumns {
+/// The rects a log's columns take across its plot; `None` for one dropped.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct LogLanes {
+    strat: Option<egui::Rect>,
+    density: Option<egui::Rect>,
+    track: egui::Rect,
+    gamma: Option<egui::Rect>,
+}
+
+impl LogColumns {
+    /// Lay the columns out across `plot`, gapped where both neighbours stand.
+    fn lanes(self, plot: egui::Rect) -> LogLanes {
+        let lane = |left: f32, width: f32| (width > 0.0).then(|| egui::Rect::from_x_y_ranges(left..=left + width, plot.y_range()));
+        let strat = lane(plot.left(), self.strat);
+        let after = |lane: Option<egui::Rect>, from: f32| lane.map_or(from, |lane| lane.right() + LOG_TRACK_GAP);
+        let density = lane(after(strat, plot.left()), self.density);
+        let gamma = lane(plot.right() - self.gamma, self.gamma);
+        let track_left = after(density, after(strat, plot.left()));
+        let track_right = gamma.map_or(plot.right(), |gamma| gamma.left() - LOG_TRACK_GAP);
+        LogLanes {
+            strat,
+            density,
+            track: egui::Rect::from_x_y_ranges(track_left..=track_right.max(track_left), plot.y_range()),
+            gamma,
+        }
+    }
+}
+
+/// The columns a narrow log keeps, first to last, as indices into its
+/// (strat, density, gamma) columns: it gives up gamma first, then strat,
+/// then density. The depth scale is squeezed but never dropped, and the
+/// hole's own track never goes.
+const LOG_KEEP_ORDER: [usize; 3] = [1, 0, 2];
+
+/// Share `width` between the depth scale, the strat column when there is a
+/// field to fill it, the trace columns the hole has data for, and the hole.
+/// Columns are kept in [`LOG_KEEP_ORDER`] while each still fits at its
+/// narrowest beside those already kept, so a strat column that lost its place
+/// to density comes back once density is gone; then each grows toward its own
+/// width and the hole takes whatever is left.
+fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumns {
     let width = width.max(0.0);
     let scale = LOG_SCALE_WIDTH.min(width * 0.35).max(LOG_SCALE_MIN_WIDTH.min(width));
     let rest = (width - scale).max(0.0);
-    if rest < LOG_STRAT_MIN_WIDTH + LOG_TRACK_GAP + LOG_TRACK_MIN_WIDTH {
-        return LogColumns { scale, strat: 0.0, track: rest };
+    let dropped = LogColumns {
+        scale,
+        strat: 0.0,
+        density: 0.0,
+        track: rest,
+        gamma: 0.0,
+    };
+
+    // Strat, density, gamma.
+    let wants = [strat, density, gamma];
+    let minimum = [LOG_STRAT_MIN_WIDTH, LOG_TRACE_MIN_WIDTH, LOG_TRACE_MIN_WIDTH];
+    let track_minimum = |kept: &[bool; 3]| if kept[1] || kept[2] { LOG_TRACK_KEEP_WIDTH } else { LOG_TRACK_MIN_WIDTH };
+    let need = |kept: &[bool; 3]| track_minimum(kept) + (0..3).filter(|&index| kept[index]).map(|index| minimum[index] + LOG_TRACK_GAP).sum::<f32>();
+    let mut kept = [false; 3];
+    for index in LOG_KEEP_ORDER {
+        let mut trial = kept;
+        trial[index] = wants[index];
+        if need(&trial) <= rest {
+            kept = trial;
+        }
     }
-    let strat = LOG_STRAT_WIDTH.min(rest * 0.45).min(rest - LOG_TRACK_GAP - LOG_TRACK_MIN_WIDTH);
+    if kept == [false; 3] {
+        return dropped;
+    }
+    if !kept[1] && !kept[2] {
+        // The strat column and the hole alone share as they always have.
+        let strat = LOG_STRAT_WIDTH.min(rest * 0.45).min(rest - LOG_TRACK_GAP - LOG_TRACK_MIN_WIDTH);
+        return LogColumns {
+            strat,
+            track: rest - strat - LOG_TRACK_GAP,
+            ..dropped
+        };
+    }
+
+    // Past every minimum, the spare is shared in proportion to how far each
+    // column is from its own width; the hole keeps anything beyond that.
+    let wanted = [LOG_STRAT_WIDTH, LOG_TRACE_WIDTH, LOG_TRACE_WIDTH];
+    let track_min = track_minimum(&kept);
+    let spare = rest - need(&kept);
+    let short: f32 = (0..3).filter(|&index| kept[index]).map(|index| wanted[index] - minimum[index]).sum::<f32>() + (LOG_TRACK_WIDTH - track_min);
+    let share = if short > 0.0 { (spare / short).min(1.0) } else { 0.0 };
+    let grown = |index: usize| if kept[index] { minimum[index] + (wanted[index] - minimum[index]) * share } else { 0.0 };
+    let [strat, density, gamma] = [grown(0), grown(1), grown(2)];
+    let gaps = LOG_TRACK_GAP * kept.iter().filter(|kept| **kept).count() as f32;
     LogColumns {
         scale,
         strat,
-        track: rest - strat - LOG_TRACK_GAP,
+        density,
+        track: (rest - strat - density - gamma - gaps).max(track_min),
+        gamma,
+    }
+}
+
+/// A trace column's right-click menu while it is open: the column, the
+/// style being edited, and the custom range being typed.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct TraceMenu {
+    column: TraceColumn,
+    draft: WellLogStyle,
+    custom: [f32; 2],
+}
+
+/// The trace column under `pos`, if any: inside a column's width and down
+/// the plot itself, so the headers and the axis below open no trace menu.
+fn trace_column_at<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<ColumnTraces<'t>>, Option<egui::Rect>); 2]) -> Option<ColumnTraces<'t>> {
+    if !plot.y_range().contains(pos.y) {
+        return None;
+    }
+    lanes
+        .into_iter()
+        .find_map(|(traces, lane)| traces.filter(|_| lane.is_some_and(|lane| lane.x_range().contains(pos.x))))
+}
+
+/// The notes from [`BoreholeLog::trace_notes`], one weak line each across
+/// `area`, elided to its width.
+fn draw_trace_notes(ui: &egui::Ui, painter: &egui::Painter, area: egui::Rect, notes: [Option<String>; 2], line_height: f32) {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let ink = ui.visuals().weak_text_color();
+    for (index, note) in notes.into_iter().flatten().enumerate() {
+        let galley = elided(painter, note, font.clone(), ink, area.width());
+        painter.galley(egui::pos2(area.left(), area.top() + index as f32 * line_height), galley, egui::Color32::PLACEHOLDER);
+    }
+}
+
+/// The traces of whichever column `column` names.
+fn column_traces<'a>(column: TraceColumn, density: Option<ColumnTraces<'a>>, gamma: Option<ColumnTraces<'a>>) -> Option<ColumnTraces<'a>> {
+    match column {
+        TraceColumn::Density => density,
+        TraceColumn::Gamma => gamma,
+    }
+}
+
+/// Colour for one strat run, matched to the ribbon's own set: the ribbon's
+/// field reads through the same working-section mapping the ribbon does, so
+/// a code coloured by its section shows that colour in both.
+fn strat_run_color(color: &crate::model::drill_hole::DrillColorState, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
+    if color.active_field.as_deref() == Some(field.key.as_str()) {
+        let value = crate::model::drill_hole::DrillValue::Category(code.to_owned());
+        return crate::rendering::scene::drill_hole_cache::evaluate_color_for(&field.kind, &value, color);
+    }
+    match &field.kind {
+        crate::model::drill_hole::DrillFieldKind::Categorical { categories } => categories
+            .iter()
+            .position(|category| category == code)
+            .map_or([1.0, 1.0, 1.0], crate::model::drill_hole::generated_category_color),
+        crate::model::drill_hole::DrillFieldKind::Numeric { .. } => [1.0, 1.0, 1.0],
     }
 }
 

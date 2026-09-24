@@ -9,7 +9,7 @@ use crate::{
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileRole},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
@@ -531,6 +531,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                             CsvDrillFileRole::Survey,
                             CsvDrillFileRole::Interval,
                             CsvDrillFileRole::ExplicitSegments,
+                            CsvDrillFileRole::Geophysics,
                         ] {
                             ui.selectable_value(&mut mapping.role, role, file_role_label(role));
                         }
@@ -550,7 +551,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                 ui.weak(tr!(literal = "Unmapped"));
                             } else {
                                 let selected = &mut mapping.columns[column];
-                                egui::ComboBox::from_id_salt(("column", column))
+                                let combo = egui::ComboBox::from_id_salt(("column", column))
                                     .selected_text(column_role_label(selected))
                                     .width(115.0)
                                     .show_ui(ui, |ui| {
@@ -559,6 +560,9 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                             ui.selectable_value(selected, column_role, label);
                                         }
                                     });
+                                if let Some(help) = column_role_help(mapping.role, selected) {
+                                    combo.response.on_hover_text(help);
+                                }
                             }
                         });
                     }
@@ -573,6 +577,11 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
             });
         }
     });
+    if geophysics_without_holes(&editor.import_drill_csv) {
+        ui.weak(tr!(
+            literal = "Add the collar file (or an explicit-segments file): downhole geophysics attaches to the holes it defines."
+        ));
+    }
 }
 
 fn file_role_label(role: CsvDrillFileRole) -> String {
@@ -582,6 +591,7 @@ fn file_role_label(role: CsvDrillFileRole) -> String {
         CsvDrillFileRole::Survey => tr!(literal = "Survey"),
         CsvDrillFileRole::Interval => tr!(literal = "Interval"),
         CsvDrillFileRole::ExplicitSegments => tr!(literal = "Explicit segments"),
+        CsvDrillFileRole::Geophysics => tr!(literal = "Downhole geophysics"),
     }
 }
 
@@ -605,7 +615,27 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::EndNorth => tr!(literal = "End Y"),
         CsvDrillColumnRole::EndElevation => tr!(literal = "End Z"),
         CsvDrillColumnRole::Diameter => tr!(literal = "Diameter"),
+        CsvDrillColumnRole::Gamma => tr!(literal = "Gamma (API)"),
+        CsvDrillColumnRole::LongDensity => tr!(literal = "Long-spaced density (g/cc)"),
+        CsvDrillColumnRole::ShortDensity => tr!(literal = "Short-spaced density (g/cc)"),
         CsvDrillColumnRole::Attribute(_) => tr!(literal = "Attribute"),
+    }
+}
+
+/// Hover help for a geophysics column's unit convention, `None` elsewhere.
+fn column_role_help(file: CsvDrillFileRole, column: &CsvDrillColumnRole) -> Option<String> {
+    if file != CsvDrillFileRole::Geophysics {
+        return None;
+    }
+    match column {
+        CsvDrillColumnRole::Depth => Some(tr!(
+            literal = "Measured depth down the hole, read as metres. Incline converts no units: the database that exported the file sets them."
+        )),
+        CsvDrillColumnRole::Gamma => Some(tr!(literal = "Natural gamma, read as API units, as exported.")),
+        CsvDrillColumnRole::LongDensity | CsvDrillColumnRole::ShortDensity => Some(tr!(
+            literal = "Density, read as g/cc, as exported. A curve whose median is not between 0.5 and 5 g/cc is left out of the import with a warning, its unit looking wrong."
+        )),
+        _ => None,
     }
 }
 
@@ -640,6 +670,12 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::EndElevation,
             CsvDrillColumnRole::Diameter,
             CsvDrillColumnRole::Attribute(header.to_owned()),
+        ]),
+        CsvDrillFileRole::Geophysics => roles.extend([
+            CsvDrillColumnRole::Depth,
+            CsvDrillColumnRole::Gamma,
+            CsvDrillColumnRole::LongDensity,
+            CsvDrillColumnRole::ShortDensity,
         ]),
     }
     roles
@@ -830,6 +866,13 @@ fn ensure_export_block_model(editor: &mut EditorState, project: &UiProjectView) 
     }
 }
 
+/// True when the bundle carries a downhole-geophysics file but no file the
+/// holes it should attach to could be named after (no collar, no
+/// explicit-segments file).
+fn geophysics_without_holes(files: &[(CsvDrillFileMapping, CsvDrillPreview)]) -> bool {
+    files.iter().any(|(mapping, _)| mapping.role == CsvDrillFileRole::Geophysics) && bundle_anchor(files.iter().map(|(mapping, _)| mapping)).is_none()
+}
+
 fn import_command(editor: &EditorState) -> Option<UiCommand> {
     let source_paths = selected_import_source_paths(editor);
     match editor.data_menu {
@@ -850,12 +893,12 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
         DataMenu::CsvDrillHole
             if editor.import_csv_error.is_none()
                 && !editor.import_drill_csv.is_empty()
-                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned) =>
+                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned)
+                && !geophysics_without_holes(&editor.import_drill_csv) =>
         {
-            let name = editor
-                .import_drill_csv
-                .first()?
-                .0
+            let anchor = bundle_anchor(editor.import_drill_csv.iter().map(|(mapping, _)| mapping));
+            let name = anchor
+                .or_else(|| editor.import_drill_csv.first().map(|(mapping, _)| mapping))?
                 .path
                 .file_stem()
                 .and_then(|stem| stem.to_str())

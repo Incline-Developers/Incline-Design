@@ -153,6 +153,9 @@ pub(crate) struct Config {
     /// first launch, where it resolves to the OS locale - see [`crate::i18n`].
     #[serde(default = "default_language")]
     pub(crate) language: LanguageChoice,
+    /// Colours and scales for the borehole log's trace columns.
+    #[serde(default)]
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     /// Use egui's dark visuals and the dark UI icon set.
     #[serde(default = "default_dark_mode")]
     pub(crate) dark_mode: bool,
@@ -274,6 +277,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: default_language(),
+            well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
             show_borehole_inspector: default_show_borehole_inspector(),

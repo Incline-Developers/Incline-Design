@@ -19,22 +19,40 @@ use crate::{
 /// response to light up the grip.
 pub(crate) const PANEL_ID: &str = "borehole_inspector_panel";
 
-/// Default width: room for a two-column property grid.
-const DEFAULT_WIDTH: f32 = 300.0;
+/// Default width: room for a two-column property grid, and for the Log tab's
+/// density, strat and gamma columns at their narrowest beside the hole.
+const DEFAULT_WIDTH: f32 = 360.0;
 /// Narrowest width before rows would rather truncate than shrink further.
 const MIN_WIDTH: f32 = 200.0;
-/// Widest, so the Log tab's strip log has room without swallowing the scene.
-const MAX_WIDTH: f32 = 520.0;
+/// Widest, so the Log tab's strip log fits every column at full width
+/// without swallowing the scene.
+const MAX_WIDTH: f32 = 760.0;
+/// Share of the window the panel may take at most, so a small display
+/// keeps a usable scene beside it.
+const MAX_WINDOW_SHARE: f32 = 0.5;
+
+/// The panel's widest for a window `window_width` wide: [`MAX_WIDTH`], or
+/// half the window when that is less, but never under [`MIN_WIDTH`].
+fn max_width(window_width: f32) -> f32 {
+    (window_width * MAX_WINDOW_SHARE).clamp(MIN_WIDTH, MAX_WIDTH)
+}
 
 /// Draw the borehole inspector panel and return what it claimed.
-pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_borehole_inspector(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    datasets: &[OpenDrillHoleDataset],
+    well_logs: &crate::model::geophysics::GeophysicsStore,
+    commands: &mut Vec<UiCommand>,
+) -> egui::Rect {
     // Reuse the explorer's row colours so the two panels share a palette.
     let (surface, _stripe) = crate::ui::widgets::tree_row_colors(ui);
+    let widest = max_width(ui.ctx().content_rect().width());
     egui::Panel::right(PANEL_ID)
         .resizable(true)
-        .default_size(DEFAULT_WIDTH)
+        .default_size(DEFAULT_WIDTH.min(widest))
         .min_size(MIN_WIDTH)
-        .max_size(MAX_WIDTH)
+        .max_size(widest)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
@@ -50,7 +68,7 @@ pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorStat
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             body_ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            draw_body(&mut body_ui, editor, datasets, commands);
+            draw_body(&mut body_ui, editor, datasets, well_logs, commands);
         })
         .response
         .rect
@@ -60,7 +78,7 @@ pub(crate) fn draw_borehole_inspector(ui: &mut egui::Ui, editor: &mut EditorStat
 ///
 /// The tab strip and dataset name sit outside the Data tab's scroll area,
 /// so neither scrolls out of view.
-fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], well_logs: &crate::model::geophysics::GeophysicsStore, commands: &mut Vec<UiCommand>) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
@@ -121,9 +139,16 @@ fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillH
         }
         BoreholeInspectorTab::Log => {
             draw_log_field_pickers(ui, editor, dataset, commands);
-            crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            // Matched on the store's own key: the dataset, then the hole id
+            // exactly as the dataset spells it.
+            let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
                 .strat_field(strat_choice_for(editor, dataset))
+                .well_logs(well_logs.hole(dataset.id, &hole.dhid), well_logs.has_dataset(dataset.id))
+                .well_log_style(editor.well_log_style)
                 .show(ui);
+            if let Some(style) = saved {
+                commands.push(UiCommand::SetWellLogStyle(style));
+            }
         }
     }
 }
