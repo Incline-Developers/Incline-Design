@@ -19,7 +19,7 @@ use crate::{
     model::{
         Axis, FillStyle, FolderId, FolderMember, FolderRegistry, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillHoleStyle, DrillPatternLayout},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -3449,6 +3449,19 @@ pub(crate) enum UiCommand {
         radius_scale: f64,
         min_pixel_diameter: f32,
     },
+    /// Switch a dataset between a true-diameter cylinder and a string with
+    /// discs.
+    SetDrillHoleStyle {
+        id: DrillHoleId,
+        style: DrillHoleStyle,
+    },
+    /// The disc diameter and string width used when a dataset is drawn as
+    /// string and discs.
+    SetDrillHoleDiscs {
+        id: DrillHoleId,
+        disc_diameter: f64,
+        string_pixel_width: f32,
+    },
     SetDrillHoleColorStops {
         id: DrillHoleId,
         stops: Vec<DrillColorStop>,
@@ -3943,6 +3956,12 @@ impl UiCommand {
             Self::SetDrillHoleWidth {
                 radius_scale, min_pixel_diameter, ..
             } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
+            Self::SetDrillHoleStyle { style, .. } => report(tr!(literal = "Set Drillhole Style"), style.label()),
+            Self::SetDrillHoleDiscs {
+                disc_diameter,
+                string_pixel_width,
+                ..
+            } => report(tr!(literal = "Set Drillhole Discs"), format!("{disc_diameter:.2} m, {string_pixel_width:.1} px")),
             Self::BuildReferencePoints { holes, target, side, .. } => report(
                 tr!(literal = "Build Reference Points"),
                 format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()),

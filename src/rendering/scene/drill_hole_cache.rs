@@ -9,8 +9,8 @@ use wgpu::util::DeviceExt;
 use crate::{
     i18n::tr_format,
     model::drill_hole::{
-        COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
-        DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieIn,
+        COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DISC_MIN_PIXEL_LENGTH, DrillColorState,
+        DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillValue, HoleDisc, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieIn, hole_discs,
     },
 };
 
@@ -25,13 +25,39 @@ pub(crate) struct DrillSegmentInstance {
     /// This instance's slot in the dataset's selection bitset - see
     /// [`selection_bits_for`].
     pub(crate) selection_index: u32,
+    /// String-and-discs only: least on-screen length along the axis, in
+    /// physical pixels, that the shader stretches a disc to about its
+    /// midpoint. Zero for a true-diameter cylinder or a string, neither of
+    /// which is ever lengthened.
+    pub(crate) pixel_length: f32,
+    /// String-and-discs only: a disc's place among its hole's discs,
+    /// thinnest highest, packed into (0, 1]. Breaks the tie when a
+    /// lengthened disc's screen box grows into a neighbour - see
+    /// [`bucket_instances`]'s within-cell ordering - by z-nudging and
+    /// draw-ordering the thinner disc on top. Zero for anything that is not
+    /// a disc.
+    pub(crate) depth_rank: f32,
+    /// String-and-discs only: scene-relative position of the whole disc's
+    /// first point (`position_at_depth(disc.from)`), the same for every
+    /// piece the disc was split into at a station. The shader lengthens a
+    /// thin disc about the midpoint of this whole span, not of the one
+    /// piece an instance happens to carry, so a disc split at a station
+    /// still stretches as one interval. Zero for anything that is not a
+    /// disc.
+    pub(crate) disc_start: [f32; 3],
+    /// The disc's whole span's other end - see [`Self::disc_start`]. Zero
+    /// for anything that is not a disc.
+    pub(crate) disc_end: [f32; 3],
 }
 
 /// One spatial bucket of a dataset's segment instances: a contiguous range
 /// and the scene-relative box bounding every cylinder in it. Boxes overlap
 /// where a merged run crosses a cell edge. A box is padded by world radius
 /// alone, so a culled cell can lose up to half the set's screen floor: a
-/// sliver under a pixel at the default, wider on a set that raised it.
+/// sliver under a pixel at the default, wider on a set that raised it. A
+/// string-and-discs disc is the same kind of sliver risk from a different
+/// cause: the shader may stretch it on screen past `pixel_length` about its
+/// midpoint, wider than the world-space box computed here.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DrillCell {
     pub(crate) min: glam::Vec3,
@@ -186,9 +212,20 @@ fn create_selection_buffer_and_bind_group(device: &wgpu::Device, queue: &wgpu::Q
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
-    /// Cells over `buffer` for frustum culling; empty means draw the whole
-    /// buffer (the pattern preview, never worth bucketing).
+    /// Cells over `buffer` for frustum culling. Empty exactly when there is
+    /// no buffer to cull - no instances were built - since a real entry's
+    /// cells, once built, always cover its buffer in full. The pattern
+    /// preview draws its own buffer whole rather than cell by cell and
+    /// leaves this empty for the same reason.
     pub(crate) cells: Vec<DrillCell>,
+    /// Index into `cells` where disc cells begin: string cells (or, for a
+    /// true-diameter set, the whole buffer) occupy `[0, disc_cells_from)`,
+    /// discs occupy the rest. `cells.len()` for a true-diameter set or an
+    /// empty buffer, so a split at that index draws everything in the first
+    /// half and nothing in the second - see `passes::draw_drill_holes`,
+    /// which draws every dataset's first half before any dataset's second
+    /// so all strings win the x-ray draw order over all discs.
+    pub(crate) disc_cells_from: usize,
     pub(crate) tie_buffer: Option<wgpu::Buffer>,
     pub(crate) tie_count: u32,
     pub(crate) collar_buffer: Option<wgpu::Buffer>,
@@ -208,8 +245,56 @@ pub(crate) struct CachedDrillHoles {
     selection_key: u64,
 }
 
+/// Every string-and-discs set's discs, hole by hole, as the last build drew
+/// them, so a pick reads them rather than working them out on every click.
+/// Held apart from the GPU entries so a pick needs no device, and keyed by
+/// only what the discs depend on.
+#[derive(Default)]
+pub(crate) struct DiscSpans {
+    sets: HashMap<DrillHoleId, (u64, Vec<Vec<HoleDisc>>)>,
+}
+
+impl DiscSpans {
+    /// What a set's discs depend on: its geometry and intervals (both
+    /// behind the revision), the colour field and the style.
+    pub(crate) fn key(dataset: &OpenDrillHoleDataset) -> u64 {
+        let mut hash = DefaultHasher::new();
+        dataset.id.hash(&mut hash);
+        dataset.state.loaded.hash(&mut hash);
+        dataset.state.revision().hash(&mut hash);
+        dataset.color.active_field.hash(&mut hash);
+        dataset.color.hole_style.hash(&mut hash);
+        hash.finish()
+    }
+
+    /// The discs of each of `dataset`'s holes, indexed like its holes, or
+    /// `None` when the last build is stale or never happened, as between an
+    /// edit and the next frame: the caller works them out itself then.
+    pub(crate) fn get(&self, dataset: &OpenDrillHoleDataset) -> Option<&[Vec<HoleDisc>]> {
+        self.sets.get(&dataset.id).filter(|(key, _)| *key == Self::key(dataset)).map(|(_, holes)| holes.as_slice())
+    }
+
+    pub(crate) fn insert(&mut self, dataset: &OpenDrillHoleDataset, holes: Vec<Vec<HoleDisc>>) {
+        self.sets.insert(dataset.id, (Self::key(dataset), holes));
+    }
+
+    pub(crate) fn remove(&mut self, id: DrillHoleId) {
+        self.sets.remove(&id);
+    }
+
+    pub(crate) fn retain(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
+        self.sets.retain(|id, _| keep(*id));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.sets.clear();
+    }
+}
+
 pub(crate) struct DrillHoleGpuCache {
     entries: HashMap<DrillHoleId, CachedDrillHoles>,
+    /// The discs the entries above were built from, for picking.
+    disc_spans: DiscSpans,
     /// Transient pattern-menu geometry, kept outside the id-keyed project
     /// entries so it can use the normal drill shaders without pretending to
     /// be a dataset before Create is pressed.
@@ -286,6 +371,7 @@ impl DrillHoleGpuCache {
         });
         Self {
             entries: HashMap::new(),
+            disc_spans: DiscSpans::default(),
             preview: None,
             content_key: 0,
             warned_over_capacity: std::collections::HashSet::new(),
@@ -295,11 +381,13 @@ impl DrillHoleGpuCache {
         }
     }
 
-    /// Drops the entries and the preview and bumps `content_key`; keeps the
-    /// selection layout, the empty bind group, and the two once-per-set
-    /// sets `warned_over_capacity` and `reported_build`.
+    /// Drops the entries, the preview and `disc_spans`, and bumps
+    /// `content_key`; keeps the selection layout, the empty bind group, and
+    /// the two once-per-set sets `warned_over_capacity` and
+    /// `reported_build`.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.disc_spans.clear();
         self.preview = None;
         self.content_key = self.content_key.wrapping_add(1);
     }
@@ -308,20 +396,32 @@ impl DrillHoleGpuCache {
         &self.selection_layout
     }
 
+    /// The discs each set was last built with, for the pick.
+    pub(crate) fn disc_spans(&self) -> &DiscSpans {
+        &self.disc_spans
+    }
+
     pub(crate) fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset], editor: &crate::ui::state::EditorState) {
         let retained = self.entries.len();
         self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id && dataset.state.loaded));
+        self.disc_spans.retain(|id| datasets.iter().any(|dataset| dataset.id == id && dataset.state.loaded));
         self.warned_over_capacity.retain(|id| datasets.iter().any(|dataset| dataset.id == *id));
         self.reported_build.retain(|id| datasets.iter().any(|dataset| dataset.id == *id));
         if self.entries.len() != retained {
             self.content_key = self.content_key.wrapping_add(1);
         }
+        // Computed once, not per dataset: every string-and-discs set in the
+        // scene shares the same background and therefore the same string
+        // colour, and a true-diameter set never reads it (`dataset_key`
+        // leaves it out of that set's hash, so a theme change alone never
+        // rebuilds it).
+        let string_color = string_color_for(editor.renderer_background_color);
         for dataset in datasets {
             if !dataset.state.loaded {
                 continue;
             }
             let selection = HoleSelection::of(dataset, editor);
-            let key = dataset_key(dataset, scene_origin);
+            let key = dataset_key(dataset, scene_origin, string_color);
             let selection_key = selection.key();
             let action = sync_action(self.entries.get(&dataset.id).map(|cached| (cached.key, cached.selection_key)), key, selection_key);
             if action == SyncAction::Keep {
@@ -343,83 +443,91 @@ impl DrillHoleGpuCache {
                 );
             }
 
-            let (buffer, count, cells, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group) = match self.entries.remove(&dataset.id) {
-                Some(cached) if !base_changed => {
-                    // Only the preview, never inserted here, has no buffer.
-                    let selection_buffer = cached.selection_buffer.unwrap();
-                    queue.write_buffer(&selection_buffer, 0, &bits.live_bytes());
-                    (
-                        cached.buffer,
-                        cached.count,
-                        cached.cells,
-                        cached.tie_buffer,
-                        cached.tie_count,
-                        cached.collar_buffer,
-                        cached.collar_count,
-                        selection_buffer,
-                        cached.selection_bind_group,
-                    )
-                }
-                _ => {
-                    let built = build_segment_instances(dataset, scene_origin);
-                    let buffer = (!built.instances.is_empty()).then(|| {
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Drillhole Segment Instances"),
-                            contents: bytemuck::cast_slice(&built.instances),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        })
-                    });
-                    let count = built.instances.len().min(u32::MAX as usize) as u32;
-                    let cells = built.cells;
-                    if self.reported_build.insert(dataset.id) {
-                        crate::userspace_log!(
-                            "{}",
-                            tr_format!(
-                                literal = "Drill hole set %name%: %stations% stations, %before% segments merged to %after%, %cells% cells",
-                                name = dataset.name,
-                                stations = built.stations,
-                                before = built.before_merge,
-                                after = built.instances.len(),
-                                cells = cells.len(),
-                            )
-                        );
+            let (buffer, count, cells, disc_cells_from, tie_buffer, tie_count, collar_buffer, collar_count, selection_buffer, selection_bind_group) =
+                match self.entries.remove(&dataset.id) {
+                    Some(cached) if !base_changed => {
+                        // Only the preview, never inserted here, has no buffer.
+                        let selection_buffer = cached.selection_buffer.unwrap();
+                        queue.write_buffer(&selection_buffer, 0, &bits.live_bytes());
+                        (
+                            cached.buffer,
+                            cached.count,
+                            cached.cells,
+                            cached.disc_cells_from,
+                            cached.tie_buffer,
+                            cached.tie_count,
+                            cached.collar_buffer,
+                            cached.collar_count,
+                            selection_buffer,
+                            cached.selection_bind_group,
+                        )
                     }
+                    _ => {
+                        let built = build_segment_instances(dataset, scene_origin, string_color);
+                        match dataset.color.hole_style {
+                            DrillHoleStyle::StringAndDiscs => self.disc_spans.insert(dataset, built.disc_spans),
+                            DrillHoleStyle::TrueDiameter => self.disc_spans.remove(dataset.id),
+                        }
+                        let buffer = (!built.instances.is_empty()).then(|| {
+                            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Drillhole Segment Instances"),
+                                contents: bytemuck::cast_slice(&built.instances),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            })
+                        });
+                        let count = built.instances.len().min(u32::MAX as usize) as u32;
+                        let cells = built.cells;
+                        let disc_cells_from = built.disc_cells_from;
+                        if self.reported_build.insert(dataset.id) {
+                            crate::userspace_log!(
+                                "{}",
+                                tr_format!(
+                                    literal = "Drill hole set %name%: %stations% stations, %before% segments merged to %after%, %cells% cells",
+                                    name = dataset.name,
+                                    stations = built.stations,
+                                    before = built.before_merge,
+                                    after = built.instances.len(),
+                                    cells = cells.len(),
+                                )
+                            );
+                        }
 
-                    let ties = build_tie_instances(dataset, scene_origin);
-                    let tie_buffer = (!ties.is_empty()).then(|| {
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Drillhole Tie-In Instances"),
-                            contents: bytemuck::cast_slice(&ties),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        })
-                    });
-                    let tie_count = ties.len().min(u32::MAX as usize) as u32;
+                        let ties = build_tie_instances(dataset, scene_origin);
+                        let tie_buffer = (!ties.is_empty()).then(|| {
+                            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Drillhole Tie-In Instances"),
+                                contents: bytemuck::cast_slice(&ties),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            })
+                        });
+                        let tie_count = ties.len().min(u32::MAX as usize) as u32;
 
-                    let collars = build_collar_instances(dataset, scene_origin);
-                    let collar_buffer = (!collars.is_empty()).then(|| {
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Drillhole Collar Instances"),
-                            contents: bytemuck::cast_slice(&collars),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        })
-                    });
-                    let collar_count = collars.len().min(u32::MAX as usize) as u32;
+                        let collars = build_collar_instances(dataset, scene_origin);
+                        let collar_buffer = (!collars.is_empty()).then(|| {
+                            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Drillhole Collar Instances"),
+                                contents: bytemuck::cast_slice(&collars),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            })
+                        });
+                        let collar_count = collars.len().min(u32::MAX as usize) as u32;
 
-                    let (selection_buffer, selection_bind_group) = create_selection_buffer_and_bind_group(device, queue, &self.selection_layout, &bits);
+                        let (selection_buffer, selection_bind_group) = create_selection_buffer_and_bind_group(device, queue, &self.selection_layout, &bits);
 
-                    (
-                        buffer,
-                        count,
-                        cells,
-                        tie_buffer,
-                        tie_count,
-                        collar_buffer,
-                        collar_count,
-                        selection_buffer,
-                        selection_bind_group,
-                    )
-                }
-            };
+                        (
+                            buffer,
+                            count,
+                            cells,
+                            disc_cells_from,
+                            tie_buffer,
+                            tie_count,
+                            collar_buffer,
+                            collar_count,
+                            selection_buffer,
+                            selection_bind_group,
+                        )
+                    }
+                };
 
             self.content_key = self.content_key.wrapping_add(1);
             self.entries.insert(
@@ -428,6 +536,7 @@ impl DrillHoleGpuCache {
                     buffer,
                     count,
                     cells,
+                    disc_cells_from,
                     tie_buffer,
                     tie_count,
                     collar_buffer,
@@ -481,6 +590,10 @@ impl DrillHoleGpuCache {
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: [1.0; 3],
                 selection_index: 0,
+                pixel_length: 0.0,
+                depth_rank: 0.0,
+                disc_start: [0.0; 3],
+                disc_end: [0.0; 3],
             })
             .collect();
         let collars: Vec<_> = editor
@@ -515,6 +628,7 @@ impl DrillHoleGpuCache {
             buffer,
             count: instances.len().min(u32::MAX as usize) as u32,
             cells: Vec::new(),
+            disc_cells_from: 0,
             tie_buffer: None,
             tie_count: 0,
             collar_buffer,
@@ -588,7 +702,21 @@ impl HoleSelection {
     }
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
+/// The neutral grey a string is drawn in, chosen for contrast against the
+/// scene background the same way the viewport picks its overlay ink - see
+/// `contrast_ink` in `ui/widgets/viewport.rs`, whose 0.45 threshold this
+/// matches. The scene background is `EditorState::renderer_background_color`,
+/// a preference independent of the UI's own dark/light toggle.
+fn string_color_for(background: [f32; 4]) -> [f32; 3] {
+    let rgba = if crate::rendering::color::relative_luminance(background) > 0.45 {
+        crate::rendering::color::hex_to_linear_rgba(0x383838)
+    } else {
+        crate::rendering::color::hex_to_linear_rgba(0xd0d0d0)
+    };
+    [rgba[0], rgba[1], rgba[2]]
+}
+
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.state.loaded.hash(&mut hash);
@@ -613,6 +741,17 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
     dataset.color.categories.content_hash().hash(&mut hash);
     dataset.color.working_sections.hash(&mut hash);
     dataset.color.by_working_section.hash(&mut hash);
+    dataset.color.hole_style.hash(&mut hash);
+    // Diameter, string width and string colour only matter to a
+    // string-and-discs build: hashing them for a true-diameter set would
+    // rebuild it on every theme change for no visible difference.
+    if dataset.color.hole_style == DrillHoleStyle::StringAndDiscs {
+        dataset.color.disc_diameter.to_bits().hash(&mut hash);
+        dataset.color.string_pixel_width.to_bits().hash(&mut hash);
+        for value in string_color {
+            value.to_bits().hash(&mut hash);
+        }
+    }
     hash.finish()
 }
 
@@ -620,6 +759,14 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
 struct SegmentBuild {
     instances: Vec<DrillSegmentInstance>,
     cells: Vec<DrillCell>,
+    /// Index into `cells` where disc cells begin - see
+    /// [`CachedDrillHoles::disc_cells_from`]. `cells.len()` for a
+    /// true-diameter build, which has no discs.
+    disc_cells_from: usize,
+    /// Per hole, indexed like `dataset.dataset.holes`: the discs
+    /// [`build_string_and_disc_instances`] drew for it, for
+    /// [`DiscSpans`]. Empty for a true-diameter build, which draws none.
+    disc_spans: Vec<Vec<HoleDisc>>,
     stations: usize,
     before_merge: usize,
 }
@@ -633,6 +780,10 @@ struct RawSegment {
     radius: f32,
     color: [f32; 3],
     selection_index: u32,
+    /// Carried straight to [`DrillSegmentInstance::depth_rank`]; zero for a
+    /// true-diameter segment or a string, set per disc in
+    /// [`build_string_and_disc_instances`].
+    depth_rank: f32,
 }
 
 /// Largest direction change, in degrees, between a run's chord and a
@@ -696,15 +847,26 @@ fn merge_raw_segments(segments: Vec<RawSegment>, cos_threshold: f64) -> Vec<RawS
     merged
 }
 
-fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> SegmentBuild {
+fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> SegmentBuild {
     if !dataset.state.loaded {
         return SegmentBuild {
             instances: Vec::new(),
             cells: Vec::new(),
+            disc_cells_from: 0,
+            disc_spans: Vec::new(),
             stations: 0,
             before_merge: 0,
         };
     }
+    match dataset.color.hole_style {
+        DrillHoleStyle::TrueDiameter => build_true_diameter_instances(dataset, scene_origin),
+        DrillHoleStyle::StringAndDiscs => build_string_and_disc_instances(dataset, scene_origin, string_color),
+    }
+}
+
+/// The true-diameter look: one cylinder per merged run at the hole's
+/// drilled diameter, cut wherever the active field's value changes.
+fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> SegmentBuild {
     let mut instances = Vec::new();
     let mut stations = 0usize;
     let mut before_merge = 0usize;
@@ -718,18 +880,19 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
         }
         let min_depth = hole.trace.first().unwrap().depth;
         let max_depth = hole.trace.last().unwrap().depth;
-        let mut boundaries = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
+        // Interval boundaries are extra cuts, not extra pieces of their own:
+        // `trace_pieces` already cuts at every station and render-range end.
+        let mut cuts = Vec::new();
         if let Some(field) = field {
             for interval in &hole.intervals {
                 if interval.values.contains_key(&field.key) {
-                    boundaries.push(interval.from.clamp(min_depth, max_depth));
-                    boundaries.push(interval.to.clamp(min_depth, max_depth));
+                    cuts.push(interval.from.clamp(min_depth, max_depth));
+                    cuts.push(interval.to.clamp(min_depth, max_depth));
                 }
             }
         }
-        boundaries.sort_by(f64::total_cmp);
-        boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
-        if boundaries.len() < 2 {
+        let pieces = hole.trace_pieces(min_depth, max_depth, &cuts);
+        if pieces.is_empty() {
             continue;
         }
 
@@ -740,26 +903,10 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
             order
         });
         let mut cursor = 0usize;
-        let mut raw_segments: Vec<RawSegment> = Vec::new();
+        let mut raw_segments: Vec<RawSegment> = Vec::with_capacity(pieces.len());
 
-        let mut previous = hole.position_at_depth(boundaries[0]);
-        for pair in boundaries.windows(2) {
-            let start = previous;
-            let end = hole.position_at_depth(pair[1]);
-            previous = end;
-            if pair[1] <= pair[0] + 1.0e-9 {
-                continue;
-            }
-            let (Some(start), Some(end)) = (start, end) else {
-                continue;
-            };
-            if start.distance_squared(end) <= 1.0e-18 {
-                continue;
-            }
-            let midpoint = (pair[0] + pair[1]) * 0.5;
-            if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint && midpoint < *to) {
-                continue;
-            }
+        for piece in &pieces {
+            let midpoint = (piece.from + piece.to) * 0.5;
             let value = field.and_then(|field| {
                 let order = interval_order.as_ref()?;
                 while cursor < order.len() && hole.intervals[order[cursor]].to <= midpoint {
@@ -779,13 +926,14 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
                     .and_then(|&i| hole.intervals[i].values.get(&field.key))
             });
             raw_segments.push(RawSegment {
-                start,
-                end,
+                start: piece.start,
+                end: piece.end,
                 radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5 * dataset.color.radius_scale) as f32),
                 color: field
                     .and_then(|field| value.map(|value| evaluate_color_with(&field.kind, value, &dataset.color, &sections)))
                     .unwrap_or([1.0; 3]),
                 selection_index: index as u32,
+                depth_rank: 0.0,
             });
         }
 
@@ -797,12 +945,168 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) 
             pixel_diameter: dataset.color.min_pixel_diameter,
             color: segment.color,
             selection_index: segment.selection_index,
+            pixel_length: 0.0,
+            depth_rank: 0.0,
+            disc_start: [0.0; 3],
+            disc_end: [0.0; 3],
         }));
     }
     let (instances, cells) = bucket_instances(instances);
+    let disc_cells_from = cells.len();
     SegmentBuild {
         instances,
         cells,
+        disc_cells_from,
+        disc_spans: Vec::new(),
+        stations,
+        before_merge,
+    }
+}
+
+/// The string-and-discs look: a thin constant-width string along the trace,
+/// coloured by [`string_color_for`], and a disc on every interval carrying a
+/// value in the active field - see [`hole_discs`] for the overlap rule that
+/// keeps discs from ever fighting one another for the same depth.
+///
+/// Strings and discs are bucketed separately and concatenated string-first so
+/// the draw (`passes::draw_drill_holes`) can emit every string before any
+/// disc: with no depth test on the x-ray pipeline, draw order is the only
+/// thing standing between a disc and the string underneath it.
+fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> SegmentBuild {
+    let mut strings = Vec::new();
+    let mut discs = Vec::new();
+    let mut stations = 0usize;
+    let mut before_merge = 0usize;
+    let cos_threshold = MERGE_MAX_DEVIATION_DEGREES.to_radians().cos();
+
+    let field = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key));
+    let sections = dataset.color.section_lookup();
+    let disc_radius = (dataset.color.disc_diameter * 0.5) as f32;
+    let disc_pixel_diameter = dataset.color.disc_min_pixel_diameter();
+
+    let mut disc_spans: Vec<Vec<HoleDisc>> = vec![Vec::new(); dataset.dataset.holes.len()];
+
+    for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+        stations += hole.trace.len();
+
+        if hole.trace.len() >= 2 {
+            let min_depth = hole.trace.first().unwrap().depth;
+            let max_depth = hole.trace.last().unwrap().depth;
+            let pieces = hole.trace_pieces(min_depth, max_depth, &[]);
+            let raw_segments: Vec<RawSegment> = pieces
+                .iter()
+                .map(|piece| RawSegment {
+                    start: piece.start,
+                    end: piece.end,
+                    radius: 0.0,
+                    color: string_color,
+                    selection_index: index as u32,
+                    depth_rank: 0.0,
+                })
+                .collect();
+            before_merge += raw_segments.len();
+            strings.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
+                start: (segment.start - scene_origin).as_vec3().to_array(),
+                radius: 0.0,
+                end: (segment.end - scene_origin).as_vec3().to_array(),
+                pixel_diameter: dataset.color.string_pixel_width,
+                color: segment.color,
+                selection_index: segment.selection_index,
+                pixel_length: 0.0,
+                depth_rank: 0.0,
+                disc_start: [0.0; 3],
+                disc_end: [0.0; 3],
+            }));
+        }
+
+        let Some(field) = field else { continue };
+        disc_spans[index] = hole_discs(hole, &field.key);
+        let discs_for_hole = &disc_spans[index];
+        let disc_count = discs_for_hole.len();
+        if disc_count == 0 {
+            continue;
+        }
+        // Longest first so the k-th (0-based) disc's rank is (k+1)/n: the
+        // thinnest disc, last in this order, lands on 1.0.
+        let mut rank_order: Vec<usize> = (0..disc_count).collect();
+        rank_order.sort_by(|&a, &b| {
+            let length_a = discs_for_hole[a].to - discs_for_hole[a].from;
+            let length_b = discs_for_hole[b].to - discs_for_hole[b].from;
+            length_b.total_cmp(&length_a).then(discs_for_hole[a].from.total_cmp(&discs_for_hole[b].from))
+        });
+        let mut depth_ranks = vec![0.0f32; disc_count];
+        for (order, &disc_index) in rank_order.iter().enumerate() {
+            depth_ranks[disc_index] = (order + 1) as f32 / disc_count as f32;
+        }
+
+        for (disc_index, disc) in discs_for_hole.iter().enumerate() {
+            let Some(value) = hole.intervals[disc.interval].values.get(&field.key) else {
+                continue;
+            };
+            let color = evaluate_color_with(&field.kind, value, &dataset.color, &sections);
+            // The whole disc's span, shared by every piece it is split into
+            // at a station: the shader lengthens a thin disc about this
+            // span's midpoint, not one piece's.
+            let (Some(disc_start_pos), Some(disc_end_pos)) = (hole.position_at_depth(disc.from), hole.position_at_depth(disc.to)) else {
+                continue;
+            };
+            let disc_start = (disc_start_pos - scene_origin).as_vec3().to_array();
+            let disc_end = (disc_end_pos - scene_origin).as_vec3().to_array();
+
+            let pieces = hole.trace_pieces(disc.from, disc.to, &[]);
+            let raw_segments: Vec<RawSegment> = pieces
+                .iter()
+                .map(|piece| RawSegment {
+                    start: piece.start,
+                    end: piece.end,
+                    radius: disc_radius,
+                    color,
+                    selection_index: index as u32,
+                    depth_rank: depth_ranks[disc_index],
+                })
+                .collect();
+            before_merge += raw_segments.len();
+            // Merged on its own, never joined with a neighbouring disc's
+            // segments: each disc must keep its own extent and rank.
+            discs.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
+                start: (segment.start - scene_origin).as_vec3().to_array(),
+                radius: segment.radius,
+                end: (segment.end - scene_origin).as_vec3().to_array(),
+                pixel_diameter: disc_pixel_diameter,
+                color: segment.color,
+                selection_index: segment.selection_index,
+                pixel_length: DISC_MIN_PIXEL_LENGTH,
+                depth_rank: segment.depth_rank,
+                disc_start,
+                disc_end,
+            }));
+        }
+    }
+
+    // Ascending so a spatial cell's members, which keep their relative order
+    // through bucketing, end with the thinnest disc: the one x-ray draw order
+    // should put on top.
+    discs.sort_by(|a, b| a.depth_rank.total_cmp(&b.depth_rank));
+
+    let (strings, string_cells) = bucket_instances(strings);
+    let (discs, disc_cells) = bucket_instances(discs);
+    let string_count = strings.len() as u32;
+    let mut cells = string_cells;
+    let disc_cells_from = cells.len();
+    cells.extend(disc_cells.into_iter().map(|cell| DrillCell {
+        min: cell.min,
+        max: cell.max,
+        start: cell.start + string_count,
+        end: cell.end + string_count,
+    }));
+    let mut instances = strings;
+    instances.extend(discs);
+
+    SegmentBuild {
+        instances,
+        cells,
+        disc_cells_from,
+        disc_spans,
         stations,
         before_merge,
     }
@@ -922,6 +1226,10 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> V
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: tie.color,
                 selection_index: hole_count + tie_index as u32,
+                pixel_length: 0.0,
+                depth_rank: 0.0,
+                disc_start: [0.0; 3],
+                disc_end: [0.0; 3],
             })
         })
         .collect()
@@ -931,6 +1239,14 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
     if !dataset.state.loaded {
         return Vec::new();
     }
+    // The marker itself keeps the drilled radius regardless of style; only
+    // the lift that holds it clear of what is drawn below it - `hole_radius`
+    // and `trace_pixel_diameter` - follows the trace's own width, so it sits
+    // proud of a disc the same way it sits proud of a true-diameter cylinder.
+    // `SceneQuery::nearest_drill_hole` picks the collar at this same lift.
+    // Constant across the dataset for string-and-discs, so it is worked out
+    // once rather than matched per hole.
+    let disc_lift = matches!(dataset.color.hole_style, DrillHoleStyle::StringAndDiscs).then(|| (dataset.color.disc_diameter * 0.5, dataset.color.disc_min_pixel_diameter()));
     dataset
         .dataset
         .holes
@@ -938,18 +1254,17 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
         .enumerate()
         .map(|(index, hole)| {
             let center = hole.collar_position();
-            // The marker keeps the drilled radius; only the lift that holds it
-            // clear of the trace follows the width the trace is drawn at.
             let hole_radius = hole.render_radius();
+            let (radius, pixel_diameter) = disc_lift.unwrap_or((hole_radius * dataset.color.radius_scale, dataset.color.min_pixel_diameter));
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),
                 marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline: COLLAR_MARKER_OUTLINE_COLOR,
                 pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
                 fill: COLLAR_MARKER_FILL_COLOR,
-                hole_radius: (hole_radius * dataset.color.radius_scale) as f32,
+                hole_radius: radius as f32,
                 selection_index: index as u32,
-                trace_pixel_diameter: dataset.color.min_pixel_diameter,
+                trace_pixel_diameter: pixel_diameter,
             }
         })
         .collect()

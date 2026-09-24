@@ -184,12 +184,11 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
 }
 
 /// One draw per run of visible cells; an off-screen cell costs a box test
-/// instead of its instances. An entry with no cells draws whole.
-fn draw_drill_cells(render_pass: &mut wgpu::RenderPass<'_>, cells: &[DrillCell], count: u32, frustum: &Frustum) {
-    if cells.is_empty() {
-        render_pass.draw(0..144, 0..count);
-        return;
-    }
+/// instead of its instances. An empty slice draws nothing: a real entry's
+/// cells always cover its whole buffer (see `CachedDrillHoles::cells`), so
+/// this only happens when a caller deliberately asks for zero cells, such as
+/// the empty half of `draw_drill_holes`'s string/disc split.
+fn draw_drill_cells(render_pass: &mut wgpu::RenderPass<'_>, cells: &[DrillCell], frustum: &Frustum) {
     let mut run: Option<std::ops::Range<u32>> = None;
     for cell in cells {
         if !frustum.intersects_aabb(cell.min, cell.max) {
@@ -239,6 +238,13 @@ impl<'a> Graphics<'a> {
         };
         if draw_traces {
             render_pass.set_pipeline(hole_pipeline);
+            // Two passes over every dataset, not one pass per dataset: with
+            // no depth test on the x-ray pipeline, draw order is all that
+            // keeps a disc off the string underneath it, and that has to
+            // hold across datasets, not just within one dataset's own cells.
+            // Still not guaranteed: a disc the shader lengthens across a
+            // cell boundary, or across a dataset boundary, follows cell and
+            // dataset draw order, not screen depth.
             for dataset in drill_holes {
                 if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
@@ -251,7 +257,22 @@ impl<'a> Graphics<'a> {
                 if let Some(buffer) = cached.buffer.as_ref() {
                     render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
-                    draw_drill_cells(render_pass, &cached.cells, cached.count, frustum);
+                    let split = cached.disc_cells_from.min(cached.cells.len());
+                    draw_drill_cells(render_pass, &cached.cells[..split], frustum);
+                }
+            }
+            for dataset in drill_holes {
+                if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
+                    continue;
+                }
+                let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
+                    continue;
+                };
+                if let Some(buffer) = cached.buffer.as_ref() {
+                    render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, buffer.slice(..));
+                    let split = cached.disc_cells_from.min(cached.cells.len());
+                    draw_drill_cells(render_pass, &cached.cells[split..], frustum);
                 }
             }
             if draw_preview

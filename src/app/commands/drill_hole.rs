@@ -6,8 +6,9 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, LoadedDrillHoleDataset,
-            MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT,
+            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillHoleStyle,
+            LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter,
+            clamp_string_pixel_width,
         },
         formats::csv_drill_hole,
     },
@@ -38,6 +39,38 @@ fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterat
     }
 }
 
+/// A pattern's planned holes as a new set: vertical from each collar to
+/// `depth`, all at the design `diameter`, drawn at that true diameter.
+fn planned_dataset(id: DrillHoleId, name: String, collars: Vec<glam::DVec3>, depth: f64, diameter: f64) -> OpenDrillHoleDataset {
+    let width = collars.len().to_string().len().max(3);
+    let holes = collars
+        .into_iter()
+        .enumerate()
+        .map(|(index, collar)| DrillHole {
+            dhid: format!("H{:0width$}", index + 1, width = width),
+            collar,
+            diameter: Some(diameter),
+            trace: vec![
+                TraceStation { depth: 0.0, position: collar },
+                TraceStation {
+                    depth,
+                    position: collar - glam::DVec3::Z * depth,
+                },
+            ],
+            render_ranges: Vec::new(),
+            intervals: Vec::new(),
+            orientation_source: OrientationSource::Assumed,
+        })
+        .collect();
+    OpenDrillHoleDataset {
+        id,
+        state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, None),
+        name,
+        dataset: std::sync::Arc::new(DrillHoleDataset::new(holes)),
+        color: DrillColorState::for_planned_holes(),
+    }
+}
+
 impl<'a> App<'a> {
     /// Turn the pattern menu's exact preview into a normal project-owned
     /// drillhole dataset. Generated patterns need no reload source: project
@@ -60,37 +93,10 @@ impl<'a> App<'a> {
             anyhow::bail!("{}", tr!(literal = "The drill pattern is too large or contains invalid collar coordinates"));
         }
 
-        let width = collars.len().to_string().len().max(3);
-        let holes = collars
-            .into_iter()
-            .enumerate()
-            .map(|(index, collar)| DrillHole {
-                dhid: format!("H{:0width$}", index + 1, width = width),
-                collar,
-                diameter: Some(diameter),
-                trace: vec![
-                    TraceStation { depth: 0.0, position: collar },
-                    TraceStation {
-                        depth,
-                        position: collar - glam::DVec3::Z * depth,
-                    },
-                ],
-                render_ranges: Vec::new(),
-                intervals: Vec::new(),
-                orientation_source: OrientationSource::Assumed,
-            })
-            .collect();
-        let dataset = std::sync::Arc::new(DrillHoleDataset::new(holes));
         let id = DrillHoleId(self.next_drill_hole_id);
         self.next_drill_hole_id += 1;
         let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
-        let item = OpenDrillHoleDataset {
-            id,
-            state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, None),
-            name,
-            dataset,
-            color: DrillColorState::default(),
-        };
+        let item = planned_dataset(id, name, collars, depth, diameter);
         self.execute_edit(Command::AddItem {
             item: ItemRef::DrillHole(id),
             index: self.drill_holes.len(),
@@ -223,7 +229,7 @@ impl<'a> App<'a> {
             state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, Some(loaded.source.display_name())),
             name,
             dataset: loaded.dataset,
-            color: DrillColorState::default(),
+            color: DrillColorState::for_logged_holes(),
         });
         self.touch_active_project_content();
         self.persist_session();
@@ -265,6 +271,21 @@ impl<'a> App<'a> {
         self.set_drill_hole_color(id, |_, color| {
             color.radius_scale = scale;
             color.min_pixel_diameter = floor;
+        });
+    }
+
+    pub(crate) fn set_drill_hole_style(&mut self, id: DrillHoleId, style: DrillHoleStyle) {
+        self.set_drill_hole_color(id, |_, color| {
+            color.hole_style = style;
+        });
+    }
+
+    pub(crate) fn set_drill_hole_discs(&mut self, id: DrillHoleId, disc_diameter: f64, string_pixel_width: f32) {
+        let disc_diameter = clamp_disc_diameter(disc_diameter);
+        let string_pixel_width = clamp_string_pixel_width(string_pixel_width);
+        self.set_drill_hole_color(id, |_, color| {
+            color.disc_diameter = disc_diameter;
+            color.string_pixel_width = string_pixel_width;
         });
     }
 

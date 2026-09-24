@@ -106,6 +106,9 @@ pub(super) fn slice_preview_scene_key(
         dataset.color.categories.content_hash().hash(&mut hasher);
         dataset.color.working_sections.hash(&mut hasher);
         dataset.color.by_working_section.hash(&mut hasher);
+        dataset.color.hole_style.hash(&mut hasher);
+        dataset.color.disc_diameter.to_bits().hash(&mut hasher);
+        dataset.color.string_pixel_width.to_bits().hash(&mut hasher);
     }
     for point_cloud in point_clouds {
         point_cloud.id.hash(&mut hasher);

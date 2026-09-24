@@ -1799,7 +1799,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name,
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
-                color: style_value(style, "color").unwrap_or_default(),
+                color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
                 folder,
                 section,
             });
@@ -2723,7 +2723,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             },
             deferred: None,
             is_loaded: style_loaded(style),
-            color: style_value(style, "color").unwrap_or_default(),
+            color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
             folder,
             section,
         }))

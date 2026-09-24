@@ -35,7 +35,8 @@ pub(super) const GROUND_INTENSITY: f32 = 0.12;
 /// design strings.
 pub(super) const SCENE_EXPOSURE: f32 = 0.8;
 
-const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32];
+const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 7] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32, 4 => Float32x2, 5 => Float32x3, 6 => Float32x3];
 const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32, 4 => Float32];
 
 /// The bind group layouts the scene pipelines are laid out against. Everything

@@ -1,7 +1,8 @@
 use crate::{
     i18n::{tr, tr_format},
     model::drill_hole::{
-        DrillColorPreset, DrillFieldKind, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection, default_category_colors, working_section_name_problem,
+        DrillColorPreset, DrillFieldKind, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection, default_category_colors,
+        working_section_name_problem,
     },
     ui::{
         state::{EditorState, UiCommand},
@@ -101,37 +102,90 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
     }
 
     menu::menu_section(ui, tr!(literal = "Width"));
-    let mut scale = dataset.color.radius_scale;
-    let mut floor = dataset.color.min_pixel_diameter;
-    let mut width_changed = false;
-    MenuField::new(tr!(literal = "Of drilled diameter")).show(ui, |ui, _, _| {
-        width_changed |= ui
-            .add(
-                egui::Slider::new(&mut scale, crate::model::drill_hole::RADIUS_SCALE_RANGE)
-                    .fixed_decimals(2)
-                    .suffix(tr!(literal = "x")),
-            )
-            .on_hover_text(tr!(
-                literal = "A hole at its drilled width reads as a pipe beside the geology; a set of thousands reads as a mat."
-            ))
-            .changed();
-    });
-    MenuField::new(tr!(literal = "Never thinner than")).show(ui, |ui, _, _| {
-        width_changed |= ui
-            .add(
-                egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
-                    .fixed_decimals(1)
-                    .suffix(tr!(literal = " px")),
-            )
-            .on_hover_text(tr!(literal = "However far the eye is, a hole is drawn at least this wide."))
-            .changed();
-    });
-    if width_changed {
-        commands.push(UiCommand::SetDrillHoleWidth {
-            id,
-            radius_scale: scale,
-            min_pixel_diameter: floor,
-        });
+    let mut style = dataset.color.hole_style;
+    if MenuFieldCombo::new(
+        ("drill_hole_style", id),
+        tr!(literal = "Style"),
+        &mut style,
+        dataset.color.hole_style.label(),
+        DrillHoleStyle::ALL.map(|style| (style, style.label().into())),
+    )
+    .help_text(tr!(literal = "As string and discs, where intervals overlap the shortest one is drawn as the disc."))
+    .show(ui)
+    .changed()
+    {
+        commands.push(UiCommand::SetDrillHoleStyle { id, style });
+    }
+    match style {
+        DrillHoleStyle::TrueDiameter => {
+            let mut scale = dataset.color.radius_scale;
+            let mut floor = dataset.color.min_pixel_diameter;
+            let mut width_changed = false;
+            MenuField::new(tr!(literal = "Of drilled diameter")).show(ui, |ui, _, _| {
+                width_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut scale, crate::model::drill_hole::RADIUS_SCALE_RANGE)
+                            .fixed_decimals(2)
+                            .suffix(tr!(literal = "x")),
+                    )
+                    .on_hover_text(tr!(
+                        literal = "A hole at its drilled width reads as a pipe beside the geology; a set of thousands reads as a mat."
+                    ))
+                    .changed();
+            });
+            MenuField::new(tr!(literal = "Never thinner than")).show(ui, |ui, _, _| {
+                width_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
+                            .fixed_decimals(1)
+                            .suffix(tr!(literal = " px")),
+                    )
+                    .on_hover_text(tr!(literal = "However far the eye is, a hole is drawn at least this wide."))
+                    .changed();
+            });
+            if width_changed {
+                commands.push(UiCommand::SetDrillHoleWidth {
+                    id,
+                    radius_scale: scale,
+                    min_pixel_diameter: floor,
+                });
+            }
+        }
+        DrillHoleStyle::StringAndDiscs => {
+            let mut disc_diameter = dataset.color.disc_diameter;
+            let mut string_pixel_width = dataset.color.string_pixel_width;
+            let mut discs_changed = false;
+            MenuField::new(tr!(literal = "Disc diameter")).show(ui, |ui, _, _| {
+                discs_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut disc_diameter, crate::model::drill_hole::DISC_DIAMETER_RANGE)
+                            .logarithmic(true)
+                            .fixed_decimals(2)
+                            .suffix(tr!(literal = " m")),
+                    )
+                    .on_hover_text(tr!(
+                        literal = "Every interval with a value in the colour field is drawn as a disc this wide on the string. Far away it is never narrower than a few pixels."
+                    ))
+                    .changed();
+            });
+            MenuField::new(tr!(literal = "String width")).show(ui, |ui, _, _| {
+                discs_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut string_pixel_width, crate::model::drill_hole::STRING_PIXEL_WIDTH_RANGE)
+                            .fixed_decimals(1)
+                            .suffix(tr!(literal = " px")),
+                    )
+                    .on_hover_text(tr!(literal = "The hole itself is drawn as a line this wide at every zoom."))
+                    .changed();
+            });
+            if discs_changed {
+                commands.push(UiCommand::SetDrillHoleDiscs {
+                    id,
+                    disc_diameter,
+                    string_pixel_width,
+                });
+            }
+        }
     }
 
     let Some(field) = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key)) else {

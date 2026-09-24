@@ -643,6 +643,18 @@ impl<'a> App<'a> {
                 self.set_drill_hole_width(id, radius_scale, min_pixel_diameter);
                 Ok(())
             }
+            UiCommand::SetDrillHoleStyle { id, style } => {
+                self.set_drill_hole_style(id, style);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleDiscs {
+                id,
+                disc_diameter,
+                string_pixel_width,
+            } => {
+                self.set_drill_hole_discs(id, disc_diameter, string_pixel_width);
+                Ok(())
+            }
             UiCommand::SetDrillHoleColorStops { id, stops } => {
                 self.set_drill_hole_color_stops(id, stops);
                 Ok(())

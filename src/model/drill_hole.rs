@@ -39,6 +39,23 @@ pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// holes it joins. Its physical width follows the pattern, while the renderer
 /// applies the same screen-space floor as a drill-hole trace.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
+/// A disc's diameter, in metres, where a set has not chosen one: ten times
+/// an HQ core hole, so a disc never reads as the hole itself, and small
+/// beside the closest drill spacings, so neighbouring discs never touch.
+/// Far out the pixel floor below sets the size, not this.
+pub(crate) const DEFAULT_DISC_DIAMETER: f64 = 1.0;
+/// What the disc diameter control accepts, in metres.
+pub(crate) const DISC_DIAMETER_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+/// The string's on-screen width where a set has not chosen one.
+pub(crate) const DEFAULT_STRING_PIXEL_WIDTH: f32 = 2.0;
+/// What the string width control accepts, in pixels.
+pub(crate) const STRING_PIXEL_WIDTH_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+/// How much wider than the string a disc is always drawn, in pixels: two
+/// pixels of colour either side of it however far the eye is.
+pub(crate) const DISC_PIXEL_MARGIN: f32 = 4.0;
+/// The least a disc is drawn along the string, in pixels, so a ply a few
+/// centimetres thick still shows from kilometres away.
+pub(crate) const DISC_MIN_PIXEL_LENGTH: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -658,6 +675,71 @@ impl DrillHole {
         let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
         Some(a.position.lerp(b.position, t))
     }
+
+    /// The straight pieces the trace is drawn in between depths `from` and
+    /// `to`, clamped to the trace: cut at every station, at the ends of
+    /// `render_ranges`, and at `cuts`. A piece whose middle lies outside
+    /// every render range is not drawn and is left out, as is one with no
+    /// length. Every builder of a hole's geometry and the pick walk the
+    /// trace through this, so what is clickable is what is drawn.
+    pub(crate) fn trace_pieces(&self, from: f64, to: f64, cuts: &[f64]) -> Vec<TracePiece> {
+        let (Some(first), Some(last)) = (self.trace.first(), self.trace.last()) else {
+            return Vec::new();
+        };
+        let (from, to) = (from.max(first.depth), to.min(last.depth));
+        if !from.is_finite() || !to.is_finite() || to <= from {
+            return Vec::new();
+        }
+        let inside = |depth: &f64| *depth > from && *depth < to;
+        let mut boundaries: Vec<f64> = self
+            .trace
+            .iter()
+            .map(|station| station.depth)
+            .filter(inside)
+            .chain(self.render_ranges.iter().flat_map(|&(start, end)| [start, end]).filter(inside))
+            .chain(cuts.iter().copied().filter(inside))
+            .chain([from, to])
+            .collect();
+        boundaries.sort_by(f64::total_cmp);
+        boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+
+        let mut pieces = Vec::with_capacity(boundaries.len().saturating_sub(1));
+        let mut previous = self.position_at_depth(boundaries[0]);
+        for pair in boundaries.windows(2) {
+            let start = previous;
+            let end = self.position_at_depth(pair[1]);
+            previous = end;
+            if pair[1] <= pair[0] + 1.0e-9 {
+                continue;
+            }
+            let (Some(start), Some(end)) = (start, end) else {
+                continue;
+            };
+            if start.distance_squared(end) <= 1.0e-18 {
+                continue;
+            }
+            let midpoint = (pair[0] + pair[1]) * 0.5;
+            if !self.render_ranges.is_empty() && !self.render_ranges.iter().any(|(start, end)| *start <= midpoint && midpoint < *end) {
+                continue;
+            }
+            pieces.push(TracePiece {
+                from: pair[0],
+                to: pair[1],
+                start,
+                end,
+            });
+        }
+        pieces
+    }
+}
+
+/// One straight piece of a drawn trace: its depths and where they stand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TracePiece {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) start: DVec3,
+    pub(crate) end: DVec3,
 }
 
 fn trace_box(collar: DVec3, trace: &[TraceStation]) -> WorldBox {
@@ -1051,6 +1133,39 @@ pub(crate) struct DrillColorState {
     /// the group's colour, any other code keeps its own.
     #[serde(default)]
     pub(crate) by_working_section: bool,
+    /// How the set is drawn. A set saved before there was a choice reads
+    /// back at its true diameter, the look it was saved with; an imported
+    /// set starts as string and discs (see `Self::for_logged_holes`).
+    #[serde(default = "saved_before_styles_hole_style", deserialize_with = "lenient_hole_style")]
+    pub(crate) hole_style: DrillHoleStyle,
+    /// The discs' diameter in metres, drawn string and discs.
+    #[serde(default = "default_disc_diameter", deserialize_with = "clamped_disc_diameter")]
+    pub(crate) disc_diameter: f64,
+    /// The string's width on screen in pixels, drawn string and discs: it
+    /// neither thins nor thickens with zoom.
+    #[serde(default = "default_string_pixel_width", deserialize_with = "clamped_string_pixel_width")]
+    pub(crate) string_pixel_width: f32,
+}
+
+/// How a drill hole set is drawn in the 3D view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) enum DrillHoleStyle {
+    /// A cylinder at the drilled diameter times the set's width scale.
+    TrueDiameter,
+    /// A thin string of constant screen width along the trace, and a disc of
+    /// a chosen diameter on every interval with a value in the colour field.
+    StringAndDiscs,
+}
+
+impl DrillHoleStyle {
+    pub(crate) const ALL: [Self; 2] = [Self::TrueDiameter, Self::StringAndDiscs];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::TrueDiameter => tr!(literal = "True diameter"),
+            Self::StringAndDiscs => tr!(literal = "String and discs"),
+        }
+    }
 }
 
 /// Seams or plies of one categorical field that are mined as one unit.
@@ -1235,6 +1350,62 @@ fn clamped_min_pixel_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D)
     })
 }
 
+/// The style of a set saved before there was one: drawn at its true
+/// diameter, as it was when saved. Deliberately not what a new set gets.
+fn saved_before_styles_hole_style() -> DrillHoleStyle {
+    DrillHoleStyle::TrueDiameter
+}
+
+/// A style this build does not know, from a newer one, reads as the saved
+/// look rather than costing the set every colour saved beside it.
+fn lenient_hole_style<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<DrillHoleStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Style {
+        Known(DrillHoleStyle),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Style::deserialize(deserializer)? {
+        Style::Known(style) => style,
+        Style::Unknown(_) => saved_before_styles_hole_style(),
+    })
+}
+
+pub(crate) fn default_disc_diameter() -> f64 {
+    DEFAULT_DISC_DIAMETER
+}
+
+pub(crate) fn default_string_pixel_width() -> f32 {
+    DEFAULT_STRING_PIXEL_WIDTH
+}
+
+/// The disc diameter as the controls and a saved file may set it: a value
+/// that is not a number is the default, anything else is held in range.
+pub(crate) fn clamp_disc_diameter(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(*DISC_DIAMETER_RANGE.start(), *DISC_DIAMETER_RANGE.end())
+    } else {
+        default_disc_diameter()
+    }
+}
+
+/// The string width as the controls and a saved file may set it.
+pub(crate) fn clamp_string_pixel_width(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(*STRING_PIXEL_WIDTH_RANGE.start(), *STRING_PIXEL_WIDTH_RANGE.end())
+    } else {
+        default_string_pixel_width()
+    }
+}
+
+fn clamped_disc_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(clamp_disc_diameter(f64::deserialize(deserializer)?))
+}
+
+fn clamped_string_pixel_width<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    Ok(clamp_string_pixel_width(f32::deserialize(deserializer)?))
+}
+
 impl Default for DrillColorState {
     fn default() -> Self {
         let preset = DrillColorPreset::Rainbow;
@@ -1248,11 +1419,41 @@ impl Default for DrillColorState {
             min_pixel_diameter: default_min_pixel_diameter(),
             working_sections: Vec::new(),
             by_working_section: false,
+            // The look a set had before there was a choice. A new set takes
+            // the constructor for where it came from instead.
+            hole_style: saved_before_styles_hole_style(),
+            disc_diameter: default_disc_diameter(),
+            string_pixel_width: default_string_pixel_width(),
         }
     }
 }
 
 impl DrillColorState {
+    /// A set of logged holes, imported: drawn as string and discs, the
+    /// picture a modeller reads intervals by.
+    pub(crate) fn for_logged_holes() -> Self {
+        Self {
+            hole_style: DrillHoleStyle::StringAndDiscs,
+            ..Self::default()
+        }
+    }
+
+    /// A set of planned holes, laid out as a pattern: drawn at their true
+    /// diameter. They carry no intervals to put discs on, and their design
+    /// diameter, and the tie-ins sized from it, must read as drawn.
+    pub(crate) fn for_planned_holes() -> Self {
+        Self {
+            hole_style: DrillHoleStyle::TrueDiameter,
+            ..Self::default()
+        }
+    }
+
+    /// The narrowest a disc is drawn on screen, in pixels: always wider than
+    /// the string it sits on, so its colour shows either side.
+    pub(crate) fn disc_min_pixel_diameter(&self) -> f32 {
+        self.string_pixel_width + DISC_PIXEL_MARGIN
+    }
+
     /// The colour chosen for one code, by binary search over the sorted table.
     pub(crate) fn category_color(&self, value: &str) -> Option<[f32; 3]> {
         self.categories
@@ -1737,4 +1938,92 @@ pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], si
         ReferenceSide::Floor => base,
     });
     ReferencePick { depth, runs: runs.len() }
+}
+
+/// One disc of a hole drawn as string and discs: a stretch of the trace and
+/// the interval whose value colours it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HoleDisc {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    /// Index into the hole's `intervals`.
+    pub(crate) interval: usize,
+}
+
+/// Whether a value earns its interval a disc. A blank code, or a number that
+/// is not one or is a no-data marker, is nothing at all - the colour path
+/// draws it white for the same reason - so that interval shows only string.
+pub(crate) fn disc_value(value: &DrillValue) -> bool {
+    match value {
+        DrillValue::Category(code) => !code.trim().is_empty(),
+        DrillValue::Numeric(number) => number.is_finite() && !crate::model::block_model::is_no_data_sentinel(*number),
+    }
+}
+
+/// The discs `hole` shows for the colour field `field`, shallowest first,
+/// clamped to the trace and to `render_ranges`.
+///
+/// Where intervals holding a value overlap - a seam logged whole and again
+/// as its plies - the shortest one covering a depth is drawn there, ties to
+/// the first logged: the plies show, and the whole seam fills only what
+/// they leave. Discs therefore never overlap one another, so no two of them
+/// fight for the same pixels.
+pub(crate) fn hole_discs(hole: &DrillHole, field: &str) -> Vec<HoleDisc> {
+    let (Some(first), Some(last)) = (hole.trace.first(), hole.trace.last()) else {
+        return Vec::new();
+    };
+    let (min_depth, max_depth) = (first.depth, last.depth);
+    // Also refuses a depth that is not a number.
+    if min_depth.partial_cmp(&max_depth) != Some(std::cmp::Ordering::Less) {
+        return Vec::new();
+    }
+    let mut candidates: Vec<usize> = hole
+        .intervals
+        .iter()
+        .enumerate()
+        .filter(|(_, interval)| interval.from.is_finite() && interval.to.is_finite() && interval.from < interval.to)
+        .filter(|(_, interval)| interval.values.get(field).is_some_and(disc_value))
+        .map(|(index, _)| index)
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut boundaries: Vec<f64> = candidates
+        .iter()
+        .flat_map(|&index| [hole.intervals[index].from, hole.intervals[index].to])
+        .chain(hole.render_ranges.iter().flat_map(|&(from, to)| [from, to]))
+        .filter(|depth| depth.is_finite())
+        .map(|depth| depth.clamp(min_depth, max_depth))
+        .collect();
+    boundaries.sort_by(f64::total_cmp);
+    boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+
+    candidates.sort_by(|&a, &b| hole.intervals[a].from.total_cmp(&hole.intervals[b].from).then(a.cmp(&b)));
+    let length = |index: usize| hole.intervals[index].to - hole.intervals[index].from;
+    let mut next = 0usize;
+    let mut active: Vec<usize> = Vec::new();
+    let mut discs: Vec<HoleDisc> = Vec::new();
+    for pair in boundaries.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if to <= from + 1.0e-9 {
+            continue;
+        }
+        let midpoint = (from + to) * 0.5;
+        while next < candidates.len() && hole.intervals[candidates[next]].from <= midpoint {
+            active.push(candidates[next]);
+            next += 1;
+        }
+        active.retain(|&index| midpoint < hole.intervals[index].to);
+        if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(start, end)| *start <= midpoint && midpoint < *end) {
+            continue;
+        }
+        let Some(winner) = active.iter().copied().min_by(|&a, &b| length(a).total_cmp(&length(b)).then(a.cmp(&b))) else {
+            continue;
+        };
+        match discs.last_mut() {
+            Some(disc) if disc.interval == winner && (disc.to - from).abs() <= 1.0e-9 => disc.to = to,
+            _ => discs.push(HoleDisc { from, to, interval: winner }),
+        }
+    }
+    discs
 }
