@@ -880,6 +880,7 @@ impl<'a> Graphics<'a> {
             design_point_gpu,
             raster_gpu: RasterGpuCache::default(),
             chunk_render_stats: (0, 0),
+            chunk_bounds_outline: None,
             plot_preview: None,
             plot_preview_key: None,
             pending_screenshot: None,

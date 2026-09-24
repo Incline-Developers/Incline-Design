@@ -671,6 +671,7 @@ impl<'a> App<'a> {
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
         self.editor.frame_counter_enabled = config.frame_counter_enabled;
         self.editor.debug_chunk_coloring = config.debug_chunk_coloring;
+        self.editor.debug_chunk_bounds = config.debug_chunk_bounds;
         self.editor.debug_clip_planes = config.debug_clip_planes;
         self.editor.plan_orbit_sensitivity = io::finite_clamped(config.plan_orbit_sensitivity, 0.0001, 0.02, io::default_plan_orbit_sensitivity());
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());

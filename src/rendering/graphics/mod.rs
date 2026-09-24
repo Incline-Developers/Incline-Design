@@ -474,6 +474,10 @@ pub(crate) struct Graphics<'a> {
     /// the developer chunk-debug readout. One frame stale by the time the UI
     /// reads it, which is fine for a debug counter.
     pub(crate) chunk_render_stats: (u32, u32),
+    /// Line geometry outlining each surface chunk's AABB, rebuilt by the main
+    /// scene pass while the developer chunk-bounds view is on and drawn,
+    /// depth-tested, by the editor overlay pass.
+    pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,

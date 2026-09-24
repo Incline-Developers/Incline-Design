@@ -58,6 +58,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) debug_chunk_coloring: bool,
+    pub(crate) debug_chunk_bounds: bool,
     pub(crate) debug_clip_planes: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
@@ -99,6 +100,7 @@ impl Default for PreferencesDraft {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             debug_chunk_coloring: false,
+            debug_chunk_bounds: false,
             debug_clip_planes: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
@@ -1165,11 +1167,13 @@ pub(crate) struct EditorState {
     /// `App::record_frame_time`.
     pub(crate) frame_rate_window: (u32, f32),
     /// Developer view: colour each surface chunk distinctly to visualise the
-    /// Morton spatial chunking (and drive the chunk-cull stats readout).
+    /// spatial chunking (and drive the chunk-cull stats readout).
     pub(crate) debug_chunk_coloring: bool,
     /// `(rendered, total)` surface chunks from the last frame; shown in the
     /// status bar while `debug_chunk_coloring` is on.
     pub(crate) debug_chunk_stats: Option<(u32, u32)>,
+    /// Developer view: outline every surface chunk's culling AABB.
+    pub(crate) debug_chunk_bounds: bool,
     /// Current projection near/far values, shown in the status bar when the
     /// developer clip-plane readout is enabled.
     pub(crate) debug_clip_plane_distances: Option<(f64, f64)>,
@@ -2281,6 +2285,7 @@ impl EditorState {
             downscale_raster_previews: self.downscale_raster_previews,
             frame_counter_enabled: self.frame_counter_enabled,
             debug_chunk_coloring: self.debug_chunk_coloring,
+            debug_chunk_bounds: self.debug_chunk_bounds,
             debug_clip_planes: self.debug_clip_planes,
             plan_orbit_sensitivity: self.plan_orbit_sensitivity,
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
@@ -2342,6 +2347,7 @@ impl EditorState {
             frame_rate_window: (0, 0.0),
             debug_chunk_coloring: false,
             debug_chunk_stats: None,
+            debug_chunk_bounds: false,
             debug_clip_plane_distances: None,
             debug_clip_planes: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),

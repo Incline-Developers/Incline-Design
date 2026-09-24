@@ -6,7 +6,7 @@ use std::{
     sync::mpsc,
 };
 
-use glam::{DVec3, Vec3};
+use glam::{DMat3, DVec3, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
     },
-    rendering::{BlockInstance, SurfaceVertex},
+    rendering::{BlockInstance, SurfaceVertex, graphics::frustum::OrientedBox},
     ui::state::EditorState,
 };
 
@@ -71,26 +71,29 @@ pub(crate) struct CachedSurfaceChunk {
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) index_buffer: wgpu::Buffer,
     pub(crate) index_count: u32,
-    /// Scene-origin-relative AABB, for per-chunk frustum culling. Vertex
-    /// positions are stored relative to the chunk's own AABB centre instead
-    /// (small magnitudes keep f32 interpolation precise far from the scene
-    /// origin); the shader re-adds the scene-relative centre from the chunk
-    /// uniform in `chunk_bind_group`.
-    pub(crate) bounds_min: Vec3,
-    pub(crate) bounds_max: Vec3,
+    /// Scene-origin-relative bounding box, for per-chunk frustum culling:
+    /// fitted to the chunk's principal axes, so an inclined wall gets a thin
+    /// tilted slab (see [`fit_chunk_box`]). Vertex positions are stored
+    /// relative to the chunk's own AABB centre instead (small magnitudes keep
+    /// f32 interpolation precise far from the scene origin); the shader
+    /// re-adds the scene-relative centre from the chunk uniform in
+    /// `chunk_bind_group`.
+    pub(crate) bounds: OrientedBox,
     /// Uniform bind group (group 2) holding this chunk's scene-origin-relative
     /// rebase offset; the bind group keeps the buffer alive.
     pub(crate) chunk_bind_group: wgpu::BindGroup,
     /// The buffer behind `chunk_bind_group`, rewritten when the scene origin moves.
     chunk_buffer: wgpu::Buffer,
-    /// World-space AABB and local origin, kept in `f64` so a rebase can
+    /// World-space box centre and local origin, kept in `f64` so a rebase can
     /// recompute the scene-relative values without touching the vertices.
-    world_min: DVec3,
-    world_max: DVec3,
+    world_box_center: DVec3,
     world_origin: DVec3,
     /// A `SurfaceStyle` bind group holding a distinct per-chunk debug colour,
     /// bound instead of the mesh colour when the chunk-debug view is on.
     pub(crate) debug_style_bind_group: wgpu::BindGroup,
+    /// The colour behind `debug_style_bind_group`, which the bounding-box
+    /// debug view outlines the chunk in so box and fill match.
+    pub(crate) debug_color: [f32; 4],
 }
 
 pub(crate) struct CachedEdgeChunk {
@@ -1454,16 +1457,10 @@ impl TriangulationGpuCache {
     }
 }
 
-/// Target triangles per spatial chunk. Chunks are the granularity of frustum
-/// culling (and per-chunk debug colouring), so this trades culling precision
-/// (smaller = tighter) against per-chunk draw-call/AABB-test overhead
-/// (smaller = more). ~100k keeps a multi-million-face mesh in tens of chunks.
-const TARGET_FACES_PER_CHUNK: usize = 100_000;
-
 /// Upload indexed surface geometry as spatially-coherent chunks, walking faces
-/// in the precomputed XY-Morton order (`triangulation.surface_face_order`,
-/// built off-thread) so each chunk covers a compact region with a tight AABB
-/// the renderer can frustum-cull - rather than the old size-only split whose
+/// in the precomputed kd order (`triangulation.surface_face_order`, built
+/// off-thread) so each chunk covers a compact box with a tight AABB the
+/// renderer can frustum-cull - rather than the old size-only split whose
 /// chunks each spanned the whole mesh. No sorting happens here, so a huge
 /// mesh's first upload doesn't hitch the render thread. Colour is NOT baked in;
 /// it lives in a per-draw SurfaceStyle uniform (plus a per-chunk debug-colour
@@ -1494,12 +1491,14 @@ fn build_surface_chunks(
     let order = &triangulation.surface_face_order;
 
     // Chunk size: the target, capped so a chunk's vertex/index buffers fit the
-    // device limit and local indices stay within u32.
+    // device limit and local indices stay within u32. The order's leaves are
+    // exactly `SURFACE_CHUNK_FACES` long, so only the uncapped size gets its
+    // compact boxes - the cap is a safety net no real device reaches.
     let limit = (device.limits().max_buffer_size as usize).min(MAX_SURFACE_CHUNK_BYTES);
     let max_indices = limit / size_of::<u32>();
     let max_vertices = limit / size_of::<SurfaceVertex>();
     let faces_cap = (max_indices / 3).min(max_vertices / 3).min(u32::MAX as usize / 3).max(1);
-    let faces_per_chunk = TARGET_FACES_PER_CHUNK.min(faces_cap).max(1);
+    let faces_per_chunk = crate::model::triangulation::SURFACE_CHUNK_FACES.min(faces_cap).max(1);
 
     let mut chunks = Vec::new();
     // Dense sentinel remap reused across chunks: remap[global] == u32::MAX means
@@ -1588,11 +1587,12 @@ fn build_surface_chunks(
             provoking_claimed[provoking] = true;
             indices.extend_from_slice(&local);
         }
+        let (world_box_center, axes, half_extents) = fit_chunk_box(&vertices, chunk_origin, world_max - world_min);
         if let Some(chunk) = upload_surface_chunk(
             device,
             &vertices,
             &indices,
-            (world_min, world_max, chunk_origin),
+            (world_box_center, axes, half_extents, chunk_origin),
             scene_origin,
             chunk_index,
             surface_style_layout,
@@ -1655,7 +1655,7 @@ fn upload_surface_chunk(
     device: &wgpu::Device,
     vertices: &[SurfaceVertex],
     indices: &[u32],
-    (world_min, world_max, world_origin): (DVec3, DVec3, DVec3),
+    (world_box_center, axes, half_extents, world_origin): (DVec3, [Vec3; 3], Vec3, DVec3),
     scene_origin: DVec3,
     chunk_index: usize,
     surface_style_layout: &wgpu::BindGroupLayout,
@@ -1690,8 +1690,9 @@ fn upload_surface_chunk(
         usage: wgpu::BufferUsages::INDEX,
     });
     // Per-chunk debug colour uniform; the bind group keeps the buffer alive.
+    let debug_color = chunk_debug_color(chunk_index);
     let debug_style = SurfaceStyleUniform {
-        color: chunk_debug_color(chunk_index),
+        color: debug_color,
         params: [0.0; 4],
         wire_color: [0.0; 4],
     };
@@ -1726,14 +1727,17 @@ fn upload_surface_chunk(
         vertex_buffer,
         index_buffer,
         index_count: indices.len() as u32,
-        bounds_min: (world_min - scene_origin).as_vec3(),
-        bounds_max: (world_max - scene_origin).as_vec3(),
+        bounds: OrientedBox {
+            center: (world_box_center - scene_origin).as_vec3(),
+            axes,
+            half_extents,
+        },
         chunk_bind_group,
         chunk_buffer,
-        world_min,
-        world_max,
+        world_box_center,
         world_origin,
         debug_style_bind_group,
+        debug_color,
     })
 }
 
@@ -1744,12 +1748,157 @@ fn chunk_offset_uniform(world_origin: DVec3, scene_origin: DVec3) -> [f32; 4] {
 
 impl CachedSurfaceChunk {
     /// Re-express this chunk against a new floating origin: a uniform write
-    /// and two AABB subtractions, where a rebuild re-uploads every vertex.
+    /// and a box-centre subtraction, where a rebuild re-uploads every vertex.
     fn rebase(&mut self, queue: &wgpu::Queue, scene_origin: DVec3) {
         queue.write_buffer(&self.chunk_buffer, 0, bytemuck::bytes_of(&chunk_offset_uniform(self.world_origin, scene_origin)));
-        self.bounds_min = (self.world_min - scene_origin).as_vec3();
-        self.bounds_max = (self.world_max - scene_origin).as_vec3();
+        self.bounds.center = (self.world_box_center - scene_origin).as_vec3();
     }
+}
+
+/// Fit a chunk's culling box to its geometry, returning the world-space
+/// centre, the axes and the half extents.
+///
+/// A chunk of a steep pit wall is a nearly planar inclined band; the axis-
+/// aligned box around it is mostly air, and air inside the box is what lets a
+/// chunk wholly out of view survive the frustum test. So the box is a slab
+/// laid on the chunk: its thin axis is one of a few candidate normals (the
+/// covariance's weakest direction, the mean surface normal, vertical), and for
+/// each the in-plane rotation is searched for the smallest footprint.
+///
+/// Principal axes alone are not enough for that rotation: a kd cell's
+/// footprint is near-square, its in-plane variance near-isotropic, and the
+/// eigenvectors land anywhere - at 45° the box needs twice the area. The
+/// search scores orientations on a vertex subsample and only the winner is
+/// measured over every vertex, so the box stays conservative. Falls back to
+/// the axis-aligned box whenever that is no larger, so no chunk culls worse.
+///
+/// `vertices` are chunk-local (relative to `chunk_origin`, the AABB centre),
+/// and `aabb_size` is the chunk's full AABB extent.
+fn fit_chunk_box(vertices: &[SurfaceVertex], chunk_origin: DVec3, aabb_size: DVec3) -> (DVec3, [Vec3; 3], Vec3) {
+    /// Vertices the orientation search scores against.
+    const SEARCH_SAMPLES: usize = 1024;
+    /// Coarse in-plane sweep over the quarter turn a box repeats in, then a
+    /// fine one around the best coarse angle.
+    const COARSE_STEP_DEGREES: f64 = 3.0;
+    const FINE_STEP_DEGREES: f64 = 0.5;
+
+    // Vertices were rounded to f32 on their way into `vertices`; pad by more
+    // than that rounding so the box never clips the geometry it bounds. Also
+    // keeps a flat chunk's zero thickness from making every volume zero.
+    let padding = 1e-6 * aabb_size.max_element() + 1e-3;
+    let aabb = (chunk_origin, [Vec3::X, Vec3::Y, Vec3::Z], (aabb_size * 0.5 + padding).as_vec3());
+    if vertices.len() < 3 {
+        return aabb;
+    }
+    let position = |vertex: &SurfaceVertex| Vec3::from_array(vertex.pos).as_dvec3();
+    let stride = vertices.len().div_ceil(SEARCH_SAMPLES).max(1);
+    let samples: Vec<DVec3> = vertices.iter().step_by(stride).map(position).collect();
+    let range = |points: &[DVec3], axis: DVec3| {
+        let (low, high) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), point| {
+            let along = axis.dot(*point);
+            (low.min(along), high.max(along))
+        });
+        high - low + 2.0 * padding
+    };
+
+    let mean = samples.iter().sum::<DVec3>() / samples.len() as f64;
+    let mut covariance = DMat3::ZERO;
+    for point in &samples {
+        let offset = *point - mean;
+        covariance += DMat3::from_cols(offset * offset.x, offset * offset.y, offset * offset.z);
+    }
+    let weakest = symmetric_eigenvectors(covariance)
+        .into_iter()
+        .min_by(|a, b| a.dot(covariance * *a).total_cmp(&b.dot(covariance * *b)))
+        .unwrap_or(DVec3::Z);
+    let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
+
+    // Smallest-volume `[u, v, normal]` over the candidates.
+    let mut best: Option<(f64, [DVec3; 3])> = None;
+    for normal in [weakest, mean_normal, DVec3::Z] {
+        if normal == DVec3::ZERO {
+            continue;
+        }
+        // Angle zero lays the box's first axis along world X, so a kd cell
+        // on gentle ground can come out aligned with its own edges.
+        let reference = if normal.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+        let u0 = (reference - normal * normal.dot(reference)).normalize();
+        let v0 = normal.cross(u0);
+        let in_plane = |degrees: f64| {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let u = u0 * cos + v0 * sin;
+            (u, normal.cross(u))
+        };
+        let area = |degrees: f64| {
+            let (u, v) = in_plane(degrees);
+            range(&samples, u) * range(&samples, v)
+        };
+        let coarse = (0..(90.0 / COARSE_STEP_DEGREES) as usize)
+            .map(|step| step as f64 * COARSE_STEP_DEGREES)
+            .min_by(|a, b| area(*a).total_cmp(&area(*b)))
+            .unwrap_or(0.0);
+        let fine_steps = (COARSE_STEP_DEGREES / FINE_STEP_DEGREES) as i32;
+        let degrees = (-fine_steps..=fine_steps)
+            .map(|step| coarse + f64::from(step) * FINE_STEP_DEGREES)
+            .min_by(|a, b| area(*a).total_cmp(&area(*b)))
+            .unwrap_or(coarse);
+        let volume = area(degrees) * range(&samples, normal);
+        if best.is_none_or(|(best_volume, _)| volume < best_volume) {
+            let (u, v) = in_plane(degrees);
+            best = Some((volume, [u, v, normal]));
+        }
+    }
+    let Some((_, axes)) = best else {
+        return aabb;
+    };
+
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    for point in vertices.iter().map(position) {
+        let projected = DVec3::new(axes[0].dot(point), axes[1].dot(point), axes[2].dot(point));
+        min = min.min(projected);
+        max = max.max(projected);
+    }
+    let half_extents = (max - min) * 0.5 + padding;
+    if half_extents.element_product() >= 0.9 * aabb.2.as_dvec3().element_product() {
+        return aabb;
+    }
+    let center_local = (min + max) * 0.5;
+    let center = chunk_origin + axes[0] * center_local.x + axes[1] * center_local.y + axes[2] * center_local.z;
+    (center, axes.map(|axis| axis.as_vec3()), half_extents.as_vec3())
+}
+
+/// Orthonormal eigenvectors of a symmetric 3x3 matrix by cyclic Jacobi
+/// rotations: each rotation zeroes one off-diagonal entry, and a handful of
+/// sweeps drives all three to rounding noise.
+fn symmetric_eigenvectors(matrix: DMat3) -> [DVec3; 3] {
+    let mut a = matrix;
+    let mut vectors = DMat3::IDENTITY;
+    let scale = a.x_axis.x.abs() + a.y_axis.y.abs() + a.z_axis.z.abs();
+    for _ in 0..16 {
+        let off_diagonal = a.y_axis.x.powi(2) + a.z_axis.x.powi(2) + a.z_axis.y.powi(2);
+        if off_diagonal <= (scale * 1e-12).powi(2) {
+            break;
+        }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            let apq = a.col(q)[p];
+            if apq.abs() <= f64::MIN_POSITIVE {
+                continue;
+            }
+            let theta = (a.col(q)[q] - a.col(p)[p]) / (2.0 * apq);
+            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            let s = t * c;
+            let mut rotation = DMat3::IDENTITY;
+            rotation.col_mut(p)[p] = c;
+            rotation.col_mut(q)[q] = c;
+            rotation.col_mut(q)[p] = s;
+            rotation.col_mut(p)[q] = -s;
+            a = rotation.transpose() * a * rotation;
+            vectors *= rotation;
+        }
+    }
+    [vectors.x_axis.normalize(), vectors.y_axis.normalize(), vectors.z_axis.normalize()]
 }
 
 fn build_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, triangulation: &OpenTriangulation) -> Vec<CachedEdgeChunk> {

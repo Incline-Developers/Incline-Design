@@ -194,6 +194,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) debug_chunk_coloring: bool,
     #[serde(default)]
+    pub(crate) debug_chunk_bounds: bool,
+    #[serde(default)]
     pub(crate) debug_clip_planes: bool,
     #[serde(default = "default_plan_orbit_sensitivity")]
     pub(crate) plan_orbit_sensitivity: f64,
@@ -283,6 +285,7 @@ impl Default for Config {
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
             show_scale_bar: default_show_scale_bar(),
             debug_chunk_coloring: false,
+            debug_chunk_bounds: false,
             debug_clip_planes: false,
             plan_orbit_sensitivity: default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: default_plan_zoom_sensitivity(),

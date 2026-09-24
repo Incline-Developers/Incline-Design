@@ -191,6 +191,7 @@ impl<'a> App<'a> {
         if !preferences.debug_chunk_coloring {
             self.editor.debug_chunk_stats = None;
         }
+        self.editor.debug_chunk_bounds = preferences.debug_chunk_bounds;
         self.editor.debug_clip_planes = preferences.debug_clip_planes;
         self.editor.plan_orbit_sensitivity = preferences.plan_orbit_sensitivity;
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
@@ -338,6 +339,7 @@ pub(crate) fn config_from(
         downscale_raster_previews: preferences.downscale_raster_previews,
         frame_counter_enabled: preferences.frame_counter_enabled,
         debug_chunk_coloring: preferences.debug_chunk_coloring,
+        debug_chunk_bounds: preferences.debug_chunk_bounds,
         debug_clip_planes: preferences.debug_clip_planes,
         plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,

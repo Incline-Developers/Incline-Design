@@ -313,6 +313,7 @@ fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.frame_counter_enabled = defaults.frame_counter_enabled;
     draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
+    draft.debug_chunk_bounds = defaults.debug_chunk_bounds;
     draft.debug_clip_planes = defaults.debug_clip_planes;
 }
 
@@ -518,6 +519,11 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(
                 &MenuFieldBool::new(tr!(literal = "Colour GPU chunks"), &mut draft.debug_chunk_coloring)
                     .help_text(tr!(literal = "Visualises the Morton spatial chunking used for frustum culling."))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new(tr!(literal = "Chunk bounding boxes"), &mut draft.debug_chunk_bounds)
+                    .help_text(tr!(literal = "Outlines the box each surface chunk is frustum-culled by."))
                     .show(ui),
             );
             changed |= committed(

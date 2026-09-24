@@ -784,7 +784,7 @@ impl<'a> Graphics<'a> {
                 }
                 // Cull against the light, so off-camera shadow casters remain visible.
                 for chunk in &cached.surface_chunks {
-                    if !frustum.intersects_aabb(chunk.bounds_min, chunk.bounds_max) {
+                    if !frustum.intersects_obb(&chunk.bounds) {
                         continue;
                     }
                     shadow_pass.set_bind_group(1, &chunk.chunk_bind_group, &[]);

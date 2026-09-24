@@ -1,4 +1,4 @@
-//! Camera-frustum extraction and AABB intersection, used to skip GPU draw
+//! Camera-frustum extraction and AABB/OBB intersection, used to skip GPU draw
 //! calls for chunks that are entirely outside the current view.
 
 use glam::{Mat4, Vec3, Vec4};
@@ -40,6 +40,22 @@ impl Frustum {
         self.planes.iter().all(|plane| aabb_inside_plane(plane, min, max))
     }
 
+    /// [`intersects_aabb`] for an oriented box: `false` only when the box lies
+    /// entirely outside one plane. A plane rejects the box when the centre's
+    /// signed distance is below minus the box's reach along the normal.
+    pub(crate) fn intersects_obb(&self, obb: &OrientedBox) -> bool {
+        self.planes.iter().all(|plane| {
+            let normal = plane.truncate();
+            let reach = obb
+                .axes
+                .iter()
+                .zip(obb.half_extents.to_array())
+                .map(|(axis, half)| normal.dot(*axis).abs() * half)
+                .sum::<f32>();
+            normal.dot(obb.center) + plane.w >= -reach
+        })
+    }
+
     /// Like [`intersects_aabb`] but ignores the near/far planes, testing only
     /// the four lateral (left/right/top/bottom) planes. Used to decide whether
     /// geometry is within the camera's field of view regardless of how deep it
@@ -59,4 +75,25 @@ fn aabb_inside_plane(plane: &Vec4, min: Vec3, max: Vec3) -> bool {
         if plane.z >= 0.0 { max.z } else { min.z },
     );
     plane.x * positive.x + plane.y * positive.y + plane.z * positive.z + plane.w >= 0.0
+}
+
+/// A box with arbitrary orthonormal `axes`, in scene-origin-relative space. A
+/// steep wall's chunk is a thin inclined slab that an axis-aligned box can only
+/// cover with mostly empty air.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrientedBox {
+    pub(crate) center: Vec3,
+    pub(crate) axes: [Vec3; 3],
+    pub(crate) half_extents: Vec3,
+}
+
+impl OrientedBox {
+    /// Corner `index` (0..8): bit `i` picks the positive end of axis `i`, so
+    /// corners differing in exactly one bit share an edge.
+    pub(crate) fn corner(&self, index: usize) -> Vec3 {
+        (0..3).fold(self.center, |corner, axis| {
+            let sign = if index & (1 << axis) == 0 { -1.0 } else { 1.0 };
+            corner + self.axes[axis] * (sign * self.half_extents[axis])
+        })
+    }
 }
