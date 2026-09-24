@@ -40,6 +40,10 @@ Incline supports: English, Español, Português, Français, 简体中文, Bahasa
 
 The [`examples`](examples/) directory contains a small OMF 2 project with a pit-shell design, mine surface triangulation, point cloud, drillholes, and an orthophoto raster. Create a project, then use **File → Import** to load [`pit_design.omf`](examples/pit_design.omf) and explore the datasets together.
 
+## Citing Incline
+
+If you use Incline Design in your research or publications, please cite it. Citation metadata is in [`CITATION.cff`](CITATION.cff).
+
 ## License
 
 Incline Design is licensed under the [MIT License](LICENSE.md).
