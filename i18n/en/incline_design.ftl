@@ -228,6 +228,7 @@ literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a6999
 literal-choose-9e53070883acbe06 = Choose...
 literal-faces-chunks-c777e400b789df4e = Faces: -- / -- (--/-- chunks)
 literal-points-of-chunks-ad87b40aa4e63086 = Points: -- / -- of -- (--/-- chunks)
+literal-classify-91c3dd6e6a6997cb = Classify
 literal-clear-b4f1dffbb6be6302 = Clear
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Clear Active Triangulation Texture
 literal-clear-raster-ef94c7849961e88f = Clear Raster

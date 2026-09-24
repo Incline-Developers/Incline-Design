@@ -5,7 +5,7 @@ use crate::{
     model::{Axis, Document},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
-        themed_icon, unthemed_icon,
+        themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
@@ -329,8 +329,10 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     const ROW_HEIGHT: f32 = 22.0;
     const RECENT_HEIGHT: f32 = 100.0;
     /// Grow the splash by exactly as much as the Recent box has grown from the
-    /// original two-row grid, keeping the footer and surrounding spacing put.
-    const PANEL_HEIGHT: f32 = PANEL_SIZE * 0.7 + (RECENT_HEIGHT - 48.0);
+    /// original two-row grid, keeping the footer and surrounding spacing put,
+    /// and by however much taller the artwork is than the 120pt banner it
+    /// replaced.
+    const PANEL_HEIGHT: f32 = PANEL_SIZE * 0.7 + (RECENT_HEIGHT - 48.0) + (SPLASH_ARTWORK_HEIGHT + SPLASH_ARTWORK_GAP - 120.0);
 
     // The splash is the only place a remembered project can be picked up now
     // that the explorer shows the open one alone. The active project is never
@@ -381,7 +383,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
                         });
                     });
 
-                    ui.add(egui::Image::new(unthemed_icon!("splash.svg")).shrink_to_fit());
+                    draw_splash_artwork(ui, PANEL_SIZE);
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                         ui.add_space(30.0);
@@ -486,6 +488,69 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
                     });
             }
         });
+}
+
+/// The banner's height at the splash's width, from its 1000x280 pixels.
+const SPLASH_ARTWORK_HEIGHT: f32 = 500.0 * 280.0 / 1000.0;
+/// Extra room below the banner, on top of the usual item gap, so the first
+/// row does not crowd it.
+const SPLASH_ARTWORK_GAP: f32 = 6.0;
+
+/// Draw the banner across the top of the splash, edge to edge, the way
+/// Blender opens on a piece of release artwork: the benches of an open pit,
+/// rendered as a triangulation in Incline itself (the website's
+/// triangulations feature image, cropped to a strip).
+///
+/// A PNG rather than an SVG, which is all egui's installed loaders read, so
+/// it is decoded once here and its texture kept in the context.
+fn draw_splash_artwork(ui: &mut egui::Ui, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, SPLASH_ARTWORK_HEIGHT + SPLASH_ARTWORK_GAP), egui::Sense::hover());
+    let Some(texture) = splash_artwork_texture(ui.ctx()) else {
+        return;
+    };
+    // Held a point inside the card's top and sides so its border still runs
+    // round the banner, with the top corners following the card's rounding.
+    let art = egui::Rect::from_min_max(rect.min + egui::vec2(1.0, 1.0), egui::pos2(rect.right() - 1.0, rect.top() + SPLASH_ARTWORK_HEIGHT));
+    let radius = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
+    egui::Image::new((texture.id(), art.size()))
+        .corner_radius(egui::CornerRadius {
+            nw: radius,
+            ne: radius,
+            sw: 0,
+            se: 0,
+        })
+        .paint_at(ui, art);
+}
+
+/// The splash artwork's texture, decoded on first use. `None` only if the
+/// embedded file fails to decode, in which case the splash goes without.
+fn splash_artwork_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    const ARTWORK: &[u8] = include_bytes!("../../../res/ui/splash_artwork.png");
+
+    let id = egui::Id::new("splash_artwork_texture");
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let decode = || -> Result<egui::ColorImage, png::DecodingError> {
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(ARTWORK));
+        // The file is palette-coloured to keep it small; expand it to RGBA.
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+        let mut reader = decoder.read_info()?;
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap_or_default()];
+        let info = reader.next_frame(&mut pixels)?;
+        pixels.truncate(info.buffer_size());
+        Ok(egui::ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &pixels))
+    };
+    let image = match decode() {
+        Ok(image) => image,
+        Err(error) => {
+            log::warn!("splash artwork failed to decode: {error}");
+            return None;
+        }
+    };
+    let texture = ctx.load_texture("splash_artwork", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 /// The splash's section headings and footer: set back from the actions, but a
