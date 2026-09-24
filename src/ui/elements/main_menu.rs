@@ -55,14 +55,16 @@ const MENU_LABEL_PADDING: f32 = 7.0;
 /// Gap between two dropdowns in that run, on top of their padding.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 const MENU_LABEL_GAP: f32 = 2.0;
-/// What the platform calls showing a file in its file manager. macOS says
-/// "Reveal in Finder" and has the row in the system menu instead - see
-/// `mac.rs`.
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-fn show_project_label() -> String {
+/// What the platform calls showing a file in its file manager. On macOS the
+/// File menu's row lives in the system menu instead - see `mac.rs` - but the
+/// splash's Recent list still asks for the name here.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn show_in_file_manager_label() -> String {
     #[cfg(target_os = "windows")]
     return tr!("menu-file-show-in-explorer");
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    return crate::i18n::tr!(literal = "Reveal in Finder");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     return tr!("menu-file-show-in-folder");
 }
 
@@ -404,7 +406,11 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         // Disabled until the project is a file: a never-saved one is nowhere
         // to be shown.
         #[cfg(not(target_arch = "wasm32"))]
-        if ContextMenuAction::new(show_project_label()).enabled(project.active_path.is_some()).show(ui).clicked() {
+        if ContextMenuAction::new(show_in_file_manager_label())
+            .enabled(project.active_path.is_some())
+            .show(ui)
+            .clicked()
+        {
             commands.push(UiCommand::ShowProjectInFileManager);
             ui.close();
         }
