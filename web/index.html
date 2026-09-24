@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Incline Design Web</title>
-    <link data-trunk rel="icon" type="image/svg+xml" href="res/logo.svg" />
+    <link data-trunk rel="icon" type="image/svg+xml" href="../res/logo.svg" />
     <link data-trunk rel="copy-file" href="_headers" />
 
     <style>
@@ -206,6 +206,6 @@
     </script>
     <!-- Binaryen 123 does not auto-enable the threads/bulk-memory validators;
          rustc LTO still performs the release optimizations for this module. -->
-    <link data-trunk rel="rust" data-wasm-opt="0" data-initializer="web-initializer.js">
+    <link data-trunk rel="rust" href="../Cargo.toml" data-wasm-opt="0" data-initializer="web-initializer.js">
 </body>
 </html>
