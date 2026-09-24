@@ -1,8 +1,8 @@
 use crate::{
     i18n::{tr, tr_format},
     model::drill_hole::{
-        DrillColorPreset, DrillFieldKind, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection, default_category_colors,
-        working_section_name_problem,
+        ColorRow, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection,
+        default_category_colors, suggested_working_sections, working_section_name_problem,
     },
     ui::{
         state::{EditorState, UiCommand},
@@ -276,22 +276,39 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 .weak(),
             );
             ui.add_space(2.0);
-            let row_labels = if dataset.color.by_working_section {
+            let rows: Vec<ColorRow<'_>> = if dataset.color.by_working_section {
                 dataset.color.working_section_view(&field.key, categories)
             } else {
-                categories.clone()
+                categories.iter().map(|code| ColorRow::code(code)).collect()
             };
-            // Rows follow the field's order, not the table's.
-            let mut table: Option<Vec<crate::model::drill_hole::DrillCategoryColor>> = None;
+            let needle = draw_code_filter(ui, code_filter_id("colours", id, &field.key));
+            // A section's row also shows for a code it holds, so typing a ply
+            // finds the section it went into.
+            let shown_rows: Vec<&ColorRow<'_>> = rows
+                .iter()
+                .filter(|row| filter_matches(row.label, &needle) || row.section.is_some_and(|section| section.codes.iter().any(|code| filter_matches(code, &needle))))
+                .collect();
+            if !needle.is_empty() {
+                let note = if dataset.color.by_working_section {
+                    tr_format!(literal = "%shown% of %total% rows shown", shown = shown_rows.len(), total = rows.len())
+                } else {
+                    tr_format!(literal = "%shown% of %total% codes shown", shown = shown_rows.len(), total = rows.len())
+                };
+                ui.label(egui::RichText::new(note).weak());
+            }
+            // Rows follow the field's order, not the table's. A section's row
+            // sets the section's own entry, never the code of its name.
+            let mut table: Option<Vec<DrillCategoryColor>> = None;
             let row_height = ui.spacing().interact_size.y;
-            let mut draw_row = |ui: &mut egui::Ui, code: &String| {
-                let mut color = dataset.color.category_color(code).unwrap_or([1.0; 3]);
-                MenuField::new(code.as_str()).show(ui, |ui, _, _| {
+            let mut draw_row = |ui: &mut egui::Ui, row: &ColorRow<'_>| {
+                let key: &str = &row.key;
+                let mut color = dataset.color.category_color(key).unwrap_or([1.0; 3]);
+                MenuField::new(row.label).show(ui, |ui, _, _| {
                     if crate::ui::widgets::color::edit_rgb(ui, &mut color).changed() {
                         let table = table.get_or_insert_with(|| dataset.color.categories.to_vec());
-                        match table.iter_mut().find(|entry| &entry.value == code) {
+                        match table.iter_mut().find(|entry| entry.value == key) {
                             Some(entry) => entry.color = color,
-                            None => table.push(crate::model::drill_hole::DrillCategoryColor { value: code.clone(), color }),
+                            None => table.push(DrillCategoryColor { value: key.to_owned(), color }),
                         }
                     }
                 });
@@ -303,9 +320,9 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         .max_height(280.0)
                         .auto_shrink([false, true])
                         .id_salt(("drill_hole_categories_scroll", id))
-                        .show_rows(ui, row_height, row_labels.len(), |ui, range| {
-                            for code in &row_labels[range] {
-                                draw_row(ui, code);
+                        .show_rows(ui, row_height, shown_rows.len(), |ui, range| {
+                            for row in &shown_rows[range] {
+                                draw_row(ui, row);
                             }
                         });
                 }
@@ -313,8 +330,8 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                     // The preferences page already scrolls as a whole; lay
                     // the rows out inline instead of nesting a scroll
                     // area that would fight the page's own under the mouse.
-                    for code in &row_labels {
-                        draw_row(ui, code);
+                    for row in &shown_rows {
+                        draw_row(ui, row);
                     }
                 }
             }
@@ -322,11 +339,18 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: table });
             }
             ui.add_space(2.0);
-            if ui.add(MenuButton::new(tr!(literal = "Reset colours"))).clicked() {
-                let mut reset: Vec<crate::model::drill_hole::DrillCategoryColor> =
-                    dataset.color.categories.iter().filter(|entry| !row_labels.contains(&entry.value)).cloned().collect();
-                reset.extend(default_category_colors(&row_labels));
-                commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: reset });
+            let reset_label = if needle.is_empty() {
+                tr!(literal = "Reset colours")
+            } else {
+                tr!(literal = "Reset shown colours")
+            };
+            if ui.add(MenuButton::new(reset_label)).clicked() {
+                let all: Vec<String> = rows.iter().map(|row| row.key.to_string()).collect();
+                let shown: Vec<&str> = shown_rows.iter().map(|row| &*row.key).collect();
+                commands.push(UiCommand::SetDrillHoleCategoryColors {
+                    id,
+                    categories: reset_row_colors(&dataset.color.categories, &all, &shown),
+                });
             }
 
             draw_working_sections(ui, dataset, field, categories, commands, host);
@@ -364,25 +388,19 @@ fn draw_working_sections(
     );
     ui.add_space(2.0);
 
-    let existing: Vec<&WorkingSection> = dataset.color.working_sections.iter().filter(|section| section.field == field.key).collect();
-    let mut remove_name: Option<String> = None;
-    for section in &existing {
+    // Every change asked for this frame goes out as one command at the end,
+    // so two in one frame neither overwrite each other nor split the undo.
+    let mut edits: Vec<SectionEdit> = Vec::new();
+    for section in dataset.color.working_sections.iter().filter(|section| section.field == field.key) {
         MenuField::new(section.name.as_str()).show(ui, |ui, _, _| {
             ui.label(egui::RichText::new(section.codes.join(", ")).weak());
             if ui.small_button(tr!(literal = "−")).clicked() {
-                remove_name = Some(section.name.clone());
+                edits.push(SectionEdit::Remove(section.name.clone()));
             }
         });
     }
-    if let Some(name) = remove_name {
-        let sections: Vec<WorkingSection> = dataset
-            .color
-            .working_sections
-            .iter()
-            .filter(|section| !(section.field == field.key && section.name == name))
-            .cloned()
-            .collect();
-        commands.push(UiCommand::SetDrillHoleWorkingSections { id: dataset.id, sections });
+    if let Some(added) = draw_suggested_sections(ui, dataset, field, categories) {
+        edits.push(SectionEdit::Add(added));
     }
 
     ui.add_space(4.0);
@@ -398,23 +416,30 @@ fn draw_working_sections(
         draft.codes.clear();
     }
 
-    let name_response = MenuFieldText::new(tr!(literal = "New section name"), &mut draft.name).show(ui);
-    let name_problem = working_section_name_problem(&draft.name, &field.key, categories, &dataset.color.working_sections);
-    if let Some(problem) = name_problem
-        && matches!(problem, SectionProblem::NameIsCode | SectionProblem::DuplicateName)
-    {
-        ui.label(egui::RichText::new(problem.message()).weak());
-    }
-
     // Re-checked every frame: a code leaves this list the moment some other
     // section (added, or edited elsewhere) claims it.
     let available: Vec<&String> = categories.iter().filter(|code| dataset.color.working_section_of(&field.key, code).is_none()).collect();
+    let needle = draw_code_filter(ui, code_filter_id("section codes", dataset.id, &field.key));
+    let shown: Vec<&String> = available.iter().copied().filter(|code| filter_matches(code, &needle)).collect();
+    if !needle.is_empty() {
+        ui.label(egui::RichText::new(tr_format!(literal = "%shown% of %total% codes shown", shown = shown.len(), total = available.len())).weak());
+    }
+    // A tick the filter hides still counts; say so rather than add codes
+    // the user cannot see.
+    let hidden_ticked = available
+        .iter()
+        .filter(|code| draft.codes.contains(code.as_str()) && !filter_matches(code, &needle))
+        .count();
+    if hidden_ticked > 0 {
+        ui.label(egui::RichText::new(tr_format!(literal = "Ticked but hidden by the filter: %count%", count = hidden_ticked)).weak());
+    }
+
     let row_height = ui.spacing().interact_size.y;
-    let mut draw_code_row = |ui: &mut egui::Ui, code: &&String| {
+    let mut draw_code_row = |ui: &mut egui::Ui, code: &String| {
         let mut ticked = draft.codes.contains(code.as_str());
         if MenuFieldBool::new(code.as_str(), &mut ticked).show(ui).changed() {
             if ticked {
-                draft.codes.insert((*code).clone());
+                draft.codes.insert(code.clone());
             } else {
                 draft.codes.remove(code.as_str());
             }
@@ -426,22 +451,31 @@ fn draw_working_sections(
                 .max_height(160.0)
                 .auto_shrink([false, true])
                 .id_salt(("drill_hole_working_section_codes_scroll", dataset.id, field.key.as_str()))
-                .show_rows(ui, row_height, available.len(), |ui, range| {
-                    for code in &available[range] {
+                .show_rows(ui, row_height, shown.len(), |ui, range| {
+                    for code in &shown[range] {
                         draw_code_row(ui, code);
                     }
                 });
         }
         ColorEditorHost::Page => {
-            for code in &available {
+            for code in &shown {
                 draw_code_row(ui, code);
             }
         }
     }
 
-    // Only a ticked code still available goes into the new section; a stale
-    // tick left over from before another section claimed it does not.
+    // The name comes after the ticks, so it is checked once, against the
+    // codes this frame ended with: it may be one of them. Only a ticked code
+    // still available goes into the new section; a stale tick left over from
+    // before another section claimed it does not.
+    let name_response = MenuFieldText::new(tr!(literal = "New section name"), &mut draft.name).show(ui);
     let ticked_available: Vec<String> = available.iter().copied().filter(|code| draft.codes.contains(code.as_str())).cloned().collect();
+    let name_problem = working_section_name_problem(&draft.name, &field.key, categories, &ticked_available, &dataset.color.working_sections);
+    if let Some(problem) = &name_problem
+        && matches!(problem, SectionProblem::NameIsCode | SectionProblem::CodeClaimed { .. } | SectionProblem::DuplicateName)
+    {
+        ui.label(egui::RichText::new(problem.message()).weak());
+    }
     let can_add = name_problem.is_none() && !ticked_available.is_empty();
     let add_clicked = ui.add_enabled(can_add, MenuButton::new(tr!(literal = "Add working section"))).clicked();
     // A single-line TextEdit surrenders focus the same frame it sees Enter,
@@ -452,17 +486,141 @@ fn draw_working_sections(
         ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     }
     if add_clicked || (enter_pressed && can_add) {
-        let mut sections = dataset.color.working_sections.clone();
-        sections.push(WorkingSection {
+        edits.push(SectionEdit::Add(vec![WorkingSection {
             name: draft.name.clone(),
             field: field.key.clone(),
             codes: ticked_available,
-        });
-        commands.push(UiCommand::SetDrillHoleWorkingSections { id: dataset.id, sections });
+        }]));
         draft = WorkingSectionDraft {
             field: field.key.clone(),
             ..WorkingSectionDraft::default()
         };
     }
     ui.data_mut(|data| data.insert_temp(draft_id, draft));
+    if let Some(sections) = apply_section_edits(&dataset.color.working_sections, &field.key, edits) {
+        commands.push(UiCommand::SetDrillHoleWorkingSections { id: dataset.id, sections });
+    }
+}
+
+/// One change to the working sections asked for in a frame.
+#[derive(Debug)]
+enum SectionEdit {
+    /// Take out the section of this name.
+    Remove(String),
+    /// Add these, after those already there.
+    Add(Vec<WorkingSection>),
+}
+
+/// `current` with every edit of one frame applied in the order asked, for
+/// one command; `None` when none was asked. Removals are of `field`'s
+/// sections only.
+fn apply_section_edits(current: &[WorkingSection], field: &str, edits: Vec<SectionEdit>) -> Option<Vec<WorkingSection>> {
+    if edits.is_empty() {
+        return None;
+    }
+    let mut sections = current.to_vec();
+    for edit in edits {
+        match edit {
+            SectionEdit::Remove(name) => sections.retain(|section| !(section.field == field && section.name == name)),
+            SectionEdit::Add(added) => sections.extend(added),
+        }
+    }
+    Some(sections)
+}
+
+/// The colour table after resetting the rows keyed `shown`: each takes what
+/// a reset of every row keyed `all` would give it, so a filtered reset
+/// matches the full one row for row, and every other entry stays.
+fn reset_row_colors(table: &[DrillCategoryColor], all: &[String], shown: &[&str]) -> Vec<DrillCategoryColor> {
+    let mut reset: Vec<DrillCategoryColor> = table.iter().filter(|entry| !shown.contains(&entry.value.as_str())).cloned().collect();
+    reset.extend(default_category_colors(all).into_iter().filter(|entry| shown.contains(&entry.value.as_str())));
+    reset
+}
+
+/// Where one list's filter text is kept: per dataset and field, not per
+/// window, so the dialog and the Preferences page share it, and a field's
+/// filter does not narrow another's codes.
+fn code_filter_id(list: &str, dataset: DrillHoleId, field: &str) -> egui::Id {
+    egui::Id::new(("drill_hole_code_filter", list, dataset, field))
+}
+
+/// Whether `code` shows under a filter already trimmed and lowercased by
+/// [`draw_code_filter`]: a case-blind match anywhere in it. No filter shows
+/// every code.
+fn filter_matches(code: &str, needle: &str) -> bool {
+    needle.is_empty() || code.to_lowercase().contains(needle)
+}
+
+/// A filter row above a long list of codes, with a button to clear it. The
+/// text is unsent UI state kept in egui memory under `id`, salted by dataset
+/// like the section draft, so the dialog and the Preferences page narrow the
+/// same list the same way. Returns the text to match, trimmed and
+/// lowercased.
+fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
+    let mut text = ui.data_mut(|data| data.get_temp::<String>(id)).unwrap_or_default();
+    let changed = MenuField::new(tr!(literal = "Filter")).show(ui, |ui, row_height, column_width| {
+        let before = ui.available_width();
+        let mut changed = false;
+        if ui
+            .add_enabled(!text.is_empty(), egui::Button::new(tr!(literal = "×")).small())
+            .on_hover_text(tr!(literal = "Clear the filter"))
+            .clicked()
+        {
+            text.clear();
+            changed = true;
+        }
+        let clear_width = before - ui.available_width();
+        changed |= ui
+            .add_sized(
+                [(column_width - clear_width).max(40.0), row_height],
+                egui::TextEdit::singleline(&mut text).hint_text(tr!(literal = "Part of a code")),
+            )
+            .changed();
+        changed
+    });
+    if changed {
+        ui.data_mut(|data| data.insert_temp(id, text.clone()));
+    }
+    text.trim().to_lowercase()
+}
+
+/// Working sections the code names suggest, offered in a collapsed list and
+/// only ever added when asked; see [`suggested_working_sections`] for the
+/// rule. Returns what was asked for, for the caller's one command.
+fn draw_suggested_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, field: &crate::model::drill_hole::DrillField, categories: &[String]) -> Option<Vec<WorkingSection>> {
+    // Worked out again only when the codes or the sections change, not on
+    // every frame the editor is open.
+    let fingerprint = egui::Id::new((field.key.as_str(), categories, &dataset.color.working_sections));
+    let cache_id = egui::Id::new(("drill_hole_suggested_sections", dataset.id, field.key.as_str()));
+    let cached = ui.data_mut(|data| data.get_temp::<(egui::Id, std::sync::Arc<Vec<WorkingSection>>)>(cache_id));
+    let suggestions = match cached {
+        Some((key, suggestions)) if key == fingerprint => suggestions,
+        _ => {
+            let suggestions = std::sync::Arc::new(suggested_working_sections(&field.key, categories, &dataset.color.working_sections));
+            ui.data_mut(|data| data.insert_temp(cache_id, (fingerprint, std::sync::Arc::clone(&suggestions))));
+            suggestions
+        }
+    };
+    if suggestions.is_empty() {
+        return None;
+    }
+    let mut add: Option<Vec<WorkingSection>> = None;
+    egui::CollapsingHeader::new(tr_format!(literal = "Suggested from code names (%count%)", count = suggestions.len()))
+        .id_salt(("drill_hole_suggested_sections", dataset.id, field.key.as_str()))
+        .default_open(false)
+        .show(ui, |ui| {
+            for suggestion in suggestions.iter() {
+                MenuField::new(suggestion.name.as_str()).show(ui, |ui, _, _| {
+                    if ui.small_button(tr!(literal = "Add")).clicked() {
+                        add = Some(vec![suggestion.clone()]);
+                    }
+                    ui.label(egui::RichText::new(tr_format!(literal = "%count% codes", count = suggestion.codes.len())).weak())
+                        .on_hover_text(suggestion.codes.join(", "));
+                });
+            }
+            if ui.add(MenuButton::new(tr!(literal = "Add all"))).clicked() {
+                add = Some(suggestions.to_vec());
+            }
+        });
+    add
 }

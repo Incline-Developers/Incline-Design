@@ -1275,7 +1275,7 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -
 /// kind is borrowed: a categorical kind owns its whole code list.
 pub(crate) fn evaluate_color_for(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {
     match (kind, value) {
-        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(state.display_code(value)).unwrap_or([1.0; 3]),
+        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(&state.color_key(value)).unwrap_or([1.0; 3]),
         _ => evaluate_ramp(kind, value, state),
     }
 }
@@ -1284,7 +1284,7 @@ pub(crate) fn evaluate_color_for(kind: &DrillFieldKind, value: &DrillValue, stat
 /// section lookup built once, not a walk of the section list per interval.
 pub(crate) fn evaluate_color_with(kind: &DrillFieldKind, value: &DrillValue, state: &DrillColorState, sections: &crate::model::drill_hole::SectionLookup<'_>) -> [f32; 3] {
     match (kind, value) {
-        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(sections.display_code(value)).unwrap_or([1.0; 3]),
+        (DrillFieldKind::Categorical { .. }, DrillValue::Category(value)) => state.category_color(sections.color_key(value)).unwrap_or([1.0; 3]),
         _ => evaluate_ramp(kind, value, state),
     }
 }

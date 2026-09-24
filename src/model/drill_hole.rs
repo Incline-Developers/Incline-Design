@@ -1177,13 +1177,17 @@ pub(crate) struct WorkingSection {
 }
 
 /// Why a working section cannot be kept as named.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SectionProblem {
     /// Blank once trimmed.
     NoName,
-    /// A code of the field has the name, ignoring case: a pick or a colour
-    /// under it could mean either.
+    /// A code of the field outside the section has the name, ignoring
+    /// case: a pick under it could mean either. A code inside it may share
+    /// the name, as a seam's section is named after the seam.
     NameIsCode,
+    /// As [`Self::NameIsCode`], where the code of that name is outside
+    /// because another section already holds it.
+    CodeClaimed { code: String, section: String },
     /// Another section of the field has the name, ignoring case.
     DuplicateName,
     /// Every code it lists is blank or already in an earlier section of the
@@ -1192,10 +1196,11 @@ pub(crate) enum SectionProblem {
 }
 
 impl SectionProblem {
-    pub(crate) fn message(self) -> String {
+    pub(crate) fn message(&self) -> String {
         match self {
             Self::NoName => tr!(literal = "A working section needs a name."),
-            Self::NameIsCode => tr!(literal = "A code of this field already has that name."),
+            Self::NameIsCode => tr!(literal = "A code outside this section has that name. A section may share its name only with a code it holds."),
+            Self::CodeClaimed { code, section } => tr_format!(literal = "%code% is already in working section %section%.", code = code.clone(), section = section.clone()),
             Self::DuplicateName => tr!(literal = "Another working section of this field has that name."),
             Self::NoCodes => tr!(literal = "Every code it lists is already in another working section."),
         }
@@ -1214,17 +1219,28 @@ fn same_name(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
 }
 
-/// What stops `name` naming a new working section of `field`, given the
-/// field's codes and the sections already kept. The editor asks this before
-/// it offers to add one, and [`tidy_working_sections`] before it keeps one,
-/// so what the one allows the other keeps.
-pub(crate) fn working_section_name_problem(name: &str, field: &str, codes: &[String], sections: &[WorkingSection]) -> Option<SectionProblem> {
+/// What stops `name` naming a new working section of `field` holding
+/// `members`. The editor asks before offering to add one and
+/// [`tidy_working_sections`] before keeping one, so the two agree.
+pub(crate) fn working_section_name_problem(name: &str, field: &str, codes: &[String], members: &[String], sections: &[WorkingSection]) -> Option<SectionProblem> {
     let name = name.trim();
     if name.is_empty() {
-        Some(SectionProblem::NoName)
-    } else if codes.iter().any(|code| same_name(code, name)) {
-        Some(SectionProblem::NameIsCode)
-    } else if sections.iter().any(|section| section.field == field && same_name(&section.name, name)) {
+        return Some(SectionProblem::NoName);
+    }
+    if let Some(code) = codes.iter().find(|code| same_name(code, name) && !members.contains(code)) {
+        // Say where the code went when another section has it: that is the
+        // cause, not the name.
+        return Some(
+            sections
+                .iter()
+                .find(|section| section.field == field && section.codes.contains(code))
+                .map_or(SectionProblem::NameIsCode, |section| SectionProblem::CodeClaimed {
+                    code: code.clone(),
+                    section: section.name.clone(),
+                }),
+        );
+    }
+    if sections.iter().any(|section| section.field == field && same_name(&section.name, name)) {
         Some(SectionProblem::DuplicateName)
     } else {
         None
@@ -1242,25 +1258,28 @@ fn field_codes<'a>(fields: &'a [DrillField], key: &str) -> &'a [String] {
 
 /// A list of working sections as the app keeps it: names trimmed, each code
 /// in at most one section per field (the first that claims it), and no
-/// section kept whose name is blank, is a code of its field, or repeats
-/// another's, ignoring case. What is left out comes back with the reason.
-/// A section of a field `fields` does not hold is kept as it is, as a colour
-/// for a code a shorter extract lacks is.
+/// section kept whose name is blank, is a code of its field it does not
+/// hold, or repeats another's, ignoring case. What is left out comes back
+/// with the reason. A section of a field `fields` does not hold is kept as
+/// it is, as a colour for a code a shorter extract lacks is.
 pub(crate) fn tidy_working_sections(sections: Vec<WorkingSection>, fields: &[DrillField]) -> (Vec<WorkingSection>, Vec<DroppedSection>) {
     let mut kept: Vec<WorkingSection> = Vec::new();
     let mut dropped = Vec::new();
     for mut section in sections {
         section.name = section.name.trim().to_owned();
-        if let Some(problem) = working_section_name_problem(&section.name, &section.field, field_codes(fields, &section.field), &kept) {
-            dropped.push(DroppedSection { name: section.name, problem });
-            continue;
-        }
+        // The codes first: whether the name may be one of them depends on
+        // which of them this section still holds once earlier ones claimed
+        // theirs.
         let mut codes: Vec<String> = Vec::new();
-        for code in section.codes {
+        for code in std::mem::take(&mut section.codes) {
             let claimed = kept.iter().any(|other| other.field == section.field && other.codes.contains(&code));
             if !code.trim().is_empty() && !claimed && !codes.contains(&code) {
                 codes.push(code);
             }
+        }
+        if let Some(problem) = working_section_name_problem(&section.name, &section.field, field_codes(fields, &section.field), &codes, &kept) {
+            dropped.push(DroppedSection { name: section.name, problem });
+            continue;
         }
         if codes.is_empty() {
             dropped.push(DroppedSection {
@@ -1273,6 +1292,70 @@ pub(crate) fn tidy_working_sections(sections: Vec<WorkingSection>, fields: &[Dri
         kept.push(section);
     }
     (kept, dropped)
+}
+
+/// Working sections the names of `field`'s codes suggest, for the editor to
+/// offer, never applied unasked. A root is a code of two or more characters
+/// that other codes begin with; only the shortest roots count, so no two
+/// suggestions share a code. Each holds its root and every code beginning
+/// with it. A common beginning that is not itself a code (KAL1A and KAL4B,
+/// no KAL) or a code of digits alone is no root, and a code carrying on a
+/// root's number (P10 after P1) is not under it. Codes already in a section
+/// take no part, and what is offered is what [`tidy_working_sections`] keeps.
+pub(crate) fn suggested_working_sections(field: &str, codes: &[String], sections: &[WorkingSection]) -> Vec<WorkingSection> {
+    let taken = |code: &String| sections.iter().any(|section| section.field == field && section.codes.contains(code));
+    let mut free: Vec<&String> = codes.iter().filter(|code| !code.trim().is_empty() && !taken(code)).collect();
+    free.sort_unstable();
+    free.dedup();
+    // A code that carries on a root's number is not under it: P10 is not a
+    // ply of P1.
+    let extends = |root: &str, code: &str| {
+        code.starts_with(root) && !(root.ends_with(|character: char| character.is_ascii_digit()) && code[root.len()..].starts_with(|character: char| character.is_ascii_digit()))
+    };
+    // Sorted, every code beginning with a root follows the root directly, so
+    // one pass finds each shortest root and the codes under it.
+    let mut suggested = Vec::new();
+    let mut consumed = vec![false; free.len()];
+    for index in 0..free.len() {
+        if consumed[index] {
+            continue;
+        }
+        let root = free[index];
+        let span = free[index + 1..].iter().take_while(|code| code.starts_with(root.as_str())).count();
+        let numeric = root.trim().chars().all(|character| character.is_ascii_digit() || character == '.');
+        if span == 0 || root.trim().chars().count() < 2 || numeric {
+            continue;
+        }
+        let under: Vec<usize> = (index + 1..=index + span).filter(|&other| !consumed[other] && extends(root, free[other])).collect();
+        if under.is_empty() {
+            continue;
+        }
+        consumed[index] = true;
+        for &other in &under {
+            consumed[other] = true;
+        }
+        let mut section_codes: Vec<String> = Vec::new();
+        for code in codes {
+            let member = code == root || under.iter().any(|&other| free[other] == code);
+            if member && !section_codes.contains(code) {
+                section_codes.push(code.clone());
+            }
+        }
+        suggested.push((root, section_codes));
+    }
+    suggested.sort_by_key(|(root, _)| codes.iter().position(|code| code == *root));
+    let mut offered: Vec<WorkingSection> = Vec::new();
+    for (root, section_codes) in suggested {
+        let name = root.trim();
+        if working_section_name_problem(name, field, codes, &section_codes, sections).is_none() && !offered.iter().any(|other| same_name(&other.name, name)) {
+            offered.push(WorkingSection {
+                name: name.to_owned(),
+                field: field.to_owned(),
+                codes: section_codes,
+            });
+        }
+    }
+    offered
 }
 
 /// Reads the working sections an entry at a time, so one malformed entry,
@@ -1454,12 +1537,17 @@ impl DrillColorState {
         self.string_pixel_width + DISC_PIXEL_MARGIN
     }
 
-    /// The colour chosen for one code, by binary search over the sorted table.
+    /// The colour kept under a code or a section's [`section_color_key`]. A
+    /// section with no entry yet shows the colour under its bare name until
+    /// [`Self::reconcile_categories`] gives it one.
     pub(crate) fn category_color(&self, value: &str) -> Option<[f32; 3]> {
-        self.categories
-            .binary_search_by(|entry| entry.value.as_str().cmp(value))
-            .ok()
-            .map(|index| self.categories[index].color)
+        let find = |value: &str| {
+            self.categories
+                .binary_search_by(|entry| entry.value.as_str().cmp(value))
+                .ok()
+                .map(|index| self.categories[index].color)
+        };
+        find(value).or_else(|| value.strip_prefix(SECTION_COLOR_PREFIX).and_then(find))
     }
 
     /// The working section of `field` that holds `code`, if any.
@@ -1474,48 +1562,54 @@ impl DrillColorState {
         self.working_sections.iter().find(|section| section.field == field && section.name == name)
     }
 
-    /// The section each code is coloured as, gathered once for a rebuild;
+    /// The colour key of each code's section, gathered once for a rebuild;
     /// empty unless colouring the active field by working section.
     pub(crate) fn section_lookup(&self) -> SectionLookup<'_> {
-        let mut names = HashMap::new();
+        let mut keys = Vec::new();
+        let mut index = HashMap::new();
         if self.by_working_section
             && let Some(field) = self.active_field.as_deref()
         {
             for section in self.working_sections.iter().filter(|section| section.field == field) {
+                keys.push(section_color_key(&section.name));
                 for code in &section.codes {
-                    names.entry(code.as_str()).or_insert(section.name.as_str());
+                    index.entry(code.as_str()).or_insert(keys.len() - 1);
                 }
             }
         }
-        SectionLookup { names }
+        SectionLookup { keys, index }
     }
 
-    /// The code an interval is coloured as: its working section's name when
-    /// colouring by section and the code is in one, otherwise the code. This
-    /// walks the section list; a pass over many intervals takes a
-    /// [`Self::section_lookup`] instead.
-    pub(crate) fn display_code<'a>(&'a self, code: &'a str) -> &'a str {
+    /// The colour table key an interval of `code` is coloured by: its
+    /// working section's key when colouring by section and the code is in
+    /// one, otherwise the code. This walks the section list; a pass over
+    /// many intervals takes a [`Self::section_lookup`] instead.
+    pub(crate) fn color_key<'a>(&'a self, code: &'a str) -> std::borrow::Cow<'a, str> {
         if !self.by_working_section {
-            return code;
+            return code.into();
         }
         self.active_field
             .as_deref()
             .and_then(|field| self.working_section_of(field, code))
-            .map_or(code, |section| section.name.as_str())
+            .map_or(code.into(), |section| section_color_key(&section.name).into())
     }
 
     /// What the colour table lists for `field` coloured by section: every
-    /// section name, then each code no section holds, in the field's order.
-    pub(crate) fn working_section_view(&self, field: &str, categories: &[String]) -> Vec<String> {
-        let mut view: Vec<String> = self
+    /// section, then each code no section holds, in the field's order.
+    pub(crate) fn working_section_view<'a>(&'a self, field: &str, categories: &'a [String]) -> Vec<ColorRow<'a>> {
+        let mut view: Vec<ColorRow<'a>> = self
             .working_sections
             .iter()
             .filter(|section| section.field == field)
-            .map(|section| section.name.clone())
+            .map(|section| ColorRow {
+                label: &section.name,
+                key: section_color_key(&section.name).into(),
+                section: Some(section),
+            })
             .collect();
         for code in categories {
-            if self.working_section_of(field, code).is_none() && !view.contains(code) {
-                view.push(code.clone());
+            if self.working_section_of(field, code).is_none() && !view.iter().any(|row| row.key == code.as_str()) {
+                view.push(ColorRow::code(code));
             }
         }
         view
@@ -1537,7 +1631,26 @@ impl DrillColorState {
         };
         let added = self.fill_category_colors(categories);
         if self.working_sections.iter().any(|section| section.field == field.key) {
-            self.fill_category_colors(&self.working_section_view(&field.key, categories));
+            // A section saved before sections had keys keeps the colour under
+            // its bare name, and one named after a code it holds starts in it.
+            let adopted: Vec<DrillCategoryColor> = self
+                .working_sections
+                .iter()
+                .filter(|section| section.field == field.key)
+                .filter_map(|section| {
+                    let key = section_color_key(&section.name);
+                    let own = self.categories.binary_search_by(|entry| entry.value.as_str().cmp(&key)).is_ok();
+                    let bare = self.category_color(&section.name);
+                    bare.filter(|_| !own).map(|color| DrillCategoryColor { value: key, color })
+                })
+                .collect();
+            if !adopted.is_empty() {
+                let mut table = Vec::from(std::mem::take(&mut self.categories));
+                table.extend(adopted);
+                self.set_categories(table);
+            }
+            let keys: Vec<String> = self.working_section_view(&field.key, categories).into_iter().map(|row| row.key.into_owned()).collect();
+            self.fill_category_colors(&keys);
         }
         added
     }
@@ -1826,19 +1939,50 @@ pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategor
     CategoryTable::new(colors).into()
 }
 
-/// The section each code of the active field is coloured as; see
-/// [`DrillColorState::section_lookup`].
-pub(crate) struct SectionLookup<'a> {
-    names: HashMap<&'a str, &'a str>,
+/// Colour table keys of working sections begin with this Unicode
+/// noncharacter, reserved for internal use, so a section's colour does not
+/// share an entry with a code of its name.
+const SECTION_COLOR_PREFIX: char = '\u{FDD0}';
+
+/// The colour table key a working section called `name` is coloured by.
+pub(crate) fn section_color_key(name: &str) -> String {
+    let mut key = String::with_capacity(name.len() + SECTION_COLOR_PREFIX.len_utf8());
+    key.push(SECTION_COLOR_PREFIX);
+    key.push_str(name);
+    key
 }
 
-impl<'a> SectionLookup<'a> {
-    /// `code`'s section name, or `code` where it is in none.
-    pub(crate) fn display_code<'b>(&'b self, code: &'b str) -> &'b str
-    where
-        'a: 'b,
-    {
-        self.names.get(code).copied().unwrap_or(code)
+/// One row of the colour list: what it is called, the colour table key it
+/// sets, and the section it stands for, if it is one.
+pub(crate) struct ColorRow<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) key: std::borrow::Cow<'a, str>,
+    pub(crate) section: Option<&'a WorkingSection>,
+}
+
+impl<'a> ColorRow<'a> {
+    /// A code's own row, coloured under the code.
+    pub(crate) fn code(code: &'a str) -> Self {
+        Self {
+            label: code,
+            key: code.into(),
+            section: None,
+        }
+    }
+}
+
+/// The section colour key of each code of the active field; see
+/// [`DrillColorState::section_lookup`].
+pub(crate) struct SectionLookup<'a> {
+    keys: Vec<String>,
+    index: HashMap<&'a str, usize>,
+}
+
+impl SectionLookup<'_> {
+    /// The key `code` is coloured by: its section's, or `code` where it is
+    /// in none.
+    pub(crate) fn color_key<'b>(&'b self, code: &'b str) -> &'b str {
+        self.index.get(code).map_or(code, |&section| self.keys[section].as_str())
     }
 }
 

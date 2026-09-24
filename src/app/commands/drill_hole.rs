@@ -684,7 +684,7 @@ impl<'a> App<'a> {
         let layer_id = document.allocate_layer_id();
         let layer = crate::model::Layer {
             id: layer_id,
-            name: tr_format!(literal = "%value% %side%", value = value.clone(), side = side.label()),
+            name: reference_layer_name(&target, side),
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
@@ -711,7 +711,7 @@ impl<'a> App<'a> {
                 literal = "Reference points: %used% holes placed, %absent% without '%value%', %flagged% flagged as possible fault repeats",
                 used = used.to_string(),
                 absent = absent.to_string(),
-                value = value,
+                value = target.label(),
                 flagged = flagged.len().to_string()
             )
         );
@@ -719,6 +719,18 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr_format!(literal = "Uppermost run used, flagged: %holes%", holes = flagged.join(", ")));
         }
         self.invalidate_geometry();
+    }
+}
+
+/// The new layer's name for a reference pick. A working section says so, so
+/// a section and a code of the same name (e.g. a section "COO" holding a
+/// code also called "COO") never collide on the layer they build.
+fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side: crate::model::drill_hole::ReferenceSide) -> String {
+    match target {
+        crate::model::drill_hole::ReferenceTarget::Section(name) => {
+            tr_format!(literal = "%name% working section %side%", name = name.clone(), side = side.label())
+        }
+        crate::model::drill_hole::ReferenceTarget::Code(name) => tr_format!(literal = "%name% %side%", name = name.clone(), side = side.label()),
     }
 }
 
