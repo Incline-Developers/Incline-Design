@@ -91,6 +91,9 @@ pub(crate) struct CachedSurfaceChunk {
     /// A `SurfaceStyle` bind group holding a distinct per-chunk debug colour,
     /// bound instead of the mesh colour when the chunk-debug view is on.
     pub(crate) debug_style_bind_group: wgpu::BindGroup,
+    /// The buffer behind `debug_style_bind_group`, rewritten with the
+    /// surface's wireframe so selection still shows in the debug view.
+    debug_style_buffer: wgpu::Buffer,
     /// The colour behind `debug_style_bind_group`, which the bounding-box
     /// debug view outlines the chunk in so box and fill match.
     pub(crate) debug_color: [f32; 4],
@@ -1366,6 +1369,11 @@ impl TriangulationGpuCache {
                     cached.mesh = triangulation.mesh.clone();
                 }
 
+                if surface_dirty || geometry_dirty {
+                    for chunk in &cached.surface_chunks {
+                        chunk.write_debug_style(queue, &surface_style);
+                    }
+                }
                 if surface_dirty {
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&surface_style));
                     cached.color = color;
@@ -1394,6 +1402,9 @@ impl TriangulationGpuCache {
                 let surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
                 if surface_chunks.is_empty() {
                     continue;
+                }
+                for chunk in &surface_chunks {
+                    chunk.write_debug_style(queue, &surface_style);
                 }
 
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1699,7 +1710,7 @@ fn upload_surface_chunk(
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),
         contents: bytemuck::bytes_of(&debug_style),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let debug_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_style_layout,
@@ -1737,6 +1748,7 @@ fn upload_surface_chunk(
         world_box_center,
         world_origin,
         debug_style_bind_group,
+        debug_style_buffer,
         debug_color,
     })
 }
@@ -1752,6 +1764,17 @@ impl CachedSurfaceChunk {
     fn rebase(&mut self, queue: &wgpu::Queue, scene_origin: DVec3) {
         queue.write_buffer(&self.chunk_buffer, 0, bytemuck::bytes_of(&chunk_offset_uniform(self.world_origin, scene_origin)));
         self.bounds.center = (self.world_box_center - scene_origin).as_vec3();
+    }
+
+    /// Carry the surface's in-shader wireframe into the debug colour uniform,
+    /// without the raster drape, which would hide the debug colour.
+    fn write_debug_style(&self, queue: &wgpu::Queue, surface_style: &SurfaceStyleUniform) {
+        let style = SurfaceStyleUniform {
+            color: self.debug_color,
+            params: [0.0, surface_style.params[1], 0.0, 0.0],
+            wire_color: surface_style.wire_color,
+        };
+        queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
     }
 }
 
