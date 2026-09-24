@@ -79,7 +79,6 @@ tri-estimated-memory = حداکثر حافظه تخمین زده شده ~{ $esti
 block-grid-summary = شبکه: { $x } × { $y } × { $z } = { $count } بلوک
 status-selected = انتخاب شده: { $count }
 status-fps = FPS: { $fps }
-status-chunks = قطعات: { $rendered }/{ $total } ({ $culled } قطع شده)
 status-clip = کلیپ نزدیک / دور / Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = فایل منبع یا فایل های وارداتی را انتخاب کنید.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = این ورودی را با کلیک روی سطح بارگذاری‌شده در نمای دید انتخاب کنید
 literal-choose-9e53070883acbe06 = انتخاب کن...
-literal-chunks-d8bf831735fec9eb = چانکس:
 literal-clear-b4f1dffbb6be6302 = پاک کردن
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = بافت شفاف فعال مثلث‌بندی
 literal-clear-raster-ef94c7849961e88f = شفاف رستر

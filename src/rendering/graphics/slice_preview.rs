@@ -37,7 +37,7 @@ pub(super) fn slice_preview_scene_key(
     editor.topology_wireframes_enabled.hash(&mut hasher);
     editor.show_points.hash(&mut hasher);
     editor.xray_enabled.hash(&mut hasher);
-    editor.debug_chunk_coloring.hash(&mut hasher);
+    editor.debug_surface_chunks.hash(&mut hasher);
     editor.vertical_exaggeration.to_bits().hash(&mut hasher);
     for value in editor.slice_center {
         value.to_bits().hash(&mut hasher);

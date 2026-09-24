@@ -879,7 +879,7 @@ impl<'a> Graphics<'a> {
             drill_hole_gpu: DrillHoleGpuCache::default(),
             design_point_gpu,
             raster_gpu: RasterGpuCache::default(),
-            chunk_render_stats: (0, 0),
+            surface_render_stats: Default::default(),
             point_render_stats: Default::default(),
             chunk_bounds_outline: None,
             plot_preview: None,

@@ -79,7 +79,6 @@ tri-estimated-memory = ذروة الذاكرة المقدَّرة ~{ $estimate }
 block-grid-summary = الشبكة: { $x } × { $y } × { $z } = كتلة { $count }
 status-selected = مختارة: { $count }
 status-fps = FPS: { $fps }
-status-chunks = قطع: { $rendered }/{ $total } ({ $culled } تم قطعها)
 status-clip = المقطع القريب / بعيد / Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = اختر ملف المصدر أو الملفات التي تريد استيرادها.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = اختر هذا المدخل بالنقر على السطح المحمّل في منفذ العرض
 literal-choose-9e53070883acbe06 = اختر...
-literal-chunks-d8bf831735fec9eb = القطع: --
 literal-clear-b4f1dffbb6be6302 = مسح
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = مسح نسيج الشبكة المثلثية النشطة
 literal-clear-raster-ef94c7849961e88f = مسح البيانات النقطية

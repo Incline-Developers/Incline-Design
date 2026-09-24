@@ -67,6 +67,19 @@ pub(crate) struct CachedTriangulationGpu {
     pub(crate) edge_width: f32,
 }
 
+/// Last main-viewport frame's surface draw after chunk culling, for the
+/// developer surface-chunk readout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SurfaceRenderStats {
+    /// Faces in the chunks that survived frustum culling.
+    pub(crate) drawn_faces: u64,
+    /// Every face in the visible surfaces.
+    pub(crate) total_faces: u64,
+    /// Chunks drawn this frame, and every chunk in the visible surfaces.
+    pub(crate) drawn_chunks: u32,
+    pub(crate) total_chunks: u32,
+}
+
 pub(crate) struct CachedSurfaceChunk {
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) index_buffer: wgpu::Buffer,

@@ -118,10 +118,16 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     };
                     ui.separator();
                 }
-                if editor.debug_chunk_coloring {
-                    match editor.debug_chunk_stats {
-                        Some((rendered, total)) => ui.label(tr!("status-chunks", rendered = rendered, total = total, culled = total.saturating_sub(rendered))),
-                        None => ui.label(tr!(literal = "Chunks: --")),
+                if editor.debug_surface_chunks {
+                    match editor.debug_surface_stats {
+                        Some(stats) => ui.label(tr!(
+                            "status-faces",
+                            drawn = stats.drawn_faces.separate_with_commas(),
+                            total = stats.total_faces.separate_with_commas(),
+                            drawn_chunks = stats.drawn_chunks,
+                            total_chunks = stats.total_chunks
+                        )),
+                        None => ui.label(tr!(literal = "Faces: -- / -- (--/-- chunks)")),
                     };
                     ui.separator();
                 }
@@ -137,7 +143,7 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     };
                     ui.separator();
                 }
-                if editor.debug_point_counts {
+                if editor.debug_point_cloud_chunks {
                     match editor.debug_point_stats {
                         Some(stats) => ui.label(tr!(
                             "status-points",

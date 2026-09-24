@@ -79,7 +79,6 @@ tri-estimated-memory = अनुमानित पीक मेमोरी ~{ 
 block-grid-summary = ग्रिडः { $x } × { $y } × { $z } = { $count } ब्लॉक
 status-selected = चयनित: { $count }
 status-fps = FPS: { $fps }
-status-chunks = टुकड़ेः { $rendered }/{ $total } ({ $culled } कटा हुआ)
 status-clip = क्लिप पास/दूर/Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = आयात करने के लिए स्रोत फ़ाइल या फ़ाइलों का चयन करें।
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = व्यूपोर्ट में लोड सतह पर क्लिक करके इस इनपुट का चयन करें
 literal-choose-9e53070883acbe06 = चुनें ...
-literal-chunks-d8bf831735fec9eb = टुकड़े: --
 literal-clear-b4f1dffbb6be6302 = साफ़ करें
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = सक्रिय त्रिभुजीकरण बनावट साफ़ करें
 literal-clear-raster-ef94c7849961e88f = रास्टर साफ़ करें

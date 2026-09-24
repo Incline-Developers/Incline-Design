@@ -156,7 +156,6 @@ tri-estimated-memory = Szacowane szczytowe zużycie pamięci ~{ $estimate }. { $
 block-grid-summary = Siatka: { $x } × { $y } × { $z } = { $count } bloków
 status-selected = Zaznaczono: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Fragmenty: { $rendered }/{ $total } (odrzucono: { $culled })
 status-clip = Bliska/daleka/Δ: { $near } / { $far } / { $delta } m
 
 ## Literały źródłowe o wysokiej częstotliwości
@@ -222,7 +221,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Wybierz plik lub pliki źródłowe do zaimportowania.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Wybierz te dane wejściowe, klikając wczytaną powierzchnię w widoku
 literal-choose-9e53070883acbe06 = Wybierz...
-literal-chunks-d8bf831735fec9eb = Fragmenty: --
 literal-clear-b4f1dffbb6be6302 = Wyczyść
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Wyczyść teksturę aktywnej triangulacji
 literal-clear-raster-ef94c7849961e88f = Wyczyść raster

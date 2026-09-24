@@ -191,14 +191,12 @@ pub(crate) struct Config {
     /// Show the cartographic distance scale in the viewport.
     #[serde(default = "default_show_scale_bar")]
     pub(crate) show_scale_bar: bool,
-    #[serde(default)]
-    pub(crate) debug_chunk_coloring: bool,
-    #[serde(default)]
-    pub(crate) debug_chunk_bounds: bool,
+    #[serde(default, alias = "debug_chunk_coloring")]
+    pub(crate) debug_surface_chunks: bool,
     #[serde(default)]
     pub(crate) debug_clip_planes: bool,
-    #[serde(default)]
-    pub(crate) debug_point_counts: bool,
+    #[serde(default, alias = "debug_point_counts")]
+    pub(crate) debug_point_cloud_chunks: bool,
     #[serde(default = "default_plan_orbit_sensitivity")]
     pub(crate) plan_orbit_sensitivity: f64,
     #[serde(default = "default_plan_zoom_sensitivity")]
@@ -286,10 +284,9 @@ impl Default for Config {
             frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
             show_scale_bar: default_show_scale_bar(),
-            debug_chunk_coloring: false,
-            debug_chunk_bounds: false,
+            debug_surface_chunks: false,
             debug_clip_planes: false,
-            debug_point_counts: false,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
