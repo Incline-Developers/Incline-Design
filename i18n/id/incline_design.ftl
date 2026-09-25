@@ -1173,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Bangun 
 literal-restore-the-full-model-range-23c0898e378be1df = Pulihkan rentang model penuh
 literal-axis-minimum-8a51a7bda9747700 = Minimum %axis%
 literal-axis-maximum-fa149d72f9564fca = Maksimum %axis%
-literal-name-no-range-4f328990327afd0b = %name% (tanpa rentang)
 literal-choose-a-variable-62b267fd35bdce31 = Pilih variabel
 literal-no-usable-range-6bd2da592be04b0c = (tidak ada rentang yang dapat digunakan)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Edit warna yang digunakan untuk nilai kosong

@@ -1226,7 +1226,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Rebuild
 literal-restore-the-full-model-range-23c0898e378be1df = Restore the full model range
 literal-axis-minimum-8a51a7bda9747700 = %axis% minimum
 literal-axis-maximum-fa149d72f9564fca = %axis% maximum
-literal-name-no-range-4f328990327afd0b = %name% (no range)
 literal-choose-a-variable-62b267fd35bdce31 = Choose a variable
 literal-no-usable-range-6bd2da592be04b0c = (no usable range)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Edit the colour used for empty values

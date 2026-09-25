@@ -1212,7 +1212,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = 데이�
 literal-restore-the-full-model-range-23c0898e378be1df = 전체 모델 범위 복원
 literal-axis-minimum-8a51a7bda9747700 = %axis% 최소값
 literal-axis-maximum-fa149d72f9564fca = %axis% 최대값
-literal-name-no-range-4f328990327afd0b = %name%(범위 없음)
 literal-choose-a-variable-62b267fd35bdce31 = 변수 선택
 literal-no-usable-range-6bd2da592be04b0c = (사용 가능한 범위 없음)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 빈 값에 사용되는 색상 편집

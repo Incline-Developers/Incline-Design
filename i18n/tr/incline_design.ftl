@@ -1218,7 +1218,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Bu değ
 literal-restore-the-full-model-range-23c0898e378be1df = Tam model aralığını geri yükle
 literal-axis-minimum-8a51a7bda9747700 = %axis% minimum
 literal-axis-maximum-fa149d72f9564fca = %axis% maksimum
-literal-name-no-range-4f328990327afd0b = %name% (aralık yok)
 literal-choose-a-variable-62b267fd35bdce31 = Bir değişken seçin
 literal-no-usable-range-6bd2da592be04b0c = (kullanılabilir aralık yok)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Boş değerler için kullanılan rengi düzenle

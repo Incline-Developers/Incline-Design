@@ -5,7 +5,7 @@ use crate::{
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::{
         state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
-        widgets::menu,
+        widgets::{menu, toolbar},
     },
 };
 
@@ -78,20 +78,41 @@ impl ViewportDockPanel {
     }
 }
 
-/// The small "Reset" button in the Slice and Colour-mapping section headers.
-///
-/// Sized to its own label with tight padding and `Extend` wrap - the properties
-/// panel sets a global `Truncate` that would otherwise clip it to "Re…".
-fn reset_section_button(ui: &mut egui::Ui, tooltip: impl Into<String>) -> bool {
-    let tooltip = tooltip.into();
-    ui.scope(|ui| {
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-        ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
-        ui.add(egui::Button::new(egui::RichText::new(tr!(literal = "Reset")).small()))
-            .on_hover_text(tooltip)
-            .clicked()
-    })
-    .inner
+/// A section heading in the block-model card: [`menu::menu_section`]'s small
+/// weak title and hairline, ending in a small "Reset" button. Returns whether
+/// the link was clicked.
+fn section_header_with_reset(ui: &mut egui::Ui, heading: impl Into<String>, reset_tooltip: impl Into<String>) -> bool {
+    let weak = ui.visuals().weak_text_color();
+    let font = egui::FontId::proportional(11.0);
+    let heading = ui.painter().layout_no_wrap(heading.into(), font.clone(), weak);
+    let reset = ui.painter().layout_no_wrap(tr!(literal = "Reset"), font, egui::Color32::PLACEHOLDER);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), SECTION_HEADER_HEIGHT), egui::Sense::hover());
+
+    let reset_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - reset.size().x - 16.0, rect.top()), rect.right_bottom());
+    let response = ui
+        .interact(reset_rect, ui.id().with(("section_reset", heading.text())), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(reset_tooltip.into());
+    // Filled like the card's other buttons at rest, so it reads as one.
+    let visuals = ui.visuals();
+    let widget = if response.is_pointer_button_down_on() {
+        &visuals.widgets.active
+    } else if response.hovered() {
+        &visuals.widgets.hovered
+    } else {
+        &visuals.widgets.inactive
+    };
+    ui.painter()
+        .rect(reset_rect, toolbar::GROUP_CORNER_RADIUS, widget.bg_fill, widget.bg_stroke, egui::StrokeKind::Inside);
+    let reset_color = widget.fg_stroke.color;
+    let heading_end = rect.left() + heading.size().x;
+    ui.painter().line_segment(
+        [egui::pos2(heading_end + 8.0, rect.center().y), egui::pos2(reset_rect.left() - 6.0, rect.center().y)],
+        egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+    );
+    ui.painter().galley(egui::pos2(rect.left(), rect.center().y - heading.size().y / 2.0), heading, weak);
+    ui.painter().galley(reset_rect.center() - reset.size() / 2.0, reset, reset_color);
+    response.clicked()
 }
 
 /// A colormap as the ramp widget manipulates it.
@@ -258,8 +279,15 @@ const STOP_EPSILON: f32 = 0.01;
 const COLOR_STOP_HANDLE_SIZE: f32 = 18.0;
 const COLOR_PICKER_BUTTON_WIDTH: f32 = 40.0;
 const COLOR_PICKER_BUTTON_HEIGHT: f32 = 18.0;
+/// Drop from the bottom of the ramp to the top of the colour swatch, clearing
+/// the scale labels.
+const COLOR_PICKER_DROP: f32 = 22.0;
 /// Height reserved for the horizontal ramp, labels and colour picker.
-const LEGEND_BAR_HEIGHT: f32 = 112.0;
+const LEGEND_BAR_HEIGHT: f32 = 96.0;
+/// Height of a section heading row in the block-model card.
+const SECTION_HEADER_HEIGHT: f32 = 20.0;
+/// Width of the axis letter column in the slice rows.
+const SLICE_AXIS_LABEL_WIDTH: f32 = 22.0;
 const LEGEND_BAR_THICKNESS: f32 = 16.0;
 /// Column drawn left of each boundary handle: the boundary's value in the
 /// variable's own units (an editable number box once clicked), then the `≤`
@@ -443,16 +471,15 @@ impl<'a> BlockModelProperties<'a> {
             if !model_has_selectable_variable(model) {
                 return;
             }
+            ui.add_space(8.0);
             ui.separator();
+            ui.add_space(8.0);
             ui.vertical(|ui| {
-                let content_width = 460.0;
+                let content_width = 440.0;
                 ui.set_width(content_width);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tr!(literal = "Colour mapping")).strong().color(ui.visuals().weak_text_color()));
-                    if reset_section_button(ui, tr!(literal = "Rebuild this variable's colours from its data")) {
-                        commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
-                    }
-                });
+                if section_header_with_reset(ui, tr!(literal = "Colour mapping"), tr!(literal = "Rebuild this variable's colours from its data")) {
+                    commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
+                }
                 self.draw_variable_dropdown(ui, content_width, model, editor, commands);
                 if model.active_variable_is_categorical() {
                     self.draw_category_legend(ui, content_width, model, commands);
@@ -472,33 +499,37 @@ impl<'a> BlockModelProperties<'a> {
         let mut slice = model.slice.unwrap_or(full).clamped_to(lower, upper);
         let mut changed = false;
 
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr!(literal = "Slice")).strong().color(ui.visuals().weak_text_color()));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if reset_section_button(ui, tr!(literal = "Restore the full model range")) {
-                    commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
-                }
-            });
-        });
+        if section_header_with_reset(ui, tr!(literal = "Slice"), tr!(literal = "Restore the full model range")) {
+            commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
+        }
 
-        let axis_label_width = 14.0;
         let gap = ui.spacing().item_spacing.x;
-        let value_width = ((content_width - axis_label_width - gap * 2.0) * 0.5).max(48.0);
+        let row_height = ui.spacing().interact_size.y;
+        let value_width = ((content_width - SLICE_AXIS_LABEL_WIDTH - gap * 2.0) * 0.5).max(48.0);
         for (axis, label) in crate::model::survey::axis_names().into_iter().enumerate() {
             let extent = (upper[axis] - lower[axis]).abs();
             let speed = (extent / 500.0).max(0.001);
             ui.horizontal(|ui| {
-                ui.add_sized(egui::vec2(axis_label_width, 20.0), egui::Label::new(egui::RichText::new(label.clone()).strong()));
+                // Painted into a fixed column: a label widget grows to fit
+                // "RL" and pushes that row's boxes out of line with E and N.
+                let (label_rect, _) = ui.allocate_exact_size(egui::vec2(SLICE_AXIS_LABEL_WIDTH, row_height), egui::Sense::hover());
+                ui.painter().text(
+                    label_rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    &label,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    ui.visuals().weak_text_color(),
+                );
                 changed |= ui
                     .add_sized(
-                        egui::vec2(value_width, 20.0),
+                        egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
                     )
                     .on_hover_text(tr_format!(literal = "%axis% minimum", axis = label))
                     .changed();
                 changed |= ui
                     .add_sized(
-                        egui::vec2(value_width, 20.0),
+                        egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
                     )
                     .on_hover_text(tr_format!(literal = "%axis% maximum", axis = label))
@@ -513,29 +544,31 @@ impl<'a> BlockModelProperties<'a> {
 
     fn draw_variable_dropdown(&self, ui: &mut egui::Ui, content_width: f32, model: &OpenBlockModel, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
         let current = model.active_color_variable.as_deref().unwrap_or("");
-        let selected_text = model
+        // The name and its range are laid out separately, so the range can sit
+        // back in the weak colour the list rows give it.
+        let (selected_name, selected_detail) = model
             .active_color_variable
             .as_deref()
             .map(|name| {
-                if let Some(variable) = model.model.variable(name)
+                let detail = if let Some(variable) = model.model.variable(name)
                     && is_categorical_variable(variable)
                 {
-                    format!("{name} ({})", format_category_count(variable))
+                    format!("({})", format_category_count(variable))
                 } else if let Some((min, max)) = cached_variable_range(editor, model, name) {
-                    format!("{name} {}", format_grade_range(min, max))
+                    format_grade_range(min, max)
                 } else {
-                    tr_format!(literal = "%name% (no range)", name = name)
-                }
+                    tr!(literal = "(no usable range)")
+                };
+                (name.to_owned(), detail)
             })
-            .unwrap_or_else(|| tr!(literal = "Choose a variable"));
+            .unwrap_or_else(|| (tr!(literal = "Choose a variable"), String::new()));
         let filter_id = self.id.with(("variable_filter", model.id));
         let mut filter = ui.data_mut(|data| data.get_persisted::<String>(filter_id)).unwrap_or_default();
 
         let popup_id = self.id.with(("variable_popup", model.id));
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let button_response = ui
-            .add_sized(egui::vec2(content_width, 22.0), egui::Button::selectable(open, egui::RichText::new(selected_text).strong()))
-            .on_hover_text(tr!(literal = "Choose the active block model variable"));
+        let button_response = variable_field(ui, content_width, open, &selected_name, &selected_detail).on_hover_text(tr!(literal = "Choose the active block model variable"));
+        ui.add_space(2.0);
 
         let _ = egui::Popup::menu(&button_response)
             .id(popup_id)
@@ -736,7 +769,7 @@ impl<'a> BlockModelProperties<'a> {
                 );
                 painter.rect_filled(strip_rect, 0.0, ramp.color_at_t(t));
             }
-            painter.rect_stroke(bar_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(40)), egui::StrokeKind::Outside);
+            painter.rect_stroke(bar_rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Outside);
         }
 
         let bar_response = ui
@@ -925,9 +958,13 @@ impl<'a> BlockModelProperties<'a> {
             changed = true;
         }
 
-        if let Some(color) = ramp.stops.get(selected).map(|stop| stop.color) {
-            let swatch_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.center().x - COLOR_PICKER_BUTTON_WIDTH * 0.5, rect.bottom() - COLOR_PICKER_BUTTON_HEIGHT),
+        if let Some((color, t)) = ramp.stops.get(selected).map(|stop| (stop.color, stop.t)) {
+            // The swatch follows the handle it edits - the one last clicked or
+            // dragged.
+            let handle_x = x_at(t);
+            let swatch_x = handle_x.clamp(rect.left() + COLOR_PICKER_BUTTON_WIDTH * 0.5, rect.right() - COLOR_PICKER_BUTTON_WIDTH * 0.5);
+            let swatch_rect = egui::Rect::from_center_size(
+                egui::pos2(swatch_x, bar_rect.bottom() + COLOR_PICKER_DROP + COLOR_PICKER_BUTTON_HEIGHT * 0.5),
                 egui::vec2(COLOR_PICKER_BUTTON_WIDTH, COLOR_PICKER_BUTTON_HEIGHT),
             );
             let mut srgba = straight_to_unmultiplied_srgba(color);
@@ -990,6 +1027,66 @@ impl<'a> BlockModelProperties<'a> {
             );
         }
     }
+}
+
+/// The variable picker's closed face: a combo-box field with the variable's
+/// name, its range in the weak colour, and a chevron.
+fn variable_field(ui: &mut egui::Ui, width: f32, open: bool, name: &str, detail: &str) -> egui::Response {
+    let height = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let visuals = ui.visuals();
+    let widget = if open {
+        &visuals.widgets.open
+    } else if response.hovered() {
+        &visuals.widgets.hovered
+    } else {
+        &visuals.widgets.inactive
+    };
+    ui.painter().rect(rect, widget.corner_radius, widget.bg_fill, widget.bg_stroke, egui::StrokeKind::Inside);
+
+    let padding = 10.0;
+    let chevron_width = 10.0;
+    let text_right = rect.right() - padding - chevron_width - 8.0;
+    let name_font = egui::FontId::proportional(13.0);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        name,
+        0.0,
+        egui::TextFormat {
+            font_id: name_font,
+            color: visuals.text_color(),
+            valign: egui::Align::Center,
+            ..Default::default()
+        },
+    );
+    if !detail.is_empty() {
+        job.append(
+            detail,
+            6.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(12.0),
+                color: visuals.weak_text_color(),
+                valign: egui::Align::Center,
+                ..Default::default()
+            },
+        );
+    }
+    job.wrap = egui::text::TextWrapping::truncate_at_width((text_right - rect.left() - padding).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    ui.painter()
+        .galley(egui::pos2(rect.left() + padding, rect.center().y - galley.size().y / 2.0), galley, visuals.text_color());
+
+    // A chevron that flips while the list is open.
+    let center = egui::pos2(rect.right() - padding - chevron_width / 2.0, rect.center().y);
+    let (dx, dy) = (chevron_width / 2.0 - 1.0, if open { -2.0 } else { 2.0 });
+    let stroke = egui::Stroke::new(1.4, if response.hovered() || open { visuals.text_color() } else { visuals.weak_text_color() });
+    ui.painter()
+        .line(vec![center + egui::vec2(-dx, -dy), center + egui::vec2(0.0, dy), center + egui::vec2(dx, -dy)], stroke);
+    response
 }
 
 /// Ink/outline pair for overlay text: black-on-white over a light background,

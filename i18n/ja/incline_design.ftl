@@ -1214,7 +1214,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = この�
 literal-restore-the-full-model-range-23c0898e378be1df = モデルの全範囲を復元
 literal-axis-minimum-8a51a7bda9747700 = %axis% の最小値
 literal-axis-maximum-fa149d72f9564fca = %axis% の最大値
-literal-name-no-range-4f328990327afd0b = %name%（範囲なし）
 literal-choose-a-variable-62b267fd35bdce31 = 変数を選択
 literal-no-usable-range-6bd2da592be04b0c = （使用可能な範囲なし）
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 空値に使用する色を編集

@@ -1173,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = 根据�
 literal-restore-the-full-model-range-23c0898e378be1df = 恢复完整模型范围
 literal-axis-minimum-8a51a7bda9747700 = %axis% 最小值
 literal-axis-maximum-fa149d72f9564fca = %axis% 最大值
-literal-name-no-range-4f328990327afd0b = %name%（无范围）
 literal-choose-a-variable-62b267fd35bdce31 = 选择变量
 literal-no-usable-range-6bd2da592be04b0c = （无可用范围）
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 编辑空值使用的颜色

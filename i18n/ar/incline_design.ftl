@@ -1173,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = إعا�
 literal-restore-the-full-model-range-23c0898e378be1df = استعادة نطاق النموذج الكامل
 literal-axis-minimum-8a51a7bda9747700 = الحد الأدنى لـ %axis%
 literal-axis-maximum-fa149d72f9564fca = الحد الأقصى لـ %axis%
-literal-name-no-range-4f328990327afd0b = %name% (دون نطاق)
 literal-choose-a-variable-62b267fd35bdce31 = اختر متغيرًا
 literal-no-usable-range-6bd2da592be04b0c = (لا يوجد نطاق قابل للاستخدام)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = تحرير اللون المستخدم للقيم الفارغة

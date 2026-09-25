@@ -231,25 +231,94 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         )
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| {
-            egui::Frame::window(ui.style()).show(ui, |ui| {
-                ui.set_width((canvas.width() - 32.0).clamp(240.0, 780.0));
-                egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
-                    MenuFieldCombo::new(
-                        "filter_model",
-                        tr!(literal = "Block model"),
-                        &mut editor.viewport_block_model_id,
-                        model.name.clone(),
-                        models.iter().filter(|model| model.state.loaded).map(|model| (Some(model.id), model.name.clone().into())),
-                    )
-                    .show(ui);
-                    if let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) {
-                        ui.push_id(model.id, |ui| {
-                            BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
+            // The menu-family card, so the panel matches the docked tool panels
+            // rather than egui's stock window.
+            let surface = menu::menu_surface(ui.visuals());
+            egui::Frame::new()
+                .fill(surface)
+                .stroke(menu::menu_border(ui.visuals()))
+                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
+                .show(ui, |ui| {
+                    menu::apply_menu_style(ui, surface);
+                    let width = (canvas.width() - 32.0).clamp(240.0, 780.0);
+                    ui.set_width(width);
+                    draw_block_model_title_bar(ui, editor, models, model, width, surface);
+                    let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
+                        return;
+                    };
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin {
+                            left: 12,
+                            right: 12,
+                            top: 6,
+                            bottom: 10,
+                        })
+                        .show(ui, |ui| {
+                            egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
+                                ui.push_id(model.id, |ui| {
+                                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
+                                });
+                            });
                         });
-                    }
                 });
-            });
         });
+}
+
+/// The block-model card's heading: its title, the model it is showing, and a
+/// close cross. Closing clears the shown model; selecting one reopens it.
+fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], model: &OpenBlockModel, width: f32, surface: egui::Color32) {
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+    ui.spacing_mut().item_spacing.y = spacing;
+    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!(literal = "Block model")), rect, surface);
+
+    let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
+    let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
+    let picker_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - menu::TITLE_BAR_HEIGHT - 2.0 - picker_width, rect.center().y - 11.0),
+        egui::vec2(picker_width, 22.0),
+    );
+    if loaded.len() > 1 {
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(picker_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().interact_size.y = 22.0;
+                egui::ComboBox::from_id_salt("filter_model")
+                    .selected_text(model.name.clone())
+                    .width(picker_width)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for option in &loaded {
+                            ui.selectable_value(&mut editor.viewport_block_model_id, Some(option.id), option.name.clone());
+                        }
+                    })
+                    .response
+                    .on_hover_text(model.name.clone());
+            },
+        );
+    } else {
+        // Nothing to switch to: name the model without offering a choice.
+        let mut job = egui::text::LayoutJob::single_section(
+            model.name.clone(),
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(12.0),
+                color: ui.visuals().weak_text_color(),
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(picker_width);
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(
+            egui::pos2(picker_rect.right() - galley.size().x, picker_rect.center().y - galley.size().y / 2.0),
+            galley,
+            ui.visuals().weak_text_color(),
+        );
+    }
+
+    if menu::title_bar_close_button(ui, rect, surface) {
+        editor.viewport_block_model_id = None;
+    }
 }
 
 /// Runs `add_fields` against the editor's preferences draft and applies it as

@@ -1220,7 +1220,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Пер�
 literal-restore-the-full-model-range-23c0898e378be1df = Відновити повний діапазон моделі
 literal-axis-minimum-8a51a7bda9747700 = Мінімум %axis%
 literal-axis-maximum-fa149d72f9564fca = Максимум %axis%
-literal-name-no-range-4f328990327afd0b = %name% (без діапазону)
 literal-choose-a-variable-62b267fd35bdce31 = Виберіть змінну
 literal-no-usable-range-6bd2da592be04b0c = (немає придатного діапазону)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Змінити колір порожніх значень

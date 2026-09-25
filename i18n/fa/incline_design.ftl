@@ -1173,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = باز�
 literal-restore-the-full-model-range-23c0898e378be1df = بازیابی دامنه کامل مدل
 literal-axis-minimum-8a51a7bda9747700 = کمینه %axis%
 literal-axis-maximum-fa149d72f9564fca = بیشینه %axis%
-literal-name-no-range-4f328990327afd0b = %name% (بدون دامنه)
 literal-choose-a-variable-62b267fd35bdce31 = یک متغیر انتخاب کنید
 literal-no-usable-range-6bd2da592be04b0c = (دامنه قابل استفاده‌ای وجود ندارد)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = ویرایش رنگ مورد استفاده برای مقادیر خالی
