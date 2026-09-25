@@ -6,6 +6,8 @@ use crate::{
     pqarray::PqArrayReader,
 };
 
+use rayon::prelude::*;
+
 use super::{super::Reader, schemas};
 
 impl<R: ReadAt> Reader<R> {
@@ -287,6 +289,33 @@ impl<R: ReadAt> Reader<R> {
         })
     }
 
+    /// Read an [`array_type::Index`](crate::array_type::Index) array into a single
+    /// vector, checking the indices as [`Self::array_indices`] does.
+    pub fn array_indices_vec(
+        &self,
+        array: &Array<array_type::Index>,
+    ) -> Result<Vec<Option<u32>>, Error> {
+        let reader = self.array_reader(array)?;
+        let schemas::Index::U32 = schemas::Index::check(&reader)?;
+        let &crate::array::Constraint::Index(category_count) = array.constraint() else {
+            panic!("invalid constraint");
+        };
+        let indices = reader.read_nullable_column::<u32>("index")?;
+        if let Some(index) = indices
+            .par_iter()
+            .flatten()
+            .map(|index| u64::from(*index))
+            .find_any(|index| *index >= category_count)
+        {
+            return Err(InvalidData::IndexOutOfRange {
+                value: index,
+                maximum: category_count.saturating_add(1),
+            }
+            .into());
+        }
+        Ok(indices)
+    }
+
     /// Read an [`array_type::Vector`](crate::array_type::Vector) array.
     pub fn array_vectors(&self, array: &Array<array_type::Vector>) -> Result<Vectors<R>, Error> {
         let reader = self.array_reader(array)?;
@@ -326,6 +355,22 @@ impl<R: ReadAt> Reader<R> {
         Ok(match schemas::Color::check(&reader)? {
             schemas::Color::Rgba8 => {
                 Colors(reader.iter_nullable_group_column("color", ["r", "g", "b", "a"])?)
+            }
+        })
+    }
+
+    /// Read an [`array_type::Color`](crate::array_type::Color) array into a single vector.
+    ///
+    /// Equivalent to collecting [`Self::array_colors`], but decoded in bulk with row
+    /// groups in parallel, like [`Self::array_vertices_vec`].
+    pub fn array_colors_vec(
+        &self,
+        array: &Array<array_type::Color>,
+    ) -> Result<Vec<Option<[u8; 4]>>, Error> {
+        let reader = self.array_reader(array)?;
+        Ok(match schemas::Color::check(&reader)? {
+            schemas::Color::Rgba8 => {
+                reader.read_nullable_group_column::<u8, 4>("color", ["r", "g", "b", "a"])?
             }
         })
     }

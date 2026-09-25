@@ -13,7 +13,7 @@ pub(crate) fn zero_origin(v: &Vector3) -> bool {
 }
 
 /// Selects the type of geometry in an [`Element`](crate::Element) from several options.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "type")]
 pub enum Geometry {
     PointSet(PointSet),
@@ -22,6 +22,81 @@ pub enum Geometry {
     GridSurface(GridSurface),
     BlockModel(BlockModel),
     Composite(Composite),
+}
+
+/// Reads the same internally tagged form `#[serde(tag = "type")]` writes, without serde's
+/// buffering of the whole object when the tag comes first, which is where every writer
+/// using this crate puts it. That buffering is costly here because a `Composite` holds its
+/// child elements: each nested composite had its entire subtree buffered and replayed.
+impl<'de> Deserialize<'de> for Geometry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct GeometryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeometryVisitor {
+            type Value = Geometry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a geometry object with a \"type\" field")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Geometry, A::Error> {
+                use serde::de::{Error, value::MapAccessDeserializer};
+
+                let Some(first) = map.next_key::<std::borrow::Cow<'de, str>>()? else {
+                    return Err(A::Error::missing_field("type"));
+                };
+                if first == "type" {
+                    let tag = map.next_value::<std::borrow::Cow<'de, str>>()?;
+                    let rest = MapAccessDeserializer::new(map);
+                    return Ok(match tag.as_ref() {
+                        "PointSet" => Geometry::PointSet(Deserialize::deserialize(rest)?),
+                        "LineSet" => Geometry::LineSet(Deserialize::deserialize(rest)?),
+                        "Surface" => Geometry::Surface(Deserialize::deserialize(rest)?),
+                        "GridSurface" => Geometry::GridSurface(Deserialize::deserialize(rest)?),
+                        "BlockModel" => Geometry::BlockModel(Deserialize::deserialize(rest)?),
+                        "Composite" => Geometry::Composite(Deserialize::deserialize(rest)?),
+                        other => return Err(A::Error::unknown_variant(other, VARIANTS)),
+                    });
+                }
+                // The tag is somewhere later: gather the object and dispatch on it.
+                let mut object = serde_json::Map::new();
+                let value = map.next_value::<serde_json::Value>()?;
+                object.insert(first.into_owned(), value);
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    object.insert(key, value);
+                }
+                let tag = match object.remove("type") {
+                    Some(serde_json::Value::String(tag)) => tag,
+                    Some(_) => return Err(A::Error::custom("geometry \"type\" must be a string")),
+                    None => return Err(A::Error::missing_field("type")),
+                };
+                let rest = serde_json::Value::Object(object);
+                let geometry = match tag.as_str() {
+                    "PointSet" => serde_json::from_value(rest).map(Geometry::PointSet),
+                    "LineSet" => serde_json::from_value(rest).map(Geometry::LineSet),
+                    "Surface" => serde_json::from_value(rest).map(Geometry::Surface),
+                    "GridSurface" => serde_json::from_value(rest).map(Geometry::GridSurface),
+                    "BlockModel" => serde_json::from_value(rest).map(Geometry::BlockModel),
+                    "Composite" => serde_json::from_value(rest).map(Geometry::Composite),
+                    other => return Err(A::Error::unknown_variant(other, VARIANTS)),
+                };
+                geometry.map_err(A::Error::custom)
+            }
+        }
+
+        const VARIANTS: &[&str] = &[
+            "PointSet",
+            "LineSet",
+            "Surface",
+            "GridSurface",
+            "BlockModel",
+            "Composite",
+        ];
+        deserializer.deserialize_map(GeometryVisitor)
+    }
 }
 
 impl Geometry {

@@ -171,10 +171,16 @@ impl<'a> PqArrayWriter<'a> {
         // Compression is nearly all of the cost of writing, and every column chunk compresses
         // independently. Buffer enough row groups to give each thread a chunk, encode them all
         // at once, then splice them into the file in order. A wide array needs one row group
-        // to fill the pool; a narrow one buffers several.
-        let batch_row_groups = rayon::current_num_threads()
-            .div_ceil(columns.len().max(1))
-            .max(1);
+        // to fill the pool; a narrow one buffers several - enough that the chunks divide
+        // evenly among the threads. Otherwise every batch ends in a near-empty wave: 3
+        // vertex columns on 16 threads made 18 chunks, 16 then 2 with the pool idle.
+        let threads = rayon::current_num_threads().max(1);
+        let width = columns.len().max(1);
+        let batch_row_groups = if width >= threads {
+            1
+        } else {
+            threads / gcd(threads, width)
+        };
         let mut finished = false;
         while !finished {
             let mut row_groups = Vec::with_capacity(batch_row_groups);
@@ -213,4 +219,11 @@ impl<'a> PqArrayWriter<'a> {
         writer.close()?;
         Ok(self.total_written)
     }
+}
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }

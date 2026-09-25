@@ -53,7 +53,7 @@ impl OpenItem {
         }
         let bytes = omf::to_bytes(snapshot, omf::Compression::Scratch, progress)?;
         let backing = Backing::write(&bytes)?;
-        self.state_mut().deferred = Some(DeferredAsset { backing, element_path: vec![0] });
+        self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
         self.release_payload();
         Ok(self)
     }
@@ -64,7 +64,8 @@ impl OpenItem {
         match self {
             Self::Triangulation(item) => Some(omf::PayloadIdentity::triangulation(item)),
             Self::PointCloud(item) => Some(omf::PayloadIdentity::point_cloud(item)),
-            Self::BlockModel(_) | Self::DrillHole(_) | Self::Raster(_) => None,
+            Self::Raster(item) => Some(omf::PayloadIdentity::raster(item)),
+            Self::BlockModel(_) | Self::DrillHole(_) => None,
         }
     }
 

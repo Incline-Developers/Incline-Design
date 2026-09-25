@@ -133,15 +133,18 @@ pub(crate) fn valid_subblock_sizes(
     valid_sizes
 }
 
-pub(crate) struct MaximumIndex(u32);
+/// The largest index written, or `None` while nothing has been. An array with no
+/// indices references no vertices, so it is valid whatever the vertex count - even zero.
+pub(crate) struct MaximumIndex(Option<u32>);
 
 impl MaximumIndex {
     pub fn new() -> Self {
-        Self(0)
+        Self(None)
     }
 
     pub fn visit<T: Copy + Into<u32>>(&mut self, value: T) -> T {
-        self.0 = self.0.max(value.into());
+        let value32 = value.into();
+        self.0 = Some(self.0.map_or(value32, |max| max.max(value32)));
         value
     }
 
@@ -157,7 +160,10 @@ impl MaximumIndex {
     }
 
     pub fn get(self) -> Vec<ArrayWriteCheck> {
-        vec![ArrayWriteCheck::MaximumIndex(self.0)]
+        self.0
+            .map(ArrayWriteCheck::MaximumIndex)
+            .into_iter()
+            .collect()
     }
 }
 
