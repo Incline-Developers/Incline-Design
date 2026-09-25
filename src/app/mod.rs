@@ -1805,7 +1805,6 @@ impl<'a> App<'a> {
                     is_active: active.is_some_and(|project| project.id == stored.id),
                     dirty: active.is_some_and(|project| project.id == stored.id) && project_dirty,
                     id: stored.id,
-                    stored_in_browser: true,
                 })
                 .collect::<Vec<_>>();
             if let Some(active) = active
@@ -1816,7 +1815,6 @@ impl<'a> App<'a> {
                     is_active: true,
                     dirty: project_dirty,
                     id: active.id,
-                    stored_in_browser: false,
                 });
             }
             entries

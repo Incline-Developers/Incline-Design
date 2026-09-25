@@ -4159,8 +4159,6 @@ pub(crate) struct UiTrackedProjectEntry {
     pub(crate) path: PathBuf,
     #[cfg(target_arch = "wasm32")]
     pub(crate) id: crate::model::project::ProjectId,
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) stored_in_browser: bool,
 }
 
 impl UiProjectEntry {
