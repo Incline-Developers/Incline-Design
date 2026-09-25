@@ -3582,7 +3582,3 @@ fn virtual_path(source: &str, element: &str, extension: &str) -> PathBuf {
 fn style_loaded(style: Option<&Value>) -> bool {
     style_bool(style, "loaded").or_else(|| style_bool(style, "visible")).unwrap_or(true)
 }
-
-#[cfg(test)]
-#[path = "omf_bench.rs"]
-mod bench;
