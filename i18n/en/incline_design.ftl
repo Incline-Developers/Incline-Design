@@ -101,8 +101,8 @@ tri-create-run = Triangulate
 tri-selection-none = The selected objects are no longer available.
 tri-selection-selected = { $summary } selected
 
-tri-type-open-surface = Open surface
-tri-type-solid-closed = Solid – fully closed
+tri-type-open-surface = Surface
+tri-type-solid-closed = Solid
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". Each noun is pluralised
 # by its own count so languages with more than two plural forms read correctly.

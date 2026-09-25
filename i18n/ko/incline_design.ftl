@@ -96,8 +96,8 @@ tri-create-run = 삼각망 생성
 
 tri-selection-selected = { $summary } 선택됨
 
-tri-type-open-surface = 개방형 표면
-tri-type-solid-closed = 솔리드 – 완전히 밀폐됨
+tri-type-open-surface = 표면
+tri-type-solid-closed = 솔리드
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". 한국어는 CLDR 복수
 # 카테고리가 하나뿐이므로 *[other] 분기만 사용합니다.

@@ -98,8 +98,8 @@ tri-create-run = Triangulieren
 
 tri-selection-selected = { $summary } ausgewählt
 
-tri-type-open-surface = Offene Oberfläche
-tri-type-solid-closed = Volumenkörper – vollständig geschlossen
+tri-type-open-surface = Oberfläche
+tri-type-solid-closed = Volumenkörper
 
 # Bestandteile der Auswahlübersicht, z. B. „3 Polylinien, 1 Punkt“. Jedes
 # Substantiv wird nach seiner eigenen Anzahl flektiert, damit Sprachen mit

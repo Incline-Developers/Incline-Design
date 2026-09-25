@@ -98,8 +98,8 @@ tri-create-run = Tạo lưới tam giác
 
 tri-selection-selected = Đã chọn { $summary }
 
-tri-type-open-surface = Mặt hở
-tri-type-solid-closed = Khối đặc – khép kín hoàn toàn
+tri-type-open-surface = Mặt
+tri-type-solid-closed = Khối đặc
 
 # Các thành phần tóm tắt lựa chọn, ví dụ: "3 đường đa tuyến, 1 điểm".
 tri-count-polylines =

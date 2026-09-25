@@ -90,8 +90,8 @@ tri-create-run = Tatua (Triangulate)
 
 tri-selection-selected = { $summary } vimechaguliwa
 
-tri-type-open-surface = Uso wazi
-tri-type-solid-closed = Kigumu – kimefungwa kabisa
+tri-type-open-surface = Uso
+tri-type-solid-closed = Kigumu
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". Each noun is pluralised
 # by its own count so languages with more than two plural forms read correctly.

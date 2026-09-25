@@ -99,8 +99,8 @@ tri-create-run = Triangola
 
 tri-selection-selected = { $summary } selezionati
 
-tri-type-open-surface = Superficie aperta
-tri-type-solid-closed = Solido – completamente chiuso
+tri-type-open-surface = Superficie
+tri-type-solid-closed = Solido
 
 # Elementi del riepilogo della selezione, ad es. "3 polilinee, 1 punto". Ogni
 # sostantivo viene messo al plurale in base al proprio conteggio, così le

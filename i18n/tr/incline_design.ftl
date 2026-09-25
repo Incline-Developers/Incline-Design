@@ -98,8 +98,8 @@ tri-create-run = Üçgenle
 
 tri-selection-selected = { $summary } seçildi
 
-tri-type-open-surface = Açık yüzey
-tri-type-solid-closed = Katı – tamamen kapalı
+tri-type-open-surface = Yüzey
+tri-type-solid-closed = Katı
 
 # Seçim özeti parçaları, örn. "3 çizgi, 1 nokta". Her ad kendi sayısına göre
 # çoğullaştırılır; böylece ikiden fazla çoğul biçimi olan diller de doğru okunur.

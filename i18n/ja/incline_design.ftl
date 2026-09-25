@@ -99,8 +99,8 @@ tri-create-run = 三角網化
 
 tri-selection-selected = { $summary }を選択中
 
-tri-type-open-surface = 開いた曲面
-tri-type-solid-closed = ソリッド（完全閉合）
+tri-type-open-surface = 曲面
+tri-type-solid-closed = ソリッド
 
 # 選択サマリーの各要素、例:「ポリライン3本、点1個」。日本語には文法的な
 # 複数形がないため、count に関わらず単一の表現を使用します。

@@ -94,8 +94,8 @@ tri-create-run = Triangulacja
 
 tri-selection-selected = Wybrano: { $summary }
 
-tri-type-open-surface = Powierzchnia otwarta
-tri-type-solid-closed = Bryła – w pełni zamknięta
+tri-type-open-surface = Powierzchnia
+tri-type-solid-closed = Bryła
 
 tri-count-polylines =
     { $count ->

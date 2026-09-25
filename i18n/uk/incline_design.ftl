@@ -96,8 +96,8 @@ tri-create-run = Тріангулювати
 
 tri-selection-selected = Вибрано: { $summary }
 
-tri-type-open-surface = Відкрита поверхня
-tri-type-solid-closed = Тіло — повністю замкнене
+tri-type-open-surface = Поверхня
+tri-type-solid-closed = Тіло
 
 tri-count-polylines =
     { $count ->

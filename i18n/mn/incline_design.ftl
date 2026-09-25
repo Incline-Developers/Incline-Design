@@ -98,8 +98,8 @@ tri-create-run = Триангуляц хийх
 
 tri-selection-selected = { $summary } сонгогдсон
 
-tri-type-open-surface = Задгай гадаргуу
-tri-type-solid-closed = Хатуу бие – бүрэн хаалттай
+tri-type-open-surface = Гадаргуу
+tri-type-solid-closed = Хатуу бие
 
 # Сонголтын тоймын хэсгүүд, ж: "3 полилиниа, 1 цэг". Нэр үг бүр өөрийн
 # тоогоор олонлогжсон тул хоёроос олон олонлогийн хэлбэртэй хэлүүдэд ч
