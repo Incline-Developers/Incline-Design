@@ -6,6 +6,8 @@ use crate::{
     pqarray::PqArrayReader,
 };
 
+use rayon::prelude::*;
+
 use super::{super::Reader, schemas};
 
 impl<R: ReadAt> Reader<R> {
@@ -285,6 +287,33 @@ impl<R: ReadAt> Reader<R> {
                 Indices::new(reader.iter_nullable_column("index")?, array.constraint())
             }
         })
+    }
+
+    /// Read an [`array_type::Index`](crate::array_type::Index) array into a single
+    /// vector, checking the indices as [`Self::array_indices`] does.
+    pub fn array_indices_vec(
+        &self,
+        array: &Array<array_type::Index>,
+    ) -> Result<Vec<Option<u32>>, Error> {
+        let reader = self.array_reader(array)?;
+        let schemas::Index::U32 = schemas::Index::check(&reader)?;
+        let &crate::array::Constraint::Index(category_count) = array.constraint() else {
+            panic!("invalid constraint");
+        };
+        let indices = reader.read_nullable_column::<u32>("index")?;
+        if let Some(index) = indices
+            .par_iter()
+            .flatten()
+            .map(|index| u64::from(*index))
+            .find_any(|index| *index >= category_count)
+        {
+            return Err(InvalidData::IndexOutOfRange {
+                value: index,
+                maximum: category_count.saturating_add(1),
+            }
+            .into());
+        }
+        Ok(indices)
     }
 
     /// Read an [`array_type::Vector`](crate::array_type::Vector) array.

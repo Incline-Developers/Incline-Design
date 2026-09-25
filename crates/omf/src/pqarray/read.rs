@@ -551,16 +551,37 @@ impl<R: ChunkReader + 'static> PqArrayReader<R> {
     where
         P: PqArrayType + Copy + Send + Sync,
     {
+        self.read_nullable_paths(
+            field_names.map(|name| ColumnPath::new(vec![group_name.to_owned(), name.to_owned()])),
+        )
+    }
+
+    /// Read one nullable column into a single vector.
+    ///
+    /// The bulk counterpart of [`Self::iter_nullable_column`], parallel over row groups
+    /// like [`Self::read_multi_column`].
+    pub fn read_nullable_column<P>(&self, name: &str) -> Result<Vec<Option<P>>, Error>
+    where
+        P: PqArrayType + Copy + Send + Sync,
+    {
+        Ok(self
+            .read_nullable_paths::<P, 1>([ColumnPath::new(vec![name.to_owned()])])?
+            .into_par_iter()
+            .map(|row| row.map(|[value]| value))
+            .collect())
+    }
+
+    fn read_nullable_paths<P, const N: usize>(
+        &self,
+        paths: [ColumnPath; N],
+    ) -> Result<Vec<Option<[P; N]>>, Error>
+    where
+        P: PqArrayType + Copy + Send + Sync,
+    {
         let metadata = self.file_reader.metadata();
-        let infos: [Info; N] = field_names
-            .iter()
-            .map(|name| {
-                check::<P>(
-                    metadata,
-                    ColumnPath::new(vec![group_name.to_owned(), (*name).to_owned()]),
-                    true,
-                )
-            })
+        let infos: [Info; N] = paths
+            .into_iter()
+            .map(|path| check::<P>(metadata, path, true))
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .expect("correct length");

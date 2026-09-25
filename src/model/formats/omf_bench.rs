@@ -7,6 +7,9 @@
 //!
 //! `OMF_BENCH_PHASES` is a comma list of `write`, `open`, `materialize`,
 //! `resave`, `evict` (default: all). `OMF_BENCH_SCALE` multiplies the item sizes.
+//!
+//! `omf_file_round_trip_benchmark` runs the same phases (bar `materialize`)
+//! on a real archive named by `OMF_BENCH_FILE`.
 
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
@@ -493,6 +496,123 @@ fn omf_open_file_benchmark() {
             }
         }
         eprintln!("{summary}");
+    }
+}
+
+/// Resident open items for everything `bundle` decoded eagerly. With
+/// `passthrough`, surfaces and clouds keep the element they were read from, so
+/// a save copies them rather than re-encoding.
+fn file_snapshot(bundle: ImportBundle, passthrough: bool) -> ProjectSnapshot {
+    let mut snapshot = ProjectSnapshot {
+        name: bundle.project_name,
+        designs: bundle.designs.into_iter().next(),
+        folders: bundle.folders,
+        ..Default::default()
+    };
+    for (index, imported) in bundle.triangulations.into_iter().filter(|item| item.deferred.is_none()).enumerate() {
+        let loaded = imported.loaded;
+        let mut item = OpenTriangulation {
+            id: TriangulationId(index as u64 + 1),
+            state: ProjectItemState::dirty(MemberKind::Triangulation, None),
+            name: loaded.name,
+            mesh: loaded.mesh,
+            spatial: loaded.spatial,
+            edges: loaded.edges,
+            surface_face_order: loaded.surface_face_order,
+            color: imported.color,
+            line_color: imported.line_color,
+            line_weight: imported.line_weight,
+            raster_texture: None,
+            raster_opacity: imported.raster_opacity,
+        };
+        if passthrough {
+            item.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, &item);
+        }
+        snapshot.triangulations.push(item);
+    }
+    for (index, imported) in bundle.point_clouds.into_iter().filter(|item| item.deferred.is_none()).enumerate() {
+        let loaded = imported.loaded;
+        let mut item = OpenPointCloud {
+            id: PointCloudId(index as u64 + 1),
+            state: ProjectItemState::dirty(MemberKind::PointCloud, None),
+            name: loaded.name,
+            points: loaded.points,
+            colors: loaded.colors,
+            classifications: loaded.classifications,
+            prepared: loaded.prepared,
+            bounds: loaded.bounds,
+            color: imported.color,
+            point_size: imported.point_size,
+        };
+        if passthrough {
+            item.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, &item);
+        }
+        snapshot.point_clouds.push(item);
+    }
+    for (index, imported) in bundle.rasters.into_iter().filter(|item| item.deferred.is_none()).enumerate() {
+        let loaded = imported.loaded;
+        let mut item = OpenRasterTexture {
+            id: RasterTextureId(index as u64 + 1),
+            state: ProjectItemState::dirty(MemberKind::Raster, None),
+            name: loaded.name,
+            source_size: loaded.source_size,
+            preview_size: loaded.preview_size,
+            full_rgba: loaded.full_rgba,
+            rgba: loaded.rgba,
+            world_to_uv: loaded.world_to_uv,
+            projection: loaded.projection,
+            driver_name: loaded.driver_name,
+        };
+        if passthrough {
+            item.state.payload_source = PayloadSource::for_raster(imported.payload_source, &item);
+        }
+        snapshot.rasters.push(item);
+    }
+    snapshot
+}
+
+/// A real archive (`OMF_BENCH_FILE`) through the same phases as
+/// [`omf_round_trip_benchmark`]: `open`, `write` (re-encode everything),
+/// `resave` (unchanged surfaces and clouds copied) and `evict`.
+#[test]
+#[ignore = "profiling harness; run explicitly"]
+fn omf_file_round_trip_benchmark() {
+    let path = std::env::var("OMF_BENCH_FILE").expect("OMF_BENCH_FILE");
+    let phases = std::env::var("OMF_BENCH_PHASES").unwrap_or_else(|_| "open,write,resave,evict".to_owned());
+    let enabled = |phase: &str| phases.split(',').any(|name| name.trim() == phase);
+    let repeat = std::env::var("OMF_BENCH_REPEAT").ok().and_then(|value| value.parse().ok()).unwrap_or(1usize);
+    let bytes = std::fs::read(&path).unwrap();
+    let progress = Progress::new();
+    let phase = progress.phase(0.0, 1.0);
+    let open = || from_bytes("file.omf", bytes.clone(), &phase).unwrap();
+    for _ in 0..repeat {
+        if enabled("open") {
+            timed("file: open", open);
+        }
+        if enabled("write") {
+            let snapshot = file_snapshot(open(), false);
+            let written = timed("file: write (re-encode)", || to_bytes(snapshot, Compression::Archive, &phase).unwrap());
+            eprintln!("file: write size                   {:>9.1} MB", written.len() as f64 / 1e6);
+        }
+        if enabled("resave") {
+            let snapshot = file_snapshot(open(), true);
+            timed("file: resave (copy unchanged)", || to_bytes(snapshot, Compression::Archive, &phase).unwrap());
+        }
+        if enabled("evict") {
+            let snapshot = file_snapshot(open(), true);
+            let items = snapshot
+                .triangulations
+                .into_iter()
+                .map(|item| OpenItem::Triangulation(Box::new(item)))
+                .chain(snapshot.point_clouds.into_iter().map(|item| OpenItem::PointCloud(Box::new(item))))
+                .chain(snapshot.rasters.into_iter().map(|item| OpenItem::Raster(Box::new(item))))
+                .collect::<Vec<_>>();
+            timed("file: evict (scratch)", || {
+                for item in items {
+                    item.evict(&phase).unwrap();
+                }
+            });
+        }
     }
 }
 

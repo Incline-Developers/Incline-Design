@@ -232,6 +232,7 @@ impl<'a> App<'a> {
                     .with_deferred(imported.deferred)
                     .with_section(imported.section)
                     .with_folder(folder);
+                open.state.payload_source = PayloadSource::for_raster(imported.payload_source, open);
             }
             if let Some(preferred_id) = preferred_id {
                 raster_id_map.insert(preferred_id, crate::model::raster::RasterTextureId(target_id));
@@ -544,6 +545,7 @@ impl<'a> App<'a> {
                 if let Some(open) = self.raster_textures.last_mut() {
                     open.state.set_provenance(raster.source_name, raster.source_format);
                     open.state = open.state.clone().with_loaded(visible).with_deferred(deferred).with_section(section).with_folder(folder);
+                    open.state.payload_source = PayloadSource::for_raster(raster.payload_source, open);
                     if let Some(preferred_id) = preferred_id {
                         raster_id_map.insert(preferred_id, open.id);
                     }

@@ -209,6 +209,8 @@ pub(crate) struct ImportedRaster {
     pub(crate) loaded: LoadedRasterTexture,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
+    /// The archive element the image was read from; see [`PayloadSource`].
+    pub(crate) payload_source: Option<DeferredAsset>,
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
@@ -389,15 +391,23 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         progress.set_items(complete, total);
     }
     for raster in &snapshot.rasters {
-        let restored;
-        let raster = if raster.state.deferred.is_some() {
-            restored = crate::model::OpenItem::Raster(Box::new(raster.clone())).materialize()?;
-            let crate::model::OpenItem::Raster(item) = &restored else { unreachable!() };
-            item.as_ref()
-        } else {
-            raster
+        let copied = match sources.unchanged(&raster.state, &PayloadIdentity::raster(raster)) {
+            Some((reader, element)) => copy_raster_image(&mut writer, reader, element)?,
+            None => None,
         };
-        let mut element = write_raster(&mut writer, raster)?;
+        let mut element = match copied {
+            Some(image) => write_raster(&mut writer, raster, image)?,
+            None if raster.state.deferred.is_some() => {
+                let restored = crate::model::OpenItem::Raster(Box::new(raster.clone())).materialize()?;
+                let crate::model::OpenItem::Raster(item) = &restored else { unreachable!() };
+                let image = writer.image_bytes(&encode_png(item.source_size, &item.full_rgba)?)?;
+                write_raster(&mut writer, item, image)?
+            }
+            None => {
+                let image = writer.image_bytes(&encode_png(raster.source_size, &raster.full_rgba)?)?;
+                write_raster(&mut writer, raster, image)?
+            }
+        };
         tag_folder(&mut element, &snapshot.folders, raster.state.section, raster.state.folder);
         tag_section(&mut element, MemberKind::Raster, raster.state.section);
         elements.push(element);
@@ -829,7 +839,11 @@ fn point_cloud_element(cloud: &OpenPointCloud, geometry: omf_crate::Geometry, at
 fn write_point_classification<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, codes: &[u8]) -> Result<omf_crate::Attribute> {
     use crate::model::point_cloud::{classification_color, classification_name};
 
-    let used: Vec<u8> = codes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut seen = [false; 256];
+    for code in codes {
+        seen[usize::from(*code)] = true;
+    }
+    let used: Vec<u8> = (0..=u8::MAX).filter(|code| seen[usize::from(*code)]).collect();
     let mut lookup = [0u32; 256];
     for (index, code) in used.iter().enumerate() {
         lookup[usize::from(*code)] = index as u32;
@@ -1234,7 +1248,13 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     Ok(Some(element))
 }
 
-fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, raster: &OpenRasterTexture) -> Result<omf_crate::Element> {
+/// `image` is the raster's pixels already in the archive, encoded afresh or
+/// copied; everything else is written here.
+fn write_raster<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    raster: &OpenRasterTexture,
+    image: omf_crate::Array<omf_crate::array_type::Image>,
+) -> Result<omf_crate::Element> {
     let [a, b, c, d, e, f] = raster.world_to_uv;
     let determinant = a * e - b * d;
     if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
@@ -1256,10 +1276,9 @@ fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             writer.array_triangles([[0, 1, 2], [0, 2, 3]])?,
         ),
     );
-    let png = encode_png(raster.source_size, &raster.full_rgba)?;
     element.attributes.push(omf_crate::Attribute::from_texture_map(
         "Raster",
-        writer.image_bytes(&png)?,
+        image,
         omf_crate::Location::Vertices,
         writer.array_texcoords([[0.0_f64, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])?,
     ));
@@ -1296,6 +1315,10 @@ fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>> {
         let mut encoder = png::Encoder::new(&mut bytes, size[0], size[1]);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        // fdeflate's PNG-tuned mode. On an 8000x8333 orthophoto the default
+        // (Balanced) took 4.9s for a file only 3% smaller, and the result also
+        // decodes slower.
+        encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header()?;
         writer.write_image_data(rgba)?;
     }
@@ -1424,6 +1447,14 @@ impl PayloadSource {
         })
     }
 
+    /// Record `asset` as the source of `item`'s payload as it stands now.
+    pub(crate) fn for_raster(asset: Option<DeferredAsset>, item: &OpenRasterTexture) -> Option<Self> {
+        Some(Self {
+            asset: asset?,
+            resident: item.state.deferred.is_none().then(|| PayloadIdentity::raster(item)),
+        })
+    }
+
     /// The archive element that still holds exactly the payload `current`
     /// names, if there is one.
     fn unchanged(&self, deferred: bool, current: &PayloadIdentity) -> Option<&DeferredAsset> {
@@ -1458,6 +1489,7 @@ pub(crate) enum PayloadIdentity {
         colors: Option<std::sync::Weak<Vec<u32>>>,
         classifications: Option<std::sync::Weak<Vec<u8>>>,
     },
+    Raster(std::sync::Weak<Vec<u8>>),
 }
 
 impl PayloadIdentity {
@@ -1471,6 +1503,10 @@ impl PayloadIdentity {
             colors: item.colors.as_ref().map(Arc::downgrade),
             classifications: item.classifications.as_ref().map(Arc::downgrade),
         }
+    }
+
+    pub(crate) fn raster(item: &OpenRasterTexture) -> Self {
+        Self::Raster(Arc::downgrade(&item.full_rgba))
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -1495,6 +1531,7 @@ impl PayloadIdentity {
                     classifications: b_classes,
                 },
             ) => a.ptr_eq(b) && same_optional(a_colors, b_colors) && same_optional(a_classes, b_classes),
+            (Self::Raster(a), Self::Raster(b)) => a.ptr_eq(b),
             _ => false,
         }
     }
@@ -1560,6 +1597,27 @@ impl SourceArchives {
         }
         Some((reader, element))
     }
+}
+
+/// Copy an unchanged raster's image from the element it was read from, the
+/// one array worth copying: re-encoding a large orthophoto costs far more than
+/// the rest of a save. `None` when the element is not in the shape
+/// [`write_raster`] produces.
+fn copy_raster_image<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    reader: &SourceReader,
+    element: &omf_crate::Element,
+) -> Result<Option<omf_crate::Array<omf_crate::array_type::Image>>> {
+    if kind(element) != Some("raster") {
+        return Ok(None);
+    }
+    let [attribute] = element.attributes.as_slice() else {
+        return Ok(None);
+    };
+    let omf_crate::AttributeData::MappedTexture { image, .. } = &attribute.data else {
+        return Ok(None);
+    };
+    Ok(Some(writer.array_copy(reader, image)?))
 }
 
 /// Copy an unchanged triangulation's arrays from the element it was read
@@ -1900,6 +1958,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 source_name,
                 source_format,
                 is_loaded: false,
+                payload_source: Some(locator.clone()),
                 deferred: Some((locator, AssetSummary::default())),
                 folder,
                 section,
@@ -2683,13 +2742,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if codes.len() != category_count {
             return Ok(None);
         }
-        let values = collect_results(self.reader.array_indices(values)?)?;
+        ensure_items(values.item_count(), "classifications")?;
+        let values = self.reader.array_indices_vec(values)?;
         if values.len() != point_count {
             return Ok(None);
         }
         Ok(Some(
             values
-                .into_iter()
+                .into_par_iter()
                 .map(|value| {
                     value
                         .and_then(|index| codes.get(index as usize).copied())
@@ -3114,7 +3174,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 _ => continue,
             };
-            let decoded = self.reader.image(image).with_context(|| format!("decode texture '{}'", attribute.name))?.to_rgba8();
+            let decoded = self.reader.image(image).with_context(|| format!("decode texture '{}'", attribute.name))?.into_rgba8();
             let size = [decoded.width(), decoded.height()];
             let style = element.metadata.get(META_STYLE);
             let world_to_uv = style
@@ -3168,11 +3228,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             } else {
                 Arc::new(crate::model::raster::downscale_rgba(&full_rgba, size, preview_size)?)
             };
+            // Only an element this app wrote holds exactly `full_rgba` in the
+            // layout a save would give it; see `copy_raster_image`.
+            let payload_source = if kind(element) == Some("raster") { self.payload_locator() } else { None };
             self.bundle.rasters.push(ImportedRaster {
                 preferred_id: element_id(element),
                 source_name: element_source_name(element),
                 source_format: element_source_format(element),
                 deferred: None,
+                payload_source,
                 is_loaded: style_loaded(style),
                 loaded: LoadedRasterTexture {
                     name: if attribute.name == "Raster" {

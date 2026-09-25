@@ -64,7 +64,8 @@ impl OpenItem {
         match self {
             Self::Triangulation(item) => Some(omf::PayloadIdentity::triangulation(item)),
             Self::PointCloud(item) => Some(omf::PayloadIdentity::point_cloud(item)),
-            Self::BlockModel(_) | Self::DrillHole(_) | Self::Raster(_) => None,
+            Self::Raster(item) => Some(omf::PayloadIdentity::raster(item)),
+            Self::BlockModel(_) | Self::DrillHole(_) => None,
         }
     }
 
