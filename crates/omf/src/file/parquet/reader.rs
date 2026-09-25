@@ -329,6 +329,22 @@ impl<R: ReadAt> Reader<R> {
             }
         })
     }
+
+    /// Read an [`array_type::Color`](crate::array_type::Color) array into a single vector.
+    ///
+    /// Equivalent to collecting [`Self::array_colors`], but decoded in bulk with row
+    /// groups in parallel, like [`Self::array_vertices_vec`].
+    pub fn array_colors_vec(
+        &self,
+        array: &Array<array_type::Color>,
+    ) -> Result<Vec<Option<[u8; 4]>>, Error> {
+        let reader = self.array_reader(array)?;
+        Ok(match schemas::Color::check(&reader)? {
+            schemas::Color::Rgba8 => {
+                reader.read_nullable_group_column::<u8, 4>("color", ["r", "g", "b", "a"])?
+            }
+        })
+    }
 }
 
 /// The bulk counterpart of the per-item range check in

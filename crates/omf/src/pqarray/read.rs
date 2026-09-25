@@ -538,6 +538,107 @@ impl<R: ChunkReader + 'static> PqArrayReader<R> {
         Ok(())
     }
 
+    /// Read a nullable group of `N` columns of one type into a single vector.
+    ///
+    /// The bulk counterpart of [`Self::iter_nullable_group_column`], parallel over row
+    /// groups like [`Self::read_multi_column`]. As there, a row is null when any of its
+    /// fields is.
+    pub fn read_nullable_group_column<P, const N: usize>(
+        &self,
+        group_name: &str,
+        field_names: [&str; N],
+    ) -> Result<Vec<Option<[P; N]>>, Error>
+    where
+        P: PqArrayType + Copy + Send + Sync,
+    {
+        let metadata = self.file_reader.metadata();
+        let infos: [Info; N] = field_names
+            .iter()
+            .map(|name| {
+                check::<P>(
+                    metadata,
+                    ColumnPath::new(vec![group_name.to_owned(), (*name).to_owned()]),
+                    true,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .expect("correct length");
+
+        let counts: Vec<usize> = (0..metadata.num_row_groups())
+            .map(|group| metadata.row_group(group).num_rows().try_into().unwrap_or(0))
+            .collect();
+        let mut rows = vec![Some([P::default(); N]); counts.iter().sum()];
+
+        let mut groups = Vec::with_capacity(counts.len());
+        let mut rest = rows.as_mut_slice();
+        for count in &counts {
+            let (head, tail) = rest.split_at_mut(*count);
+            groups.push(head);
+            rest = tail;
+        }
+
+        groups
+            .into_par_iter()
+            .enumerate()
+            .try_for_each(|(group, slice)| self.read_nullable_row_group(group, &infos, slice))?;
+        Ok(rows)
+    }
+
+    fn read_nullable_row_group<P, const N: usize>(
+        &self,
+        group: usize,
+        infos: &[Info; N],
+        rows: &mut [Option<[P; N]>],
+    ) -> Result<(), Error>
+    where
+        P: PqArrayType + Copy,
+    {
+        let reader = self.file_reader.get_row_group(group)?;
+        let mut values: Vec<<P::DataType as DataType>::T> = Vec::with_capacity(CHUNK_SIZE);
+        let mut def_levels: Vec<i16> = Vec::with_capacity(CHUNK_SIZE);
+        for (lane, info) in infos.iter().enumerate() {
+            let column = reader.get_column_reader(info.column_index)?;
+            let mut column =
+                P::DataType::get_column_reader(column).expect("matching column reader type");
+            let mut filled = 0;
+            while filled < rows.len() {
+                values.clear();
+                def_levels.clear();
+                column.read_records(
+                    CHUNK_SIZE.min(rows.len() - filled),
+                    Some(&mut def_levels),
+                    None,
+                    &mut values,
+                )?;
+                if def_levels.is_empty() {
+                    break;
+                }
+                let mut values = values.drain(..);
+                for (row, &level) in rows[filled..].iter_mut().zip(&def_levels) {
+                    if level == 0 {
+                        *row = None;
+                    } else {
+                        let value = values.next().ok_or_else(|| {
+                            invalid("Parquet column has fewer values than levels")
+                        })?;
+                        if let Some(row) = row {
+                            row[lane] = P::from_parquet(value, &info.logical_type);
+                        }
+                    }
+                    filled += 1;
+                }
+            }
+            if filled != rows.len() {
+                return Err(invalid(format!(
+                    "Parquet column ended after {filled} of {} rows",
+                    rows.len()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn iter_nullable_group_column<P: PqArrayType, const N: usize>(
         &self,
         group_name: &str,

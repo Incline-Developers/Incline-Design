@@ -53,7 +53,7 @@ impl OpenItem {
         }
         let bytes = omf::to_bytes(snapshot, omf::Compression::Scratch, progress)?;
         let backing = Backing::write(&bytes)?;
-        self.state_mut().deferred = Some(DeferredAsset { backing, element_path: vec![0] });
+        self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
         self.release_payload();
         Ok(self)
     }

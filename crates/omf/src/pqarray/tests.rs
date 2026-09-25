@@ -372,3 +372,26 @@ fn parquet_array_date_time() {
         values
     );
 }
+
+#[test]
+fn parquet_array_nullable_group_bulk_matches_iterator() {
+    let values: Vec<Option<[u8; 4]>> = (0..20_u8)
+        .map(|i| (i % 3 != 1).then_some([i, i.wrapping_mul(7), 255 - i, 128]))
+        .collect();
+    let mut writer = PqArrayWriter::new(PqWriteOptions {
+        row_group_size: 3,
+        ..Default::default()
+    });
+    writer
+        .add_nullable_group("color", &["r", "g", "b", "a"], values.clone())
+        .unwrap();
+    let reader = write_read(writer);
+    let bulk = reader
+        .read_nullable_group_column::<u8, 4>("color", ["r", "g", "b", "a"])
+        .unwrap();
+    assert_eq!(bulk, values);
+    assert_eq!(
+        read_nullable_group_column::<u8, 4>(&reader, "color", ["r", "g", "b", "a"]),
+        values
+    );
+}
