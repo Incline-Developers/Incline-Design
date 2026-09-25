@@ -599,7 +599,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, &[]);
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Building ore mesh…"),

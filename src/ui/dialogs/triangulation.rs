@@ -512,6 +512,11 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 .width(width)
                 .hint_text(tr!(literal = "e.g. mysurf_cut"))
                 .show(ui);
+            MenuFieldBool::new(tr!(literal = "Unload source surface"), &mut editor.tri_cut_poly_unload_source)
+                .help_text(tr!(
+                    literal = "Once the clip succeeds, unload the source surface so only the clipped result stays in the scene."
+                ))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -528,6 +533,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                         polyline_id: poly_id,
                         mode: editor.tri_cut_poly_mode,
                         name: editor.tri_cut_poly_name_input.trim().to_owned(),
+                        unload_source: editor.tri_cut_poly_unload_source,
                     });
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -599,6 +605,11 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 .width(width)
                 .hint_text(tr!(literal = "e.g. mysurf_slice"))
                 .show(ui);
+            MenuFieldBool::new(tr!(literal = "Unload source surface"), &mut editor.tri_cut_z_unload_source)
+                .help_text(tr!(
+                    literal = "Once the slice succeeds, unload the source surface so only the sliced result stays in the scene."
+                ))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -618,6 +629,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         z_min,
                         z_max,
                         name: editor.tri_cut_z_name_input.trim().to_owned(),
+                        unload_source: editor.tri_cut_z_unload_source,
                     });
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -742,6 +754,11 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             {
                 editor.tri_cut_surface_name_auto = false;
             }
+            MenuFieldBool::new(tr!(literal = "Unload source surface"), &mut editor.tri_cut_surface_unload_source)
+                .help_text(tr!(
+                    literal = "Once the trim succeeds, unload the surface that was trimmed so only the result stays in the scene. The topology stays loaded."
+                ))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -760,6 +777,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         reference_id,
                         side: editor.tri_cut_surface_side,
                         name: editor.tri_cut_surface_name_input.trim().to_owned(),
+                        unload_source: editor.tri_cut_surface_unload_source,
                     });
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -863,6 +881,11 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             {
                 editor.tri_cut_pitshell_name_auto = false;
             }
+            MenuFieldBool::new(tr!(literal = "Unload source topology"), &mut editor.tri_cut_pitshell_unload_source)
+                .help_text(tr!(
+                    literal = "Once the cut succeeds, unload the original topology so only the cut result stays in the scene. The pit shell stays loaded."
+                ))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -878,6 +901,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
                         topology_id,
                         pit_shell_id,
                         name: editor.tri_cut_pitshell_name_input.trim().to_owned(),
+                        unload_source: editor.tri_cut_pitshell_unload_source,
                     });
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {

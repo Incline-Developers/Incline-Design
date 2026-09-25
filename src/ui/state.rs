@@ -1605,6 +1605,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_poly_object_name: String,
     pub(crate) tri_cut_poly_mode: TriPolylineClipMode,
     pub(crate) tri_cut_poly_name_input: String,
+    pub(crate) tri_cut_poly_unload_source: bool,
 
     // Cut Triangulation by Z Range
     pub(crate) tri_cut_z_open: bool,
@@ -1612,6 +1613,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_z_min_input: f64,
     pub(crate) tri_cut_z_max_input: f64,
     pub(crate) tri_cut_z_name_input: String,
+    pub(crate) tri_cut_z_unload_source: bool,
 
     // Trim Surface to Topology
     pub(crate) tri_cut_surface_open: bool,
@@ -1620,6 +1622,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_surface_side: TriSurfaceCutSide,
     pub(crate) tri_cut_surface_name_input: String,
     pub(crate) tri_cut_surface_name_auto: bool,
+    pub(crate) tri_cut_surface_unload_source: bool,
 
     // Cut Topology to Pit Shell
     pub(crate) tri_cut_pitshell_open: bool,
@@ -1627,6 +1630,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_pitshell_pitshell_id: Option<TriangulationId>,
     pub(crate) tri_cut_pitshell_name_input: String,
     pub(crate) tri_cut_pitshell_name_auto: bool,
+    pub(crate) tri_cut_pitshell_unload_source: bool,
 
     // Include Pit/Stockpile Solid in Topology
     pub(crate) tri_include_solid_open: bool,
@@ -2568,22 +2572,26 @@ impl EditorState {
             tri_cut_poly_object_name: String::new(),
             tri_cut_poly_mode: TriPolylineClipMode::KeepInside,
             tri_cut_poly_name_input: String::new(),
+            tri_cut_poly_unload_source: true,
             tri_cut_z_open: false,
             tri_cut_z_tri_id: None,
             tri_cut_z_min_input: 0.0,
             tri_cut_z_max_input: 100.0,
             tri_cut_z_name_input: String::new(),
+            tri_cut_z_unload_source: true,
             tri_cut_surface_open: false,
             tri_cut_surface_target_id: None,
             tri_cut_surface_reference_id: None,
             tri_cut_surface_side: TriSurfaceCutSide::CutTop,
             tri_cut_surface_name_input: String::new(),
             tri_cut_surface_name_auto: true,
+            tri_cut_surface_unload_source: true,
             tri_cut_pitshell_open: false,
             tri_cut_pitshell_topology_id: None,
             tri_cut_pitshell_pitshell_id: None,
             tri_cut_pitshell_name_input: String::new(),
             tri_cut_pitshell_name_auto: true,
+            tri_cut_pitshell_unload_source: true,
             tri_include_solid_open: false,
             tri_include_solid_topology_id: None,
             tri_include_solid_shape_id: None,
@@ -3465,6 +3473,8 @@ pub(crate) enum UiCommand {
         polyline_id: ObjectId,
         mode: TriPolylineClipMode,
         name: String,
+        /// Unload the source surface once the clip lands.
+        unload_source: bool,
     },
     /// Open the "Cut Triangulation by Z Range" dialog.
     OpenCutTriangulationByZ,
@@ -3474,6 +3484,8 @@ pub(crate) enum UiCommand {
         z_min: f64,
         z_max: f64,
         name: String,
+        /// Unload the source surface once the slice lands.
+        unload_source: bool,
     },
     /// Open the "Trim to Topology" dialog.
     OpenCutTriangulationBySurface,
@@ -3483,6 +3495,8 @@ pub(crate) enum UiCommand {
         reference_id: TriangulationId,
         side: TriSurfaceCutSide,
         name: String,
+        /// Unload the trimmed surface's source once the trim lands; the topology stays.
+        unload_source: bool,
     },
     /// Open the "Cut Topology to Pit Shell" dialog.
     OpenCutTopologyByPitShell,
@@ -3491,6 +3505,8 @@ pub(crate) enum UiCommand {
         topology_id: TriangulationId,
         pit_shell_id: TriangulationId,
         name: String,
+        /// Unload the source topology once the cut lands; the pit shell stays for the merge.
+        unload_source: bool,
     },
     /// Open the "Include Pit/Stockpile Solid" dialog.
     OpenIncludeSolidInTopology,

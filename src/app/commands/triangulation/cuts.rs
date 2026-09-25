@@ -4,7 +4,14 @@ use crate::model::geometry::{clip_polyline_by_xy_edge, signed_area_xy, triangle_
 impl<'a> App<'a> {
     /// Cut the triangulation, clipping each triangle against the XY polyline boundary
     /// using Sutherland-Hodgman. Produces smooth edges instead of centroid-based jagged cuts.
-    pub(crate) fn cut_triangulation_by_polyline(&mut self, tri_id: TriangulationId, polyline_id: ObjectId, mode: TriPolylineClipMode, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_polyline(
+        &mut self,
+        tri_id: TriangulationId,
+        polyline_id: ObjectId,
+        mode: TriPolylineClipMode,
+        name: String,
+        unload_source: bool,
+    ) -> Result<()> {
         let (mesh, tri_name) = {
             let tri = self
                 .triangulations
@@ -45,7 +52,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Clipping surface by polyline…"),
@@ -61,7 +68,7 @@ impl<'a> App<'a> {
     /// not a fixed design polyline. Topology under parts of the shell that float above the
     /// ground is kept. The pit shell mesh may be multi-valued in XY (walls, benches) or a
     /// watertight closed solid; its flat crest cap never forces removal on its own.
-    pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String) -> Result<()> {
+    pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String, unload_source: bool) -> Result<()> {
         if topology_id == pit_shell_id {
             anyhow::bail!("Topology and pit shell must be different triangulations");
         }
@@ -107,7 +114,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(topology_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Cutting topology by pit shell…"),
@@ -120,7 +127,7 @@ impl<'a> App<'a> {
 
     /// Cut the triangulation to the Z band [z_min, z_max], clipping triangles
     /// that straddle the boundary planes.
-    pub(crate) fn cut_triangulation_by_z(&mut self, tri_id: TriangulationId, z_min: f64, z_max: f64, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_z(&mut self, tri_id: TriangulationId, z_min: f64, z_max: f64, name: String, unload_source: bool) -> Result<()> {
         if z_min >= z_max {
             anyhow::bail!("Z min must be less than Z max");
         }
@@ -173,7 +180,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Cutting triangulation by Z…"),
@@ -186,7 +193,14 @@ impl<'a> App<'a> {
 
     /// Vertically clip one triangulation against another topology. Only the XY
     /// overlap with the reference topology is emitted.
-    pub(crate) fn cut_triangulation_by_surface(&mut self, target_id: TriangulationId, reference_id: TriangulationId, side: TriSurfaceCutSide, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_surface(
+        &mut self,
+        target_id: TriangulationId,
+        reference_id: TriangulationId,
+        side: TriSurfaceCutSide,
+        name: String,
+        unload_source: bool,
+    ) -> Result<()> {
         if target_id == reference_id {
             anyhow::bail!("Surface to trim and topology must be different triangulations");
         }
@@ -229,7 +243,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(target_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Trimming surface to topology…"),
