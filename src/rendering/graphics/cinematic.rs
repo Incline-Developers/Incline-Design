@@ -290,6 +290,7 @@ impl<'a> Graphics<'a> {
             device,
             &scene_pipelines::ScenePipelineLayouts {
                 camera: &scene_camera_layout,
+                document_style: &self.document_style.layout,
                 grid: &self.scene_pipelines.grid_render_pipeline.get_bind_group_layout(1),
                 surface_style: &self.surface_style_bind_group_layout,
                 surface_chunk: &self.surface_chunk_bind_group_layout,

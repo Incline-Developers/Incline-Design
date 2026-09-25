@@ -5,9 +5,8 @@ use crate::model::point_cloud::POINT_CLOUD_LOD_LEVELS;
 
 /// See [`Graphics::chunk_bounds_outline`].
 pub(crate) struct ChunkBoundsOutline {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    instance_buffer: wgpu::Buffer,
+    instance_count: u32,
 }
 
 /// Width, in logical pixels, of the chunk-bounds debug outline.
@@ -179,10 +178,12 @@ fn projected_world_splat_size(view_proj: glam::Mat4, position: glam::Vec3, world
     (right_pixels * up_pixels).sqrt()
 }
 
-fn clamped_document_batch_range(range: (u32, u32), available_indices: usize) -> Option<std::ops::Range<u32>> {
-    let start = (range.0 as usize).min(available_indices);
-    let end = (range.1 as usize).min(available_indices);
-    let end = start + (end.saturating_sub(start) / 3) * 3;
+/// `range` cut to the stream that survived truncation, in whole primitives
+/// of `step` elements (three fill indices, or one stroke instance).
+fn clamped_document_batch_range(range: (u32, u32), available: usize, step: usize) -> Option<std::ops::Range<u32>> {
+    let start = (range.0 as usize).min(available);
+    let end = (range.1 as usize).min(available);
+    let end = start + (end.saturating_sub(start) / step) * step;
     (start < end).then_some(start as u32..end as u32)
 }
 
@@ -347,25 +348,30 @@ impl<'a> Graphics<'a> {
                 };
                 render_pass.set_pipeline(pipeline);
                 render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+                render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
                 match batch.primitive {
                     DocumentPrimitive::Fill => {
                         render_pass.set_vertex_buffer(0, self.lyon_vertex_gpu.slice(..));
                         render_pass.set_index_buffer(self.lyon_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
                     }
                     DocumentPrimitive::Stroke => {
-                        render_pass.set_vertex_buffer(0, self.stroke_vertex_gpu.slice(..));
-                        render_pass.set_index_buffer(self.stroke_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
+                        render_pass.set_vertex_buffer(0, self.stroke_gpu.slice(..));
                     }
                 }
                 bound_primitive = Some(batch.primitive);
             }
 
-            let available = match batch.primitive {
-                DocumentPrimitive::Fill => self.lyon_buffer.indices.len(),
-                DocumentPrimitive::Stroke => self.stroke_index_buf.len(),
-            };
-            if let Some(range) = clamped_document_batch_range(batch.index_range, available) {
-                render_pass.draw_indexed(range, 0, 0..1);
+            match batch.primitive {
+                DocumentPrimitive::Fill => {
+                    if let Some(range) = clamped_document_batch_range(batch.range, self.lyon_buffer.indices.len(), 3) {
+                        render_pass.draw_indexed(range, 0, 0..1);
+                    }
+                }
+                DocumentPrimitive::Stroke => {
+                    if let Some(range) = clamped_document_batch_range(batch.range, self.strokes.len(), 1) {
+                        render_pass.draw(0..6, range);
+                    }
+                }
             }
         }
     }
@@ -382,35 +388,54 @@ impl<'a> Graphics<'a> {
         };
         render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+        render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.text_vertex_gpu.slice(..));
         render_pass.set_index_buffer(self.text_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
         for batch in batches {
-            if let Some(range) = clamped_document_batch_range(batch.index_range, self.text_index_buf.len()) {
+            if let Some(range) = clamped_document_batch_range(batch.index_range, self.text_index_buf.len(), 3) {
                 render_pass.draw_indexed(range, 0, 0..1);
             }
         }
     }
 
     fn draw_static_document_strokes<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>, xray_enabled: bool) {
+        self.draw_static_stroke_chunks(
+            render_pass,
+            if xray_enabled {
+                &self.pipes().overlay_render_pipeline
+            } else {
+                &self.pipes().opaque_stroke_render_pipeline
+            },
+            &self.document_style.all_bind_group,
+        );
+    }
+
+    /// The static chunks' highlighted members again, in the overlay stage:
+    /// the stream draws its highlighted objects there, over translucent
+    /// surfaces and coincident lines, and chunk members must match without
+    /// leaving their chunk. The shader culls every other member.
+    fn draw_static_highlighted_strokes<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>) {
+        if self.document_style.static_highlighted {
+            self.draw_static_stroke_chunks(render_pass, &self.pipes().stroke_render_pipeline, &self.document_style.highlighted_bind_group);
+        }
+    }
+
+    fn draw_static_stroke_chunks<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>, pipeline: &'pass wgpu::RenderPipeline, style: &'pass wgpu::BindGroup) {
         if !self.static_strokes.chunks().iter().any(|chunk| chunk.drawable()) {
             return;
         }
-        render_pass.set_pipeline(if xray_enabled {
-            &self.pipes().overlay_render_pipeline
-        } else {
-            &self.pipes().opaque_stroke_render_pipeline
-        });
+        render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+        render_pass.set_bind_group(1, style, &[]);
         for chunk in self.static_strokes.chunks() {
             if !chunk.drawable() {
                 continue;
             }
-            let (Some(vertex_gpu), Some(index_gpu)) = (&chunk.vertex_gpu, &chunk.index_gpu) else {
+            let Some(instance_gpu) = &chunk.instance_gpu else {
                 continue;
             };
-            render_pass.set_vertex_buffer(0, vertex_gpu.slice(..));
-            render_pass.set_index_buffer(index_gpu.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..chunk.index_count, 0, 0..1);
+            render_pass.set_vertex_buffer(0, instance_gpu.slice(..));
+            render_pass.draw(0..6, 0..chunk.instance_count);
         }
     }
 
@@ -490,18 +515,16 @@ impl<'a> Graphics<'a> {
         if triangulations.is_empty() && point_clouds.is_empty() {
             return;
         }
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        let mut strokes = Vec::new();
         let mut unused_fill_vertices = Vec::new();
         let mut unused_fill_indices = Vec::new();
-        let mut context = crate::rendering::geometry::DrawContext {
-            stroke_vertex_buf: &mut vertices,
-            stroke_index_buf: &mut indices,
-            fill_vertex_buf: &mut unused_fill_vertices,
-            fill_index_buf: &mut unused_fill_indices,
-            scene_origin: self.scene_origin,
-            scale_factor: self.window.scale_factor() as f32,
-        };
+        let mut context = crate::rendering::geometry::DrawContext::unstyled(
+            &mut strokes,
+            &mut unused_fill_vertices,
+            &mut unused_fill_indices,
+            self.scene_origin,
+            self.window.scale_factor() as f32,
+        );
         for triangulation in triangulations {
             if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {
                 continue;
@@ -539,21 +562,16 @@ impl<'a> Graphics<'a> {
                 }
             }
         }
-        if indices.is_empty() {
+        if strokes.is_empty() {
             return;
         }
         self.chunk_bounds_outline = Some(ChunkBoundsOutline {
-            vertex_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Chunk Bounds Outline Vertices"),
-                contents: bytemuck::cast_slice(&vertices),
+            instance_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chunk Bounds Outline Strokes"),
+                contents: bytemuck::cast_slice(&strokes),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
-            index_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Chunk Bounds Outline Indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
-            index_count: indices.len() as u32,
+            instance_count: strokes.len() as u32,
         });
     }
 
@@ -1060,6 +1078,7 @@ impl<'a> Graphics<'a> {
             // but never update it, so farther translucent fills still blend.
             self.draw_document_batches(render_pass, DocumentRenderStage::Translucent, false, None);
             self.draw_document_batches(render_pass, DocumentRenderStage::Overlay, false, None);
+            self.draw_static_highlighted_strokes(render_pass);
             if include_editor_overlays {
                 self.draw_text_batches(render_pass, DocumentRenderStage::Overlay, false);
             }
@@ -1239,24 +1258,24 @@ impl<'a> Graphics<'a> {
         let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
 
-        if !self.dynamic_vertex_buf.is_empty() && !self.dynamic_index_buf.is_empty() {
+        if !self.dynamic_strokes.is_empty() {
             render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
                 &self.pipes().overlay_render_pipeline
             } else {
                 &self.pipes().stroke_render_pipeline
             });
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, self.dynamic_vertex_gpu.slice(..));
-            render_pass.set_index_buffer(self.dynamic_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.dynamic_index_buf.len() as u32, 0, 0..1);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.dynamic_stroke_gpu.slice(..));
+            render_pass.draw(0..6, 0..self.dynamic_strokes.len() as u32);
         }
 
-        if !self.overlay_vertex_buf.is_empty() && !self.overlay_index_buf.is_empty() {
+        if !self.overlay_strokes.is_empty() {
             render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, self.overlay_vertex_gpu.slice(..));
-            render_pass.set_index_buffer(self.overlay_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.overlay_index_buf.len() as u32, 0, 0..1);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.overlay_stroke_gpu.slice(..));
+            render_pass.draw(0..6, 0..self.overlay_strokes.len() as u32);
         }
 
         // Depth-tested so geometry in front of a box hides it, like any other
@@ -1264,9 +1283,9 @@ impl<'a> Graphics<'a> {
         if let Some(outline) = &self.chunk_bounds_outline {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, outline.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(outline.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..outline.index_count, 0, 0..1);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, outline.instance_buffer.slice(..));
+            render_pass.draw(0..6, 0..outline.instance_count);
         }
     }
 

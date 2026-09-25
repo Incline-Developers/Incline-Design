@@ -150,13 +150,13 @@ fn project_polygon(view_proj: &DMat4, screen: Size, polygon: &[DVec3]) -> Option
 /// Every rendered triangle of one pick record, cut to the part the section shows and projected to the screen; a stroke quad can span the slab with both ends beyond the walls, so only the cut piece is judged.
 fn visible_screen_polygons(group: &PickGeometry<'_>, record: &PickRecord, scene_origin: DVec3, slab: Option<SectionSlab>, view_proj: &DMat4, screen: Size) -> Vec<Vec<DVec2>> {
     let mut polygons = Vec::new();
-    let stroke_indices = &group.stroke_indices[clamped_range(record.stroke_index_range, group.stroke_indices.len())];
+    let strokes = &group.strokes[clamped_range(record.stroke_range, group.strokes.len())];
     let fill_indices = &group.fill_indices[clamped_range(record.fill_index_range, group.fill_indices.len())];
-    for indices in stroke_indices.as_chunks::<3>().0 {
-        let [Some(a), Some(b), Some(c)] = indices.map(|index| group.stroke_verts.get(index as usize)) else {
-            continue;
-        };
-        let corners = [a, b, c].map(|vertex| local_vertex_world(vertex.pos, scene_origin));
+    for stroke in strokes.iter().filter(|stroke| !stroke.selection_only()) {
+        // A line is judged by its centreline, as the degenerate triangle
+        // (start, start, end) its widened quad collapses to in world space.
+        let (start, end) = stroke.world_ends();
+        let corners = [start, start, end].map(|position| local_vertex_world(position, scene_origin));
         if let Some(shown) = slab_clipped_polygon(slab, &corners)
             && let Some(projected) = project_polygon(view_proj, screen, &shown)
         {
@@ -185,11 +185,15 @@ fn visible_screen_vertices<'group>(
     view_proj: &'group DMat4,
     screen: Size,
 ) -> impl Iterator<Item = DVec2> + 'group {
-    let stroke = clamped_range(record.stroke_range, group.stroke_verts.len());
+    let stroke = clamped_range(record.stroke_range, group.strokes.len());
     let fill = clamped_range(record.fill_range, group.fill_verts.len());
-    group.stroke_verts[stroke]
+    group.strokes[stroke]
         .iter()
-        .map(|vertex| vertex.pos)
+        .filter(|stroke| !stroke.selection_only())
+        .flat_map(|stroke| {
+            let (start, end) = stroke.world_ends();
+            [start, end]
+        })
         .chain(group.fill_verts[fill].iter().map(|vertex| vertex.pos))
         .filter_map(move |position| slab_screen_point(slab, view_proj, screen, local_vertex_world(position, scene_origin)))
 }
@@ -542,8 +546,8 @@ impl<'a> Graphics<'a> {
         let mut groups = vec![PickGeometry {
             world_bounds: None,
             records: &self.pick_records,
-            stroke_verts: &self.stroke_vertex_buf,
-            stroke_indices: &self.stroke_index_buf,
+            strokes: &self.strokes,
+            stroke_blocks: &self.stroke_blocks,
             fill_verts: &self.lyon_buffer.vertices,
             fill_indices: &self.lyon_buffer.indices,
         }];
@@ -554,8 +558,8 @@ impl<'a> Graphics<'a> {
             groups.push(PickGeometry {
                 world_bounds: chunk.world_bounds,
                 records: &chunk.records,
-                stroke_verts: &chunk.vertices,
-                stroke_indices: &chunk.indices,
+                strokes: &chunk.strokes,
+                stroke_blocks: &chunk.stroke_blocks,
                 fill_verts: &[],
                 fill_indices: &[],
             });

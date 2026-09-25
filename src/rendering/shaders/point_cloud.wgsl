@@ -3,7 +3,8 @@ struct PointCloudStyle {
     // x: screen-facing splat width in world units; y: draw `color` in place of
     // the instance's own colour (a selected cloud, or one whose colour channel
     // holds classification colours while that view is off); z: fade splats by
-    // distance from the eye (fly mode).
+    // distance from the eye (fly mode); w: colour by the classification code
+    // in the instance colour's alpha byte (an RGB cloud's class view).
     options: vec4<f32>,
     // Fixed cloud origin relative to the current floating scene origin.
     origin: vec4<f32>,
@@ -135,7 +136,12 @@ fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOu
 
 @vertex
 fn vs_colored(point: ColoredPointInput, @builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    let color = select(point.color, style.color, style.options.y > 0.5);
+    // Points are opaque; an RGB cloud's alpha byte carries its class code.
+    var own = vec4<f32>(point.color.rgb, 1.0);
+    if style.options.w > 0.5 {
+        own = unpack4x8unorm(CLASS_PALETTE[u32(round(point.color.a * 255.0))]);
+    }
+    let color = select(own, style.color, style.options.y > 0.5);
     return expand_point(point.pos, color, vertex_index);
 }
 

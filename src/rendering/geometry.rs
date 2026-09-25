@@ -1,29 +1,62 @@
 //! CPU scene tessellation primitives. Domain geometry remains double precision;
 //! vertices are rebased to a scene origin only at the GPU boundary.
 
-use std::sync::LazyLock;
-
 use glam::DVec3;
 
 use crate::{
     model::{PolyVertex, geometry::tessellate_bulge_segment},
-    rendering::{StrokeVertex, Vertex},
+    rendering::{
+        StrokeInstance, Vertex,
+        scene::document_style::{STROKE_ROUND, STROKE_SCREEN_AXIS, STYLE_SLOT_NONE},
+    },
 };
 
 pub(crate) struct DrawContext<'a> {
-    pub(crate) stroke_vertex_buf: &'a mut Vec<StrokeVertex>,
-    pub(crate) stroke_index_buf: &'a mut Vec<u32>,
+    pub(crate) strokes: &'a mut Vec<StrokeInstance>,
     pub(crate) fill_vertex_buf: &'a mut Vec<Vertex>,
     pub(crate) fill_index_buf: &'a mut Vec<u32>,
     pub(crate) scene_origin: DVec3,
     pub(crate) scale_factor: f32,
+    /// Style slot stamped on everything drawn; see `scene::document_style`.
+    pub(crate) style: u32,
+}
+
+impl<'a> DrawContext<'a> {
+    /// A context for geometry the editor never restyles.
+    pub(crate) fn unstyled(
+        strokes: &'a mut Vec<StrokeInstance>,
+        fill_vertex_buf: &'a mut Vec<Vertex>,
+        fill_index_buf: &'a mut Vec<u32>,
+        scene_origin: DVec3,
+        scale_factor: f32,
+    ) -> Self {
+        Self {
+            strokes,
+            fill_vertex_buf,
+            fill_index_buf,
+            scene_origin,
+            scale_factor,
+            style: STYLE_SLOT_NONE,
+        }
+    }
+
+    fn push(&mut self, start: [f32; 3], end: [f32; 3], half_width_px: f32, flags: u32, color: [f32; 4]) {
+        self.strokes.push(StrokeInstance {
+            start,
+            half_width_px,
+            end,
+            style: self.style | flags,
+            color,
+        });
+    }
 }
 
 /// Cosine of the turn angle below which a round join is visually redundant:
 /// the wedge gap between adjacent stroke quads is `half_width * tan(angle/2)`,
 /// sub-pixel at document line widths for turns under ~11 degrees. Densely
 /// sampled polylines (contours, imported strings) are almost entirely such
-/// turns, and a join costs 18 vertices.
+/// turns, and skipping their joins keeps translucent strings from darkening
+/// at every vertex.
 const JOIN_COLLINEAR_COS: f64 = 0.98;
 
 /// Whether the turn from direction `incoming` to `outgoing` is sharp enough
@@ -42,75 +75,19 @@ fn local(point: DVec3, origin: DVec3) -> [f32; 3] {
 }
 
 pub(crate) fn draw_line(ctx: &mut DrawContext, start: DVec3, end: DVec3, line_width: f32, color: [f32; 4]) {
-    let delta = end - start;
-    if delta.length_squared() <= f64::EPSILON {
+    if (end - start).length_squared() <= f64::EPSILON {
         return;
     }
-    let line_width = line_width * ctx.scale_factor;
-    let i = ctx.stroke_vertex_buf.len() as u32;
-    let start = local(start, ctx.scene_origin);
-    let end = local(end, ctx.scene_origin);
-    let half = line_width.max(1.0) * 0.5;
-
-    ctx.stroke_vertex_buf.extend_from_slice(&[
-        StrokeVertex {
-            pos: start,
-            color,
-            other_pos: end,
-            offset_px: [-half, 0.0],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: start,
-            color,
-            other_pos: end,
-            offset_px: [half, 0.0],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: end,
-            color,
-            other_pos: start,
-            offset_px: [half, 0.0],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: end,
-            color,
-            other_pos: start,
-            offset_px: [-half, 0.0],
-            screen_space: 0.0,
-        },
-    ]);
-    ctx.stroke_index_buf.extend_from_slice(&[i + 1, i, i + 3, i, i + 2, i + 3]);
+    let half = (line_width * ctx.scale_factor).max(1.0) * 0.5;
+    let (start, end) = (local(start, ctx.scene_origin), local(end, ctx.scene_origin));
+    ctx.push(start, end, half, 0, color);
 }
 
 /// Draw a filled circle (sphere indicator) in screen space at the given world position.
 /// `radius_px` is in device pixels.
 pub(crate) fn draw_screen_sphere(ctx: &mut DrawContext, center: DVec3, radius_px: f32, color: [f32; 4]) {
-    const SEGMENTS: u32 = 16;
-    let base = ctx.stroke_vertex_buf.len() as u32;
     let position = local(center, ctx.scene_origin);
-    ctx.stroke_vertex_buf.push(StrokeVertex {
-        pos: position,
-        color,
-        other_pos: position,
-        offset_px: [0.0, 0.0],
-        screen_space: 1.0,
-    });
-    for i in 0..SEGMENTS {
-        let angle = std::f32::consts::TAU * i as f32 / SEGMENTS as f32;
-        ctx.stroke_vertex_buf.push(StrokeVertex {
-            pos: position,
-            color,
-            other_pos: position,
-            offset_px: [angle.cos() * radius_px, angle.sin() * radius_px],
-            screen_space: 1.0,
-        });
-    }
-    for i in 0..SEGMENTS {
-        ctx.stroke_index_buf.extend_from_slice(&[base, base + i + 1, base + (i + 1) % SEGMENTS + 1]);
-    }
+    ctx.push(position, position, radius_px, STROKE_ROUND, color);
 }
 
 /// Snap marker matching the design-vertex markers drawn by `design_point.wgsl`:
@@ -135,55 +112,15 @@ pub(crate) fn draw_screen_cross(ctx: &mut DrawContext, center: DVec3, half_size_
     let position = local(center, ctx.scene_origin);
     let half_size = half_size_px * ctx.scale_factor;
     let half_width = (line_width * ctx.scale_factor).max(1.0) * 0.5;
-    for [half_x, half_y] in [[half_size, half_width], [half_width, half_size]] {
-        let index = ctx.stroke_vertex_buf.len() as u32;
-        for offset_px in [[-half_x, -half_y], [half_x, -half_y], [-half_x, half_y], [half_x, half_y]] {
-            ctx.stroke_vertex_buf.push(StrokeVertex {
-                pos: position,
-                color,
-                other_pos: position,
-                offset_px,
-                screen_space: 1.0,
-            });
-        }
-        ctx.stroke_index_buf.extend_from_slice(&[index + 1, index, index + 3, index, index + 2, index + 3]);
-    }
+    ctx.push(position, [half_size, 0.0, 0.0], half_width, STROKE_SCREEN_AXIS, color);
+    ctx.push(position, [0.0, half_size, 0.0], half_width, STROKE_SCREEN_AXIS, color);
 }
 
 /// Add a camera-independent round join in pixel space at a world position.
 pub(crate) fn draw_round_join(ctx: &mut DrawContext, center: DVec3, line_width: f32, color: [f32; 4]) {
-    const MAX_SEGMENTS: u32 = 16;
-    static DIRECTIONS: LazyLock<[[f32; 2]; (MAX_SEGMENTS + 1) as usize]> = LazyLock::new(|| {
-        std::array::from_fn(|index| {
-            let angle = std::f32::consts::TAU * index as f32 / MAX_SEGMENTS as f32;
-            [angle.cos(), angle.sin()]
-        })
-    });
     let radius = (line_width * ctx.scale_factor).max(1.0) * 0.5;
-    let segments = if radius <= 2.0 { 8 } else { MAX_SEGMENTS };
-    let direction_step = (MAX_SEGMENTS / segments) as usize;
-    let base = ctx.stroke_vertex_buf.len() as u32;
     let position = local(center, ctx.scene_origin);
-    ctx.stroke_vertex_buf.push(StrokeVertex {
-        pos: position,
-        color,
-        other_pos: position,
-        offset_px: [0.0, 0.0],
-        screen_space: 1.0,
-    });
-    for index in (0..=MAX_SEGMENTS as usize).step_by(direction_step) {
-        let direction = DIRECTIONS[index];
-        ctx.stroke_vertex_buf.push(StrokeVertex {
-            pos: position,
-            color,
-            other_pos: position,
-            offset_px: [direction[0] * radius, direction[1] * radius],
-            screen_space: 1.0,
-        });
-    }
-    for index in 0..segments {
-        ctx.stroke_index_buf.extend_from_slice(&[base, base + index + 1, base + index + 2]);
-    }
+    ctx.push(position, position, radius, STROKE_ROUND, color);
 }
 
 /// Tessellate a polyline's stroke (segments, arcs and the round joins between

@@ -103,25 +103,18 @@ pub(crate) struct CachedPointCloudGpu {
     /// Whether `color` is drawn in place of the instances' colour channel.
     uniform_color: bool,
     depth_cue: bool,
-    /// Whether the resident instances had classification colours staged over
-    /// the source RGB they were prepared with. Flipping this re-streams the
-    /// cloud, so it is settled per cloud in [`PointCloudGpuCache::sync`] and
-    /// read unchanged by the upload below.
-    staged_classification: bool,
+    /// Whether the shader colours by the classification codes.
+    classify_codes: bool,
 }
 
-/// Where a cloud's drawn colours come from this frame.
-///
-/// Only [`Self::StagedClassification`] touches the vertex buffer: the other two
-/// are a choice the style uniform makes, which is why the common classified
-/// cloud - one with no RGB of its own, whose prepared colours already are the
-/// classification colours - toggles for free.
+/// Where a cloud's drawn colours come from this frame. Every choice is made
+/// by the style uniform; none touches the vertex buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PointColorView {
     /// The colours baked into the prepared instances.
     Prepared,
-    /// Classification colours staged over prepared source RGB.
-    StagedClassification,
+    /// The class palette applied to the codes in the instances' alpha bytes.
+    ClassificationCodes,
     /// The cloud's uniform colour, ignoring the instances' colour channel.
     Uniform,
 }
@@ -133,31 +126,16 @@ fn color_view(prepared: &PreparedPointCloud, classify: bool) -> PointColorView {
         // Prepared as classification colours, and the view is off: the cloud
         // falls back to the flat colour it is drawn in everywhere else.
         PointColorChannel::Classification if !classify => PointColorView::Uniform,
-        PointColorChannel::Source if classify && prepared.chunk_classifications => PointColorView::StagedClassification,
+        PointColorChannel::Source if classify && prepared.chunk_classifications => PointColorView::ClassificationCodes,
         _ => PointColorView::Prepared,
     }
 }
 
-/// Rebuild one byte range of a chunk's instances with classification colours in
-/// place of the source RGB. `None` when the chunk has no codes to colour from,
-/// which leaves the prepared bytes to be uploaded untouched.
-fn stage_classification_instances(prepared: &crate::model::point_cloud::PreparedPointChunk, byte_start: usize, byte_end: usize) -> Option<Vec<PointInstance>> {
-    let instances = prepared.data.colored()?;
-    let codes = prepared.classifications.as_deref()?;
-    let stride = size_of::<PointInstance>();
-    let (first, last) = (byte_start / stride, byte_end / stride);
-    let instances = instances.get(first..last)?;
-    let codes = codes.get(first..last)?;
-    Some(
-        instances
-            .iter()
-            .zip(codes)
-            .map(|(instance, code)| PointInstance {
-                pos: instance.pos,
-                color: classification_color(*code),
-            })
-            .collect(),
-    )
+/// The class palette `point_cloud.wgsl` maps alpha-byte codes through, from
+/// the same [`classification_color`] classified-only clouds are baked with.
+pub(crate) fn classification_palette_wgsl() -> String {
+    let entries = (0..=u8::MAX).map(|code| format!("{}u", classification_color(code))).collect::<Vec<_>>().join(", ");
+    format!("var<private> CLASS_PALETTE: array<u32, 256> = array<u32, 256>({entries});\n")
 }
 
 #[derive(Default)]
@@ -467,14 +445,9 @@ impl PointCloudGpuCache {
             let point_size = cloud.point_size.max(1.0e-6);
             let selected = editor.selected_handles.contains(&cloud.entity_id());
             let view = color_view(&cloud.prepared, classify);
-            let staged_classification = view == PointColorView::StagedClassification;
+            let classify_codes = view == PointColorView::ClassificationCodes;
             let uniform_color = selected || view == PointColorView::Uniform;
-            // Staging changes every resident byte, so the entry is rebuilt and
-            // re-streamed exactly as a replaced cloud is.
-            let replace = self
-                .clouds
-                .get(&cloud.id)
-                .is_some_and(|cached| !Arc::ptr_eq(&cached.prepared, &cloud.prepared) || cached.staged_classification != staged_classification);
+            let replace = self.clouds.get(&cloud.id).is_some_and(|cached| !Arc::ptr_eq(&cached.prepared, &cloud.prepared));
             if replace {
                 // Return the stale entry's slots before dropping it, otherwise
                 // the reallocation leaks them for the arena's lifetime.
@@ -493,8 +466,9 @@ impl PointCloudGpuCache {
                     || cached.selected != selected
                     || cached.uniform_color != uniform_color
                     || cached.depth_cue != depth_cue
+                    || cached.classify_codes != classify_codes
                 {
-                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
+                    let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue, classify_codes);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = cloud.color;
                     cached.point_size = point_size;
@@ -503,11 +477,12 @@ impl PointCloudGpuCache {
                     cached.selected = selected;
                     cached.uniform_color = uniform_color;
                     cached.depth_cue = depth_cue;
+                    cached.classify_codes = classify_codes;
                 }
                 continue;
             }
 
-            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue);
+            let style = style_uniform(cloud, point_size, scene_origin, selected, uniform_color, depth_cue, classify_codes);
             let style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Point Cloud Style Uniform"),
                 contents: bytemuck::bytes_of(&style),
@@ -556,7 +531,7 @@ impl PointCloudGpuCache {
                     selected,
                     uniform_color,
                     depth_cue,
-                    staged_classification,
+                    classify_codes,
                 },
             );
         }
@@ -688,17 +663,11 @@ impl PointCloudGpuCache {
                     }
                 };
                 let upload_end = candidate.upload_offset + candidate.upload_bytes;
-                // Only the frame's budgeted slice is restaged, so this stays a
-                // bounded copy however large the cloud is.
-                let staged = cloud
-                    .staged_classification
-                    .then(|| stage_classification_instances(prepared, candidate.upload_offset, upload_end))
-                    .flatten();
-                let payload: &[u8] = match staged.as_deref() {
-                    Some(instances) => bytemuck::cast_slice(instances),
-                    None => &prepared.data.bytes()[candidate.upload_offset..upload_end],
-                };
-                queue.write_buffer(dest_buffer, dest_offset + candidate.upload_offset as u64, payload);
+                queue.write_buffer(
+                    dest_buffer,
+                    dest_offset + candidate.upload_offset as u64,
+                    &prepared.data.bytes()[candidate.upload_offset..upload_end],
+                );
                 (
                     new_slot,
                     prepared.level_counts,
@@ -835,11 +804,24 @@ fn projected_bounds(view_proj: &DMat4, screen: (f32, f32), min: DVec3, max: DVec
     Some((projected_min, projected_max))
 }
 
-fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool, uniform_color: bool, depth_cue: bool) -> PointCloudStyleUniform {
+fn style_uniform(
+    cloud: &OpenPointCloud,
+    point_size: f32,
+    scene_origin: DVec3,
+    selected: bool,
+    uniform_color: bool,
+    depth_cue: bool,
+    classify_codes: bool,
+) -> PointCloudStyleUniform {
     let origin = (cloud.prepared.origin - scene_origin).as_vec3();
     PointCloudStyleUniform {
         color: if selected { crate::ui::SELECTION_COLOR_F32 } else { cloud.color },
-        options: [point_size, if uniform_color { 1.0 } else { 0.0 }, if depth_cue { 1.0 } else { 0.0 }, 0.0],
+        options: [
+            point_size,
+            if uniform_color { 1.0 } else { 0.0 },
+            if depth_cue { 1.0 } else { 0.0 },
+            if classify_codes { 1.0 } else { 0.0 },
+        ],
         origin: [origin.x, origin.y, origin.z, 0.0],
     }
 }
