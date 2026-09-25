@@ -135,6 +135,13 @@ pub(crate) fn draw_right_click_context(
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
 
+            if let Some(drill_hole_id) = selected_drill_hole
+                && ContextMenuAction::new(tr!(literal = "Link Geophysics...")).show(ui).clicked()
+            {
+                commands.push(UiCommand::LinkGeophysics(drill_hole_id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+
             context_menu_separator(ui);
         }
 

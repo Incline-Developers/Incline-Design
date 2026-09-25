@@ -1702,6 +1702,10 @@ pub(crate) struct OpenDrillHoleDataset {
     pub(crate) name: String,
     pub(crate) dataset: Arc<DrillHoleDataset>,
     pub(crate) color: DrillColorState,
+    /// Downhole geophysics files linked to the dataset, saved with it.
+    /// Relinking replaces the link rather than editing it, so a reader can
+    /// tell a new link from the one it checked by pointer.
+    pub(crate) geophysics: Option<Arc<crate::model::geophysics::GeophysicsLink>>,
 }
 
 impl OpenDrillHoleDataset {

@@ -10,11 +10,7 @@ use crate::{
             LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter,
             clamp_string_pixel_width,
         },
-        formats::{
-            csv_drill_hole,
-            csv_geophysics::{GeophysicsImport, StreamControl},
-        },
-        geophysics::LogKind,
+        formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
     userspace_log, userspace_warn,
 };
@@ -28,24 +24,10 @@ fn remap_browser_source_path(source: &mut DrillHoleSource, path: std::path::Path
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterator<Item = &'bytes [u8]>, control: StreamControl<'_>) -> Result<csv_drill_hole::ParsedBundle> {
-    let bytes = bytes.into_iter().collect::<Vec<_>>();
-    match source {
-        DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
-        DrillHoleSource::Csv { files, .. } => {
-            if files.len() != bytes.len() {
-                anyhow::bail!("Stored CSV manifest contains {} mappings but {} files", files.len(), bytes.len());
-            }
-            csv_drill_hole::parse_bundle(files.iter().zip(bytes), control).map_err(anyhow::Error::new)
-        }
-        DrillHoleSource::Omf { .. } => anyhow::bail!("OMF drillhole data is loaded through the project importer"),
-    }
-}
-
-/// A parsed bundle on its way to the App: the dataset, and the traces of any
+/// A parsed bundle on its way to the App: the dataset, and the link to any
 /// geophysics files it carried.
-pub(crate) type LoadedBundle = (LoadedDrillHoleDataset, Option<GeophysicsImport>);
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type LoadedBundle = (LoadedDrillHoleDataset, Option<crate::model::geophysics::GeophysicsLink>);
 
 /// The key a bundle load runs under: one bundle for one project always gives
 /// the same key, so a second import of it is refused while the first runs,
@@ -63,6 +45,7 @@ pub(crate) fn drill_hole_load_key(source: &DrillHoleSource, runtime_id: u32) -> 
 
 /// A load's result on the UI thread. The busy state lasts until the new
 /// holes are uploaded to the GPU.
+#[cfg(not(target_arch = "wasm32"))]
 fn apply_loaded_bundle(app: &mut App, result: Result<LoadedBundle>) {
     match result {
         Ok(bundle) => {
@@ -102,6 +85,7 @@ fn planned_dataset(id: DrillHoleId, name: String, collars: Vec<glam::DVec3>, dep
         name,
         dataset: std::sync::Arc::new(DrillHoleDataset::new(holes)),
         color: DrillColorState::for_planned_holes(),
+        geophysics: None,
     }
 }
 
@@ -141,12 +125,14 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Parsed on the job queue: a geophysics file runs to hundreds of
-    /// megabytes, too long to parse on the page's own thread.
+    /// Reads a browser bundle's table files whole on the page thread (a
+    /// table is small; its geophysics files, kept apart, are streamed once
+    /// the dataset exists so gigabytes never sit in memory at once), then
+    /// hands the bytes back through [`AppEvent::DrillHoleTablesRead`] to
+    /// continue on the job queue in [`Self::continue_web_drill_hole_import`].
+    /// The picked files are split by role here, once.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
-        // A refused load, for any reason, lets go of the picked bytes and
-        // their memory reservation.
         let key = match self.drill_hole_load(&source) {
             Ok(Some(key)) => key,
             refused => {
@@ -154,27 +140,102 @@ impl<'a> App<'a> {
                 return refused.map(|_| ());
             }
         };
-        let (_, inputs) = self.web_import_files.take().context("Choose the drillhole source files again")?;
+        let DrillHoleSource::Csv { files: mappings, .. } = &source else {
+            self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
+            anyhow::bail!("{}", tr!(literal = "Only mapped CSV bundles are imported in the browser"));
+        };
+        let picked = self.take_web_import_picked_files();
+        if picked.len() != mappings.len() {
+            self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
+            anyhow::bail!("{}", tr!(literal = "Choose the drillhole source files again"));
+        }
+        let mut table_files = Vec::new();
+        let mut geophysics = Vec::new();
+        for (mapping, file) in mappings.iter().cloned().zip(picked) {
+            if mapping.role == csv_drill_hole::CsvDrillFileRole::Geophysics {
+                geophysics.push((mapping, file));
+            } else {
+                table_files.push((mapping, file));
+            }
+        }
+        self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
         let display_path = crate::app::browser_source_filename(&source.display_name());
-        remap_browser_source_path(&mut source, display_path.clone());
+        remap_browser_source_path(&mut source, display_path);
+        let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
+        let (ticket, _progress) = self.begin_reported_task(tr_format!(literal = "Reading %name%", name = source.display_name()));
+        let workspace = self.workspace_generation;
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut tables = Vec::with_capacity(table_files.len());
+            let mut failed = None;
+            for (mapping, file) in table_files {
+                match crate::model::input::read_browser_file(file).await {
+                    Ok(input) => tables.push((mapping, input)),
+                    Err(error) => {
+                        failed = Some(error);
+                        break;
+                    }
+                }
+            }
+            let result = if let Some(error) = failed { Err(error) } else { Ok(tables) };
+            let _ = proxy.send_event(crate::app::AppEvent::DrillHoleTablesRead {
+                key,
+                source,
+                geophysics,
+                ticket,
+                workspace,
+                result,
+            });
+        });
+        Ok(())
+    }
+
+    /// Continues a browser bundle import once its table files are read:
+    /// parses them on the job queue, adds the dataset, then links any
+    /// geophysics files to it, which needs the new dataset's id.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn continue_web_drill_hole_import(
+        &mut self,
+        key: crate::app::jobs::JobKey,
+        source: DrillHoleSource,
+        geophysics: Vec<(csv_drill_hole::CsvDrillFileMapping, web_sys::File)>,
+        result: std::result::Result<Vec<(csv_drill_hole::CsvDrillFileMapping, crate::model::input::InputFile)>, String>,
+    ) {
+        let tables = match result {
+            Ok(tables) => tables,
+            Err(error) => {
+                userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = error));
+                return;
+            }
+        };
+        // Only a CSV bundle gets this far: the import refuses any other.
+        let DrillHoleSource::Csv { files: mappings, .. } = &source else { return };
+        let mappings = mappings.clone();
         let label = tr_format!(literal = "Loading %name%", name = source.display_name());
-        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<LoadedBundle> {
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<LoadedDrillHoleDataset> {
             let control = StreamControl {
                 progress: &|fraction| progress.set_fraction(fraction),
                 cancelled: &|| cancel.is_cancelled(),
             };
-            let parsed = parse_browser_bundle(&source, inputs.iter().map(|input| input.bytes.as_slice()), control)?;
-            // The file bytes and their reservation go before the apply step.
-            drop(inputs);
-            let loaded = LoadedDrillHoleDataset {
+            let dataset = csv_drill_hole::parse_bundle_tables(&mappings, tables.iter().map(|(mapping, table)| (mapping, table.bytes.as_slice())), control)?;
+            // The table bytes go before the apply step.
+            drop(tables);
+            Ok(LoadedDrillHoleDataset {
                 name: source.display_name(),
                 source,
-                dataset: std::sync::Arc::new(parsed.dataset),
-            };
-            Ok((loaded, parsed.geophysics))
+                dataset: std::sync::Arc::new(dataset),
+            })
         };
-        self.spawn_job_reporting_progress(label, vec![key], compute, apply_loaded_bundle);
-        Ok(())
+        let apply = move |app: &mut App, result: Result<LoadedDrillHoleDataset>| match result {
+            Ok(loaded) => {
+                let id = app.add_loaded_drill_holes(loaded);
+                app.job_needs_gpu_upload();
+                if !geophysics.is_empty() {
+                    app.link_bundle_geophysics(id, geophysics);
+                }
+            }
+            Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = format!("{error:#}"))),
+        };
+        self.spawn_job_reporting_progress(label, vec![key], compute, apply);
     }
 
     /// The key a load of `source` runs under, or `None` when the same bundle
@@ -233,64 +294,13 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// A CSV bundle's dataset, then its geophysics under the new dataset's id.
+    /// A CSV bundle's dataset, then the link to its geophysics files.
+    #[cfg(not(target_arch = "wasm32"))]
     fn add_loaded_bundle(&mut self, (loaded, geophysics): LoadedBundle) {
         let id = self.add_loaded_drill_holes(loaded);
-        if let Some(geophysics) = geophysics {
-            self.store_geophysics(id, geophysics);
+        if let Some(link) = geophysics {
+            self.keep_geophysics_link(id, link);
         }
-    }
-
-    /// Hold a bundle's geophysics as all of `id`'s traces, replacing any it
-    /// had, and say what was kept.
-    fn store_geophysics(&mut self, id: DrillHoleId, import: GeophysicsImport) {
-        let Some(name) = self.drill_holes.iter().find(|item| item.id == id).map(|item| item.name.clone()) else {
-            return;
-        };
-        let [gamma, long, short] = import.traces_per_curve();
-        let holes = import.holes.len();
-        self.well_logs.replace_dataset(id, import.holes, import.reservation);
-        userspace_log!(
-            "{}",
-            tr_format!(
-                literal = "Downhole geophysics for '%name%': %holes% hole(s) with %gamma% gamma, %long% long-spaced density and %short% short-spaced density trace(s); %rows% row(s) read, %skipped% skipped, %orphans% for %orphan_holes% hole(s) the bundle does not define; %out_of_range% reading(s) outside the valid range left empty",
-                name = name.clone(),
-                holes = holes,
-                gamma = gamma,
-                long = long,
-                short = short,
-                rows = import.rows_read,
-                skipped = import.rows_skipped,
-                orphans = import.orphan_rows,
-                orphan_holes = import.orphan_holes,
-                out_of_range = import.out_of_range
-            )
-        );
-        if import.already_held + import.isolated + import.runs_not_kept + import.curves_left_out > 0 {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "Downhole geophysics set aside for '%name%': %held% reading(s) already held from an earlier run, %isolated% isolated reading(s) far from the rest of the hole left out, %runs% run(s) with no usable depth step and %curves% density curve(s) whose unit looked wrong; the reasons are above",
-                    name = name.clone(),
-                    held = import.already_held,
-                    isolated = import.isolated,
-                    runs = import.runs_not_kept,
-                    curves = import.curves_left_out
-                )
-            );
-        }
-        let traces = LogKind::ALL.iter().map(|kind| self.well_logs.trace_count(*kind)).sum::<usize>();
-        userspace_log!(
-            "{}",
-            tr_format!(
-                literal = "Downhole geophysics held this session: %size% MiB for this dataset, %total% MiB in all (%holes% hole(s), %traces% trace(s)); not saved with the project",
-                size = format!("{:.1}", self.well_logs.dataset_memory_bytes(id) as f64 / (1024.0 * 1024.0)),
-                total = format!("{:.1}", self.well_logs.memory_bytes() as f64 / (1024.0 * 1024.0)),
-                holes = self.well_logs.hole_count(),
-                traces = traces
-            )
-        );
-        self.request_topology_redraw();
     }
 
     /// Add a loaded dataset under a fresh id, which is returned.
@@ -329,6 +339,7 @@ impl<'a> App<'a> {
             name,
             dataset: loaded.dataset,
             color: DrillColorState::for_logged_holes(),
+            geophysics: None,
         });
         self.touch_active_project_content();
         self.persist_session();
@@ -505,28 +516,11 @@ impl<'a> App<'a> {
         self.set_item_loaded(crate::model::ItemRef::DrillHole(id), false);
     }
 
-    /// Drop `id`'s geophysics traces, if it had any, and say so. Shared by
-    /// closing a dataset and removing it outright: traces are not yet saved
-    /// with the project, so they come back only by importing the bundle
-    /// again.
-    fn release_drillhole_geophysics(&mut self, id: DrillHoleId) {
-        if self.well_logs.drop_dataset(id) {
-            let name = self.drill_holes.iter().find(|item| item.id == id).map(|item| item.name.clone()).unwrap_or_default();
-            userspace_log!(
-                "{}",
-                tr_format!(
-                    literal = "Downhole geophysics for '%name%' was released with it; import the bundle again to see it",
-                    name = name
-                )
-            );
-        }
-    }
-
-    /// A closed dataset gives back its geophysics and the memory it held.
+    /// A closed dataset gives back the geophysics read from its linked files
+    /// and the memory it held; the link stays with it.
     pub(crate) fn release_drillhole_runtime(&mut self, id: DrillHoleId) {
         self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
-        self.release_drillhole_geophysics(id);
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
@@ -550,7 +544,6 @@ impl<'a> App<'a> {
     pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
         self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
-        self.release_drillhole_geophysics(id);
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);

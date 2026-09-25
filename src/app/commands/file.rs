@@ -142,10 +142,20 @@ pub(crate) enum FileDialogAction {
     ImportRaster(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     SetImportSourcePaths { kind: DataMenu, paths: Vec<PathBuf> },
+    /// Link the geophysics CSV at `path` to a drillhole dataset.
+    #[cfg(not(target_arch = "wasm32"))]
+    LinkGeophysics { dataset: DrillHoleId, path: PathBuf },
+    /// Link a picked geophysics CSV to a drillhole dataset, or give a saved
+    /// link its file again this session.
+    #[cfg(target_arch = "wasm32")]
+    WebLinkGeophysics { dataset: DrillHoleId, file: web_sys::File },
     #[cfg(target_arch = "wasm32")]
     WebSetImportSourceFiles {
         kind: DataMenu,
         files: Vec<std::result::Result<crate::model::input::InputFile, String>>,
+        /// A drillhole CSV bundle's picked files whose heads read; empty
+        /// for any other kind, which is read whole.
+        picked_files: Vec<web_sys::File>,
     },
     /// Export a layer from the project that owned it when the chooser opened.
     #[cfg(not(target_arch = "wasm32"))]
@@ -572,6 +582,16 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::LinkGeophysics { dataset, path } => {
+                self.link_geophysics_path(dataset, path);
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebLinkGeophysics { dataset, file } => {
+                self.link_geophysics_file(dataset, file);
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SetImportSourcePaths { kind, paths } => {
                 self.editor.import_source_menu = kind;
                 self.editor.import_source_paths = paths;
@@ -613,7 +633,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebSetImportSourceFiles { kind, files } => {
+            FileDialogAction::WebSetImportSourceFiles { kind, files, picked_files } => {
                 let mut accepted = Vec::new();
                 for file in files {
                     match file {
@@ -656,8 +676,13 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    // The import reads the picked files, not the previews.
+                    self.web_import_files = None;
+                    self.web_import_picked_files = Some(picked_files);
+                } else {
+                    self.web_import_picked_files = None;
+                    self.web_import_files = Some((kind, accepted));
                 }
-                self.web_import_files = Some((kind, accepted));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1414,9 +1439,17 @@ impl<'a> App<'a> {
         Ok(selected)
     }
 
+    /// Take the files picked for the drillhole CSV bundle being mapped.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn take_web_import_picked_files(&mut self) -> Vec<web_sys::File> {
+        self.web_import_picked_files.take().unwrap_or_default()
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn clear_browser_import_selection(&mut self, kind: DataMenu) {
-        if self.web_import_files.as_ref().is_some_and(|(stored_kind, _)| *stored_kind == kind) {
+        if kind == DataMenu::CsvDrillHole {
+            self.web_import_picked_files = None;
+        } else if self.web_import_files.as_ref().is_some_and(|(stored_kind, _)| *stored_kind == kind) {
             self.web_import_files = None;
         }
     }
@@ -1478,11 +1511,27 @@ impl<'a> App<'a> {
             } else {
                 dialog.pick_files().await?
             };
-            let mut files = Vec::with_capacity(handles.len());
-            for handle in handles {
-                files.push(crate::model::input::read_browser_handle(handle).await);
-            }
-            Some(FileDialogAction::WebSetImportSourceFiles { kind, files })
+            let (files, picked_files) = if kind == DataMenu::CsvDrillHole {
+                // A bundle's geophysics file runs to gigabytes: only the
+                // head is read here, for the mapping preview. The `File`
+                // handles are kept so importing can read a table whole, or
+                // stream a geophysics file, once a role is chosen for each.
+                let picked: Vec<web_sys::File> = handles.iter().map(|handle| handle.inner().clone()).collect();
+                let mut previews = Vec::with_capacity(picked.len());
+                for file in &picked {
+                    previews.push(crate::model::input::read_browser_head(file, crate::model::formats::csv_drill_hole::PREVIEW_HEAD_BYTES + 1).await);
+                }
+                // The files whose heads read, in step with the mapping.
+                let picked_files = picked.into_iter().zip(&previews).filter_map(|(file, preview)| preview.is_ok().then_some(file)).collect();
+                (previews, picked_files)
+            } else {
+                let mut files = Vec::with_capacity(handles.len());
+                for handle in handles {
+                    files.push(crate::model::input::read_browser_handle(handle).await);
+                }
+                (files, Vec::new())
+            };
+            Some(FileDialogAction::WebSetImportSourceFiles { kind, files, picked_files })
         });
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
@@ -1506,6 +1555,32 @@ impl<'a> App<'a> {
                 dialog.pick_files().await?.into_iter().map(FileHandleExt::into_path).collect()
             };
             Some(FileDialogAction::SetImportSourcePaths { kind, paths })
+        });
+    }
+
+    /// Ask for a geophysics file to link to a dataset, replacing any link
+    /// it has.
+    pub(crate) fn choose_geophysics_file(&mut self, id: DrillHoleId) {
+        if self.known_holes(id).is_none() {
+            userspace_warn!("{}", tr!(literal = "Load the drillhole dataset before linking geophysics to it"));
+            return;
+        }
+        let filter = tr!(literal = "Downhole geophysics CSV");
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let file = AsyncFileDialog::new().add_filter(filter, &["csv"]).pick_file().await?;
+            Some(FileDialogAction::LinkGeophysics {
+                dataset: id,
+                path: file.path().to_owned(),
+            })
+        });
+        #[cfg(target_arch = "wasm32")]
+        self.spawn_file_dialog(async move {
+            let file = AsyncFileDialog::new().add_filter(filter, &["csv"]).pick_file().await?;
+            Some(FileDialogAction::WebLinkGeophysics {
+                dataset: id,
+                file: file.inner().clone(),
+            })
         });
     }
 

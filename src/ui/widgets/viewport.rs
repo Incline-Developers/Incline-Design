@@ -2194,7 +2194,51 @@ pub(crate) struct BoreholeLog<'a> {
     /// Whether any hole of the dataset has traces: only then is a hole
     /// without one worth a note.
     logs_loaded: bool,
+    /// The drawn curves a hole being read has, by `LogKind::index`.
+    reading: Option<[bool; 3]>,
+    /// The depths the index says the hole's drawn curves have readings at,
+    /// while the hole is read.
+    logged: Option<[f64; 2]>,
     well_log_style: WellLogStyle,
+}
+
+/// The depth window a log keeps from frame to frame and hole to hole.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LogWindow {
+    Whole,
+    Zoomed((f64, f64)),
+}
+
+impl LogWindow {
+    /// What to keep of `view` on `hole`: all of it is kept as the whole, so
+    /// a hole grown by its readings, or the next hole, shows whole too.
+    fn kept(view: (f64, f64), hole: (f64, f64)) -> Self {
+        // Relative slack for the rounding a clamp to the whole leaves.
+        if view.1 - view.0 >= (hole.1 - hole.0) * (1.0 - 1.0e-9) {
+            Self::Whole
+        } else {
+            Self::Zoomed(view)
+        }
+    }
+
+    /// The window to draw `hole` with.
+    fn view(kept: Option<Self>, hole: (f64, f64)) -> (f64, f64) {
+        match kept {
+            None | Some(Self::Whole) => hole,
+            Some(Self::Zoomed(view)) => clamp_depth_view(view, hole),
+        }
+    }
+}
+
+/// Where a log's parts go: its columns, the notes under it and the plot,
+/// below the height kept for the trace headers.
+#[derive(Clone, PartialEq, Debug)]
+struct LogLayout {
+    columns: LogColumns,
+    notes: [Option<String>; 2],
+    notes_height: f32,
+    top_margin: f32,
+    plot: egui::Rect,
 }
 
 impl<'a> BoreholeLog<'a> {
@@ -2206,6 +2250,8 @@ impl<'a> BoreholeLog<'a> {
             strat_field: None,
             well_logs: None,
             logs_loaded: false,
+            reading: None,
+            logged: None,
             well_log_style: WellLogStyle::default(),
         }
     }
@@ -2219,6 +2265,19 @@ impl<'a> BoreholeLog<'a> {
     pub(crate) fn well_logs(mut self, hole: Option<&'a crate::model::geophysics::HoleLogs>, loaded: bool) -> Self {
         self.well_logs = hole;
         self.logs_loaded = loaded;
+        self
+    }
+
+    /// Lay the trace columns out for a hole's curves while it is read, so
+    /// nothing moves when its readings land.
+    pub(crate) fn reading(mut self, kinds: Option<[bool; 3]>) -> Self {
+        self.reading = kinds;
+        self
+    }
+
+    /// Span the index's geophysics depths while the hole is read.
+    pub(crate) fn logged_depths(mut self, depths: Option<[f64; 2]>) -> Self {
+        self.logged = depths;
         self
     }
 
@@ -2246,9 +2305,8 @@ impl<'a> BoreholeLog<'a> {
         let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
         // inspection moves, so the window may be from a different hole.
-        let mut view = clamp_depth_view(ui.data(|data| data.get_temp::<(f64, f64)>(view_id)).unwrap_or(hole), hole);
-        let density = ColumnTraces::of(TraceColumn::Density, self.well_logs);
-        let gamma = ColumnTraces::of(TraceColumn::Gamma, self.well_logs);
+        let mut view = LogWindow::view(ui.data(|data| data.get_temp::<LogWindow>(view_id)), hole);
+        let [density, gamma] = self.trace_columns();
 
         let width = ui.available_width();
         let height = ui.available_height().max(LOG_MIN_HEIGHT);
@@ -2277,21 +2335,14 @@ impl<'a> BoreholeLog<'a> {
 
         let body = egui::Rect::from_min_max(egui::pos2(rect.left(), header.bottom()), rect.max);
         let strat_field = self.lithology_field();
-        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0), strat_field.is_some(), density.is_some(), gamma.is_some());
-        // Tall enough for the trace headers when there are any.
         let line_height = ui.text_style_height(&egui::TextStyle::Small);
-        // Each note gets a line of its own across the log, under the axis.
-        let notes = self.trace_notes([density.is_some(), gamma.is_some()], columns);
-        let notes_height = notes.iter().flatten().count() as f32 * line_height;
-        let top_margin = [(density, columns.density), (gamma, columns.gamma)]
-            .into_iter()
-            .filter_map(|(traces, width)| traces.filter(|_| width > 0.0))
-            .map(|traces| log_traces::header_height(traces.column, line_height) + 4.0)
-            .fold(LOG_PLOT_TOP_MARGIN, f32::max);
-        let plot = egui::Rect::from_min_max(
-            egui::pos2(body.left() + columns.scale, body.top() + top_margin),
-            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN - LOG_AXIS_HEIGHT - notes_height),
-        );
+        let LogLayout {
+            columns,
+            notes,
+            notes_height,
+            top_margin,
+            plot,
+        } = self.layout([density, gamma], body, strat_field.is_some(), line_height);
         let lanes = columns.lanes(plot);
         let trace_lanes = [(density, lanes.density), (gamma, lanes.gamma)];
 
@@ -2412,7 +2463,7 @@ impl<'a> BoreholeLog<'a> {
         }
         ui.data_mut(|data| {
             data.insert_temp(azimuth_id, azimuth);
-            data.insert_temp(view_id, view);
+            data.insert_temp(view_id, LogWindow::kept(view, hole));
             data.insert_temp(squeeze_id, squeeze);
             data.insert_temp(menu_id, menu);
         });
@@ -2445,6 +2496,9 @@ impl<'a> BoreholeLog<'a> {
             self.draw_column(ui, &painter, lean, &path);
             Self::draw_offset_axis(ui, &painter, lean);
         }
+        if let Some(recorded) = self.recorded_depth(hole).filter(|depth| (top..=bottom).contains(depth)) {
+            draw_recorded_depth(ui, &painter, plot, view, recorded);
+        }
         let area = egui::Rect::from_min_max(
             egui::pos2(body.left() + 4.0, plot.bottom() + LOG_AXIS_HEIGHT),
             egui::pos2(body.right() - LOG_EDGE_MARGIN, plot.bottom() + LOG_AXIS_HEIGHT + notes_height),
@@ -2452,6 +2506,44 @@ impl<'a> BoreholeLog<'a> {
         draw_trace_notes(ui, &painter, area, notes, line_height);
         draw_azimuth_compass(ui, &painter, compass, azimuth);
         saved
+    }
+
+    /// The density and gamma columns: as read, or laid out ahead while the
+    /// hole is read.
+    fn trace_columns(&self) -> [Option<ColumnTraces<'a>>; 2] {
+        [TraceColumn::Density, TraceColumn::Gamma].map(|column| match self.reading {
+            Some(kinds) => ColumnTraces::reading(column, kinds),
+            None => ColumnTraces::of(column, self.well_logs),
+        })
+    }
+
+    /// Where the log's parts go in `body` for its trace columns `traces`. It
+    /// reads which columns the hole has, never their readings, so it is the
+    /// same while they are read.
+    fn layout(&self, traces: [Option<ColumnTraces<'a>>; 2], body: egui::Rect, strat: bool, line_height: f32) -> LogLayout {
+        let [density, gamma] = traces.map(|traces| traces.is_some());
+        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0), strat, density, gamma);
+        // Each note gets a line of its own across the log, under the axis.
+        let notes = self.trace_notes([density, gamma], columns);
+        let notes_height = notes.iter().flatten().count() as f32 * line_height;
+        // Tall enough for the trace headers when there are any.
+        let top_margin = traces
+            .into_iter()
+            .zip([columns.density, columns.gamma])
+            .filter_map(|(traces, width)| traces.filter(|_| width > 0.0))
+            .map(|traces| log_traces::header_height(traces.column, line_height) + 4.0)
+            .fold(LOG_PLOT_TOP_MARGIN, f32::max);
+        let plot = egui::Rect::from_min_max(
+            egui::pos2(body.left() + columns.scale, body.top() + top_margin),
+            egui::pos2(body.right() - LOG_EDGE_MARGIN, body.bottom() - LOG_EDGE_MARGIN - LOG_AXIS_HEIGHT - notes_height),
+        );
+        LogLayout {
+            columns,
+            notes,
+            notes_height,
+            top_margin,
+            plot,
+        }
     }
 
     /// Quiet notes for under the log: a curve this hole has no log for,
@@ -2490,11 +2582,11 @@ impl<'a> BoreholeLog<'a> {
         let reset = buttons
             .add_enabled(
                 zoomed,
-                egui::Button::new(tr!(literal = "Whole hole"))
+                egui::Button::new(tr!(literal = "Reset View"))
                     .small()
                     .corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
             )
-            .on_hover_text(tr!(literal = "Back to the whole hole."))
+            .on_hover_text(tr!(literal = "Back to the whole log."))
             // Disabled exactly when the log already shows the whole hole.
             .on_disabled_hover_text(tr!(
                 literal = "Roll the wheel over the log to zoom in on a seam. Drag the log to spin the hole and to walk down it."
@@ -2525,7 +2617,8 @@ impl<'a> BoreholeLog<'a> {
     }
 
     /// The depths the log spans, widened to cover any interval or well log
-    /// past the trace.
+    /// past the trace: the index's depths while the hole is read, the
+    /// traces' once they are shown.
     fn depth_range(&self) -> Option<(f64, f64)> {
         let first = self.hole.trace.first()?.depth;
         let last = self.hole.trace.last()?.depth;
@@ -2534,10 +2627,22 @@ impl<'a> BoreholeLog<'a> {
                 .into_iter()
                 .flat_map(|logs| crate::model::geophysics::LogKind::ALL.into_iter().filter_map(|kind| logs.trace(kind)))
         };
-        let first = logs().map(|trace| trace.start_depth()).fold(first, f64::min);
-        let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max);
-        let deepest = logs().map(|trace| trace.end_depth()).fold(deepest, f64::max);
+        let [shallowest, deepest] = self.logged.unwrap_or_else(|| {
+            [
+                logs().map(|trace| trace.start_depth()).fold(f64::INFINITY, f64::min),
+                logs().map(|trace| trace.end_depth()).fold(f64::NEG_INFINITY, f64::max),
+            ]
+        });
+        let first = first.min(shallowest);
+        let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max).max(deepest);
         (deepest > first).then_some((first, deepest))
+    }
+
+    /// Where the hole's trace ends, when the log in `range` runs on below
+    /// it. A collar alone has no length recorded to mark.
+    fn recorded_depth(&self, range: (f64, f64)) -> Option<f64> {
+        let [first, .., last] = self.hole.trace.as_slice() else { return None };
+        (last.depth > first.depth && range.1 > last.depth).then_some(last.depth)
     }
 
     /// Where a depth sits down the page.
@@ -3179,6 +3284,28 @@ fn trace_column_at<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<Column
         .find_map(|(traces, lane)| traces.filter(|_| lane.is_some_and(|lane| lane.x_range().contains(pos.x))))
 }
 
+/// A dashed line across the plot where the hole ends, its label on a plate so
+/// the traces crossing it cannot hide it.
+fn draw_recorded_depth(ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect, view: (f64, f64), depth: f64) {
+    let visuals = ui.visuals();
+    let ink = visuals.text_color();
+    let y = BoreholeLog::y_at(plot, view.0, view.1, depth);
+    painter.extend(egui::Shape::dashed_line(
+        &[egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
+        egui::Stroke::new(1.5, ink),
+        6.0,
+        4.0,
+    ));
+    let label = tr_format!(literal = "%depth% m hole end", depth = format!("{depth:.1}"));
+    let galley = painter.layout_no_wrap(label, egui::TextStyle::Small.resolve(ui.style()), ink);
+    let above = y - galley.size().y - 3.0;
+    let top = if above >= plot.top() { above } else { y + 3.0 };
+    let at = egui::pos2(plot.right() - galley.size().x - 4.0, top);
+    let plate = egui::Rect::from_min_size(at, galley.size()).expand(2.0);
+    painter.rect_filled(plate, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, visuals.extreme_bg_color.gamma_multiply(0.8));
+    painter.galley(at, galley, egui::Color32::PLACEHOLDER);
+}
+
 /// The notes from [`BoreholeLog::trace_notes`], one weak line each across
 /// `area`, elided to its width.
 fn draw_trace_notes(ui: &egui::Ui, painter: &egui::Painter, area: egui::Rect, notes: [Option<String>; 2], line_height: f32) {
@@ -3231,7 +3358,8 @@ fn depth_at(plot: egui::Rect, view: (f64, f64), y: f32) -> f64 {
 fn clamp_depth_view(view: (f64, f64), hole: (f64, f64)) -> (f64, f64) {
     let whole = (hole.1 - hole.0).max(0.0);
     let span = (view.1 - view.0).clamp(LOG_MIN_DEPTH_SPAN.min(whole), whole);
-    let top = view.0.clamp(hole.0, hole.1 - span);
+    // Rounding can put the lowest top a hair above the hole's own.
+    let top = view.0.clamp(hole.0, (hole.1 - span).max(hole.0));
     (top, top + span)
 }
 

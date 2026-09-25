@@ -64,6 +64,13 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// Work on a dataset's linked geophysics files: an index pass, a check
+    /// or a hole read. Stale once the dataset's link is taken up again
+    /// under another generation, by a relink or a reopen.
+    Geophysics {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+    },
     /// A drillhole bundle loading for the project with this runtime id,
     /// `source` a hash of the bundle's files and mappings. A second import of
     /// the same bundle is refused while one is in flight; the job is
@@ -214,6 +221,7 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
@@ -452,6 +460,6 @@ impl<'a> App<'a> {
 /// Whether a `DrillHoleLoad` job belongs to a project other than
 /// `active_runtime_id` (`None` when no project is active) and so should be
 /// cancelled. Every other `JobKey` variant is never stale by this rule.
-fn drill_hole_load_is_stale(key: &JobKey, active_runtime_id: Option<u32>) -> bool {
+pub(crate) fn drill_hole_load_is_stale(key: &JobKey, active_runtime_id: Option<u32>) -> bool {
     matches!(key, JobKey::DrillHoleLoad { runtime_id, .. } if Some(*runtime_id) != active_runtime_id)
 }

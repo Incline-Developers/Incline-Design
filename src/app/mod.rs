@@ -1,6 +1,9 @@
 pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
 pub(crate) mod events; // Handles window events
+pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
@@ -316,10 +319,15 @@ pub(crate) struct App<'a> {
     tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
     #[cfg(not(target_arch = "wasm32"))]
     tracked_project_paths: Vec<PathBuf>,
-    /// Downhole geophysics traces, keyed by the loaded drill-hole dataset and
-    /// hole they were matched to and dropped with that dataset. Session only:
-    /// not saved with the project.
-    pub(crate) well_logs: crate::model::geophysics::GeophysicsStore,
+    /// Whether each loaded dataset's linked geophysics files can be read
+    /// this session, and the holes read from them lately. The links
+    /// themselves are the datasets'.
+    pub(crate) well_logs: crate::model::geophysics::GeophysicsSession,
+    /// Geophysics files picked this session, by their identity, so a saved
+    /// link finds its file again without another pick. A page cannot open a
+    /// file by path.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) geophysics_files: Vec<(crate::model::geophysics::FileIdentity, web_sys::File)>,
     /// Latest non-zero window size awaiting surface reconfiguration. Resize
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
@@ -435,6 +443,12 @@ pub(crate) struct App<'a> {
     applied_job_needs_gpu: bool,
     #[cfg(target_arch = "wasm32")]
     web_import_files: Option<(crate::ui::state::DataMenu, Vec<crate::model::input::InputFile>)>,
+    /// Files picked for the current drillhole CSV bundle, in the order of
+    /// `EditorState::import_drill_csv`. Only their heads were read, for the
+    /// mapping, so the import reads its tables from these and links its
+    /// geophysics files.
+    #[cfg(target_arch = "wasm32")]
+    web_import_picked_files: Option<Vec<web_sys::File>>,
     window_focused: bool,
 }
 
@@ -472,6 +486,8 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
             well_logs: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            geophysics_files: Vec::new(),
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
@@ -537,6 +553,8 @@ impl<'a> Default for App<'a> {
             applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
+            #[cfg(target_arch = "wasm32")]
+            web_import_picked_files: None,
             window_focused: true,
         }
     }
@@ -1051,7 +1069,6 @@ impl<'a> App<'a> {
         }
         let drill_holes = &self.drill_holes;
         self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
-        self.well_logs.keep_datasets(drill_holes.iter().filter(|item| item.state.loaded).map(|item| item.id));
         if self
             .editor
             .initiation_dialog
@@ -2133,6 +2150,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         }
 
         self.poll_file_dialogs();
+        self.sync_geophysics();
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2374,6 +2392,48 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     self.redraw_requested = true;
                 }
             }
+            AppEvent::GeophysicsFileIdentified { dataset, file, identity } => {
+                self.handle_geophysics_file_identified(dataset, file, identity);
+            }
+            AppEvent::GeophysicsBundleIdentified { dataset, generation, result } => {
+                self.handle_geophysics_bundle_identified(dataset, generation, result);
+            }
+            AppEvent::GeophysicsHoleRunsRead {
+                dataset,
+                generation,
+                dhid,
+                runs,
+                reservation,
+            } => {
+                self.handle_geophysics_hole_runs_read(dataset, generation, dhid, runs, reservation);
+            }
+            AppEvent::DrillHoleTablesRead {
+                key,
+                source,
+                geophysics,
+                ticket,
+                workspace,
+                result,
+            } => {
+                let active_runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+                if workspace != self.workspace_generation || jobs::drill_hole_load_is_stale(&key, active_runtime_id) {
+                    let label = self
+                        .background_tasks
+                        .reported
+                        .iter()
+                        .find(|task| task.ticket == ticket)
+                        .map(|task| task.label.clone())
+                        .unwrap_or_else(|| crate::i18n::tr!(literal = "a drillhole import"));
+                    self.cancel_background_task(ticket);
+                    userspace_log!(
+                        "{}",
+                        crate::i18n::tr_format!(literal = "Cancelled '%label%': its project is no longer active", label = label)
+                    );
+                    return;
+                }
+                self.finish_background_task(ticket, false);
+                self.continue_web_drill_hole_import(key, source, geophysics, result);
+            }
         }
     }
 }
@@ -2419,6 +2479,46 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// A picked geophysics file's identity, computed on the page thread.
+    GeophysicsFileIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        file: web_sys::File,
+        identity: std::result::Result<crate::model::geophysics::FileIdentity, String>,
+    },
+    /// A freshly loaded CSV bundle's geophysics files' identities.
+    GeophysicsBundleIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        result: std::result::Result<
+            Vec<(
+                crate::model::formats::csv_drill_hole::CsvDrillFileMapping,
+                web_sys::File,
+                crate::model::geophysics::FileIdentity,
+            )>,
+            String,
+        >,
+    },
+    /// One hole's geophysics run bytes, read from the linked files on the
+    /// page thread and ready to parse on the job queue.
+    GeophysicsHoleRunsRead {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        dhid: String,
+        runs: std::result::Result<Vec<Vec<u8>>, String>,
+        /// Browser memory claimed for the bytes and their parse.
+        reservation: crate::app::memory::MemoryReservation,
+    },
+    /// A browser drillhole CSV bundle's table files, read whole on the page
+    /// thread with their mappings; ready to parse on the job queue.
+    DrillHoleTablesRead {
+        key: crate::app::jobs::JobKey,
+        source: crate::model::drill_hole::DrillHoleSource,
+        geophysics: Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, web_sys::File)>,
+        ticket: BackgroundTaskTicket,
+        /// Which workspace the read started in; runtime ids are recycled.
+        workspace: u64,
+        result: std::result::Result<Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, crate::model::input::InputFile)>, String>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]

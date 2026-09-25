@@ -3438,6 +3438,15 @@ pub(crate) enum UiCommand {
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
+    /// Link a geophysics CSV to a loaded drillhole dataset, replacing any
+    /// link it has.
+    LinkGeophysics(DrillHoleId),
+    /// Read one hole's geophysics from its dataset's linked files, for
+    /// the log to draw.
+    ReadHoleGeophysics {
+        dataset: DrillHoleId,
+        dhid: String,
+    },
     OpenReferencePoints,
     OpenReferenceSurface,
     /// A new triangulation from the selected points the command was opened
@@ -3783,6 +3792,8 @@ impl UiCommand {
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::SetDrillHoleWorkingSections { .. }
             | Self::OpenDrillHoleColorDialog(_)
+            | Self::LinkGeophysics(_)
+            | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
             | Self::OpenModellingSettings

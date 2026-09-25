@@ -374,6 +374,7 @@ impl<'a> App<'a> {
                     .with_section(imported.section)
                     .with_folder(folder);
                 open.color = imported.color;
+                open.geophysics = imported.geophysics;
                 reconcile_restored_drill_color(open);
             }
         }
@@ -682,6 +683,7 @@ impl<'a> App<'a> {
                         .with_section(imported.section)
                         .with_folder(folder);
                     open.color = imported.color;
+                    open.geophysics = imported.geophysics;
                     reconcile_restored_drill_color(open);
                 }
             }

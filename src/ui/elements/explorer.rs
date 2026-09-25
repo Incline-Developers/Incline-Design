@@ -1207,6 +1207,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                                 commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
                                                 ui.close();
                                             }
+                                            if ContextMenuAction::new(tr!(literal = "Link Geophysics...")).show(ui).clicked() {
+                                                commands.push(UiCommand::LinkGeophysics(dataset.id));
+                                                ui.close();
+                                            }
                                         } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
                                             commands.push(UiCommand::LoadDrillHole(dataset.id));
                                             ui.close();

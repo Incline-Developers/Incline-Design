@@ -1,6 +1,6 @@
 //! The well-log trace columns either side of the borehole log's hole track:
 //! density (long- and short-spaced, one shared scale) to its left, gamma to
-//! its right. Drawn from [`crate::model::geophysics::GeophysicsStore`] at a
+//! its right. Drawn from [`crate::model::geophysics::GeophysicsSession`] at a
 //! cost set by the column's height in pixels, never by the trace's length.
 
 use serde::{Deserialize, Serialize};
@@ -194,23 +194,54 @@ pub(crate) enum Clip {
 pub(crate) struct ColumnTraces<'a> {
     pub(crate) column: TraceColumn,
     traces: [Option<&'a LogTrace>; 2],
+    /// The curves the column shows: those read, or while the hole is read,
+    /// those its index says it has.
+    shown: [bool; 2],
 }
 
 impl<'a> ColumnTraces<'a> {
     /// `None` when the hole holds none of the column's curves.
     pub(crate) fn of(column: TraceColumn, hole: Option<&'a HoleLogs>) -> Option<Self> {
         let mut traces = [None; 2];
-        let mut any = false;
         for (slot, &kind) in traces.iter_mut().zip(column.kinds()) {
             *slot = hole.and_then(|hole| hole.trace(kind));
-            any |= slot.is_some();
         }
-        any.then_some(Self { column, traces })
+        let shown = traces.map(|trace| trace.is_some());
+        shown.contains(&true).then_some(Self { column, traces, shown })
+    }
+
+    /// The column of a hole still being read, laid out for the curves it
+    /// has, by [`LogKind::index`].
+    pub(crate) fn reading(column: TraceColumn, kinds: [bool; 3]) -> Option<Self> {
+        let mut shown = [false; 2];
+        for (slot, kind) in shown.iter_mut().zip(column.kinds()) {
+            *slot = kinds[kind.index()];
+        }
+        shown.contains(&true).then_some(Self { column, traces: [None; 2], shown })
+    }
+
+    /// The curves the column shows, in column order.
+    pub(crate) fn curves(&self) -> impl Iterator<Item = LogKind> + '_ {
+        self.column.kinds().iter().zip(self.shown).filter_map(|(kind, shown)| shown.then_some(*kind))
+    }
+
+    fn is_reading(&self) -> bool {
+        self.traces.iter().all(Option::is_none)
+    }
+
+    /// Whether the scale is known: an auto one waits for the readings.
+    fn has_range(&self, style: &WellLogStyle) -> bool {
+        !self.is_reading() || !style.scale(self.column).auto
     }
 
     /// The present traces, in column order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &'a LogTrace> + '_ {
         self.traces.into_iter().flatten()
+    }
+
+    /// The present traces with the curve each is, in column order.
+    fn kinded(&self) -> impl Iterator<Item = (LogKind, &'a LogTrace)> + '_ {
+        self.column.kinds().iter().zip(self.traces).filter_map(|(kind, trace)| trace.map(|trace| (*kind, trace)))
     }
 }
 
@@ -361,8 +392,7 @@ pub(crate) fn draw_header(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Re
     let font = egui::TextStyle::Small.resolve(ui.style());
     let mut y = rect.top() + HEADER_PADDING * 0.5;
 
-    for trace in traces.iter() {
-        let kind = trace.kind();
+    for kind in traces.curves() {
         let color = to_color32(style.color(kind));
         let swatch_y = y + line_height * 0.5;
         painter.line_segment(
@@ -385,18 +415,21 @@ pub(crate) fn draw_header(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Re
     }
 
     let weak = ui.visuals().weak_text_color();
-    let min_galley = painter.layout_no_wrap(edge_label(range[0], range), font.clone(), weak);
-    let min_size = min_galley.size();
-    painter.galley(egui::pos2(rect.left(), y), min_galley, weak);
-    let max_galley = painter.layout_no_wrap(edge_label(range[1], range), font.clone(), weak);
-    let max_size = max_galley.size();
-    let max_pos = egui::pos2(rect.right() - max_size.x, y);
-    painter.galley(max_pos, max_galley, weak);
+    let (mut left_bound, mut right_bound) = (rect.left(), rect.right());
+    if traces.has_range(style) {
+        let min_galley = painter.layout_no_wrap(edge_label(range[0], range), font.clone(), weak);
+        let min_size = min_galley.size();
+        painter.galley(egui::pos2(rect.left(), y), min_galley, weak);
+        let max_galley = painter.layout_no_wrap(edge_label(range[1], range), font.clone(), weak);
+        let max_size = max_galley.size();
+        let max_pos = egui::pos2(rect.right() - max_size.x, y);
+        painter.galley(max_pos, max_galley, weak);
+        left_bound += min_size.x + UNIT_LABEL_GAP;
+        right_bound = max_pos.x - UNIT_LABEL_GAP;
+    }
     let unit_galley = painter.layout_no_wrap(traces.column.unit().to_owned(), font, weak);
     let unit_size = unit_galley.size();
     let unit_x = rect.center().x - unit_size.x * 0.5;
-    let left_bound = rect.left() + min_size.x + UNIT_LABEL_GAP;
-    let right_bound = max_pos.x - UNIT_LABEL_GAP;
     if unit_x >= left_bound && unit_x + unit_size.x <= right_bound {
         painter.galley(egui::pos2(unit_x, y), unit_galley, weak);
     }
@@ -604,9 +637,18 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
     );
 
     let grid_color = ui.visuals().weak_text_color().gamma_multiply(GRID_ALPHA);
-    for value in gridlines(range) {
-        let (x, _) = value_x(value, range, rect.left(), rect.right());
-        clipped.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
+    if traces.has_range(style) {
+        for value in gridlines(range) {
+            let (x, _) = value_x(value, range, rect.left(), rect.right());
+            clipped.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
+        }
+    }
+    if traces.is_reading() {
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::simple_singleline(tr!(literal = "Reading..."), font, ui.visuals().weak_text_color());
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width());
+        let galley = clipped.layout_job(job);
+        clipped.galley(rect.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
     }
 
     let (top, bottom) = view;
@@ -614,8 +656,8 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
     let buckets = ((rect.height() * ui.ctx().pixels_per_point()).round().max(1.0)) as usize;
     let min_width = 1.0 / ui.ctx().pixels_per_point();
 
-    for trace in traces.iter() {
-        let color = style.color(trace.kind());
+    for (kind, trace) in traces.kinded() {
+        let color = style.color(kind);
         let trace_step = trace.step();
         let geometry = if exact_mode(view_span, buckets, trace_step) {
             sample_geometry(trace.samples(top - trace_step, bottom + trace_step), rect, view, range)
@@ -630,8 +672,7 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
 /// curve's reading there in its colour, with the file curve it came from.
 pub(crate) fn readout(ui: &mut egui::Ui, traces: &ColumnTraces, depth: f64, style: &WellLogStyle) {
     ui.label(tr_format!(literal = "%depth% m", depth = format!("{depth:.2}")));
-    for trace in traces.iter() {
-        let kind = trace.kind();
+    for (kind, trace) in traces.kinded() {
         // At most the two samples either side of the depth, never a scan.
         let half = 0.5 * trace.step();
         let reading = trace.samples(depth - half, depth + half).find_map(|(_, value)| value);

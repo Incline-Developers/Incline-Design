@@ -12,7 +12,7 @@ use std::{
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use super::csv_geophysics::{GeophysicsImport, GeophysicsReader, Records, StreamControl, cell_text};
+use super::csv_geophysics::{Records, StreamControl, cell_text};
 use crate::{
     model::drill_hole::{
         DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation, TraceStation, direction_orientation, resolve_trace,
@@ -103,11 +103,7 @@ const PREVIEW_ROWS: usize = 8;
 
 /// Most of a file read for its preview. A geophysics export runs to hundreds
 /// of megabytes and the preview shows its first rows only.
-const PREVIEW_HEAD_BYTES: usize = 1024 * 1024;
-
-/// Read buffer for a geophysics file streamed from disk.
-#[cfg(not(target_arch = "wasm32"))]
-const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+pub(crate) const PREVIEW_HEAD_BYTES: usize = 1024 * 1024;
 
 /// The header and first rows of a file, read from its head only.
 pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
@@ -328,10 +324,11 @@ pub(crate) fn bundle_anchor<'a>(files: impl IntoIterator<Item = &'a CsvDrillFile
     segments
 }
 
-/// A bundle's dataset and, when it carries geophysics files, their traces.
+/// A bundle's dataset and, when it carries geophysics files, their link.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ParsedBundle {
     pub(crate) dataset: DrillHoleDataset,
-    pub(crate) geophysics: Option<GeophysicsImport>,
+    pub(crate) geophysics: Option<crate::model::geophysics::GeophysicsLink>,
 }
 
 /// Every mapping is checked before any file is read, so a bad one fails the
@@ -351,8 +348,8 @@ fn check_purposes<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) 
     Ok(())
 }
 
-/// Tables are read whole; geophysics files are streamed from disk, never
-/// held whole.
+/// Tables are read whole; geophysics files are read through for their
+/// index, never held whole.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn parse_paths(files: &[CsvDrillFileMapping], control: StreamControl<'_>) -> Result<ParsedBundle, CsvDrillError> {
     check_purposes(files)?;
@@ -369,30 +366,33 @@ pub(crate) fn parse_paths(files: &[CsvDrillFileMapping], control: StreamControl<
     let dataset = parse_tables(tables.iter().copied().zip(buffers.iter().map(Vec::as_slice)))?;
     drop(buffers);
     work.tables_done();
-    let opened = streams.into_iter().zip(sizes).map(|(mapping, size)| {
-        let reader = std::fs::File::open(&mapping.path)
-            .map(|file| std::io::BufReader::with_capacity(STREAM_BUFFER_BYTES, file))
-            .map_err(CsvDrillError::Io);
-        (mapping, size, reader)
-    });
-    let geophysics = read_geophysics(&dataset, opened, &mut work)?;
+    let opened = streams
+        .into_iter()
+        .zip(sizes)
+        .map(|(mapping, size)| (mapping, size, super::csv_geophysics::open_for_index(&mapping.path)));
+    let geophysics = link_geophysics(&dataset, opened, &mut work)?;
     Ok(ParsedBundle { dataset, geophysics })
 }
 
-/// A bundle whose files are all in memory, as the browser hands them over.
+/// A bundle's tables, in memory as the browser hands them over. Its
+/// geophysics files are not among them: they are linked once the dataset
+/// exists, and read from the picked files a hole at a time.
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the browser import uses this; native builds it only for tests"))]
-pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>, control: StreamControl<'_>) -> Result<ParsedBundle, CsvDrillError> {
-    let inputs = inputs.into_iter().collect::<Vec<_>>();
-    check_purposes(inputs.iter().map(|(mapping, _)| *mapping))?;
-    let (streams, tables): (Vec<_>, Vec<_>) = inputs.into_iter().partition(|(mapping, _)| mapping.role == CsvDrillFileRole::Geophysics);
-    let bytes = |files: &[(&CsvDrillFileMapping, &[u8])]| files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
-    let mut work = BundleWork::new(bytes(&tables), bytes(&streams), control);
+pub(crate) fn parse_bundle_tables<'a>(
+    mappings: &[CsvDrillFileMapping],
+    tables: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>,
+    control: StreamControl<'_>,
+) -> Result<DrillHoleDataset, CsvDrillError> {
+    check_purposes(mappings)?;
+    if (control.cancelled)() {
+        return Err(CsvDrillError::Cancelled);
+    }
+    let tables = tables.into_iter().collect::<Vec<_>>();
+    let work = BundleWork::new(tables.iter().map(|(_, bytes)| bytes.len() as u64).sum(), 0, control);
     let dataset = parse_tables(tables)?;
     work.tables_done();
-    let streams = streams.into_iter().map(|(mapping, bytes)| (mapping, bytes.len() as u64, Ok(bytes)));
-    let geophysics = read_geophysics(&dataset, streams, &mut work)?;
-    Ok(ParsedBundle { dataset, geophysics })
+    Ok(dataset)
 }
 
 /// A bundle's progress, as the share of its bytes read: the tables all at
@@ -403,6 +403,7 @@ struct BundleWork<'c> {
     tables: u64,
     whole: u64,
     /// Geophysics bytes of the files already read.
+    #[cfg(not(target_arch = "wasm32"))]
     streamed: u64,
 }
 
@@ -412,6 +413,7 @@ impl<'c> BundleWork<'c> {
             control,
             tables,
             whole: (tables + geophysics).max(1),
+            #[cfg(not(target_arch = "wasm32"))]
             streamed: 0,
         }
     }
@@ -425,28 +427,42 @@ impl<'c> BundleWork<'c> {
     }
 }
 
-/// Stream every geophysics file into traces for the dataset's holes. The
-/// geophysics hangs off the dataset, not the other way round, and each file
-/// stands alone: one that fails is left out with a warning, the traces of
-/// the others are kept, and the drillholes load either way.
-fn read_geophysics<'m, R: std::io::BufRead>(
+/// Index every geophysics file for the dataset's holes. The geophysics
+/// hangs off the dataset, not the other way round, and each file stands
+/// alone: one that fails is left out with a warning, the others are linked,
+/// and the drillholes load either way.
+#[cfg(not(target_arch = "wasm32"))]
+fn link_geophysics<'m, R: std::io::BufRead>(
     dataset: &DrillHoleDataset,
-    streams: impl IntoIterator<Item = (&'m CsvDrillFileMapping, u64, Result<R, CsvDrillError>)>,
+    streams: impl IntoIterator<Item = (&'m CsvDrillFileMapping, u64, Result<(crate::model::geophysics::FileIdentity, R), CsvDrillError>)>,
     work: &mut BundleWork<'_>,
-) -> Result<Option<GeophysicsImport>, CsvDrillError> {
-    let mut reader = None;
-    let mut any_read = false;
+) -> Result<Option<crate::model::geophysics::GeophysicsLink>, CsvDrillError> {
+    let known = dataset.holes.iter().map(|hole| hole.dhid.clone()).collect::<std::collections::HashSet<_>>();
+    let mut files = Vec::new();
     for (mapping, size, input) in streams {
         if (work.control.cancelled)() {
             return Err(CsvDrillError::Cancelled);
         }
-        let reader = reader.get_or_insert_with(|| GeophysicsReader::new(dataset.holes.iter().map(|hole| hole.dhid.clone())));
         let streamed = work.streamed;
-        let outcome = input.and_then(|input| reader.read(mapping, input, work.control.cancelled, &mut |bytes| work.report(streamed + bytes)));
+        let outcome = input.and_then(|(identity, input)| {
+            let path = mapping.path.clone();
+            super::csv_geophysics::index_file(
+                path,
+                identity,
+                super::csv_geophysics::ColumnSource::Mapped(&mapping.columns),
+                &known,
+                input,
+                work.control.cancelled,
+                &mut |bytes| work.report(streamed + bytes),
+            )
+        });
         work.streamed += size;
         work.report(work.streamed);
         match outcome {
-            Ok(()) => any_read = true,
+            Ok(indexed) => {
+                indexed.report.log(&indexed.file);
+                files.push(indexed.file);
+            }
             Err(CsvDrillError::Cancelled) => return Err(CsvDrillError::Cancelled),
             Err(error) => userspace_warn!(
                 "{}",
@@ -458,7 +474,7 @@ fn read_geophysics<'m, R: std::io::BufRead>(
             ),
         }
     }
-    Ok(reader.filter(|_| any_read).map(GeophysicsReader::finish))
+    Ok((!files.is_empty()).then_some(crate::model::geophysics::GeophysicsLink { files }))
 }
 
 /// Enough to find the bad rows without burying the console.

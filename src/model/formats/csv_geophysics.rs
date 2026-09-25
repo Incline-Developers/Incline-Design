@@ -1,30 +1,37 @@
 //! Downhole geophysics from a CSV file: one row per sample, a hole id, a
-//! depth and gamma or density columns, as a database exports the logs once
-//! they are cleaned. Raw instrument formats are not read here or anywhere,
-//! and no unit is converted: depth is metres, gamma API and density g/cc.
+//! depth and curve columns, as a database exports the logs once they are
+//! cleaned. Raw instrument formats are not read here or anywhere, and no
+//! unit is converted: depth is metres, gamma API and density g/cc.
 //!
-//! A file runs to millions of rows, so it is never held as text. Rows are
-//! read one at a time straight into numbers, and a hole's samples become
-//! traces as soon as the rows move on to the next hole. A hole that comes
-//! back for a curve it holds keeps what it holds: the later rows add only
-//! depths it has no reading at, joined in batches so that rows interleaved
-//! hole by hole are not a rebuild each.
+//! A file runs to gigabytes, so it is never held. Linking reads it through
+//! once, a row at a time, for where each hole's rows are ([`index_file`]);
+//! showing a hole reads those rows alone ([`read_hole`]). A file not
+//! grouped by hole, one sorted by depth say, is refused as it is linked:
+//! its index would outgrow what a project can save and reopen. A hole that
+//! comes back later, for a repeat pass, keeps what it holds: the later rows
+//! add only depths it has no reading at, joined in batches.
 
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap, HashSet},
     io::BufRead,
     ops::Range,
+    path::PathBuf,
 };
 
+// Not on the web, where rayon's pool is the job queue: a thread waiting on
+// its share of a parallel loop may take up a queued job instead, and an
+// index pass there blocks for minutes on the page feeding it.
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+
 use crate::{
-    app::memory::MemoryReservation,
     i18n::{tr, tr_format},
     model::{
-        formats::csv_drill_hole::{self, CsvDrillColumnRole, CsvDrillError, CsvDrillFileMapping, SKIP_REPORT_LIMIT},
-        geophysics::{LogKind, LogTrace, TraceError},
+        formats::csv_drill_hole::{self, CsvDrillColumnRole, CsvDrillError, CsvDrillFileRole, SKIP_REPORT_LIMIT},
+        geophysics::{ColumnRole, ColumnSet, FileIdentity, GeophysicsLink, HoleLogs, HoleRuns, LinkedColumn, LinkedFile, LogKind, LogTrace, TraceError},
     },
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
 
 /// Hole ids named in one report before the rest are only counted.
@@ -40,31 +47,36 @@ const MAX_RECORD_BYTES: usize = 1024 * 1024;
 /// rebuild per doubling rather than per row.
 const REJOIN_BATCH_ROWS: usize = 4096;
 
-/// Most bytes of rows waiting to be joined, across holes, before the hole
-/// with the most waiting is joined early.
+/// Most bytes of rows waiting to be joined before they are joined early.
 const WAITING_BYTES_LIMIT: usize = 64 * 1024 * 1024;
 
-/// Bytes counted per depth held in the set a batch is checked against.
-const COVERED_ENTRY_BYTES: usize = 32;
-
-/// Rows between checks of the transient memory held.
-const MEMORY_CHECK_ROWS: usize = 1 << 16;
-
-/// Rows between asking whether the import was cancelled.
+/// Rows between asking whether the index pass was cancelled.
 const CANCEL_CHECK_ROWS: usize = 4096;
-
-/// Smallest step a memory reservation grows by, so a file does not reserve
-/// once per hole.
-const RESERVE_STEP: usize = 16 * 1024 * 1024;
 
 /// Bytes read between progress reports.
 const PROGRESS_STRIDE: u64 = 4 * 1024 * 1024;
+
+/// Runs past each hole's first that any file may have, however few its
+/// holes.
+const SPLIT_RUN_FLOOR: usize = 1024;
+
+/// Runs past its first that each hole adds to what a file may have.
+const SPLIT_RUNS_PER_HOLE: usize = 4;
+
+/// Most runs past each hole's first a file may have. The index is saved
+/// with the project, which does not reopen past 64 MiB of index; this many
+/// runs are a few MiB of it.
+const MAX_SPLIT_RUNS: usize = 50_000;
 
 /// Two readings this close are one depth.
 const SAME_DEPTH: f64 = 1.0e-6;
 
 /// Where a density curve's median has to lie for its unit to be g/cc.
 const PLAUSIBLE_DENSITY: std::ops::RangeInclusive<f64> = 0.5..=5.0;
+
+/// The no-reading values exports write. A drawn curve is never negative, so
+/// there every negative is one; a curve of unknown unit may be.
+const NO_READING: [f64; 3] = [-999.25, -999.0, -9999.0];
 
 /// How a long read reports progress and learns it should stop.
 #[derive(Clone, Copy)]
@@ -86,58 +98,485 @@ pub(crate) fn curve_kind(role: &CsvDrillColumnRole) -> Option<LogKind> {
     }
 }
 
-/// What a geophysics import leaves for the store, with the counts its
-/// summary reports.
-pub(crate) struct GeophysicsImport {
-    /// Each hole with at least one trace, and its traces.
-    pub(crate) holes: Vec<(String, Vec<LogTrace>)>,
-    /// Data rows read, blank lines aside.
-    pub(crate) rows_read: usize,
-    /// Rows refused: wrong width, no hole id, no usable depth.
-    pub(crate) rows_skipped: usize,
-    /// Rows for holes the bundle does not define.
-    pub(crate) orphan_rows: usize,
-    /// Distinct holes the bundle does not define.
-    pub(crate) orphan_holes: usize,
-    /// Readings left empty for lying outside what the curve can hold:
-    /// negative, which takes in the no-reading sentinels, or above the
-    /// largest value a trace stores.
-    pub(crate) out_of_range: usize,
-    /// Readings of a later run left out because the hole already held a
-    /// reading of that curve within half a step.
-    pub(crate) already_held: usize,
-    /// Readings left out as isolated: a small group far from the rest of
-    /// its hole's curve.
-    pub(crate) isolated: usize,
-    /// Runs that could not be made a trace.
-    pub(crate) runs_not_kept: usize,
-    /// Density curves left out of a file because their unit looked wrong.
-    pub(crate) curves_left_out: usize,
-    /// Held against the browser's working-set budget for as long as the
-    /// traces are; nothing on native.
-    pub(crate) reservation: MemoryReservation,
+/// A linked file's index, and what reading it through found.
+pub(crate) struct IndexedFile {
+    pub(crate) file: LinkedFile,
+    pub(crate) report: IndexReport,
 }
 
-impl GeophysicsImport {
-    /// Traces held per curve, indexed by [`LogKind::index`].
-    pub(crate) fn traces_per_curve(&self) -> [usize; LogKind::ALL.len()] {
-        let mut counts = [0; LogKind::ALL.len()];
-        for trace in self.holes.iter().flat_map(|(_, traces)| traces) {
-            counts[trace.kind().index()] += 1;
+/// What an index pass counted, for the console once the file is linked.
+pub(crate) struct IndexReport {
+    rows: usize,
+    skipped: usize,
+    orphan_rows: usize,
+    orphans: Vec<String>,
+    /// Holes whose rows came in more than one run.
+    split: Vec<String>,
+    /// Density curves left out, and where most of their readings lay.
+    left_out: Vec<(String, String)>,
+}
+
+impl IndexReport {
+    /// Say what `file` links, and what was set aside.
+    pub(crate) fn log(&self, file: &LinkedFile) {
+        let curves = file
+            .columns
+            .iter()
+            .filter(|column| matches!(column.role, ColumnRole::Curve { .. }))
+            .map(|column| column.header.as_str())
+            .collect::<Vec<_>>();
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Linked downhole geophysics from %file%: %holes% hole(s), curves %curves%; %rows% row(s) read, %skipped% skipped. The readings stay in the file and are read a hole at a time",
+                file = file.identity.name.clone(),
+                holes = file.holes.len(),
+                curves = curves.join(", "),
+                rows = self.rows,
+                skipped = self.skipped
+            )
+        );
+        if !self.split.is_empty() {
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Geophysics for %count% hole(s) comes in more than one run, not grouped by hole; each later run adds only depths its hole has no reading at: %holes%",
+                    count = self.split.len(),
+                    holes = hole_list(self.split.iter().map(String::as_str))
+                )
+            );
         }
-        counts
+        if !self.orphans.is_empty() {
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "%rows% geophysics row(s) for %count% hole(s) the dataset does not define are not linked: %holes%",
+                    rows = self.orphan_rows,
+                    count = self.orphans.len(),
+                    holes = hole_list(self.orphans.iter().map(String::as_str))
+                )
+            );
+        }
+        for (curve, side) in &self.left_out {
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "%curve% in %file% was left out: most of its readings are %side%, so its median is outside 0.5 to 5 g/cc and its unit looks wrong (g/cc expected). Incline converts no units; correct the export and link it again",
+                    curve = curve.clone(),
+                    file = file.identity.name.clone(),
+                    side = side.clone()
+                )
+            );
+        }
     }
 }
 
-/// The samples of one run of rows, a column per mapped curve.
-#[derive(Default)]
+/// Where an index pass takes the file's column roles from.
+#[derive(Clone, Copy)]
+pub(crate) enum ColumnSource<'a> {
+    /// As an import mapped them.
+    Mapped(&'a [CsvDrillColumnRole]),
+    /// As an earlier index of the file found them, while its header is the
+    /// same; guessed from the header when it is not.
+    Previous(&'a [LinkedColumn]),
+    Guessed,
+}
+
+impl ColumnSource<'_> {
+    fn roles(self, headers: &[String]) -> Vec<CsvDrillColumnRole> {
+        match self {
+            ColumnSource::Mapped(roles) => roles.to_vec(),
+            ColumnSource::Previous(columns) if columns.iter().map(|column| &column.header).eq(headers) => columns
+                .iter()
+                .map(|column| match column.role {
+                    ColumnRole::Dhid => CsvDrillColumnRole::Dhid,
+                    ColumnRole::Depth => CsvDrillColumnRole::Depth,
+                    ColumnRole::Curve { kind: Some(kind) } | ColumnRole::LeftOut { kind } => kind_role(kind),
+                    ColumnRole::Curve { kind: None } | ColumnRole::Skipped => CsvDrillColumnRole::Ignore,
+                })
+                .collect(),
+            ColumnSource::Previous(_) | ColumnSource::Guessed => csv_drill_hole::default_columns(CsvDrillFileRole::Geophysics, headers),
+        }
+    }
+}
+
+fn kind_role(kind: LogKind) -> CsvDrillColumnRole {
+    match kind {
+        LogKind::Gamma => CsvDrillColumnRole::Gamma,
+        LogKind::LongDensity => CsvDrillColumnRole::LongDensity,
+        LogKind::ShortDensity => CsvDrillColumnRole::ShortDensity,
+    }
+}
+
+/// The run of rows being indexed: consecutive rows for one hole.
+struct RunScan {
+    dhid: String,
+    /// A hole the dataset does not define: its rows are counted, not
+    /// indexed.
+    orphan: bool,
+    bytes: [u64; 2],
+    depths: [f64; 2],
+    /// Columns with a reading in the run, as a read takes a cell.
+    curves: ColumnSet,
+    /// Depths each drawn curve has readings at, by [`LogKind::index`].
+    drawn: [[f64; 2]; 3],
+}
+
+/// No depths yet.
+const NO_DEPTHS: [f64; 2] = [f64::INFINITY, f64::NEG_INFINITY];
+
+fn widen([top, bottom]: [f64; 2], [from, to]: [f64; 2]) -> [f64; 2] {
+    [top.min(from), bottom.max(to)]
+}
+
+impl RunScan {
+    /// Store the run under `holes`, unless it is an orphan's. Returns
+    /// whether a known hole's run was stored.
+    fn close(self, holes: &mut HashMap<String, (HoleRuns, [[f64; 2]; 3])>) -> bool {
+        if self.orphan {
+            return false;
+        }
+        let (hole, drawn) = holes.entry(self.dhid).or_insert_with_key(|dhid| {
+            let hole = HoleRuns {
+                dhid: dhid.clone(),
+                runs: Vec::new(),
+                depths: NO_DEPTHS,
+                curves: ColumnSet::default(),
+            };
+            (hole, [NO_DEPTHS; 3])
+        });
+        hole.runs.push(self.bytes);
+        hole.depths = widen(hole.depths, self.depths);
+        hole.curves.union(&self.curves);
+        for (held, run) in drawn.iter_mut().zip(self.drawn) {
+            *held = widen(*held, run);
+        }
+        true
+    }
+}
+
+/// Close `ended`'s run, then refuse the file `name` once its holes have
+/// more runs past their first than it may: a file grouped by hole never
+/// does, one sorted by depth soon does, long before it is read through.
+fn close_run(ended: RunScan, holes: &mut HashMap<String, (HoleRuns, [[f64; 2]; 3])>, known_runs: &mut usize, name: &str) -> Result<(), CsvDrillError> {
+    if !ended.close(holes) {
+        return Ok(());
+    }
+    *known_runs += 1;
+    let seen = holes.len();
+    let split = *known_runs - seen;
+    let allowed = (SPLIT_RUN_FLOOR + SPLIT_RUNS_PER_HOLE * seen).min(MAX_SPLIT_RUNS);
+    if split > allowed {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "%file% is not grouped by hole: its holes' rows are split across too many runs. Sort it by hole id, then depth, and link it again",
+            file = name.to_owned()
+        )));
+    }
+    Ok(())
+}
+
+/// Read buffer for a file indexed from disk.
+#[cfg(not(target_arch = "wasm32"))]
+const INDEX_BUFFER_BYTES: usize = 1024 * 1024;
+
+/// Open the file at `path` for [`index_file`]: its identity, then a reader.
+/// A path that is not UTF-8 is refused, since the link that saves it is
+/// text.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_for_index(path: &std::path::Path) -> Result<(FileIdentity, std::io::BufReader<std::fs::File>), CsvDrillError> {
+    if path.to_str().is_none() {
+        return Err(CsvDrillError::Invalid(tr!(
+            literal = "the file's path is not valid UTF-8, which a project cannot save: rename the file or its folder and link it again"
+        )));
+    }
+    let identity = FileIdentity::of_path(path)?;
+    Ok((identity, std::io::BufReader::with_capacity(INDEX_BUFFER_BYTES, std::fs::File::open(path)?)))
+}
+
+/// Read a geophysics file through, never holding it, for where the rows of
+/// each `known` hole are. A column not the hole id, the depth or a drawn
+/// curve is a curve if most of its cells are numbers. A file most of whose
+/// rows cannot be read is refused, as is a density curve whose unit looks
+/// wrong.
+pub(crate) fn index_file(
+    path: PathBuf,
+    identity: FileIdentity,
+    columns: ColumnSource<'_>,
+    known: &HashSet<String>,
+    input: impl BufRead,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<IndexedFile, CsvDrillError> {
+    let name = identity.name.clone();
+    let mut records = Records::new(input)?;
+    if !records.next()? {
+        return Err(CsvDrillError::Invalid(tr_format!(literal = "%file% is empty", file = name.clone())));
+    }
+    let headers = (0..records.len()).map(|index| cell_text(records.cell(index)).trim().to_owned()).collect::<Vec<_>>();
+    let roles = columns.roles(&headers);
+    let width = headers.len();
+    if roles.len() != width {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "%file% mapping has %mapped% columns, CSV has %found%",
+            file = name.clone(),
+            mapped = roles.len().to_string(),
+            found = width.to_string()
+        )));
+    }
+    let column = |role: CsvDrillColumnRole| roles.iter().position(|mapped| *mapped == role);
+    let (Some(dhid_column), Some(depth_column)) = (column(CsvDrillColumnRole::Dhid), column(CsvDrillColumnRole::Depth)) else {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "%file% requires one DHID and one depth column",
+            file = name.clone()
+        )));
+    };
+    let kinds = roles.iter().map(curve_kind).collect::<Vec<_>>();
+    let (mut numbers, mut texts) = (vec![0usize; width], vec![0usize; width]);
+    // Density readings below, within and above the plausible g/cc range.
+    let mut votes = [[0usize; 3]; 3];
+    let mut holes = HashMap::new();
+    let mut known_runs = 0usize;
+    let mut run: Option<RunScan> = None;
+    let (mut rows, mut skipped, mut orphan_rows) = (0usize, 0usize, 0usize);
+    let mut orphans = HashSet::new();
+    let mut last_progress = 0u64;
+    let mut start = records.bytes_read();
+    while records.next()? {
+        let row = [start, records.bytes_read()];
+        start = row[1];
+        if row[1] >= last_progress + PROGRESS_STRIDE {
+            last_progress = row[1];
+            progress(last_progress);
+        }
+        if records.is_blank() {
+            continue;
+        }
+        rows += 1;
+        if rows.is_multiple_of(CANCEL_CHECK_ROWS) && cancelled() {
+            return Err(CsvDrillError::Cancelled);
+        }
+        let (dhid, depth) = match gate(&records, &name, width, dhid_column, depth_column) {
+            Ok(gate) => gate,
+            Err(reason) => {
+                skipped += 1;
+                if skipped <= SKIP_REPORT_LIMIT {
+                    userspace_warn!("{}", tr_format!(literal = "Skipped a row: %reason%", reason = reason));
+                }
+                continue;
+            }
+        };
+        if run.as_ref().is_none_or(|run| run.dhid != dhid) {
+            if let Some(ended) = run.take() {
+                close_run(ended, &mut holes, &mut known_runs, &name)?;
+            }
+            let orphan = !known.contains(dhid.as_ref());
+            if orphan && !orphans.contains(dhid.as_ref()) {
+                orphans.insert(dhid.clone().into_owned());
+            }
+            run = Some(RunScan {
+                dhid: dhid.into_owned(),
+                orphan,
+                bytes: row,
+                depths: [depth, depth],
+                curves: ColumnSet::default(),
+                drawn: [NO_DEPTHS; 3],
+            });
+        }
+        let Some(run) = run.as_mut() else { continue };
+        run.bytes[1] = row[1];
+        run.depths = [run.depths[0].min(depth), run.depths[1].max(depth)];
+        if run.orphan {
+            orphan_rows += 1;
+            continue;
+        }
+        for (index, kind) in kinds.iter().enumerate() {
+            if index == dhid_column || index == depth_column {
+                continue;
+            }
+            let cell = records.cell(index);
+            let Some(kind) = *kind else {
+                if !run.curves.contains(index) && could_be_number(cell) && reading(None, cell).is_finite() {
+                    run.curves.insert(index);
+                }
+                if looks_numeric(cell) {
+                    numbers[index] += 1;
+                } else if !cell.trim_ascii().is_empty() {
+                    texts[index] += 1;
+                }
+                continue;
+            };
+            // Every row, for the depths the curve has readings at.
+            let value = cell_number(cell);
+            // As a read takes it: a negative is no reading and no vote.
+            if kind != LogKind::Gamma
+                && let Some(value) = value.filter(|value| *value >= 0.0)
+            {
+                votes[kind.index()][density_side(value)] += 1;
+            }
+            if value.is_some_and(|value| is_reading(Some(kind), value)) {
+                run.curves.insert(index);
+                run.drawn[kind.index()] = widen(run.drawn[kind.index()], [depth, depth]);
+            }
+        }
+    }
+    if let Some(ended) = run.take() {
+        close_run(ended, &mut holes, &mut known_runs, &name)?;
+    }
+    progress(records.bytes_read());
+
+    if skipped > SKIP_REPORT_LIMIT {
+        userspace_warn!(
+            "{}",
+            tr_format!(literal = "%count% rows were skipped in total in %file%", count = skipped.to_string(), file = name.clone())
+        );
+    }
+    // Most of a file failing is a mapping mistake, not dirty data.
+    if rows > 0 && skipped * 2 > rows {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "%file%: %skipped% of %rows% rows could not be read; the reasons are in the console",
+            file = name,
+            skipped = skipped.to_string(),
+            rows = rows.to_string()
+        )));
+    }
+    let mut left_out = Vec::new();
+    let columns = headers
+        .into_iter()
+        .enumerate()
+        .map(|(index, header)| {
+            let role = match kinds[index] {
+                _ if index == dhid_column => ColumnRole::Dhid,
+                _ if index == depth_column => ColumnRole::Depth,
+                Some(kind) => match unit_side(votes[kind.index()]) {
+                    Some(side) => {
+                        left_out.push((header.clone(), side));
+                        ColumnRole::LeftOut { kind }
+                    }
+                    None => ColumnRole::Curve { kind: Some(kind) },
+                },
+                None if numbers[index] > texts[index] => ColumnRole::Curve { kind: None },
+                None => ColumnRole::Skipped,
+            };
+            LinkedColumn { header, role }
+        })
+        .collect::<Vec<_>>();
+    if !columns.iter().any(|column| matches!(column.role, ColumnRole::Curve { .. } | ColumnRole::LeftOut { .. })) {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "%file% has no curve: no column besides the hole id and depth holds numbers",
+            file = name
+        )));
+    }
+    let mut curves = ColumnSet::default();
+    for (index, column) in columns.iter().enumerate() {
+        if matches!(column.role, ColumnRole::Curve { .. }) {
+            curves.insert(index);
+        }
+    }
+    let kept = columns
+        .iter()
+        .filter_map(|column| match column.role {
+            ColumnRole::Curve { kind: Some(kind) } => Some(kind.index()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut holes = holes
+        .into_values()
+        .map(|(mut hole, drawn)| {
+            // Only what a read takes: text and left-out columns go.
+            hole.curves.intersect(&curves);
+            let read = kept.iter().map(|&kind| drawn[kind]).fold(NO_DEPTHS, widen);
+            if read[0] <= read[1] {
+                hole.depths = read;
+            }
+            hole
+        })
+        .collect::<Vec<_>>();
+    holes.sort_unstable_by(|a, b| a.dhid.cmp(&b.dhid));
+    let split = holes.iter().filter(|hole| hole.runs.len() > 1).map(|hole| hole.dhid.clone()).collect();
+    let mut orphans = orphans.into_iter().collect::<Vec<_>>();
+    orphans.sort_unstable();
+    Ok(IndexedFile {
+        file: LinkedFile { path, identity, columns, holes },
+        report: IndexReport {
+            rows,
+            skipped,
+            orphan_rows,
+            orphans,
+            split,
+            left_out,
+        },
+    })
+}
+
+/// Which side of the plausible g/cc range a density reading lies.
+fn density_side(value: f64) -> usize {
+    if value < *PLAUSIBLE_DENSITY.start() {
+        0
+    } else if value > *PLAUSIBLE_DENSITY.end() {
+        2
+    } else {
+        1
+    }
+}
+
+/// Where most of a density curve's readings lie, when that is outside the
+/// plausible range. Units are the exporting database's to set, so such a
+/// curve is left out rather than converted.
+fn unit_side([below, within, above]: [usize; 3]) -> Option<String> {
+    let total = below + within + above;
+    if below * 2 > total {
+        Some(tr!(literal = "below 0.5"))
+    } else if above * 2 > total {
+        Some(tr!(literal = "above 5"))
+    } else {
+        None
+    }
+}
+
+/// Whether a cell reads as a number, judged by its bytes alone: cheap
+/// enough for every cell of a file of billions.
+fn looks_numeric(cell: &[u8]) -> bool {
+    let cell = cell.trim_ascii();
+    cell.iter().any(u8::is_ascii_digit) && cell.iter().all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'+' | b'e' | b'E'))
+}
+
+/// Whether a cell could read as a number: a digit, and only bytes a number
+/// or the space around one is written with. Spares text a failed parse.
+fn could_be_number(cell: &[u8]) -> bool {
+    cell.iter()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'+' | b'e' | b'E' | b'\x0B') || byte.is_ascii_whitespace() || !byte.is_ascii())
+        && cell.iter().any(u8::is_ascii_digit)
+}
+
+/// A curve cell as a reading, or NaN where it holds none.
+fn reading(kind: Option<LogKind>, cell: &[u8]) -> f64 {
+    cell_number(cell).filter(|value| is_reading(kind, *value)).unwrap_or(f64::NAN)
+}
+
+/// Whether a number in a curve's cell is a reading. A drawn curve holds
+/// none outside what its trace can store.
+fn is_reading(kind: Option<LogKind>, value: f64) -> bool {
+    match kind {
+        Some(kind) => (0.0..=kind.max_value()).contains(&value),
+        None => !NO_READING.contains(&value),
+    }
+}
+
+/// The samples of one run of rows, a column per curve.
 struct Samples {
     depths: Vec<f64>,
-    /// Empty for a curve the file does not map.
-    values: [Vec<f64>; 3],
+    /// Empty for a curve the file does not carry.
+    values: Vec<Vec<f64>>,
 }
 
 impl Samples {
+    fn new(curves: usize) -> Self {
+        Self {
+            depths: Vec::new(),
+            values: vec![Vec::new(); curves],
+        }
+    }
+
     fn bytes(&self) -> usize {
         (self.depths.capacity() + self.values.iter().map(Vec::capacity).sum::<usize>()) * size_of::<f64>()
     }
@@ -148,7 +587,7 @@ impl Samples {
     }
 
     /// Move `other`'s rows onto the end. Both come from one file, so they
-    /// map the same curves.
+    /// carry the same curves.
     fn append(&mut self, other: &mut Samples) {
         self.depths.append(&mut other.depths);
         for (values, others) in self.values.iter_mut().zip(other.values.iter_mut()) {
@@ -157,522 +596,289 @@ impl Samples {
     }
 }
 
-/// A hole's rows waiting to be joined, and each run's row count in the order
-/// the runs arrived.
-#[derive(Default)]
+/// Rows back for a curve the hole holds, waiting to be joined, and each
+/// run's row count in the order the runs arrived.
 struct Waiting {
     samples: Samples,
     runs: Vec<usize>,
 }
 
-impl Waiting {
-    fn bytes(&self) -> usize {
-        self.samples.bytes() + self.runs.capacity() * size_of::<usize>()
+/// One curve as the hole's files carry it: a drawn curve is one whichever
+/// column holds it, any other is one per header.
+#[derive(PartialEq)]
+enum CurveKey {
+    Kind(LogKind),
+    Header(String),
+}
+
+/// Build one hole's traces from the bytes of its runs, `runs` in the order
+/// [`GeophysicsLink::runs_of`] gives them. A row for another hole means the
+/// file is not the one indexed.
+pub(crate) fn read_hole(link: &GeophysicsLink, dhid: &str, runs: &[Vec<u8>]) -> Result<HoleLogs, CsvDrillError> {
+    let files = link.runs_of(dhid).map(|(file, _)| file).collect::<Vec<_>>();
+    if files.len() != runs.len() {
+        return Err(CsvDrillError::Invalid(tr_format!(
+            literal = "Read %read% run(s) of %hole%, the link has %runs%",
+            read = runs.len(),
+            hole = dhid.to_owned(),
+            runs = files.len()
+        )));
     }
-}
-
-/// The run of rows being read: consecutive rows for one hole.
-struct Run {
-    dhid: String,
-    /// A hole the bundle does not define: its rows are counted, not kept.
-    orphan: bool,
-}
-
-/// Memory held against the working-set budget, grown in steps.
-struct Held {
-    reservation: MemoryReservation,
-    reserved: usize,
-}
-
-impl Held {
-    fn new() -> Self {
-        Self {
-            reservation: MemoryReservation::untracked(),
-            reserved: 0,
+    let mut reader = HoleReader::new(dhid, link);
+    let mut at = 0;
+    for (index, file) in link.files.iter().enumerate() {
+        let count = files.iter().filter(|of| **of == index).count();
+        if count > 0 {
+            reader.read_file(file, &runs[at..at + count])?;
+            at += count;
         }
     }
-
-    fn cover(&mut self, bytes: usize) -> Result<(), CsvDrillError> {
-        if bytes <= self.reserved {
-            return Ok(());
-        }
-        let target = bytes.max(self.reserved.saturating_add(RESERVE_STEP));
-        self.reservation.grow_to(target, &tr!(literal = "Downhole geophysics")).map_err(CsvDrillError::Invalid)?;
-        self.reserved = target;
-        Ok(())
-    }
-
-    /// The reservation, trimmed to the bytes actually held.
-    fn settle(self, bytes: usize) -> MemoryReservation {
-        self.reservation.shrink_to(bytes);
-        self.reservation
-    }
+    Ok(reader.finish())
 }
 
-/// What one file has done so far, kept apart until the file is read to its
-/// end: a file that fails, or a density curve whose unit looks wrong, comes
-/// back out of every hole the file touched.
-#[derive(Default)]
-struct FileState {
-    /// Set once the file's header is read and it may touch holes; until
-    /// then there is nothing of it to take back out.
-    started: bool,
-    index: usize,
-    name: String,
-    /// The header each curve is read from, shown beside its trace.
-    sources: [String; 3],
-    /// Density readings below, within and above the plausible g/cc range.
-    votes: [[usize; 3]; 3],
-    out_of_range: [usize; 3],
-    /// Each curve's trace before this file first touched it.
-    before: HashMap<(String, LogKind), Option<LogTrace>>,
-    before_bytes: usize,
-    rows: usize,
-    skipped: usize,
-    orphans: HashSet<String>,
-    orphan_rows: usize,
-    /// Holes that came back for a curve they already held.
-    rejoined: HashSet<String>,
-    repeated: usize,
-    already_held: [usize; 3],
-    isolated: [usize; 3],
-}
-
-impl FileState {
-    /// A curve cell as a reading, or NaN where it holds none.
-    fn reading(&mut self, kind: LogKind, cell: &[u8]) -> f64 {
-        let Some(value) = cell_number(cell) else {
-            return f64::NAN;
-        };
-        // The usual no-reading sentinels, -999.25, -999 and -9999, are
-        // negative and are caught here with every other impossible reading.
-        if value < 0.0 {
-            self.out_of_range[kind.index()] += 1;
-            return f64::NAN;
-        }
-        if kind != LogKind::Gamma {
-            let side = if value < *PLAUSIBLE_DENSITY.start() {
-                0
-            } else if value > *PLAUSIBLE_DENSITY.end() {
-                2
-            } else {
-                1
-            };
-            self.votes[kind.index()][side] += 1;
-        }
-        if value > kind.max_value() {
-            self.out_of_range[kind.index()] += 1;
-            return f64::NAN;
-        }
-        value
-    }
-}
-
-/// A run that could not be made a trace, reported once the import is done.
-struct Note {
-    file: usize,
-    dhid: String,
-    kind: LogKind,
-    error: TraceError,
-}
-
-/// Reads the geophysics files of one bundle into traces, merging a hole's
-/// runs as each ends.
-pub(crate) struct GeophysicsReader {
-    /// The holes the bundle defines; rows for any other are orphans.
-    known: HashSet<String>,
-    run: Option<Run>,
+/// Reads one hole's runs into traces, file by file, merging each run as it
+/// ends.
+struct HoleReader<'a> {
+    dhid: &'a str,
+    curves: Vec<Curve>,
     samples: Samples,
-    /// One curve's readings from the runs being settled.
+    pending: Option<Waiting>,
+}
+
+/// One curve of the hole, its trace so far and the buffers it is settled
+/// in. Curves settle apart from each other, so they settle in parallel.
+struct Curve {
+    key: CurveKey,
+    kind: Option<LogKind>,
+    /// The header the curve is read from in the file being read.
+    label: String,
+    built: Option<LogTrace>,
+    /// Readings from the runs being settled.
     readings: Vec<(f64, f64)>,
     /// One run's readings, checked before they join `readings`.
     run_readings: Vec<(f64, f64)>,
     /// Depths, as bits, an earlier run of the batch already read.
     covered: BTreeSet<u64>,
-    /// A held trace's samples and new readings, joined.
+    /// The held trace's samples and new readings, joined.
     joined: Vec<(f64, f64)>,
-    /// Every hole whose run has ended, with its traces so far.
-    built: HashMap<String, [Option<LogTrace>; 3]>,
-    /// Rows of holes back for a curve they hold, waiting to be joined.
-    pending: HashMap<String, Waiting>,
-    pending_bytes: usize,
-    /// Bytes of waiting rows past which the largest batch is joined early.
-    pending_limit: usize,
-    /// The most waiting rows held at once, in bytes, for the log.
-    pending_peak: usize,
-    /// The run buffer while it is taken out to be settled or queued.
-    spare_bytes: usize,
-    /// A batch while its traces are built from it.
-    settling_bytes: usize,
-    file: FileState,
-    files: usize,
-    /// Holes whose rows came in more than one run.
-    rejoined: HashSet<String>,
-    orphans: HashSet<String>,
-    orphan_rows: usize,
-    rows_read: usize,
-    rows_skipped: usize,
-    out_of_range: usize,
-    /// Readings at a depth read earlier in the same file for that hole.
-    repeated: usize,
-    /// Readings left out for a reading the hole already held.
-    already_held: usize,
-    isolated: usize,
-    notes: Vec<Note>,
-    curves_left_out: usize,
-    transient: Held,
-    kept: Held,
-    kept_bytes: usize,
+    /// Why runs could not be made a trace, with the header they were read
+    /// from at the time: `label` moves on to a later file, so a note keeps
+    /// its own.
+    notes: Vec<(String, TraceError)>,
 }
 
-impl GeophysicsReader {
-    pub(crate) fn new(known: impl IntoIterator<Item = String>) -> Self {
+impl<'a> HoleReader<'a> {
+    fn new(dhid: &'a str, link: &GeophysicsLink) -> Self {
+        let mut curves: Vec<Curve> = Vec::new();
+        for column in link.files.iter().flat_map(|file| &file.columns) {
+            if let ColumnRole::Curve { kind } = column.role {
+                let key = curve_key(kind, &column.header);
+                if !curves.iter().any(|curve| curve.key == key) {
+                    curves.push(Curve {
+                        key,
+                        kind,
+                        label: String::new(),
+                        built: None,
+                        readings: Vec::new(),
+                        run_readings: Vec::new(),
+                        covered: BTreeSet::new(),
+                        joined: Vec::new(),
+                        notes: Vec::new(),
+                    });
+                }
+            }
+        }
+        let count = curves.len();
         Self {
-            known: known.into_iter().collect(),
-            run: None,
-            samples: Samples::default(),
-            readings: Vec::new(),
-            run_readings: Vec::new(),
-            covered: BTreeSet::new(),
-            joined: Vec::new(),
-            built: HashMap::new(),
-            pending: HashMap::new(),
-            pending_bytes: 0,
-            pending_limit: WAITING_BYTES_LIMIT,
-            pending_peak: 0,
-            spare_bytes: 0,
-            settling_bytes: 0,
-            file: FileState::default(),
-            files: 0,
-            rejoined: HashSet::new(),
-            orphans: HashSet::new(),
-            orphan_rows: 0,
-            rows_read: 0,
-            rows_skipped: 0,
-            out_of_range: 0,
-            repeated: 0,
-            already_held: 0,
-            isolated: 0,
-            notes: Vec::new(),
-            curves_left_out: 0,
-            transient: Held::new(),
-            kept: Held::new(),
-            kept_bytes: 0,
+            dhid,
+            curves,
+            samples: Samples::new(count),
+            pending: None,
         }
     }
 
-    /// Read one geophysics file. A file that fails leaves no trace of itself:
-    /// the holes it touched get back what they had, so the files around it
-    /// still count. `progress` is told the bytes of this file read so far.
-    pub(crate) fn read(&mut self, mapping: &CsvDrillFileMapping, input: impl BufRead, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<(), CsvDrillError> {
-        let read = self.read_file(mapping, input, cancelled, progress);
-        if read.is_err() {
-            self.abandon_file();
-        }
-        read
-    }
-
-    fn read_file(&mut self, mapping: &CsvDrillFileMapping, input: impl BufRead, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<(), CsvDrillError> {
-        let name = mapping.path.display().to_string();
-        let mut records = Records::new(input)?;
-        if !records.next()? {
-            return Err(CsvDrillError::Invalid(tr_format!(literal = "%file% is empty", file = name.clone())));
-        }
-        let width = records.len();
-        if mapping.columns.len() != width {
-            return Err(CsvDrillError::Invalid(tr_format!(
-                literal = "%file% mapping has %mapped% columns, CSV has %found%",
-                file = name.clone(),
-                mapped = mapping.columns.len().to_string(),
-                found = width.to_string()
-            )));
-        }
-        let column = |role: CsvDrillColumnRole| mapping.columns.iter().position(|mapped| *mapped == role);
-        let (Some(dhid_column), Some(depth_column)) = (column(CsvDrillColumnRole::Dhid), column(CsvDrillColumnRole::Depth)) else {
+    /// Read one file's runs of the hole. Its rows waiting are joined as it
+    /// ends: a run does not carry over into the next file, whose columns
+    /// differ.
+    fn read_file(&mut self, file: &LinkedFile, runs: &[Vec<u8>]) -> Result<(), CsvDrillError> {
+        let name = &file.identity.name;
+        let width = file.columns.len();
+        let column = |role: ColumnRole| file.columns.iter().position(|column| column.role == role);
+        let (Some(dhid_column), Some(depth_column)) = (column(ColumnRole::Dhid), column(ColumnRole::Depth)) else {
             return Err(CsvDrillError::Invalid(tr_format!(
                 literal = "%file% requires one DHID and one depth column",
                 file = name.clone()
             )));
         };
-        let curves = mapping
-            .columns
-            .iter()
-            .enumerate()
-            .filter_map(|(index, role)| curve_kind(role).map(|kind| (kind, index)))
-            .collect::<Vec<_>>();
-        if curves.is_empty() {
-            return Err(CsvDrillError::Invalid(tr_format!(literal = "%file% maps no gamma or density column", file = name.clone())));
+        let mut read = Vec::new();
+        self.curves.iter_mut().for_each(|curve| curve.label.clear());
+        for (index, linked) in file.columns.iter().enumerate() {
+            if let ColumnRole::Curve { kind } = linked.role
+                && let Some(at) = self.curves.iter().position(|curve| curve.key == curve_key(kind, &linked.header))
+            {
+                read.push((index, at, kind));
+                self.curves[at].label = linked.header.clone();
+            }
         }
-        self.file = FileState {
-            started: true,
-            index: self.files,
-            name: name.clone(),
-            ..FileState::default()
+        let format = RowFormat {
+            name,
+            width,
+            dhid_column,
+            depth_column,
+            read,
+            curves: self.curves.len(),
         };
-        self.files += 1;
-        for &(kind, index) in &curves {
-            self.file.sources[kind.index()] = cell_text(records.cell(index)).trim().to_owned();
+        for bytes in runs {
+            let pieces = row_pieces(bytes);
+            #[cfg(not(target_arch = "wasm32"))]
+            let pieces = pieces.par_iter();
+            #[cfg(target_arch = "wasm32")]
+            let pieces = pieces.iter();
+            let pieces = pieces.map(|piece| format.parse(self.dhid, piece)).collect::<Result<Vec<_>, _>>()?;
+            for mut piece in pieces {
+                self.samples.append(&mut piece);
+            }
+            self.end_run();
         }
-
-        let mut last_progress = 0u64;
-        while records.next()? {
-            if records.bytes_read() >= last_progress + PROGRESS_STRIDE {
-                last_progress = records.bytes_read();
-                progress(last_progress);
-            }
-            if records.is_blank() {
-                continue;
-            }
-            self.file.rows += 1;
-            if self.file.rows.is_multiple_of(CANCEL_CHECK_ROWS) && cancelled() {
-                return Err(CsvDrillError::Cancelled);
-            }
-            let (dhid, depth) = match gate(&records, &name, width, dhid_column, depth_column) {
-                Ok(gate) => gate,
-                Err(reason) => {
-                    self.file.skipped += 1;
-                    if self.file.skipped <= SKIP_REPORT_LIMIT {
-                        userspace_warn!("{}", tr_format!(literal = "Skipped a row: %reason%", reason = reason));
-                    }
-                    continue;
-                }
-            };
-            if self.run.as_ref().is_none_or(|run| run.dhid != dhid) {
-                self.end_run()?;
-                let orphan = !self.known.contains(dhid.as_ref());
-                if orphan && !self.file.orphans.contains(dhid.as_ref()) {
-                    self.file.orphans.insert(dhid.clone().into_owned());
-                }
-                self.run = Some(Run { dhid: dhid.into_owned(), orphan });
-            }
-            if self.run.as_ref().is_some_and(|run| run.orphan) {
-                self.file.orphan_rows += 1;
-                continue;
-            }
-            self.samples.depths.push(depth);
-            for &(kind, index) in &curves {
-                let value = self.file.reading(kind, records.cell(index));
-                self.samples.values[kind.index()].push(value);
-            }
-            if self.samples.depths.len().is_multiple_of(MEMORY_CHECK_ROWS) {
-                self.cover_transient()?;
-            }
-        }
-        // A run does not carry over into the next file, whose columns differ.
-        self.end_run()?;
-        self.join_pending()?;
-        progress(records.bytes_read());
-        let (rows, skipped) = (self.file.rows, self.file.skipped);
-
-        if skipped > SKIP_REPORT_LIMIT {
-            userspace_warn!(
-                "{}",
-                tr_format!(literal = "%count% rows were skipped in total in %file%", count = skipped.to_string(), file = name.clone())
-            );
-        }
-        // Most of a file failing is a mapping mistake, not dirty data.
-        if rows > 0 && skipped * 2 > rows {
-            return Err(CsvDrillError::Invalid(tr_format!(
-                literal = "%file%: %skipped% of %rows% rows could not be read; the reasons are in the console",
-                file = name,
-                skipped = skipped.to_string(),
-                rows = rows.to_string()
-            )));
-        }
-        self.close_file();
+        self.join_pending();
         Ok(())
     }
 
-    /// Transient bytes: the run's samples, wherever they are, the rows
-    /// waiting and the batch being built, the reading buffers with about as
-    /// much again for [`LogTrace::from_samples`] working on them, and what
-    /// the file must be able to put back.
-    fn cover_transient(&mut self) -> Result<(), CsvDrillError> {
-        let buffers = (self.readings.capacity() + self.run_readings.capacity() + self.joined.capacity()) * size_of::<(f64, f64)>();
-        let covered = self.covered.len() * COVERED_ENTRY_BYTES;
-        let rows = self.samples.bytes() + self.spare_bytes + self.pending_bytes + self.settling_bytes;
-        self.transient.cover(rows + 2 * buffers + covered + self.file.before_bytes)
-    }
-
-    /// Close the current run. A hole's first run becomes its traces now; a
-    /// run back for a curve the hole holds waits with any others it came
-    /// back with, and they join the traces as a batch.
-    fn end_run(&mut self) -> Result<(), CsvDrillError> {
-        let Some(run) = self.run.take() else {
-            return Ok(());
-        };
-        let mut samples = std::mem::take(&mut self.samples);
-        self.spare_bytes = samples.bytes();
+    /// Close the current run. The hole's first run of a curve becomes its
+    /// trace now; a run back for a curve the hole holds waits with any
+    /// others it came back with, and they join the traces as a batch.
+    fn end_run(&mut self) {
+        let mut samples = std::mem::replace(&mut self.samples, Samples::new(0));
         let rows = samples.depths.len();
-        let settled = if run.orphan {
-            Ok(())
-        } else if self.returning(&run.dhid, &samples) {
-            let waiting = self.pending.entry(run.dhid.clone()).or_default();
-            let before = waiting.bytes();
+        if self.returning(&samples) {
+            let curves = self.curves.len();
+            let waiting = self.pending.get_or_insert_with(|| Waiting {
+                samples: Samples::new(curves),
+                runs: Vec::new(),
+            });
             waiting.samples.append(&mut samples);
             waiting.runs.push(rows);
-            let (waiting_rows, after) = (waiting.samples.depths.len(), waiting.bytes());
-            self.pending_bytes = self.pending_bytes + after - before;
-            if waiting_rows >= REJOIN_BATCH_ROWS.max(self.held_samples(&run.dhid)) {
-                self.join_hole(&run.dhid)
-            } else {
-                self.limit_waiting()
+            let (waiting_rows, waiting_bytes) = (waiting.samples.depths.len(), waiting.samples.bytes());
+            if waiting_rows >= REJOIN_BATCH_ROWS.max(self.held_samples()) || waiting_bytes > WAITING_BYTES_LIMIT {
+                self.join_pending();
             }
         } else {
-            self.settle_samples(&run.dhid, &samples, &[rows])
-        };
+            self.settle_samples(&samples, &[rows]);
+        }
         samples.clear();
         self.samples = samples;
-        self.spare_bytes = 0;
-        settled
     }
 
-    /// Whether a run's hole already holds a curve the run has readings of,
-    /// or has rows waiting, which the run must not overtake.
-    fn returning(&self, dhid: &str, samples: &Samples) -> bool {
-        self.pending.contains_key(dhid)
-            || self.built.get(dhid).is_some_and(|traces| {
-                LogKind::ALL
-                    .iter()
-                    .any(|kind| traces[kind.index()].is_some() && samples.values[kind.index()].iter().any(|value| value.is_finite()))
-            })
+    /// Whether a run is back for a curve the hole already holds, or rows
+    /// are waiting, which the run must not overtake.
+    fn returning(&self, samples: &Samples) -> bool {
+        self.pending.is_some()
+            || self
+                .curves
+                .iter()
+                .zip(&samples.values)
+                .any(|(curve, values)| curve.built.is_some() && values.iter().any(|value| value.is_finite()))
     }
 
     /// Samples in the hole's longest trace.
-    fn held_samples(&self, dhid: &str) -> usize {
-        self.built.get(dhid).map_or(0, |traces| traces.iter().flatten().map(LogTrace::len).max().unwrap_or(0))
+    fn held_samples(&self) -> usize {
+        self.curves.iter().filter_map(|curve| curve.built.as_ref()).map(LogTrace::len).max().unwrap_or(0)
     }
 
-    /// Keep the waiting rows within their limit, joining the hole with the
-    /// most waiting first.
-    fn limit_waiting(&mut self) -> Result<(), CsvDrillError> {
-        while self.pending_bytes > self.pending_limit {
-            let Some(largest) = self.pending.iter().max_by_key(|(_, waiting)| waiting.bytes()).map(|(dhid, _)| dhid.clone()) else {
-                break;
-            };
-            self.join_hole(&largest)?;
+    fn join_pending(&mut self) {
+        if let Some(waiting) = self.pending.take() {
+            self.settle_samples(&waiting.samples, &waiting.runs);
         }
-        self.pending_peak = self.pending_peak.max(self.pending_bytes);
-        self.cover_transient()
-    }
-
-    /// Join a hole's waiting rows to its traces.
-    fn join_hole(&mut self, dhid: &str) -> Result<(), CsvDrillError> {
-        let Some(waiting) = self.pending.remove(dhid) else {
-            return Ok(());
-        };
-        let bytes = waiting.bytes();
-        self.pending_bytes -= bytes;
-        // Still counted until its traces are built.
-        self.settling_bytes = bytes;
-        let settled = self.settle_samples(dhid, &waiting.samples, &waiting.runs);
-        self.settling_bytes = 0;
-        settled
-    }
-
-    /// Join every hole's waiting rows, as a file ends.
-    fn join_pending(&mut self) -> Result<(), CsvDrillError> {
-        let mut holes = self.pending.keys().cloned().collect::<Vec<_>>();
-        holes.sort_unstable();
-        for dhid in holes {
-            self.join_hole(&dhid)?;
-        }
-        Ok(())
     }
 
     /// Settle each curve `samples` read into the hole's traces, taking the
-    /// runs, of `runs` rows each, in the order they arrived. Readings held
-    /// win: each run adds only depths with no reading within half a step,
-    /// from the hole's trace or from an earlier run. That extends a trace,
+    /// runs, of `runs` rows each, in the order they arrived.
+    fn settle_samples(&mut self, samples: &Samples, runs: &[usize]) {
+        let settle = |(curve, values): (&mut Curve, &Vec<f64>)| {
+            if !values.is_empty() {
+                curve.settle(&samples.depths, values, runs);
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.curves.par_iter_mut().zip(samples.values.par_iter()).for_each(settle);
+        #[cfg(target_arch = "wasm32")]
+        self.curves.iter_mut().zip(samples.values.iter()).for_each(settle);
+    }
+
+    /// Report the runs not kept, each with the header it was read from, and
+    /// hand over the traces.
+    fn finish(self) -> HoleLogs {
+        let notes = self.curves.iter().flat_map(|curve| curve.notes.iter());
+        for (label, error) in notes.take(SKIP_REPORT_LIMIT) {
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "A run of %hole% %curve% was not kept (%reason%)",
+                    hole = self.dhid.to_owned(),
+                    curve = label.clone(),
+                    reason = trace_error(error)
+                )
+            );
+        }
+        HoleLogs::new(self.curves.into_iter().filter_map(|curve| curve.built).collect())
+    }
+}
+
+impl Curve {
+    /// Settle this curve's `values` from runs of `runs` rows each. Readings
+    /// held win: each run adds only depths with no reading within half a
+    /// step, from the trace or from an earlier run. That extends a trace,
     /// fills its gaps and leaves a repeat pass out, two passes never
     /// interleave, and the result does not depend on where a batch ends.
-    fn settle_samples(&mut self, dhid: &str, samples: &Samples, runs: &[usize]) -> Result<(), CsvDrillError> {
-        for kind in LogKind::ALL {
-            let values = &samples.values[kind.index()];
-            if values.is_empty() {
+    fn settle(&mut self, depths: &[f64], values: &[f64], runs: &[usize]) {
+        self.readings.clear();
+        self.covered.clear();
+        let held = self.built.as_ref();
+        // Half the held trace's step counts as one depth; with no step to go
+        // by, the first run to have one sets it.
+        let mut step = held.filter(|trace| trace.len() > 1).map(LogTrace::step);
+        let mut start = 0;
+        for (index, &rows) in runs.iter().enumerate() {
+            let run = start..start + rows;
+            start += rows;
+            self.run_readings.clear();
+            self.run_readings
+                .extend(depths[run.clone()].iter().copied().zip(values[run].iter().copied()).filter(|(_, value)| value.is_finite()));
+            if self.run_readings.is_empty() {
                 continue;
             }
-            self.readings.clear();
-            self.covered.clear();
-            let held = self.built.get(dhid).and_then(|traces| traces[kind.index()].as_ref());
-            // Half the held trace's step counts as one depth; with no step to
-            // go by, the first run to have one sets it.
-            let mut step = held.filter(|trace| trace.len() > 1).map(LogTrace::step);
-            let mut offered = 0;
-            let mut start = 0;
-            for (index, &rows) in runs.iter().enumerate() {
-                let run = start..start + rows;
-                start += rows;
-                self.run_readings.clear();
-                self.run_readings.extend(
-                    samples.depths[run.clone()]
-                        .iter()
-                        .copied()
-                        .zip(values[run].iter().copied())
-                        .filter(|(_, value)| value.is_finite()),
-                );
-                if self.run_readings.is_empty() {
-                    continue;
-                }
-                offered += self.run_readings.len();
+            // A hole's first run has nothing to be checked against.
+            if held.is_some() || !self.covered.is_empty() {
                 let reach = step.map_or(SAME_DEPTH, |step| 0.5 * step + SAME_DEPTH);
                 let covered = &self.covered;
                 self.run_readings
                     .retain(|(depth, _)| !held.is_some_and(|trace| holds_reading(trace, *depth)) && !covers(covered, *depth, reach));
-                // Only a later run of the batch is checked against this one.
-                if index + 1 < runs.len() {
-                    // Stable, so at one depth the reading read first stays
-                    // first.
-                    self.run_readings.sort_by(|a, b| a.0.total_cmp(&b.0));
-                    if step.is_none() && self.run_readings.len() > 1 {
-                        step = median_spacing(&self.run_readings);
-                    }
-                    self.covered.extend(self.run_readings.iter().map(|(depth, _)| depth_key(*depth)));
+            }
+            // Only a later run of the batch is checked against this one.
+            if index + 1 < runs.len() {
+                // Stable, so at one depth the reading read first stays first.
+                self.run_readings.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if step.is_none() && self.run_readings.len() > 1 {
+                    step = median_spacing(&self.run_readings);
                 }
-                self.readings.extend_from_slice(&self.run_readings);
+                self.covered.extend(self.run_readings.iter().map(|(depth, _)| depth_key(*depth)));
             }
-            if held.is_some() && offered > 0 {
-                self.file.rejoined.insert(dhid.to_owned());
-            }
-            self.file.already_held[kind.index()] += offered - self.readings.len();
-            if self.readings.is_empty() {
-                continue;
-            }
-            self.file.repeated += settle_depths(&mut self.readings);
-            self.cover_transient()?;
-            self.settle_curve(dhid, kind)?;
+            self.readings.extend_from_slice(&self.run_readings);
         }
         self.covered.clear();
-        Ok(())
+        if self.readings.is_empty() {
+            return;
+        }
+        settle_depths(&mut self.readings);
+        self.settle_trace();
     }
 
-    /// Settle one curve's checked readings, in `self.readings`, into the
-    /// hole's trace.
-    fn settle_curve(&mut self, dhid: &str, kind: LogKind) -> Result<(), CsvDrillError> {
-        if !self.built.contains_key(dhid) {
-            self.built.insert(dhid.to_owned(), Default::default());
-        }
-        let traces = self.built.get_mut(dhid).expect("inserted above");
-        if !self.file.before.contains_key(&(dhid.to_owned(), kind)) {
-            let before = traces[kind.index()].clone();
-            self.file.before_bytes += before.as_ref().map_or(0, LogTrace::memory_bytes);
-            self.file.before.insert((dhid.to_owned(), kind), before);
-        }
-        let previous = traces[kind.index()].take();
-        let previous_bytes = previous.as_ref().map_or(0, LogTrace::memory_bytes);
-        let label = &self.file.sources[kind.index()];
-        let mut error = None;
-        let settled = match previous {
-            None => match build(kind, &self.readings) {
-                Ok((trace, isolated)) => {
-                    self.file.isolated[kind.index()] += isolated;
-                    Some(trace.with_source(label.clone()))
-                }
-                Err(refused) => {
-                    error = Some(refused);
-                    None
-                }
-            },
+    /// Settle the checked readings, in `self.readings`, into the trace.
+    fn settle_trace(&mut self) {
+        let settled = match self.built.take() {
+            None => build(self.kind, &self.readings)
+                .map(|trace| trace.with_source(self.label.clone()))
+                .map_err(|error| (None, error)),
             Some(held) => {
                 // The held samples are read back off the stored grid, which
                 // is lossless at an unchanged step: each is an exact multiple
@@ -684,202 +890,97 @@ impl GeophysicsReader {
                         .filter_map(|(depth, value)| value.map(|value| (depth, f64::from(value)))),
                 );
                 self.joined.extend_from_slice(&self.readings);
-                self.file.repeated += settle_depths(&mut self.joined);
-                match build(kind, &self.joined) {
-                    Ok((trace, isolated)) => {
-                        self.file.isolated[kind.index()] += isolated;
-                        let source = joined_label(held.source(), label);
-                        Some(trace.with_source(source))
-                    }
-                    Err(refused) => {
-                        error = Some(refused);
-                        Some(held)
-                    }
-                }
+                settle_depths(&mut self.joined);
+                let source = joined_label(held.source(), &self.label);
+                build(self.kind, &self.joined).map(|trace| trace.with_source(source)).map_err(|error| (Some(held), error))
             }
         };
-        self.notes.extend(error.map(|error| Note {
-            file: self.file.index,
-            dhid: dhid.to_owned(),
-            kind,
-            error,
-        }));
-        self.kept_bytes = self.kept_bytes - previous_bytes + settled.as_ref().map_or(0, LogTrace::memory_bytes);
-        self.built.get_mut(dhid).expect("inserted above")[kind.index()] = settled;
-        self.kept.cover(self.kept_bytes)
+        self.built = match settled {
+            Ok(trace) => Some(trace),
+            Err((held, error)) => {
+                self.notes.push((self.label.clone(), error));
+                held
+            }
+        };
     }
+}
 
-    /// End a file read to its end: its counts join the import's, and a
-    /// density curve whose median is not a g/cc value comes back out of every
-    /// hole the file touched, with a warning. Units are the exporting
-    /// database's to set, so nothing is converted.
-    fn close_file(&mut self) {
-        let file = std::mem::take(&mut self.file);
-        self.rows_read += file.rows;
-        self.rows_skipped += file.skipped;
-        self.orphan_rows += file.orphan_rows;
-        self.orphans.extend(file.orphans);
-        self.rejoined.extend(file.rejoined);
-        self.repeated += file.repeated;
-        let mut left_out = [false; 3];
-        for kind in LogKind::ALL {
-            let [below, within, above] = file.votes[kind.index()];
-            let total = below + within + above;
-            let side = if below * 2 > total {
-                Some(tr!(literal = "below 0.5"))
-            } else if above * 2 > total {
-                Some(tr!(literal = "above 5"))
-            } else {
-                None
-            };
-            let Some(side) = side else {
-                self.out_of_range += file.out_of_range[kind.index()];
-                self.already_held += file.already_held[kind.index()];
-                self.isolated += file.isolated[kind.index()];
-                continue;
-            };
-            left_out[kind.index()] = true;
-            self.curves_left_out += 1;
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "%curve% in %file% was left out: most of its readings are %side%, so its median is outside 0.5 to 5 g/cc and its unit looks wrong (g/cc expected). Incline converts no units; correct the export and import it again",
-                    curve = curve_name(kind),
-                    file = file.name.clone(),
-                    side = side
-                )
-            );
-        }
-        if left_out.contains(&true) {
-            self.restore(file.index, file.before, left_out);
-        }
-    }
+/// How one linked file's rows are read into a hole's curves.
+struct RowFormat<'f> {
+    name: &'f str,
+    width: usize,
+    dhid_column: usize,
+    depth_column: usize,
+    /// Each curve column read: its index, its curve, and its kind.
+    read: Vec<(usize, usize, Option<LogKind>)>,
+    curves: usize,
+}
 
-    /// Take a file that failed back out: every hole it touched gets back
-    /// what it had, and nothing it counted or noted stays.
-    fn abandon_file(&mut self) {
-        self.run = None;
-        self.samples.clear();
-        self.pending.clear();
-        self.pending_bytes = 0;
-        self.spare_bytes = 0;
-        self.settling_bytes = 0;
-        let file = std::mem::take(&mut self.file);
-        // A file that failed in its header never touched a hole; the state
-        // left behind is an empty one whose index is not this file's.
-        if file.started {
-            self.restore(file.index, file.before, [true; 3]);
-        }
-    }
-
-    /// Put back the traces a file found, for the curves in `curves`, and
-    /// drop its notes on them.
-    fn restore(&mut self, file: usize, before: HashMap<(String, LogKind), Option<LogTrace>>, curves: [bool; 3]) {
-        for ((dhid, kind), before) in before {
-            if !curves[kind.index()] {
+impl RowFormat<'_> {
+    /// The rows of `bytes`, which are all `dhid`'s, a column per curve.
+    fn parse(&self, dhid: &str, bytes: &[u8]) -> Result<Samples, CsvDrillError> {
+        let mut samples = Samples::new(self.curves);
+        let mut records = Records::new(bytes)?;
+        while records.next()? {
+            if records.is_blank() {
                 continue;
             }
-            let Some(traces) = self.built.get_mut(&dhid) else {
+            // Rows the index pass refused are refused again, unreported.
+            let Ok((id, depth)) = gate(&records, self.name, self.width, self.dhid_column, self.depth_column) else {
                 continue;
             };
-            let added = before.as_ref().map_or(0, LogTrace::memory_bytes);
-            let removed = std::mem::replace(&mut traces[kind.index()], before);
-            self.kept_bytes = self.kept_bytes + added - removed.as_ref().map_or(0, LogTrace::memory_bytes);
-            // A hole only this file gave traces to is not one seen before.
-            if traces.iter().all(Option::is_none) {
-                self.built.remove(&dhid);
+            if id != dhid {
+                return Err(CsvDrillError::Invalid(tr_format!(
+                    literal = "%file% no longer matches its index: link it again",
+                    file = self.name.to_owned()
+                )));
+            }
+            samples.depths.push(depth);
+            for &(index, at, kind) in &self.read {
+                samples.values[at].push(reading(kind, records.cell(index)));
             }
         }
-        self.notes.retain(|note| note.file != file || !curves[note.kind.index()]);
+        Ok(samples)
     }
+}
 
-    /// Report what was set aside and hand over the traces.
-    pub(crate) fn finish(mut self) -> GeophysicsImport {
-        log::debug!("geophysics import: waiting rows peaked at {} bytes", self.pending_peak);
-        if !self.rejoined.is_empty() {
-            let mut holes = self.rejoined.iter().map(String::as_str).collect::<Vec<_>>();
-            holes.sort_unstable();
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "Geophysics for %count% hole(s) came in more than one run of the same curve, not grouped by hole or spread over files; each later run added only depths its hole had no reading at: %holes%",
-                    count = holes.len().to_string(),
-                    holes = hole_list(holes.into_iter())
-                )
-            );
-        }
-        self.notes.sort_by(|a, b| a.dhid.cmp(&b.dhid).then(a.kind.cmp(&b.kind)).then(a.file.cmp(&b.file)));
-        for note in self.notes.iter().take(SKIP_REPORT_LIMIT) {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "A run of %hole% %curve% was not kept (%reason%)",
-                    hole = note.dhid.clone(),
-                    curve = curve_name(note.kind),
-                    reason = trace_error(&note.error)
-                )
-            );
-        }
-        if self.notes.len() > SKIP_REPORT_LIMIT {
-            userspace_warn!(
-                "{}",
-                tr_format!(literal = "%runs% run(s) of geophysics were not kept in all", runs = self.notes.len().to_string())
-            );
-        }
-        if self.repeated > 0 {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "%count% geophysics reading(s) repeated a depth read earlier in the same file for that hole; the first was kept",
-                    count = self.repeated.to_string()
-                )
-            );
-        }
-        if !self.orphans.is_empty() {
-            let mut orphans = self.orphans.iter().map(String::as_str).collect::<Vec<_>>();
-            orphans.sort_unstable();
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "%rows% geophysics row(s) for %count% hole(s) the bundle's geometry does not define were not kept: %holes%",
-                    rows = self.orphan_rows.to_string(),
-                    count = orphans.len().to_string(),
-                    holes = hole_list(orphans.into_iter())
-                )
-            );
-        }
+/// Bytes of rows parsed as one piece.
+const PIECE_BYTES: usize = 256 * 1024;
 
-        let mut holes = self
-            .built
-            .into_iter()
-            .map(|(dhid, traces)| (dhid, traces.into_iter().flatten().collect::<Vec<_>>()))
-            .filter(|(_, traces)| !traces.is_empty())
-            .collect::<Vec<_>>();
-        holes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        GeophysicsImport {
-            holes,
-            rows_read: self.rows_read,
-            rows_skipped: self.rows_skipped,
-            orphan_rows: self.orphan_rows,
-            orphan_holes: self.orphans.len(),
-            out_of_range: self.out_of_range,
-            already_held: self.already_held,
-            isolated: self.isolated,
-            runs_not_kept: self.notes.len(),
-            curves_left_out: self.curves_left_out,
-            reservation: self.kept.settle(self.kept_bytes),
-        }
+/// A run's bytes cut at line breaks into pieces parsed side by side; whole
+/// when a quote could carry a row over a line break.
+fn row_pieces(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.contains(&b'"') {
+        return vec![bytes];
     }
+    let mut pieces = Vec::new();
+    let mut rest = bytes;
+    while rest.len() > PIECE_BYTES {
+        let cut = rest[PIECE_BYTES..].iter().position(|byte| *byte == b'\n').map_or(rest.len(), |at| PIECE_BYTES + at + 1);
+        let (piece, tail) = rest.split_at(cut);
+        pieces.push(piece);
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        pieces.push(rest);
+    }
+    pieces
+}
+
+fn curve_key(kind: Option<LogKind>, header: &str) -> CurveKey {
+    kind.map_or_else(|| CurveKey::Header(header.trim().to_lowercase()), CurveKey::Kind)
 }
 
 /// A row's hole id and depth, or the reason it is refused.
 fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_column: usize, depth_column: usize) -> Result<(Cow<'r, str>, f64), String> {
-    let row = records.record_number().to_string();
+    // Named only when refused: a file of a hundred million rows would pay
+    // for the text on every one.
+    let row = || records.record_number().to_string();
     if records.len() != width {
         return Err(tr_format!(
             literal = "%file% row %row% has %found% columns; expected %expected%",
             file = file.to_owned(),
-            row = row,
+            row = row(),
             found = records.len().to_string(),
             expected = width.to_string()
         ));
@@ -889,19 +990,19 @@ fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_
         Cow::Owned(text) => Cow::Owned(text.trim().to_owned()),
     };
     if dhid.is_empty() {
-        return Err(tr_format!(literal = "%file% row %row% has a blank hole id", file = file.to_owned(), row = row));
+        return Err(tr_format!(literal = "%file% row %row% has a blank hole id", file = file.to_owned(), row = row()));
     }
     match cell_number(records.cell(depth_column)) {
-        None => Err(tr_format!(literal = "%file% row %row% has no readable depth", file = file.to_owned(), row = row)),
-        Some(depth) if depth < 0.0 => Err(tr_format!(literal = "%file% row %row% has a negative depth", file = file.to_owned(), row = row)),
+        None => Err(tr_format!(literal = "%file% row %row% has no readable depth", file = file.to_owned(), row = row())),
+        Some(depth) if depth < 0.0 => Err(tr_format!(literal = "%file% row %row% has a negative depth", file = file.to_owned(), row = row())),
         Some(depth) => Ok((dhid, depth)),
     }
 }
 
-/// A trace from readings, and how many were left out as isolated.
-fn build(kind: LogKind, readings: &[(f64, f64)]) -> Result<(LogTrace, usize), TraceError> {
+/// A trace from readings.
+fn build(kind: Option<LogKind>, readings: &[(f64, f64)]) -> Result<LogTrace, TraceError> {
     let (depths, values): (Vec<f64>, Vec<f64>) = readings.iter().copied().unzip();
-    LogTrace::from_samples(kind, &depths, &values).map(|(trace, stats)| (trace, stats.isolated))
+    LogTrace::from_samples(kind, &depths, &values)
 }
 
 /// Whether `trace` has a reading within half a step of `depth`. A trace of
@@ -950,16 +1051,13 @@ fn joined_label(held: &str, new: &str) -> String {
     }
 }
 
-/// Sort readings by depth and fold those at one depth into the first,
-/// returning how many were folded away.
-fn settle_depths(rows: &mut Vec<(f64, f64)>) -> usize {
+/// Sort readings by depth and fold those at one depth into the first.
+fn settle_depths(rows: &mut Vec<(f64, f64)>) {
     if !rows.is_sorted_by(|a, b| a.0 <= b.0) {
         // Stable, so the reading read first stays first.
         rows.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
-    let before = rows.len();
     rows.dedup_by(|later, earlier| later.0 - earlier.0 <= SAME_DEPTH);
-    before - rows.len()
 }
 
 /// A cell's text. Bytes that are not UTF-8 are repaired as the table reader
@@ -976,15 +1074,42 @@ pub(super) fn cell_text(cell: &[u8]) -> Cow<'_, str> {
 }
 
 fn cell_number(cell: &[u8]) -> Option<f64> {
-    std::str::from_utf8(cell).ok().and_then(csv_drill_hole::finite_number)
+    plain_decimal(cell.trim_ascii()).or_else(|| std::str::from_utf8(cell).ok().and_then(csv_drill_hole::finite_number))
 }
 
-fn curve_name(kind: LogKind) -> String {
-    match kind {
-        LogKind::Gamma => tr!(literal = "gamma"),
-        LogKind::LongDensity => tr!(literal = "long-spaced density"),
-        LogKind::ShortDensity => tr!(literal = "short-spaced density"),
+/// Powers of ten a double holds exactly.
+const EXACT_POWERS_OF_TEN: [f64; 23] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+];
+
+/// A cell like `-12.345`, read without the general parser, which is most
+/// of the cost of a hole's rows. Its digits and its power of ten are both
+/// exact as doubles, so one division rounds as `str::parse` rounds (the
+/// fast path in Clinger, "How to Read Floating Point Numbers Accurately",
+/// 1990). Anything else is left to the general parser.
+fn plain_decimal(cell: &[u8]) -> Option<f64> {
+    let (negative, digits) = match cell.split_first()? {
+        (b'-', rest) => (true, rest),
+        (b'+', rest) => (false, rest),
+        _ => (false, cell),
+    };
+    let (mut mantissa, mut count, mut decimals, mut point) = (0u64, 0usize, 0usize, false);
+    for &byte in digits {
+        match byte {
+            b'0'..=b'9' if count < 19 => {
+                mantissa = mantissa * 10 + u64::from(byte - b'0');
+                count += 1;
+                decimals += usize::from(point);
+            }
+            b'.' if !point => point = true,
+            _ => return None,
+        }
     }
+    if count == 0 || mantissa > 1 << 53 {
+        return None;
+    }
+    let value = mantissa as f64 / EXACT_POWERS_OF_TEN.get(decimals)?;
+    Some(if negative { -value } else { value })
 }
 
 fn trace_error(error: &TraceError) -> String {

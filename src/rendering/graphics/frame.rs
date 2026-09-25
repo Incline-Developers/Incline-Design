@@ -100,7 +100,7 @@ pub(crate) struct RenderInput<'frame> {
     pub(crate) block_models: &'frame [OpenBlockModel],
     pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
     /// Read by the borehole inspector's log, beside the inspected hole.
-    pub(crate) well_logs: &'frame crate::model::geophysics::GeophysicsStore,
+    pub(crate) well_logs: &'frame crate::model::geophysics::GeophysicsSession,
     pub(crate) point_clouds: &'frame [OpenPointCloud],
     pub(crate) rasters: &'frame [OpenRasterTexture],
     pub(crate) project: &'frame UiProjectView,

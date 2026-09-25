@@ -5,8 +5,12 @@
 //! widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
 
 use crate::{
-    i18n::tr,
-    model::{SceneEntityId, drill_hole::OpenDrillHoleDataset},
+    i18n::{tr, tr_format},
+    model::{
+        SceneEntityId,
+        drill_hole::{DrillHoleId, OpenDrillHoleDataset},
+        geophysics::{HoleView, LinkState},
+    },
     ui::{
         EditorState,
         state::{BoreholeInspectorTab, UiCommand, ViewToggle},
@@ -42,7 +46,7 @@ pub(crate) fn draw_borehole_inspector(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     datasets: &[OpenDrillHoleDataset],
-    well_logs: &crate::model::geophysics::GeophysicsStore,
+    well_logs: &crate::model::geophysics::GeophysicsSession,
     commands: &mut Vec<UiCommand>,
 ) -> egui::Rect {
     // Reuse the explorer's row colours so the two panels share a palette.
@@ -78,7 +82,13 @@ pub(crate) fn draw_borehole_inspector(
 ///
 /// The tab strip and dataset name sit outside the Data tab's scroll area,
 /// so neither scrolls out of view.
-fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], well_logs: &crate::model::geophysics::GeophysicsStore, commands: &mut Vec<UiCommand>) {
+fn draw_body(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    datasets: &[OpenDrillHoleDataset],
+    well_logs: &crate::model::geophysics::GeophysicsSession,
+    commands: &mut Vec<UiCommand>,
+) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
@@ -139,11 +149,33 @@ fn draw_body(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillH
         }
         BoreholeInspectorTab::Log => {
             draw_log_field_pickers(ui, editor, dataset, commands);
-            // Matched on the store's own key: the dataset, then the hole id
-            // exactly as the dataset spells it.
+            // Matched on the hole id exactly as the dataset spells it.
+            let view = well_logs.view(dataset, &hole.dhid);
+            if matches!(view, HoleView::Wanted) {
+                commands.push(UiCommand::ReadHoleGeophysics {
+                    dataset: dataset.id,
+                    dhid: hole.dhid.clone(),
+                });
+            }
+            let index = dataset.geophysics.as_deref();
+            let (logs, linked, reading) = match view {
+                HoleView::Shown(logs) => (Some(logs), true, None),
+                HoleView::NotInFiles => (None, true, None),
+                // Laid out from the index, so the readings only fill in.
+                HoleView::Wanted | HoleView::Reading => (None, true, index.map(|link| link.kinds_of(&hole.dhid))),
+                _ => (None, false, None),
+            };
+            // Only until shown: the index counts a stray reading the read
+            // leaves out.
+            let logged = matches!(view, HoleView::Wanted | HoleView::Reading)
+                .then(|| index.and_then(|link| link.depths_of(&hole.dhid)))
+                .flatten();
+            draw_geophysics_note(ui, &view, dataset.id, commands);
             let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
                 .strat_field(strat_choice_for(editor, dataset))
-                .well_logs(well_logs.hole(dataset.id, &hole.dhid), well_logs.has_dataset(dataset.id))
+                .well_logs(logs, linked)
+                .reading(reading)
+                .logged_depths(logged)
                 .well_log_style(editor.well_log_style)
                 .show(ui);
             if let Some(style) = saved {
@@ -209,6 +241,49 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
                     ui.selectable_value(&mut editor.borehole_log_strat_field, Some((dataset.id, field.key.clone())), field.label.clone());
                 }
             });
+    });
+    ui.add_space(4.0);
+}
+
+/// A short note above the log for the states between a link existing and its
+/// logs being on screen; nothing is drawn once the logs are shown or being
+/// read, or when there was never a link, since the log covers those itself.
+fn draw_geophysics_note(ui: &mut egui::Ui, view: &HoleView, dataset_id: DrillHoleId, commands: &mut Vec<UiCommand>) {
+    let (weak, message, button) = match view {
+        HoleView::Link(LinkState::Checking) => (true, tr!(literal = "Checking the linked geophysics file..."), None),
+        HoleView::Link(LinkState::Indexing) => (true, tr!(literal = "Reading the geophysics file for its index; the status bar shows progress."), None),
+        HoleView::Link(LinkState::Missing { file }) => (
+            false,
+            tr_format!(literal = "%file% is not where it was linked from.", file = file),
+            Some(tr!(literal = "Link Geophysics...")),
+        ),
+        HoleView::Link(LinkState::NeedsPick { file }) => (
+            false,
+            tr_format!(
+                literal = "Pick %file% again to show its geophysics: a browser page cannot reopen a file by itself.",
+                file = file
+            ),
+            Some(tr_format!(literal = "Pick %file%...", file = file)),
+        ),
+        HoleView::Link(LinkState::Failed(error)) => (false, error.clone(), Some(tr!(literal = "Link Geophysics..."))),
+        HoleView::Failed(error) => (false, (*error).to_owned(), None),
+        HoleView::Link(LinkState::Ready) | HoleView::Reading | HoleView::Wanted | HoleView::Shown(_) | HoleView::NotInFiles | HoleView::Unlinked => return,
+    };
+
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        let mut text = egui::RichText::new(message);
+        if weak {
+            text = text.weak();
+        }
+        ui.add(egui::Label::new(text).wrap());
+        if let Some(label) = button
+            && ui
+                .add(egui::Button::new(label).small().corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
+                .clicked()
+        {
+            commands.push(UiCommand::LinkGeophysics(dataset_id));
+        }
     });
     ui.add_space(4.0);
 }

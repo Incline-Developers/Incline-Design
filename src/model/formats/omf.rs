@@ -187,6 +187,7 @@ pub(crate) struct ImportedDrillHoles {
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: crate::model::drill_hole::DrillColorState,
+    pub(crate) geophysics: Option<Arc<crate::model::geophysics::GeophysicsLink>>,
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
@@ -1021,7 +1022,12 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         open.state.source_format.as_deref(),
         "drill-holes",
     );
-    put(&mut element, META_STYLE, json!({ "loaded": open.state.loaded, "color": open.color }));
+    let mut style = json!({ "loaded": open.state.loaded, "color": open.color });
+    // The link and its index only: the readings stay in the linked files.
+    if let Some(link) = open.geophysics.as_deref() {
+        style["geophysics"] = serde_json::to_value(link)?;
+    }
+    put(&mut element, META_STYLE, style);
     let ties = open.dataset.stored_ties();
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
@@ -1800,6 +1806,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
                 color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+                geophysics: style_geophysics(style),
                 folder,
                 section,
             });
@@ -2724,6 +2731,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             deferred: None,
             is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+            geophysics: style_geophysics(style),
             folder,
             section,
         }))
@@ -3089,6 +3097,14 @@ fn style_f32(style: Option<&Value>, key: &str) -> Option<f32> {
 
 fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str) -> Option<T> {
     serde_json::from_value(style?.get(key)?.clone()).ok()
+}
+
+/// A drill-hole dataset's geophysics link; a project saved before links has
+/// none.
+fn style_geophysics(style: Option<&Value>) -> Option<Arc<crate::model::geophysics::GeophysicsLink>> {
+    let mut link = style_value::<crate::model::geophysics::GeophysicsLink>(style, "geophysics")?;
+    link.sort();
+    Some(Arc::new(link))
 }
 
 fn file_stem(path: &str) -> String {

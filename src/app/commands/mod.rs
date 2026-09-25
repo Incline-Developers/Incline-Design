@@ -532,6 +532,14 @@ impl<'a> App<'a> {
                 self.editor.drill_hole_color_dialog = Some(id);
                 Ok(())
             }
+            UiCommand::LinkGeophysics(id) => {
+                self.choose_geophysics_file(id);
+                Ok(())
+            }
+            UiCommand::ReadHoleGeophysics { dataset, dhid } => {
+                self.read_hole_geophysics(dataset, dhid);
+                Ok(())
+            }
             UiCommand::OpenReferencePoints => {
                 // Select first, then act: the points are placed on the holes
                 // selected when it opens, not on a dataset picked inside the

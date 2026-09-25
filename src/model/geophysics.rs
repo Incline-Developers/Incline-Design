@@ -1,15 +1,23 @@
-//! Downhole geophysics traces, stored compactly and keyed by the drill-hole
-//! dataset and hole id they were matched to.
+//! Downhole geophysics: the traces of one hole, and the link that finds a
+//! hole's rows in a CSV file too large to hold. The file is read through
+//! once for an index saved with the dataset, then a hole at a time.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Range,
+    path::PathBuf,
+    sync::Arc,
 };
 
-use crate::model::drill_hole::DrillHoleId;
+use serde::{Deserialize, Serialize};
 
-/// The curve kinds Incline keeps from downhole geophysics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+use crate::{
+    i18n::tr_format,
+    model::drill_hole::{DrillHoleId, OpenDrillHoleDataset},
+};
+
+/// The curves the log draws, each on a fixed scale of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum LogKind {
     Gamma,
     LongDensity,
@@ -53,20 +61,16 @@ impl LogKind {
 /// out-of-range/missing sample).
 const NULL_RAW: u16 = u16::MAX;
 
-/// Quantise one value to the curve's fixed-point encoding, tracking clamp/null
-/// events.
-fn quantize(kind: LogKind, v: f64, clamped: &mut usize, nulls: &mut usize) -> u16 {
+/// Quantise one value to the curve's fixed-point encoding.
+fn quantize(kind: LogKind, v: f64) -> u16 {
     if !v.is_finite() {
-        *nulls += 1;
         return NULL_RAW;
     }
     let resolution = kind.resolution();
     let max_value = kind.max_value();
     let bounded = if v < 0.0 {
-        *clamped += 1;
         0.0
     } else if v > max_value {
-        *clamped += 1;
         max_value
     } else {
         v
@@ -78,6 +82,45 @@ fn quantize(kind: LogKind, v: f64, clamped: &mut usize, nulls: &mut usize) -> u1
 /// sentinel.
 fn decode(kind: LogKind, raw: u16) -> Option<f32> {
     if raw == NULL_RAW { None } else { Some((raw as f64 * kind.resolution()) as f32) }
+}
+
+/// How a trace's readings map to its stored samples.
+#[derive(Clone, Copy, Debug)]
+enum Scale {
+    /// A drawn curve, on its kind's fixed resolution from zero.
+    Fixed(LogKind),
+    /// Any other curve: its unit is unknown, so its samples span the
+    /// readings it had, lowest to highest.
+    Fitted { offset: f64, resolution: f64 },
+}
+
+impl Scale {
+    fn fitted(values: impl Iterator<Item = f64>) -> Self {
+        let (low, high) = values
+            .filter(|value| value.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| (low.min(value), high.max(value)));
+        let span = high - low;
+        Scale::Fitted {
+            offset: if low.is_finite() { low } else { 0.0 },
+            resolution: if span.is_finite() && span > 0.0 { span / f64::from(NULL_RAW - 1) } else { 1.0 },
+        }
+    }
+
+    fn encode(self, value: f64) -> u16 {
+        match self {
+            Scale::Fixed(kind) => quantize(kind, value),
+            Scale::Fitted { .. } if !value.is_finite() => NULL_RAW,
+            Scale::Fitted { offset, resolution } => ((value - offset) / resolution).round().clamp(0.0, f64::from(NULL_RAW - 1)) as u16,
+        }
+    }
+
+    fn decode(self, raw: u16) -> Option<f32> {
+        match self {
+            Scale::Fixed(kind) => decode(kind, raw),
+            Scale::Fitted { .. } if raw == NULL_RAW => None,
+            Scale::Fitted { offset, resolution } => Some((offset + raw as f64 * resolution) as f32),
+        }
+    }
 }
 
 /// Min/max (ignoring nulls) over a slice of base-level raw samples; the null
@@ -170,18 +213,6 @@ fn build_pyramid(values: &[u16]) -> Vec<Vec<(u16, u16)>> {
     pyramid
 }
 
-/// Stats returned alongside a freshly built [`LogTrace`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TraceStats {
-    pub(crate) clamped: usize,
-    pub(crate) resampled: bool,
-    pub(crate) nulls: usize,
-    /// Resampled depths left null because no reading lay within half a step.
-    pub(crate) gaps: usize,
-    /// Readings left out as isolated, far from the rest of the curve.
-    pub(crate) isolated: usize,
-}
-
 /// Why [`LogTrace::from_samples`] built nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TraceError {
@@ -217,8 +248,8 @@ const MIN_GROUP_READINGS: usize = 10;
 /// [`MIN_GROUP_READINGS`] readings lying more than [`ISOLATION_GAP`] from
 /// the rest of the curve, nulls within its span included: a stray depth, not
 /// a continuation. Nothing is dropped unless some group is large enough to
-/// be the curve. Returns the readings dropped.
-fn drop_isolated_readings(rows: &mut Vec<(f64, f64)>) -> usize {
+/// be the curve.
+fn drop_isolated_readings(rows: &mut Vec<(f64, f64)>) {
     // First depth, last depth and readings of each group.
     let mut groups: Vec<(f64, f64, usize)> = Vec::new();
     for &(depth, _) in rows.iter().filter(|(_, value)| value.is_finite()) {
@@ -231,27 +262,26 @@ fn drop_isolated_readings(rows: &mut Vec<(f64, f64)>) -> usize {
         }
     }
     if !groups.iter().any(|group| group.2 >= MIN_GROUP_READINGS) {
-        return 0;
+        return;
     }
     groups.retain(|group| group.2 < MIN_GROUP_READINGS);
-    let isolated = groups.iter().map(|group| group.2).sum();
-    if isolated > 0 {
-        let mut next = groups.iter().peekable();
-        rows.retain(|(depth, _)| {
-            while next.peek().is_some_and(|group| group.1 < *depth) {
-                next.next();
-            }
-            !next.peek().is_some_and(|group| group.0 <= *depth)
-        });
+    if groups.is_empty() {
+        return;
     }
-    isolated
+    let mut next = groups.iter().peekable();
+    rows.retain(|(depth, _)| {
+        while next.peek().is_some_and(|group| group.1 < *depth) {
+            next.next();
+        }
+        !next.peek().is_some_and(|group| group.0 <= *depth)
+    });
 }
 
 /// One downhole curve: evenly spaced quantised samples plus a min/max pyramid
 /// for fast zoomed-out queries.
 #[derive(Clone)]
 pub(crate) struct LogTrace {
-    kind: LogKind,
+    scale: Scale,
     start: f64,
     step: f64,
     values: Vec<u16>,
@@ -272,8 +302,8 @@ impl LogTrace {
     /// readings far from the rest of the curve are left out first (see
     /// [`drop_isolated_readings`]). A median step finer than
     /// [`MIN_TRACE_STEP`], or a trace past [`MAX_TRACE_SAMPLES`] samples, is
-    /// refused.
-    pub(crate) fn from_samples(kind: LogKind, depths: &[f64], values: &[f64]) -> Result<(LogTrace, TraceStats), TraceError> {
+    /// refused. A curve of no `kind` is scaled to its own readings.
+    pub(crate) fn from_samples(kind: Option<LogKind>, depths: &[f64], values: &[f64]) -> Result<LogTrace, TraceError> {
         let mut rows: Vec<(f64, f64)> = depths
             .iter()
             .zip(values)
@@ -287,18 +317,16 @@ impl LogTrace {
             rows.reverse();
         }
         // Out of order even after that: sort, and resample below.
-        let mut resampled = rows.windows(2).any(|pair| pair[1].0 < pair[0].0);
+        let resampled = rows.windows(2).any(|pair| pair[1].0 < pair[0].0);
         if resampled {
             rows.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
 
-        let isolated = drop_isolated_readings(&mut rows);
+        drop_isolated_readings(&mut rows);
+        let scale = kind.map_or_else(|| Scale::fitted(rows.iter().map(|&(_, value)| value)), Scale::Fixed);
 
-        let mut clamped = 0usize;
-        let mut nulls = 0usize;
-        let mut gaps = 0usize;
         let (start, step, raw_values) = if rows.len() == 1 {
-            (rows[0].0, 1.0, vec![quantize(kind, rows[0].1, &mut clamped, &mut nulls)])
+            (rows[0].0, 1.0, vec![scale.encode(rows[0].1)])
         } else {
             let mut diffs: Vec<f64> = rows.windows(2).map(|pair| pair[1].0 - pair[0].0).collect();
             let (even, middle) = (diffs.len().is_multiple_of(2), diffs.len() / 2);
@@ -320,7 +348,7 @@ impl LogTrace {
                         requested: rows.len() as u64,
                     });
                 }
-                (rows[0].0, median, rows.iter().map(|&(_, value)| quantize(kind, value, &mut clamped, &mut nulls)).collect())
+                (rows[0].0, median, rows.iter().map(|&(_, value)| scale.encode(value)).collect())
             } else {
                 let first = rows[0].0;
                 let span = (rows[rows.len() - 1].0 - first) / median;
@@ -344,13 +372,11 @@ impl LogTrace {
                         nearest += 1;
                     }
                     if (rows[nearest].0 - target).abs() > reach {
-                        gaps += 1;
                         raw.push(NULL_RAW);
                     } else {
-                        raw.push(quantize(kind, rows[nearest].1, &mut clamped, &mut nulls));
+                        raw.push(scale.encode(rows[nearest].1));
                     }
                 }
-                resampled = true;
                 (first, median, raw)
             }
         };
@@ -365,29 +391,23 @@ impl LogTrace {
         let robust_scratch: Vec<u16> = values_trimmed.iter().copied().filter(|&v| v != NULL_RAW).collect();
         let robust = robust_percentiles(robust_scratch);
         let pyramid = build_pyramid(&values_trimmed);
-        let trace = LogTrace {
-            kind,
+        Ok(LogTrace {
+            scale,
             start,
             step,
             values: values_trimmed,
             pyramid,
             robust,
             source: String::new(),
-        };
-        Ok((
-            trace,
-            TraceStats {
-                clamped,
-                resampled,
-                nulls,
-                gaps,
-                isolated,
-            },
-        ))
+        })
     }
 
-    pub(crate) fn kind(&self) -> LogKind {
-        self.kind
+    /// The drawn curve this is, if it is one.
+    pub(crate) fn kind(&self) -> Option<LogKind> {
+        match self.scale {
+            Scale::Fixed(kind) => Some(kind),
+            Scale::Fitted { .. } => None,
+        }
     }
 
     pub(crate) fn start_depth(&self) -> f64 {
@@ -409,7 +429,7 @@ impl LogTrace {
     }
 
     pub(crate) fn sample(&self, i: usize) -> Option<f32> {
-        self.values.get(i).and_then(|&raw| decode(self.kind, raw))
+        self.values.get(i).and_then(|&raw| self.scale.decode(raw))
     }
 
     /// Base-sample index range `[from, to)` covering depths in the closed
@@ -478,10 +498,10 @@ impl LogTrace {
             let centre = (bucket_from + bucket_to) * 0.5;
             let nearest = ((centre - self.start) / self.step).round();
             let nearest = (nearest.max(0.0) as usize).min(self.values.len() - 1);
-            return decode(self.kind, self.values[nearest]).map(|v| (v, v));
+            return self.scale.decode(self.values[nearest]).map(|v| (v, v));
         }
         let (mn, mx) = self.range_min_max(idx_from, idx_to_excl);
-        match (decode(self.kind, mn), decode(self.kind, mx)) {
+        match (self.scale.decode(mn), self.scale.decode(mx)) {
             (Some(a), Some(b)) => Some((a, b)),
             _ => None,
         }
@@ -568,8 +588,8 @@ impl LogTrace {
     /// Nearest-rank 1st/99th percentile decoded values, excluding spikes at
     /// either end; `None` if the trace has no valid sample.
     pub(crate) fn robust_range(&self) -> Option<(f32, f32)> {
-        self.robust
-            .map(|(low, high)| ((low as f64 * self.kind.resolution()) as f32, (high as f64 * self.kind.resolution()) as f32))
+        let (low, high) = self.robust?;
+        self.scale.decode(low).zip(self.scale.decode(high))
     }
 
     /// Attach the curve mnemonic this trace was read from.
@@ -617,110 +637,514 @@ impl<'a> Iterator for Envelope<'a> {
 
 impl<'a> ExactSizeIterator for Envelope<'a> {}
 
-/// The (up to) three traces held for one drill hole.
+/// Every trace read for one drill hole: the drawn curves and any other
+/// curve column its files carry.
 #[derive(Default)]
 pub(crate) struct HoleLogs {
-    traces: [Option<LogTrace>; 3],
+    traces: Vec<LogTrace>,
 }
 
 impl HoleLogs {
+    pub(crate) fn new(traces: Vec<LogTrace>) -> Self {
+        Self { traces }
+    }
+
     pub(crate) fn trace(&self, kind: LogKind) -> Option<&LogTrace> {
-        self.traces[kind.index()].as_ref()
-    }
-}
-
-/// The session's downhole geophysics traces, keyed by the drill-hole dataset
-/// and hole id (compared exactly) each was matched to, so a dataset's traces go
-/// with it. Not saved with the project.
-#[derive(Default)]
-pub(crate) struct GeophysicsStore {
-    datasets: HashMap<DrillHoleId, BTreeMap<String, HoleLogs>>,
-    /// A dataset's share of the browser's working-set budget, released with
-    /// its traces.
-    reservations: HashMap<DrillHoleId, crate::app::memory::MemoryReservation>,
-}
-
-impl GeophysicsStore {
-    /// Store `trace` for its hole and kind, returning the trace it replaced:
-    /// a later import replaces an earlier one.
-    pub(crate) fn insert(&mut self, dataset: DrillHoleId, dhid: &str, trace: LogTrace) -> Option<LogTrace> {
-        let kind = trace.kind;
-        let hole = self.datasets.entry(dataset).or_default().entry(dhid.to_owned()).or_default();
-        hole.traces[kind.index()].replace(trace)
+        self.traces.iter().find(|trace| trace.kind() == Some(kind))
     }
 
-    /// Hold `holes` as all of `dataset`'s traces, replacing any it had, with
-    /// the reservation that covers them.
-    pub(crate) fn replace_dataset(&mut self, dataset: DrillHoleId, holes: Vec<(String, Vec<LogTrace>)>, reservation: crate::app::memory::MemoryReservation) {
-        self.drop_dataset(dataset);
-        for (dhid, traces) in holes {
-            for trace in traces {
-                self.insert(dataset, &dhid, trace);
-            }
-        }
-        if self.datasets.contains_key(&dataset) {
-            self.reservations.insert(dataset, reservation);
-        }
-    }
-
-    /// Bytes held for one dataset's traces.
-    pub(crate) fn dataset_memory_bytes(&self, dataset: DrillHoleId) -> usize {
-        self.datasets.get(&dataset).map_or(0, |holes| {
-            holes
-                .iter()
-                .map(|(dhid, hole)| dhid.capacity() + std::mem::size_of::<HoleLogs>() + hole.traces.iter().flatten().map(LogTrace::memory_bytes).sum::<usize>())
-                .sum()
-        })
-    }
-
-    pub(crate) fn hole(&self, dataset: DrillHoleId, dhid: &str) -> Option<&HoleLogs> {
-        self.datasets.get(&dataset).and_then(|holes| holes.get(dhid))
-    }
-
-    /// True when at least one trace is held for `dataset`. A hole entry only
-    /// exists because `insert` created it, and `insert` always stores a
-    /// trace into the hole it creates, so a non-empty holes map already
-    /// means at least one trace.
-    pub(crate) fn has_dataset(&self, dataset: DrillHoleId) -> bool {
-        self.datasets.get(&dataset).is_some_and(|holes| !holes.is_empty())
-    }
-
-    pub(crate) fn holes(&self) -> impl Iterator<Item = (DrillHoleId, &str, &HoleLogs)> + '_ {
-        self.datasets
-            .iter()
-            .flat_map(|(dataset, holes)| holes.iter().map(move |(dhid, hole)| (*dataset, dhid.as_str(), hole)))
-    }
-
-    /// Drop every trace matched to `dataset`; true if there were any.
-    pub(crate) fn drop_dataset(&mut self, dataset: DrillHoleId) -> bool {
-        self.reservations.remove(&dataset);
-        self.datasets.remove(&dataset).is_some()
-    }
-
-    /// Keep only the traces of `datasets`, the loaded ones: a dataset closed
-    /// or removed gives back its traces and their share of the budget.
-    pub(crate) fn keep_datasets(&mut self, datasets: impl IntoIterator<Item = DrillHoleId>) {
-        let keep = datasets.into_iter().collect::<std::collections::HashSet<_>>();
-        self.datasets.retain(|dataset, _| keep.contains(dataset));
-        self.reservations.retain(|dataset, _| keep.contains(dataset));
-    }
-
-    /// Holes with at least one trace, across datasets.
-    pub(crate) fn hole_count(&self) -> usize {
-        self.datasets.values().map(BTreeMap::len).sum()
-    }
-
-    pub(crate) fn trace_count(&self, kind: LogKind) -> usize {
-        self.holes().filter(|(_, _, hole)| hole.trace(kind).is_some()).count()
+    pub(crate) fn traces(&self) -> &[LogTrace] {
+        &self.traces
     }
 
     pub(crate) fn memory_bytes(&self) -> usize {
-        let per_dataset = std::mem::size_of::<BTreeMap<String, HoleLogs>>();
-        std::mem::size_of::<Self>() + self.datasets.keys().map(|dataset| per_dataset + self.dataset_memory_bytes(*dataset)).sum::<usize>()
+        size_of::<Self>() + self.traces.iter().map(LogTrace::memory_bytes).sum::<usize>()
+    }
+}
+
+/// A hole's rows past this many bytes are not read: tens of thousands of
+/// metres at a centimetre step, so a file not grouped as its index says.
+pub(crate) const MAX_HOLE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Geophysics files linked to a drill-hole dataset, saved with it. Only the
+/// index is kept: the readings stay in the files, read a hole at a time.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct GeophysicsLink {
+    /// In the order they were read: a later file adds only depths an
+    /// earlier one has no reading at.
+    pub(crate) files: Vec<LinkedFile>,
+}
+
+impl GeophysicsLink {
+    /// The runs of `dhid`'s rows, by file, in the order they are read.
+    pub(crate) fn runs_of<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = (usize, [u64; 2])> + 'a {
+        self.files
+            .iter()
+            .enumerate()
+            .flat_map(move |(index, file)| file.hole(dhid).into_iter().flat_map(move |hole| hole.runs.iter().map(move |run| (index, *run))))
+    }
+
+    pub(crate) fn holds(&self, dhid: &str) -> bool {
+        self.files.iter().any(|file| file.hole(dhid).is_some())
+    }
+
+    /// Which drawn curves `dhid` has readings for, by [`LogKind::index`],
+    /// across its files as a read joins them.
+    pub(crate) fn kinds_of(&self, dhid: &str) -> [bool; 3] {
+        let mut kinds = [false; 3];
+        for (file, hole) in self.files.iter().filter_map(|file| file.hole(dhid).map(|hole| (file, hole))) {
+            for (held, has) in kinds.iter_mut().zip(file.kinds(hole)) {
+                *held |= has;
+            }
+        }
+        kinds
+    }
+
+    /// The shallowest and deepest depth `dhid`'s drawn curves have readings
+    /// at across its files, known before any is read.
+    pub(crate) fn depths_of(&self, dhid: &str) -> Option<[f64; 2]> {
+        self.files
+            .iter()
+            .filter_map(|file| file.hole(dhid).filter(|hole| file.kinds(hole).contains(&true)))
+            .map(|hole| hole.depths)
+            .reduce(|[top, bottom], [from, to]| [top.min(from), bottom.max(to)])
+    }
+
+    /// Put the holes back in the order lookups rely on, whatever wrote them.
+    pub(crate) fn sort(&mut self) {
+        for file in &mut self.files {
+            file.holes.sort_unstable_by(|a, b| a.dhid.cmp(&b.dhid));
+        }
+    }
+}
+
+/// One linked file and where each hole's rows are in it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LinkedFile {
+    /// Where the file was linked from: its full path on the desktop, only
+    /// its name in the browser.
+    pub(crate) path: PathBuf,
+    pub(crate) identity: FileIdentity,
+    /// Every column of the header, in order.
+    pub(crate) columns: Vec<LinkedColumn>,
+    /// Sorted by hole id.
+    pub(crate) holes: Vec<HoleRuns>,
+}
+
+impl LinkedFile {
+    pub(crate) fn hole(&self, dhid: &str) -> Option<&HoleRuns> {
+        self.holes.binary_search_by(|hole| hole.dhid.as_str().cmp(dhid)).ok().map(|index| &self.holes[index])
+    }
+
+    /// Which drawn curves `hole` has in this file, by [`LogKind::index`].
+    fn kinds(&self, hole: &HoleRuns) -> [bool; 3] {
+        let mut kinds = [false; 3];
+        for (index, column) in self.columns.iter().enumerate() {
+            if let ColumnRole::Curve { kind: Some(kind) } = column.role
+                && hole.curves.contains(index)
+            {
+                kinds[kind.index()] = true;
+            }
+        }
+        kinds
+    }
+}
+
+/// What tells one version of a file from another without reading it all.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct FileIdentity {
+    pub(crate) name: String,
+    pub(crate) size: u64,
+    /// Milliseconds since 1970, where the platform gives one.
+    pub(crate) modified: Option<i64>,
+    /// XXH64 of the file's first and last [`FileIdentity::END_BYTES`].
+    pub(crate) ends_hash: u64,
+}
+
+impl FileIdentity {
+    pub(crate) const END_BYTES: u64 = 64 * 1024;
+
+    /// The head and tail hashed, as byte ranges of a file of `size` bytes.
+    /// A small file's tail starts where its head ends.
+    pub(crate) fn end_ranges(size: u64) -> [Range<u64>; 2] {
+        let head = 0..size.min(Self::END_BYTES);
+        let tail = size.saturating_sub(Self::END_BYTES).max(head.end)..size;
+        [head, tail]
+    }
+
+    pub(crate) fn new(name: String, size: u64, modified: Option<i64>, head: &[u8], tail: &[u8]) -> Self {
+        use std::hash::Hasher;
+
+        let mut hasher = twox_hash::XxHash64::with_seed(0);
+        hasher.write(head);
+        hasher.write(tail);
+        Self {
+            name,
+            size,
+            modified,
+            ends_hash: hasher.finish(),
+        }
+    }
+
+    /// Whether `other` is this file unchanged. The name is left out: a file
+    /// renamed or moved is still the file its index describes.
+    pub(crate) fn matches(&self, other: &FileIdentity) -> bool {
+        self.size == other.size && self.modified == other.modified && self.ends_hash == other.ends_hash
+    }
+
+    /// A file's last-modified time in milliseconds since 1970, where the
+    /// platform gives one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn modified_millis(metadata: &std::fs::Metadata) -> Option<i64> {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_millis() as i64)
+    }
+
+    /// Read a file's identity from disk: its metadata and its two ends.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn of_path(path: &std::path::Path) -> std::io::Result<Self> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let mut file = std::fs::File::open(path)?;
+        let metadata = file.metadata()?;
+        let modified = Self::modified_millis(&metadata);
+        let mut ends = [Vec::new(), Vec::new()];
+        for (range, bytes) in Self::end_ranges(metadata.len()).into_iter().zip(&mut ends) {
+            file.seek(SeekFrom::Start(range.start))?;
+            (&mut file).take(range.end - range.start).read_to_end(bytes)?;
+        }
+        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        Ok(Self::new(name, metadata.len(), modified, &ends[0], &ends[1]))
+    }
+}
+
+/// One header column of a linked file.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LinkedColumn {
+    pub(crate) header: String,
+    pub(crate) role: ColumnRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ColumnRole {
+    Dhid,
+    Depth,
+    /// A numeric column, read as a curve; `kind` when the log draws it.
+    Curve {
+        kind: Option<LogKind>,
+    },
+    /// A density curve whose readings were mostly outside the g/cc range,
+    /// so its unit looked wrong and it is not read.
+    LeftOut {
+        kind: LogKind,
+    },
+    /// Text, or never a number: not a curve.
+    Skipped,
+}
+
+/// Where one hole's rows are in a linked file.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct HoleRuns {
+    pub(crate) dhid: String,
+    /// Byte ranges, `[start, end)`, of each run of the hole's rows, in file
+    /// order. A run is read on its own: a later one adds only depths the
+    /// hole has no reading at.
+    pub(crate) runs: Vec<[u64; 2]>,
+    /// Shallowest and deepest depth a drawn curve has a reading at, or of
+    /// any row where none has.
+    pub(crate) depths: [f64; 2],
+    /// The curve columns with a reading for the hole.
+    pub(crate) curves: ColumnSet,
+}
+
+/// Columns of a linked file, a bit each in header order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct ColumnSet(Vec<u8>);
+
+impl ColumnSet {
+    pub(crate) fn insert(&mut self, column: usize) {
+        let byte = column / 8;
+        if byte >= self.0.len() {
+            self.0.resize(byte + 1, 0);
+        }
+        self.0[byte] |= 1 << (column % 8);
+    }
+
+    pub(crate) fn contains(&self, column: usize) -> bool {
+        self.0.get(column / 8).is_some_and(|byte| byte & 1 << (column % 8) != 0)
+    }
+
+    pub(crate) fn union(&mut self, other: &ColumnSet) {
+        if self.0.len() < other.0.len() {
+            self.0.resize(other.0.len(), 0);
+        }
+        self.0.iter_mut().zip(&other.0).for_each(|(byte, other)| *byte |= other);
+    }
+
+    pub(crate) fn intersect(&mut self, other: &ColumnSet) {
+        self.0.truncate(other.0.len());
+        self.0.iter_mut().zip(&other.0).for_each(|(byte, other)| *byte &= other);
+        while self.0.last() == Some(&0) {
+            self.0.pop();
+        }
+    }
+}
+
+/// Holes kept parsed at once.
+const CACHED_HOLES: usize = 8;
+
+/// Bytes of parsed holes kept at once; the hole read last is kept whatever
+/// its size.
+const CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+/// Whether this session can read a dataset's linked files.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LinkState {
+    /// Making sure the files are where the link says, and unchanged.
+    Checking,
+    /// Reading a file through for a fresh index.
+    Indexing,
+    Ready,
+    /// A file is not where the link says. Only the desktop finds this: the
+    /// browser asks for the file again instead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "a page has no path to find a file missing from"))]
+    Missing {
+        file: String,
+    },
+    /// The browser has to be given the file again this session.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the desktop reopens a file by its path"))]
+    NeedsPick {
+        file: String,
+    },
+    Failed(String),
+}
+
+static CHECKING: LinkState = LinkState::Checking;
+
+/// What the log can show of one hole's geophysics.
+pub(crate) enum HoleView<'a> {
+    /// The dataset has no geophysics linked.
+    Unlinked,
+    /// The linked files cannot be read, yet or at all.
+    Link(&'a LinkState),
+    /// The linked files have no rows for the hole.
+    NotInFiles,
+    Reading,
+    /// Not read yet, and nothing is reading it.
+    Wanted,
+    Failed(&'a str),
+    Shown(&'a HoleLogs),
+}
+
+/// The session's side of every linked dataset: whether its files can be
+/// read, and the holes read lately. Nothing here is saved.
+#[derive(Default)]
+pub(crate) struct GeophysicsSession {
+    links: HashMap<DrillHoleId, LinkSession>,
+    /// The holes read most recently first.
+    cache: VecDeque<CachedHole>,
+    cache_bytes: usize,
+    /// Never reused, so work for a link since replaced is known stale.
+    next_generation: u64,
+}
+
+struct LinkSession {
+    /// The link as the session took it up; a dataset holding another one
+    /// has been relinked, reopened or reindexed.
+    link: Arc<GeophysicsLink>,
+    generation: u64,
+    state: LinkState,
+    reading: HashSet<String>,
+    failed: HashMap<String, String>,
+}
+
+struct CachedHole {
+    dataset: DrillHoleId,
+    generation: u64,
+    dhid: String,
+    logs: HoleLogs,
+    bytes: usize,
+    /// Holds `bytes` of the browser's budget until the hole is dropped.
+    _reservation: crate::app::memory::MemoryReservation,
+}
+
+/// Claim `bytes` of the browser's working set for `dhid`'s geophysics, or
+/// say why not. Always granted on the desktop.
+pub(crate) fn reserve_hole(dhid: &str, bytes: usize) -> Result<crate::app::memory::MemoryReservation, String> {
+    crate::app::memory::reserve(bytes, &format!("{dhid} geophysics")).map_err(|_| {
+        tr_format!(
+            literal = "%hole% needs %size% MiB for its geophysics, more than the browser has left: unload other items, then unload and load this dataset again",
+            hole = dhid.to_owned(),
+            size = bytes.div_ceil(1024 * 1024)
+        )
+    })
+}
+
+impl GeophysicsSession {
+    pub(crate) fn view(&self, dataset: &OpenDrillHoleDataset, dhid: &str) -> HoleView<'_> {
+        let session = self.links.get(&dataset.id);
+        // Before the dataset's first link is indexed too.
+        if let Some(session) = session.filter(|session| session.state != LinkState::Ready) {
+            return HoleView::Link(&session.state);
+        }
+        let Some(link) = dataset.geophysics.as_deref() else {
+            return HoleView::Unlinked;
+        };
+        let Some(session) = session else {
+            return HoleView::Link(&CHECKING);
+        };
+        if !link.holds(dhid) {
+            return HoleView::NotInFiles;
+        }
+        if let Some(hole) = self
+            .cache
+            .iter()
+            .find(|hole| hole.dataset == dataset.id && hole.generation == session.generation && hole.dhid == dhid)
+        {
+            return HoleView::Shown(&hole.logs);
+        }
+        if session.reading.contains(dhid) {
+            return HoleView::Reading;
+        }
+        match session.failed.get(dhid) {
+            Some(error) => HoleView::Failed(error),
+            None => HoleView::Wanted,
+        }
+    }
+
+    pub(crate) fn generation(&self, dataset: DrillHoleId) -> Option<u64> {
+        self.links.get(&dataset).map(|session| session.generation)
+    }
+
+    /// The state of `dataset`'s link, if the session has taken one up.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the browser finds links waiting for a pick with it"))]
+    pub(crate) fn state(&self, dataset: DrillHoleId) -> Option<&LinkState> {
+        self.links.get(&dataset).map(|session| &session.state)
+    }
+
+    /// Let go of datasets gone, unloaded or unlinked, and return the loaded
+    /// ones holding a link the session has not taken up. A dataset with no
+    /// link yet is kept while its first link is indexed, and once that has
+    /// failed, so the failure stays shown until it is linked again.
+    pub(crate) fn sync(&mut self, datasets: &[OpenDrillHoleDataset]) -> Vec<DrillHoleId> {
+        let loaded = |id: DrillHoleId| datasets.iter().find(|dataset| dataset.id == id && dataset.state.loaded);
+        let before = self.links.len();
+        self.links
+            .retain(|id, session| loaded(*id).is_some_and(|dataset| dataset.geophysics.is_some() || matches!(session.state, LinkState::Indexing | LinkState::Failed(_))));
+        if self.links.len() != before {
+            self.trim_cache();
+        }
+        datasets
+            .iter()
+            .filter(|dataset| dataset.state.loaded)
+            .filter(|dataset| {
+                dataset
+                    .geophysics
+                    .as_ref()
+                    .is_some_and(|link| !self.links.get(&dataset.id).is_some_and(|session| Arc::ptr_eq(&session.link, link)))
+            })
+            .map(|dataset| dataset.id)
+            .collect()
+    }
+
+    /// Take up `link` for `dataset`, forgetting what was read under an
+    /// earlier one; returns the generation work for it runs under.
+    pub(crate) fn adopt(&mut self, dataset: DrillHoleId, link: &Arc<GeophysicsLink>, state: LinkState) -> u64 {
+        self.next_generation += 1;
+        self.links.insert(
+            dataset,
+            LinkSession {
+                link: Arc::clone(link),
+                generation: self.next_generation,
+                state,
+                reading: HashSet::new(),
+                failed: HashMap::new(),
+            },
+        );
+        self.trim_cache();
+        self.next_generation
+    }
+
+    /// Set the state of `dataset`'s link, if `generation` is still its.
+    pub(crate) fn set_state(&mut self, dataset: DrillHoleId, generation: u64, state: LinkState) {
+        if let Some(session) = self.links.get_mut(&dataset).filter(|session| session.generation == generation) {
+            session.state = state;
+        }
+    }
+
+    /// Mark `dhid` as being read and return the generation to read it
+    /// under, or `None` when it is read, being read, failed or cannot be.
+    pub(crate) fn begin_read(&mut self, dataset: &OpenDrillHoleDataset, dhid: &str) -> Option<u64> {
+        if !matches!(self.view(dataset, dhid), HoleView::Wanted) {
+            return None;
+        }
+        let session = self.links.get_mut(&dataset.id)?;
+        session.reading.insert(dhid.to_owned());
+        Some(session.generation)
+    }
+
+    /// Keep a hole read under `generation`, or why it could not be.
+    pub(crate) fn finish_read(&mut self, dataset: DrillHoleId, generation: u64, dhid: String, result: Result<HoleLogs, String>) {
+        let Some(session) = self.links.get_mut(&dataset).filter(|session| session.generation == generation) else {
+            return;
+        };
+        session.reading.remove(&dhid);
+        match result {
+            Ok(logs) => {
+                let bytes = logs.memory_bytes() + dhid.capacity();
+                match reserve_hole(&dhid, bytes) {
+                    Ok(reservation) => {
+                        self.cache_bytes += bytes;
+                        self.cache.push_front(CachedHole {
+                            dataset,
+                            generation,
+                            dhid,
+                            logs,
+                            bytes,
+                            _reservation: reservation,
+                        });
+                        self.trim_cache();
+                    }
+                    Err(error) => {
+                        session.failed.insert(dhid, error);
+                    }
+                }
+            }
+            Err(error) => {
+                session.failed.insert(dhid, error);
+            }
+        }
+    }
+
+    /// Drop holes of links let go of or replaced, then the oldest past the
+    /// budget.
+    fn trim_cache(&mut self) {
+        let links = &self.links;
+        let mut freed = 0;
+        self.cache.retain(|hole| {
+            let current = links.get(&hole.dataset).is_some_and(|session| session.generation == hole.generation);
+            freed += if current { 0 } else { hole.bytes };
+            current
+        });
+        self.cache_bytes -= freed;
+        while self.cache.len() > CACHED_HOLES || (self.cache.len() > 1 && self.cache_bytes > CACHE_BYTES) {
+            let Some(oldest) = self.cache.pop_back() else { break };
+            self.cache_bytes -= oldest.bytes;
+        }
+    }
+
+    /// Bytes of parsed holes held.
+    pub(crate) fn memory_bytes(&self) -> usize {
+        self.cache_bytes
     }
 
     pub(crate) fn clear(&mut self) {
-        self.datasets.clear();
-        self.reservations.clear();
+        self.links.clear();
+        self.cache.clear();
+        self.cache_bytes = 0;
     }
 }
