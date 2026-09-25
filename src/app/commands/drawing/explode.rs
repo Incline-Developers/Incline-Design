@@ -1,10 +1,8 @@
 use crate::{
     app::App,
-    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, SceneEntityId},
     ui::state::ActiveTool,
-    userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -23,7 +21,6 @@ impl<'a> App<'a> {
         // happens to be two semicircular arcs, but that is an encoding detail
         // and not something to hand the user as the result of a tool.
         if matches!(self.active_document().get_object(object_id), Some(Object::Circle { .. })) {
-            userspace_warn!("{}", tr!(literal = "A circle cannot be exploded: it is a single shape, not a series of segments"));
             return;
         }
         self.editor.tool_highlight_id = None;
