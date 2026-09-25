@@ -12,7 +12,10 @@ use std::{
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::model::drill_hole::{DrillHole, DrillHoleDataset, DrillInterval, DrillValue, SurveyObservation, TraceStation, resolve_trace};
+use crate::model::{
+    drill_hole::{DrillHole, DrillHoleDataset, DrillInterval, DrillValue, SurveyObservation, TraceStation, resolve_trace},
+    formats::csv_records::{for_each_record, owned_fields},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum CsvDrillFileRole {
@@ -80,9 +83,19 @@ impl From<std::io::Error> for CsvDrillError {
     }
 }
 
+impl From<csv::Error> for CsvDrillError {
+    fn from(value: csv::Error) -> Self {
+        Self::Invalid(value.to_string())
+    }
+}
+
 pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
-    let rows = parse_csv(bytes)?;
-    let headers = rows.first().cloned().ok_or_else(|| CsvDrillError::Invalid("CSV file is empty".into()))?;
+    const PREVIEW_ROW_COUNT: usize = 8;
+    let rows = parse_csv(bytes, Some(PREVIEW_ROW_COUNT + 1))?;
+    let headers = rows
+        .first()
+        .map(|(_, headers)| headers.clone())
+        .ok_or_else(|| CsvDrillError::Invalid("CSV file is empty".into()))?;
     if headers.is_empty() || headers.iter().all(|header| header.trim().is_empty()) {
         return Err(CsvDrillError::Invalid("CSV header has no columns".into()));
     }
@@ -95,7 +108,7 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
     }
     Ok(CsvDrillPreview {
         headers,
-        rows: rows.into_iter().skip(1).take(8).collect(),
+        rows: rows.into_iter().skip(1).map(|(_, row)| row).collect(),
     })
 }
 
@@ -212,8 +225,8 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
     let mut segment_diameters: HashMap<String, Option<f64>> = HashMap::new();
     let mut attribute_counts: HashMap<String, usize> = HashMap::new();
     for (mapping, bytes) in &inputs {
-        let rows = parse_csv(bytes)?;
-        let headers = rows.first().ok_or_else(|| CsvDrillError::Invalid(format!("{} is empty", mapping.path.display())))?;
+        let rows = parse_csv(bytes, None)?;
+        let (_, headers) = rows.first().ok_or_else(|| CsvDrillError::Invalid(format!("{} is empty", mapping.path.display())))?;
         for (index, role) in mapping.columns.iter().enumerate() {
             if let CsvDrillColumnRole::Attribute(mapped) = role {
                 let label = if mapped.trim().is_empty() { headers[index].trim() } else { mapped.trim() };
@@ -223,8 +236,8 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
     }
 
     for (mapping, bytes) in &inputs {
-        let rows = parse_csv(bytes)?;
-        let headers = rows.first().ok_or_else(|| CsvDrillError::Invalid(format!("{} is empty", mapping.path.display())))?;
+        let rows = parse_csv(bytes, None)?;
+        let (_, headers) = rows.first().ok_or_else(|| CsvDrillError::Invalid(format!("{} is empty", mapping.path.display())))?;
         if mapping.columns.len() != headers.len() {
             return Err(CsvDrillError::Invalid(format!(
                 "{} mapping has {} columns, CSV has {}",
@@ -243,12 +256,12 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
             .filter(|&index| {
                 rows.iter()
                     .skip(1)
-                    .filter_map(|row| row.get(index).map(|value| value.trim()))
+                    .filter_map(|(_, row)| row.get(index).map(|value| value.trim()))
                     .filter(|value| !value.is_empty())
                     .all(|value| value.parse::<f64>().is_ok_and(f64::is_finite))
             })
             .collect::<std::collections::HashSet<_>>();
-        for (row_index, row) in rows.iter().enumerate().skip(1) {
+        for &(line, ref row) in rows.iter().skip(1) {
             if row.iter().all(|value| value.trim().is_empty()) {
                 continue;
             }
@@ -256,22 +269,22 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                 return Err(CsvDrillError::Invalid(format!(
                     "{} row {} has {} columns; expected {}",
                     mapping.path.display(),
-                    row_index + 1,
+                    line,
                     row.len(),
                     headers.len()
                 )));
             }
-            let dhid = required_text(mapping, row, &CsvDrillColumnRole::Dhid, row_index)?;
+            let dhid = required_text(mapping, row, &CsvDrillColumnRole::Dhid, line)?;
             match mapping.role {
                 CsvDrillFileRole::Unassigned => unreachable!("unassigned mappings are rejected before rows are parsed"),
                 CsvDrillFileRole::Collar => {
                     let collar = Collar {
                         position: DVec3::new(
-                            required_number(mapping, row, &CsvDrillColumnRole::East, row_index)?,
-                            required_number(mapping, row, &CsvDrillColumnRole::North, row_index)?,
-                            required_number(mapping, row, &CsvDrillColumnRole::Elevation, row_index)?,
+                            required_number(mapping, row, &CsvDrillColumnRole::East, line)?,
+                            required_number(mapping, row, &CsvDrillColumnRole::North, line)?,
+                            required_number(mapping, row, &CsvDrillColumnRole::Elevation, line)?,
                         ),
-                        diameter: optional_number(mapping, row, &CsvDrillColumnRole::Diameter, row_index)?,
+                        diameter: optional_number(mapping, row, &CsvDrillColumnRole::Diameter, line)?,
                     };
                     validate_diameter(collar.diameter, &dhid)?;
                     if collars.insert(dhid.clone(), collar).is_some() {
@@ -279,25 +292,25 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                     }
                 }
                 CsvDrillFileRole::Survey => {
-                    let position = optional_xyz(mapping, row, row_index, CsvDrillColumnRole::East, CsvDrillColumnRole::North, CsvDrillColumnRole::Elevation)?;
-                    let azimuth = optional_number(mapping, row, &CsvDrillColumnRole::Azimuth, row_index)?;
-                    let dip = optional_number(mapping, row, &CsvDrillColumnRole::Dip, row_index)?;
+                    let position = optional_xyz(mapping, row, line, CsvDrillColumnRole::East, CsvDrillColumnRole::North, CsvDrillColumnRole::Elevation)?;
+                    let azimuth = optional_number(mapping, row, &CsvDrillColumnRole::Azimuth, line)?;
+                    let dip = optional_number(mapping, row, &CsvDrillColumnRole::Dip, line)?;
                     if azimuth.is_some() != dip.is_some() {
                         return Err(CsvDrillError::Invalid(format!(
                             "{} row {} has a partial azimuth/dip orientation",
                             mapping.path.display(),
-                            row_index + 1
+                            line
                         )));
                     }
                     if position.is_none() && azimuth.is_none() {
                         return Err(CsvDrillError::Invalid(format!(
                             "{} row {} has no XYZ or azimuth/dip geometry",
                             mapping.path.display(),
-                            row_index + 1
+                            line
                         )));
                     }
                     surveys.entry(dhid).or_default().push(SurveyObservation {
-                        depth: required_number(mapping, row, &CsvDrillColumnRole::Depth, row_index)?,
+                        depth: required_number(mapping, row, &CsvDrillColumnRole::Depth, line)?,
                         azimuth,
                         dip,
                         position,
@@ -307,23 +320,23 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                     intervals
                         .entry(dhid)
                         .or_default()
-                        .push(interval_row(mapping, headers, row, row_index, stem, &numeric_attributes, &attribute_counts)?);
+                        .push(interval_row(mapping, headers, row, line, stem, &numeric_attributes, &attribute_counts)?);
                 }
                 CsvDrillFileRole::ExplicitSegments => {
-                    let from = required_number(mapping, row, &CsvDrillColumnRole::From, row_index)?;
-                    let to = required_number(mapping, row, &CsvDrillColumnRole::To, row_index)?;
-                    validate_interval(from, to, &dhid, row_index)?;
+                    let from = required_number(mapping, row, &CsvDrillColumnRole::From, line)?;
+                    let to = required_number(mapping, row, &CsvDrillColumnRole::To, line)?;
+                    validate_interval(from, to, &dhid, line)?;
                     let start = DVec3::new(
-                        required_number(mapping, row, &CsvDrillColumnRole::StartEast, row_index)?,
-                        required_number(mapping, row, &CsvDrillColumnRole::StartNorth, row_index)?,
-                        required_number(mapping, row, &CsvDrillColumnRole::StartElevation, row_index)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::StartEast, line)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::StartNorth, line)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::StartElevation, line)?,
                     );
                     let end = DVec3::new(
-                        required_number(mapping, row, &CsvDrillColumnRole::EndEast, row_index)?,
-                        required_number(mapping, row, &CsvDrillColumnRole::EndNorth, row_index)?,
-                        required_number(mapping, row, &CsvDrillColumnRole::EndElevation, row_index)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::EndEast, line)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::EndNorth, line)?,
+                        required_number(mapping, row, &CsvDrillColumnRole::EndElevation, line)?,
                     );
-                    let diameter = optional_number(mapping, row, &CsvDrillColumnRole::Diameter, row_index)?;
+                    let diameter = optional_number(mapping, row, &CsvDrillColumnRole::Diameter, line)?;
                     validate_diameter(diameter, &dhid)?;
                     if let Some(existing) = segment_diameters.get(&dhid).copied() {
                         let consistent = match (existing, diameter) {
@@ -345,7 +358,7 @@ pub(crate) fn parse_bundle<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFil
                     intervals
                         .entry(dhid)
                         .or_default()
-                        .push(interval_row(mapping, headers, row, row_index, stem, &numeric_attributes, &attribute_counts)?);
+                        .push(interval_row(mapping, headers, row, line, stem, &numeric_attributes, &attribute_counts)?);
                 }
             }
         }
@@ -469,15 +482,15 @@ fn interval_row(
     mapping: &CsvDrillFileMapping,
     headers: &[String],
     row: &[String],
-    row_index: usize,
+    line: usize,
     stem: &str,
     numeric_attributes: &std::collections::HashSet<usize>,
     attribute_counts: &HashMap<String, usize>,
 ) -> Result<DrillInterval, CsvDrillError> {
-    let dhid = required_text(mapping, row, &CsvDrillColumnRole::Dhid, row_index)?;
-    let from = required_number(mapping, row, &CsvDrillColumnRole::From, row_index)?;
-    let to = required_number(mapping, row, &CsvDrillColumnRole::To, row_index)?;
-    validate_interval(from, to, &dhid, row_index)?;
+    let dhid = required_text(mapping, row, &CsvDrillColumnRole::Dhid, line)?;
+    let from = required_number(mapping, row, &CsvDrillColumnRole::From, line)?;
+    let to = required_number(mapping, row, &CsvDrillColumnRole::To, line)?;
+    validate_interval(from, to, &dhid, line)?;
     let mut values = BTreeMap::new();
     for (index, role) in mapping.columns.iter().enumerate() {
         let CsvDrillColumnRole::Attribute(mapped_name) = role else {
@@ -503,9 +516,9 @@ fn interval_row(
     Ok(DrillInterval { from, to, values })
 }
 
-fn validate_interval(from: f64, to: f64, dhid: &str, row_index: usize) -> Result<(), CsvDrillError> {
+fn validate_interval(from: f64, to: f64, dhid: &str, line: usize) -> Result<(), CsvDrillError> {
     if !from.is_finite() || !to.is_finite() || from < 0.0 || to <= from {
-        return Err(CsvDrillError::Invalid(format!("row {} has invalid interval {from}..{to} for DHID '{dhid}'", row_index + 1)));
+        return Err(CsvDrillError::Invalid(format!("row {} has invalid interval {from}..{to} for DHID '{dhid}'", line)));
     }
     Ok(())
 }
@@ -539,29 +552,25 @@ fn role_index(mapping: &CsvDrillFileMapping, role: &CsvDrillColumnRole) -> Optio
     mapping.columns.iter().position(|value| value == role)
 }
 
-fn required_text(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, row_index: usize) -> Result<String, CsvDrillError> {
+fn required_text(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, line: usize) -> Result<String, CsvDrillError> {
     let value = role_index(mapping, role).and_then(|index| row.get(index)).map(|value| value.trim()).unwrap_or("");
     if value.is_empty() {
-        Err(CsvDrillError::Invalid(format!(
-            "{} row {} has a blank required value",
-            mapping.path.display(),
-            row_index + 1
-        )))
+        Err(CsvDrillError::Invalid(format!("{} row {} has a blank required value", mapping.path.display(), line)))
     } else {
         Ok(value.to_owned())
     }
 }
 
-fn required_number(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, row_index: usize) -> Result<f64, CsvDrillError> {
-    let value = required_text(mapping, row, role, row_index)?;
+fn required_number(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, line: usize) -> Result<f64, CsvDrillError> {
+    let value = required_text(mapping, row, role, line)?;
     value
         .parse::<f64>()
         .ok()
         .filter(|value| value.is_finite())
-        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", mapping.path.display(), row_index + 1)))
+        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", mapping.path.display(), line)))
 }
 
-fn optional_number(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, row_index: usize) -> Result<Option<f64>, CsvDrillError> {
+fn optional_number(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDrillColumnRole, line: usize) -> Result<Option<f64>, CsvDrillError> {
     let Some(index) = role_index(mapping, role) else {
         return Ok(None);
     };
@@ -574,13 +583,13 @@ fn optional_number(mapping: &CsvDrillFileMapping, row: &[String], role: &CsvDril
         .ok()
         .filter(|value| value.is_finite())
         .map(Some)
-        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", mapping.path.display(), row_index + 1)))
+        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", mapping.path.display(), line)))
 }
 
 fn optional_xyz(
     mapping: &CsvDrillFileMapping,
     row: &[String],
-    row_index: usize,
+    line: usize,
     x_role: CsvDrillColumnRole,
     y_role: CsvDrillColumnRole,
     z_role: CsvDrillColumnRole,
@@ -589,63 +598,23 @@ fn optional_xyz(
         return Ok(None);
     }
     let values = [
-        optional_number(mapping, row, &x_role, row_index)?,
-        optional_number(mapping, row, &y_role, row_index)?,
-        optional_number(mapping, row, &z_role, row_index)?,
+        optional_number(mapping, row, &x_role, line)?,
+        optional_number(mapping, row, &y_role, line)?,
+        optional_number(mapping, row, &z_role, line)?,
     ];
     match values {
         [Some(x), Some(y), Some(z)] => Ok(Some(DVec3::new(x, y, z))),
         [None, None, None] => Ok(None),
-        _ => Err(CsvDrillError::Invalid(format!(
-            "{} row {} has a partial XYZ coordinate",
-            mapping.path.display(),
-            row_index + 1
-        ))),
+        _ => Err(CsvDrillError::Invalid(format!("{} row {} has a partial XYZ coordinate", mapping.path.display(), line))),
     }
 }
 
-fn parse_csv(bytes: &[u8]) -> Result<Vec<Vec<String>>, CsvDrillError> {
-    std::str::from_utf8(bytes).map_err(|_| CsvDrillError::Invalid("CSV file must be UTF-8".into()))?;
+/// Each record with the line it starts on, so errors name the line an editor shows.
+fn parse_csv(bytes: &[u8], limit: Option<usize>) -> Result<Vec<(usize, Vec<String>)>, CsvDrillError> {
     let mut rows = Vec::new();
-    let mut row = Vec::new();
-    let mut field = Vec::new();
-    let mut quoted = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if quoted {
-            if byte == b'"' {
-                if bytes.get(index + 1) == Some(&b'"') {
-                    field.push(b'"');
-                    index += 1;
-                } else {
-                    quoted = false;
-                }
-            } else {
-                field.push(byte);
-            }
-        } else {
-            match byte {
-                b'"' if field.is_empty() => quoted = true,
-                b',' => {
-                    row.push(String::from_utf8(std::mem::take(&mut field)).expect("validated UTF-8"));
-                }
-                b'\n' => {
-                    row.push(String::from_utf8(std::mem::take(&mut field)).expect("validated UTF-8"));
-                    rows.push(std::mem::take(&mut row));
-                }
-                b'\r' => {}
-                _ => field.push(byte),
-            }
-        }
-        index += 1;
-    }
-    if quoted {
-        return Err(CsvDrillError::Invalid("CSV has an unterminated quoted field".into()));
-    }
-    if !field.is_empty() || !row.is_empty() {
-        row.push(String::from_utf8(field).expect("validated UTF-8"));
-        rows.push(row);
-    }
+    for_each_record::<CsvDrillError>(bytes, limit, |line, record| {
+        rows.push((line, owned_fields(record)));
+        Ok(())
+    })?;
     Ok(rows)
 }

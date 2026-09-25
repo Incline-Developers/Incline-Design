@@ -50,6 +50,7 @@ pub(crate) mod init;
 pub(crate) mod passes;
 pub(crate) mod plot;
 pub(crate) mod projections;
+mod readback;
 pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;

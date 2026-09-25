@@ -8,7 +8,10 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
-use super::*;
+use super::{
+    readback::{self, RgbaReadback},
+    *,
+};
 use crate::{userspace_log, userspace_warn};
 
 pub(crate) enum ScreenshotTarget {
@@ -20,14 +23,10 @@ pub(crate) enum ScreenshotTarget {
 
 /// GPU-side capture state produced before submit and consumed after present.
 pub(super) struct PendingScreenshot {
-    buffer: Arc<wgpu::Buffer>,
-    padded_bytes_per_row: u32,
-    width: u32,
-    height: u32,
+    readback: RgbaReadback,
     /// The visible-viewport sub-rect of the (full-window-sized) capture to
     /// keep when encoding the PNG - see `encode_mapped_png`.
     crop: ViewportRect,
-    format: wgpu::TextureFormat,
     target: ScreenshotTarget,
 }
 
@@ -61,21 +60,7 @@ impl<'a> Graphics<'a> {
     ) -> PendingScreenshot {
         let width = self.config.width.max(1);
         let height = self.config.height.max(1);
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Screenshot Target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.config.format.add_srgb_suffix(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (texture, view) = readback::offscreen_target(&self.device, "Screenshot Target", self.config.format.add_srgb_suffix(), width, height);
         // An export is one of the places the cinematic view earns its keep.
         // Reuse the graded scene, including the ungraded designs and drill
         // holes, then add the live overlay exactly as the viewport does.
@@ -103,40 +88,9 @@ impl<'a> Graphics<'a> {
         // from the cache; with it, the cache is where the finished image is.
         self.render_editor_overlay_pass(encoder, &view, self.viewport_rect, editor, from_cache);
 
-        let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
-        // there, but the native readback path requires Arc over Rc.
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let buffer = Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Screenshot Readback Buffer"),
-            size: u64::from(padded_bytes_per_row) * u64::from(height),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
         PendingScreenshot {
-            buffer,
-            padded_bytes_per_row,
-            width,
-            height,
+            readback: RgbaReadback::record(&self.device, encoder, &texture, "Screenshot Readback Buffer"),
             crop: self.viewport_rect,
-            format: self.config.format.add_srgb_suffix(),
             target,
         }
     }
@@ -165,7 +119,7 @@ impl<'a> Graphics<'a> {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let buffer = std::sync::Arc::clone(&capture.buffer);
+            let buffer = std::sync::Arc::clone(&capture.readback.buffer);
             let callback_buffer = std::sync::Arc::clone(&buffer);
             buffer.map_async(wgpu::MapMode::Read, .., move |result| {
                 if let Err(error) = result {
@@ -196,60 +150,32 @@ impl<'a> Graphics<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     fn write_screenshot_png(&self, capture: &PendingScreenshot) -> Result<()> {
         let ScreenshotTarget::Native(path) = &capture.target;
-        let (tx, rx) = std::sync::mpsc::channel();
-        capture.buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-            let _ = tx.send(result);
-        });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|error| anyhow!("GPU poll failed: {error}"))?;
-        rx.recv()
-            .map_err(|_| anyhow!("Readback callback dropped"))?
-            .map_err(|error| anyhow!("Buffer map failed: {error}"))?;
-
+        capture.readback.map_blocking(&self.device)?;
         let png = encode_mapped_png(capture)?;
-        capture.buffer.unmap();
+        capture.readback.buffer.unmap();
         std::fs::write(path, png)?;
         Ok(())
     }
 }
 
 fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
-    let swap_bgra = match capture.format.remove_srgb_suffix() {
-        wgpu::TextureFormat::Bgra8Unorm => true,
-        wgpu::TextureFormat::Rgba8Unorm => false,
-        other => {
-            return Err(anyhow!("Unsupported surface format for image export: {other:?}"));
-        }
-    };
-    let padded = capture.buffer.get_mapped_range(..)?;
-    let row_bytes = capture.width as usize * 4;
-    let mut rgba = Vec::with_capacity(row_bytes * capture.height as usize);
-    for row in padded.chunks_exact(capture.padded_bytes_per_row as usize) {
-        rgba.extend_from_slice(&row[..row_bytes]);
-    }
-    drop(padded);
-    if swap_bgra {
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
-    }
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
+    let rgba = capture.readback.unpack()?;
+    let (width, height) = (capture.readback.width, capture.readback.height);
 
     // The capture covers the full window; keep only the visible-viewport
     // sub-rect (`crop`), clamped defensively in case it's a frame stale
     // relative to a resize that just landed - see `Graphics::apply_canvas_rect`.
-    let crop_x = capture.crop.x.min(capture.width.saturating_sub(1)) as usize;
-    let crop_y = capture.crop.y.min(capture.height.saturating_sub(1)) as usize;
-    let crop_width = (capture.crop.width.min(capture.width - crop_x as u32)).max(1) as usize;
-    let crop_height = (capture.crop.height.min(capture.height - crop_y as u32)).max(1) as usize;
-    let full_frame = crop_x == 0 && crop_y == 0 && crop_width == capture.width as usize && crop_height == capture.height as usize;
+    let crop_x = capture.crop.x.min(width.saturating_sub(1)) as usize;
+    let crop_y = capture.crop.y.min(height.saturating_sub(1)) as usize;
+    let crop_width = (capture.crop.width.min(width - crop_x as u32)).max(1) as usize;
+    let crop_height = (capture.crop.height.min(height - crop_y as u32)).max(1) as usize;
+    let full_frame = crop_x == 0 && crop_y == 0 && crop_width == width as usize && crop_height == height as usize;
     let cropped = if full_frame {
         rgba
     } else {
         let mut out = Vec::with_capacity(crop_width * crop_height * 4);
         for row in 0..crop_height {
-            let start = ((crop_y + row) * capture.width as usize + crop_x) * 4;
+            let start = ((crop_y + row) * width as usize + crop_x) * 4;
             out.extend_from_slice(&rgba[start..start + crop_width * 4]);
         }
         out

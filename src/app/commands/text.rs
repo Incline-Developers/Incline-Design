@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
+    app::App,
     i18n::{tr, tr_format},
     model::{Command, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
@@ -17,22 +17,10 @@ impl<'a> App<'a> {
             return;
         }
 
-        let picked_text = self
-            .graphics
-            .as_ref()
-            .and_then(|graphics| {
-                graphics.pick_at_cursor(
-                    PICK_THRESHOLD_PX,
-                    &self.triangulations,
-                    &self.editor.hidden_handles,
-                    &self.editor.frozen_handles,
-                    self.editor.xray_enabled,
-                )
-            })
-            .and_then(|(handle, _)| match handle {
-                SceneEntityId::Object(id) if matches!(self.scene_document.get_object(id), Some(Object::Text { .. })) => Some(id),
-                _ => None,
-            });
+        let picked_text = self.pick_under_cursor().and_then(|(handle, _)| match handle {
+            SceneEntityId::Object(id) if matches!(self.scene_document.get_object(id), Some(Object::Text { .. })) => Some(id),
+            _ => None,
+        });
 
         if let Some(id) = picked_text {
             self.begin_text_edit(id, false);

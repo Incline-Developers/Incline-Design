@@ -35,8 +35,6 @@ use crate::{
     },
 };
 
-/// Gap between buttons in the same cluster.
-const BUTTON_GAP: f32 = 0.0;
 /// How much shorter than a button a menu label's hover fill is drawn, so the
 /// dropdowns read as labels in the bar rather than as more buttons.
 const MENU_ROW_INSET: f32 = 6.0;
@@ -97,11 +95,11 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // them. The layout centres everything on the row, so the three
                     // clusters can be three different heights and still line up.
 
-                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                     });
-                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         draw_view_tools(ui, editor, project, commands, side);
                     });
 
@@ -122,7 +120,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // sized to it, so a stale width slides the run along
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
-                        let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let drawn = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             draw_centre_settings(ui, editor, project);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
@@ -137,20 +135,6 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
         })
         .response
         .rect
-}
-
-/// Lay one cluster out over `rect`, and report what it drew into.
-///
-/// The three clusters are placed against the same strip rather than in
-/// sequence, so each is given the rect it should align itself in and none of
-/// them consumes space the next one wanted.
-fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
-        ui.spacing_mut().item_spacing.x = BUTTON_GAP;
-        add_contents(ui);
-    })
-    .response
-    .rect
 }
 
 /// The clear space between the two clusters the centre run has to stay inside.

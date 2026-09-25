@@ -61,7 +61,7 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
-        self.cancel_fuse();
+        self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
         // A step that put an item back may have restored one the editor had

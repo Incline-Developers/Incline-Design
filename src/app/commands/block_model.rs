@@ -12,7 +12,7 @@ use crate::{
         Command, ItemRef, ItemStyle, MemberKind, SceneEntityId,
         block_model::{
             BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RegularBlockBounds, RenderableBlockIndices,
-            compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
+            compute_world_bounds, is_no_data_sentinel, numeric_variable_default, quantize_micrometres,
         },
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, DrillValue},
         formats::{
@@ -884,7 +884,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
         let planes = [block.upper.x, block.lower.x, block.upper.y, block.lower.y, block.upper.z, block.lower.z];
         for (face_index, plane) in planes.into_iter().enumerate() {
             let face = block_face_rect(block, face_index);
-            plane_entries[face_index].entry(quantize(plane)).or_default().push(FaceCandidate {
+            plane_entries[face_index].entry(quantize_micrometres(plane)).or_default().push(FaceCandidate {
                 block_index: index,
                 rect: CoveredRect {
                     u_min: face.u_min,
@@ -903,7 +903,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
         for (face_index, plane_index) in opposite_planes.iter().enumerate() {
             let face = block_face_rect(block, face_index);
             let mut covered = Vec::new();
-            if let Some(indexed_faces) = plane_index.get(&quantize(face.plane)) {
+            if let Some(indexed_faces) = plane_index.get(&quantize_micrometres(face.plane)) {
                 let query = CoveredRect {
                     u_min: face.u_min,
                     u_max: face.u_max,
@@ -928,7 +928,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
                 }
             }
             exposed_planes[face_index]
-                .entry(quantize(face.plane))
+                .entry(quantize_micrometres(face.plane))
                 .or_insert_with(|| (face.plane, Vec::new()))
                 .1
                 .extend(uncovered_face_rects(face, &covered));
@@ -1167,10 +1167,5 @@ fn add_block_face_tile(
 }
 
 fn point_key(point: DVec3) -> [u64; 3] {
-    [quantize(point.x), quantize(point.y), quantize(point.z)]
-}
-
-fn quantize(value: f64) -> u64 {
-    let rounded = (value * 1_000_000.0).round();
-    if rounded == 0.0 { 0.0_f64.to_bits() } else { rounded.to_bits() }
+    [quantize_micrometres(point.x), quantize_micrometres(point.y), quantize_micrometres(point.z)]
 }
