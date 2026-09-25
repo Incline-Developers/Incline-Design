@@ -268,12 +268,20 @@ const LEGEND_STOP_VALUE_WIDTH: f32 = 46.0;
 const LEGEND_LABEL_FRACTIONS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 /// Width of the per-category share column drawn left of each legend swatch.
 const LEGEND_CATEGORY_PERCENT_WIDTH: f32 = 34.0;
-const SCALE_BAR_TARGET_WIDTH: f64 = 320.0;
+/// Longest the bar may grow; its length rounds *down* to a 1 / 2 / 5 × 10ⁿ
+/// distance, so it spans between 40% and 100% of this.
+const SCALE_BAR_MAX_WIDTH: f32 = 360.0;
 const SCALE_BAR_VIEWPORT_MARGIN: f32 = 10.0;
-const SCALE_BAR_LABEL_OVERHANG: f32 = 18.0;
+/// Room kept beside the bar for the labels centred on its ends when the
+/// viewport is too narrow for the full-length bar.
+const SCALE_BAR_LABEL_ALLOWANCE: f32 = 48.0;
 const SCALE_BAR_SEGMENT_FRACTIONS: [f64; 6] = [0.0, 0.05, 0.10, 0.25, 0.50, 1.0];
-/// Height of the scale bar's block: the bar itself and the labels under it.
-const SCALE_BAR_HEIGHT: f32 = 21.0;
+/// Order tick labels claim space in: the ends always, then the coarse ticks
+/// before the fine ones, so crowding drops the finest labels first.
+const SCALE_BAR_LABEL_PRIORITY: [usize; 6] = [5, 0, 4, 3, 2, 1];
+/// Least clear space between two neighbouring tick labels.
+const SCALE_BAR_LABEL_GAP: f32 = 6.0;
+const SCALE_BAR_THICKNESS: f32 = 5.0;
 /// Gap between the embedded slice preview and the viewport's edges.
 const SLICE_PREVIEW_MARGIN: f32 = 10.0;
 /// Drop from the top of the viewport to the embedded slice preview when the
@@ -1000,12 +1008,7 @@ fn overlay_label_font() -> egui::FontId {
     egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()))
 }
 
-/// Draws `text` with a 1px outline pass behind the ink pass, readable with no solid backdrop.
-fn outlined_label(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, text: &str, font: &egui::FontId, ink: egui::Color32, outline: egui::Color32) {
-    outlined_galley(painter, pos, align, painter.layout_no_wrap(text.to_owned(), font.clone(), ink), ink, outline);
-}
-
-/// [`outlined_label`] for a caller holding an already-laid-out galley.
+/// Draws `galley` with a 1px outline pass behind the ink pass, readable with no solid backdrop.
 fn outlined_galley(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, galley: std::sync::Arc<egui::Galley>, ink: egui::Color32, outline: egui::Color32) {
     let rect = align.anchor_size(pos, galley.size());
     painter.galley_with_override_text_color(rect.min + egui::vec2(1.0, 1.0), galley.clone(), outline);
@@ -1034,29 +1037,58 @@ impl ViewportScaleBar {
         let Some(world_per_point) = world_per_point.filter(|value| value.is_finite() && *value > 0.0) else {
             return;
         };
-        let distance = nice_scale_distance(world_per_point * SCALE_BAR_TARGET_WIDTH);
+        let max_width = SCALE_BAR_MAX_WIDTH.min(self.viewport_rect.width() - SCALE_BAR_VIEWPORT_MARGIN * 2.0 - SCALE_BAR_LABEL_ALLOWANCE);
+        if max_width <= 0.0 {
+            return;
+        }
+        let distance = round_down_to_nice(world_per_point * f64::from(max_width));
         let bar_width = (distance / world_per_point) as f32;
-        let bar_size = egui::vec2(bar_width + SCALE_BAR_LABEL_OVERHANG * 2.0, SCALE_BAR_HEIGHT);
-        // Nothing floats over the viewport's right edge any more, so the bar
-        // hangs off its bottom-right corner with nothing to dodge.
-        let anchor = egui::pos2(
+        let (ink, outline) = contrast_ink(viewport_background);
+        let font = overlay_label_font();
+
+        // Lay the labels out first: which ones fit, and how far the outermost
+        // overhang the bar's ends, decide the block's size.
+        let labels = scale_bar_labels(distance);
+        let galleys: Vec<_> = labels
+            .iter()
+            .map(|label| ctx.fonts_mut(|fonts| fonts.layout_no_wrap(label.clone(), font.clone(), ink)))
+            .collect();
+        let tick_x = |index: usize| bar_width * SCALE_BAR_SEGMENT_FRACTIONS[index] as f32;
+        let mut placed: Vec<(usize, egui::Rangef)> = Vec::with_capacity(galleys.len());
+        for index in SCALE_BAR_LABEL_PRIORITY {
+            let half = galleys[index].size().x * 0.5;
+            let span = egui::Rangef::new(tick_x(index) - half, tick_x(index) + half);
+            if placed
+                .iter()
+                .all(|(_, other)| span.min >= other.max + SCALE_BAR_LABEL_GAP || span.max + SCALE_BAR_LABEL_GAP <= other.min)
+            {
+                placed.push((index, span));
+            }
+        }
+        let left = placed.iter().map(|(_, span)| span.min).fold(0.0_f32, f32::min);
+        let right = placed.iter().map(|(_, span)| span.max).fold(bar_width, f32::max);
+        let label_height = galleys.iter().map(|galley| galley.size().y).fold(0.0_f32, f32::max);
+        // +1 on each axis for the outline pass drawn one point down-right of the ink.
+        let block_size = egui::vec2(right - left + 1.0, 1.0 + SCALE_BAR_THICKNESS + 2.0 + label_height + 1.0);
+
+        // Placed by its top-left corner rather than a right-bottom pivot: an
+        // `Area` pivots on the size it had last frame, so while a zoom step
+        // lengthens the bar it would hang off the viewport's right edge for a frame.
+        let top_left = egui::pos2(
             self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
             self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
-        );
-        let (ink, outline) = contrast_ink(viewport_background);
-
+        ) - block_size;
         egui::Area::new(self.id)
             .order(egui::Order::Background)
             // Read-only, like the tool label: kept out of `layer_id_at` so the
             // drawn cursor survives crossing it.
             .interactable(false)
-            .pivot(egui::Align2::RIGHT_BOTTOM)
-            .fixed_pos(anchor)
+            .fixed_pos(top_left)
             .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(bar_size, egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(block_size, egui::Sense::hover());
                 let painter = ui.painter();
 
-                let bar_rect = egui::Rect::from_min_size(rect.min + egui::vec2(SCALE_BAR_LABEL_OVERHANG, 1.0), egui::vec2(bar_width, 5.0));
+                let bar_rect = egui::Rect::from_min_size(rect.min + egui::vec2(-left, 1.0), egui::vec2(bar_width, SCALE_BAR_THICKNESS));
                 for (index, fractions) in SCALE_BAR_SEGMENT_FRACTIONS.windows(2).enumerate() {
                     let segment = egui::Rect::from_min_max(
                         egui::pos2(bar_rect.left() + bar_width * fractions[0] as f32, bar_rect.top()),
@@ -1069,14 +1101,10 @@ impl ViewportScaleBar {
                     }
                 }
 
-                let labels = scale_bar_labels(distance);
-                let font = overlay_label_font();
                 let label_y = bar_rect.bottom() + 2.0;
-                for (index, fraction) in SCALE_BAR_SEGMENT_FRACTIONS.iter().copied().enumerate() {
-                    let x = bar_rect.left() + bar_width * fraction as f32;
-                    let label = &labels[index];
-                    let position = egui::pos2(x, label_y);
-                    outlined_label(painter, position, egui::Align2::CENTER_TOP, label, &font, ink, outline);
+                for (index, _) in placed {
+                    let position = egui::pos2(bar_rect.left() + tick_x(index), label_y);
+                    outlined_galley(painter, position, egui::Align2::CENTER_TOP, galleys[index].clone(), ink, outline);
                 }
             });
     }
@@ -1196,19 +1224,12 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
     }
 }
 
-fn nice_scale_distance(target: f64) -> f64 {
-    let exponent = target.log10().floor();
-    let magnitude = 10.0_f64.powf(exponent);
+/// Rounds down to a 1 / 2 / 5 × 10ⁿ distance, so the bar never outgrows the
+/// width it was given.
+fn round_down_to_nice(target: f64) -> f64 {
+    let magnitude = 10.0_f64.powf(target.log10().floor());
     let normalized = target / magnitude;
-    let multiplier = if normalized < 1.5 {
-        1.0
-    } else if normalized < 3.5 {
-        2.0
-    } else if normalized < 7.5 {
-        5.0
-    } else {
-        10.0
-    };
+    let multiplier = [5.0, 2.0, 1.0].into_iter().find(|step| normalized >= *step - 1.0e-9).unwrap_or(1.0);
     multiplier * magnitude
 }
 
