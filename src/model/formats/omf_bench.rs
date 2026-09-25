@@ -224,35 +224,60 @@ fn drill_holes(rng: &mut Rng, id: u64, holes: usize, loaded: bool) -> OpenDrillH
         .map(|index| {
             let collar = ORIGIN + DVec3::new(rng.unit() * 3000.0, rng.unit() * 3000.0, 150.0);
             let dip = DVec3::new(0.1, 0.05, -1.0).normalize();
-            let trace = (0..=20)
+            // Edge cases the layout must carry exactly: a lone collar station,
+            // a hole with no intervals, missing values, and partial coverage.
+            let stations = if index % 211 == 5 { 0 } else { 20 };
+            let trace = (0..=stations)
                 .map(|step| TraceStation {
                     depth: step as f64 * 10.0,
                     position: collar + dip * (step as f64 * 10.0),
                 })
                 .collect();
-            let intervals = (0..40)
-                .map(|step| DrillInterval {
-                    from: step as f64 * 5.0,
-                    to: step as f64 * 5.0 + 5.0,
-                    values: BTreeMap::from([
+            let intervals = (0..if index % 97 == 3 { 0 } else { 40 })
+                .map(|step| {
+                    let mut values = BTreeMap::from([
                         ("au".to_owned(), DrillValue::Numeric(rng.unit() * 3.0)),
-                        ("cu".to_owned(), DrillValue::Numeric(rng.unit())),
                         ("fe".to_owned(), DrillValue::Numeric(rng.unit() * 60.0)),
                         ("lith".to_owned(), DrillValue::Category(lithologies[(rng.next() % 4) as usize].to_owned())),
-                    ]),
+                    ]);
+                    if step % 7 != 0 {
+                        values.insert("cu".to_owned(), DrillValue::Numeric(rng.unit()));
+                    }
+                    DrillInterval {
+                        from: step as f64 * 5.0,
+                        to: step as f64 * 5.0 + 5.0,
+                        values,
+                    }
                 })
                 .collect();
             DrillHole {
                 dhid: format!("DH{index:05}"),
                 collar,
-                diameter: Some(0.14),
+                diameter: (index % 13 != 0).then_some(0.14),
                 trace,
-                render_ranges: Vec::new(),
+                render_ranges: if index % 50 == 0 { vec![(0.0, 40.0), (60.5, 200.0)] } else { Vec::new() },
                 intervals,
             }
         })
         .collect();
-    let dataset = DrillHoleDataset::new(holes);
+    let mut dataset = DrillHoleDataset::new(holes);
+    let dropped = dataset.apply_stored_ties(crate::model::drill_hole::StoredTieIns {
+        ties: (0..20)
+            .map(|index| crate::model::drill_hole::StoredTieIn {
+                from: format!("DH{index:05}"),
+                to: format!("DH{:05}", index + 1),
+                delay_ms: 17,
+                product: "TLD 17".to_owned(),
+                color: [0.2, 0.4, 0.6],
+            })
+            .collect(),
+        initiations: vec![crate::model::drill_hole::StoredInitiation {
+            hole: "DH00000".to_owned(),
+            delay_ms: 0,
+        }],
+        initiation: None,
+    });
+    assert_eq!(dropped, 0);
     assert!(dataset.fields.iter().any(|field: &DrillField| matches!(field.kind, DrillFieldKind::Categorical { .. })));
     OpenDrillHoleDataset {
         id: DrillHoleId(id),
@@ -359,7 +384,10 @@ fn omf_round_trip_benchmark() {
             assert_eq!(model.metadata.n_blocks, loaded.block_models[0].model.metadata.n_blocks);
             assert_eq!(model.shared_numeric_values("cu"), loaded.block_models[0].model.shared_numeric_values("cu"));
             assert_eq!(model.shared_numeric_values("rock"), loaded.block_models[0].model.shared_numeric_values("rock"));
-            assert_eq!(bundle.drill_holes[0].loaded.dataset.holes, loaded.drill_holes[0].dataset.holes);
+            let (read, written) = (&bundle.drill_holes[0].loaded.dataset, &loaded.drill_holes[0].dataset);
+            assert_eq!(read.holes, written.holes);
+            assert_eq!(read.fields, written.fields);
+            assert_eq!(serde_json::to_value(read.stored_ties()).unwrap(), serde_json::to_value(written.stored_ties()).unwrap());
             assert_eq!(bundle.rasters[0].loaded.full_rgba, loaded.rasters[0].full_rgba);
         }
         if enabled("materialize") {
@@ -468,173 +496,187 @@ fn omf_open_file_benchmark() {
     }
 }
 
-/// Drill holes alone: today's per-hole layout against one consolidated element.
+/// Drill holes alone, written and read back.
 #[test]
 #[ignore = "profiling harness; run explicitly"]
 fn omf_drill_layout_benchmark() {
     let progress = Progress::new();
     let phase = progress.phase(0.0, 1.0);
     let holes = drill_holes(&mut Rng(3), 1, 1500, true);
-    let dataset = holes.dataset.clone();
+    let expected = holes.dataset.clone();
     let snapshot = ProjectSnapshot {
         name: "drill".to_owned(),
         drill_holes: vec![holes],
         ..Default::default()
     };
     for _ in 0..3 {
-        let bytes = timed("current: write", || to_bytes(snapshot.clone(), Compression::Archive, &phase).unwrap());
-        let bundle = timed("current: open", || from_bytes("d.omf", bytes.clone(), &phase).unwrap());
-        assert_eq!(bundle.drill_holes[0].loaded.dataset.holes.len(), 1500);
-        eprintln!("current: size                      {:>9.2} MB", bytes.len() as f64 / 1e6);
-
-        // One composite for the whole dataset, all standard OMF: collars as a
-        // point set, traces as one line set, intervals as one line set whose
-        // segments are the interval spans, each with per-row attributes.
-        let bytes = timed("consolidated: write", || {
-            use omf_crate::{Attribute, Composite, Element, LineSet, Location, PointSet};
-            let mut writer = omf_crate::file::Writer::new(Cursor::new(Vec::new())).unwrap();
-            writer.set_compression(Compression::Archive.into());
-            let holes = &dataset.holes;
-            let hole_ids = holes.iter().map(|hole| hole.dhid.clone()).collect::<Vec<_>>();
-            let per_row = |count: &dyn Fn(&DrillHole) -> usize| {
-                holes
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(index, hole)| std::iter::repeat_n(Some(index as u32), count(hole)))
-                    .collect::<Vec<_>>()
-            };
-
-            let mut collars = Element::new("Collars", PointSet::new(writer.array_vertices(holes.iter().map(|hole| hole.collar.to_array())).unwrap()));
-            let names = writer.array_names(hole_ids.clone()).unwrap();
-            let indices = writer.array_indices((0..holes.len() as u32).map(Some)).unwrap();
-            collars.attributes.push(Attribute::from_categories("Hole", Location::Vertices, indices, names, None, []));
-            collars.attributes.push(Attribute::from_numbers(
-                "Diameter",
-                Location::Vertices,
-                writer.array_numbers(holes.iter().map(|hole| hole.diameter)).unwrap(),
-            ));
-
-            let mut segments = Vec::new();
-            let mut base = 0u32;
-            for hole in holes {
-                segments.extend((0..hole.trace.len() as u32 - 1).map(|i| [base + i, base + i + 1]));
-                base += hole.trace.len() as u32;
-            }
-            let mut traces = Element::new(
-                "Traces",
-                LineSet::new(
-                    writer
-                        .array_vertices(holes.iter().flat_map(|hole| hole.trace.iter().map(|s| s.position.to_array())))
-                        .unwrap(),
-                    writer.array_segments(segments).unwrap(),
-                ),
-            );
-            traces.attributes.push(Attribute::from_numbers(
-                "Measured depth",
-                Location::Vertices,
-                writer.array_numbers(holes.iter().flat_map(|hole| hole.trace.iter().map(|s| Some(s.depth)))).unwrap(),
-            ));
-            let names = writer.array_names(hole_ids.clone()).unwrap();
-            traces.attributes.push(Attribute::from_categories(
-                "Hole",
-                Location::Vertices,
-                writer.array_indices(per_row(&|hole| hole.trace.len())).unwrap(),
-                names,
-                None,
-                [],
-            ));
-
-            let ends = holes
-                .iter()
-                .flat_map(|hole| {
-                    hole.intervals
-                        .iter()
-                        .flat_map(|i| [hole.position_at_depth(i.from).unwrap(), hole.position_at_depth(i.to).unwrap()])
-                })
-                .map(|p| p.to_array());
-            let count = holes.iter().map(|hole| hole.intervals.len() as u32).sum::<u32>();
-            let mut intervals = Element::new(
-                "Intervals",
-                LineSet::new(writer.array_vertices(ends).unwrap(), writer.array_segments((0..count).map(|i| [2 * i, 2 * i + 1])).unwrap()),
-            );
-            let names = writer.array_names(hole_ids).unwrap();
-            intervals.attributes.push(Attribute::from_categories(
-                "Hole",
-                Location::Primitives,
-                writer.array_indices(per_row(&|hole| hole.intervals.len())).unwrap(),
-                names,
-                None,
-                [],
-            ));
-            intervals.attributes.push(Attribute::from_numbers(
-                "From",
-                Location::Primitives,
-                writer.array_numbers(holes.iter().flat_map(|hole| hole.intervals.iter().map(|i| Some(i.from)))).unwrap(),
-            ));
-            intervals.attributes.push(Attribute::from_numbers(
-                "To",
-                Location::Primitives,
-                writer.array_numbers(holes.iter().flat_map(|hole| hole.intervals.iter().map(|i| Some(i.to)))).unwrap(),
-            ));
-            for key in ["au", "cu", "fe"] {
-                let values = writer
-                    .array_numbers(holes.iter().flat_map(|hole| {
-                        hole.intervals.iter().map(move |i| match i.values.get(key) {
-                            Some(DrillValue::Numeric(v)) => Some(*v),
-                            _ => None,
-                        })
-                    }))
-                    .unwrap();
-                intervals.attributes.push(Attribute::from_numbers(key, Location::Primitives, values));
-            }
-            let lith_names = ["BIF", "Dolerite", "Granite", "Shale"];
-            let lith = writer
-                .array_indices(holes.iter().flat_map(|hole| {
-                    hole.intervals.iter().map(|i| match i.values.get("lith") {
-                        Some(DrillValue::Category(v)) => lith_names.iter().position(|n| n == v).map(|p| p as u32),
-                        _ => None,
-                    })
-                }))
-                .unwrap();
-            let lith_names = writer.array_names(lith_names.map(str::to_owned)).unwrap();
-            intervals
-                .attributes
-                .push(Attribute::from_categories("lith", Location::Primitives, lith, lith_names, None, []));
-
-            let mut project = omf_crate::Project::new("drill");
-            project.elements.push(Element::new("Drilling", Composite::new(vec![collars, traces, intervals])));
-            writer.finish(project).unwrap().0.into_inner()
-        });
-        timed("consolidated: open (all arrays)", || {
-            let mut reader = omf_crate::file::Reader::new(bytes.clone()).unwrap();
-            reader.set_limits(reader_limits());
-            let (project, _) = reader.project().unwrap();
-            let omf_crate::Geometry::Composite(group) = &project.elements[0].geometry else {
-                panic!()
-            };
-            let mut values = 0usize;
-            for element in &group.elements {
-                match &element.geometry {
-                    omf_crate::Geometry::PointSet(points) => values += reader.array_vertices_vec(&points.vertices).unwrap().len(),
-                    omf_crate::Geometry::LineSet(lines) => {
-                        values += reader.array_vertices_vec(&lines.vertices).unwrap().len();
-                        values += collect_results(reader.array_segments(&lines.segments).unwrap()).unwrap().len();
-                    }
-                    _ => unreachable!(),
-                }
-                for attribute in &element.attributes {
-                    match &attribute.data {
-                        omf_crate::AttributeData::Number { values: array, .. } => values += read_numbers(&reader, array).unwrap().len(),
-                        omf_crate::AttributeData::Category { values: array, names, .. } => {
-                            values += collect_results(reader.array_indices(array).unwrap()).unwrap().len();
-                            values += collect_results(reader.array_names(names).unwrap()).unwrap().len();
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
-            assert_eq!(values > 60_000 * 7, true);
-        });
-        eprintln!("consolidated: size                 {:>9.2} MB", bytes.len() as f64 / 1e6);
+        let bytes = timed("drill: write", || to_bytes(snapshot.clone(), Compression::Archive, &phase).unwrap());
+        let bundle = timed("drill: open", || from_bytes("d.omf", bytes.clone(), &phase).unwrap());
+        assert_eq!(bundle.drill_holes[0].loaded.dataset.holes, expected.holes);
+        assert!(bundle.warnings.is_empty(), "{:?}", bundle.warnings);
+        let members = zip_member_count(&bytes);
+        eprintln!("drill: size                        {:>9.2} MB in {members} members", bytes.len() as f64 / 1e6);
     }
+}
+
+fn zip_member_count(bytes: &[u8]) -> usize {
+    let reader = omf_crate::file::Reader::new(bytes.to_vec()).unwrap();
+    let (project, _) = reader.project().unwrap();
+    fn arrays(value: &Value) -> usize {
+        match value {
+            Value::Object(map) => usize::from(map.contains_key("filename")) + map.values().map(arrays).sum::<usize>(),
+            Value::Array(items) => items.iter().map(arrays).sum(),
+            _ => 0,
+        }
+    }
+    arrays(&serde_json::to_value(&project).unwrap()) + 1
+}
+
+/// One-off: rewrite `OMF_CONVERT_FILE`'s old per-hole drillhole datasets in the
+/// consolidated layout, copying every other array byte for byte.
+#[test]
+#[ignore = "one-off conversion; run explicitly"]
+fn omf_convert_old_drill_holes() {
+    let path = std::env::var("OMF_CONVERT_FILE").expect("OMF_CONVERT_FILE");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut reader = omf_crate::file::Reader::new(bytes.clone()).unwrap();
+    reader.set_limits(reader_limits());
+    let (project, _) = reader.project().unwrap();
+    let mut writer = omf_crate::file::Writer::new(Cursor::new(Vec::new())).unwrap();
+    writer.set_compression(Compression::Archive.into());
+
+    // Every array is an object with a `filename`; copy its member and point
+    // the reference at the copy.
+    fn copy_arrays(value: &mut Value, writer: &mut omf_crate::file::Writer<Cursor<Vec<u8>>>, bytes: &[u8]) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::String(name)) = map.get("filename").cloned() {
+                    let count = map.get("item_count").and_then(Value::as_u64).unwrap_or(0);
+                    let member = zip_member(bytes, &name);
+                    let copied = if name.ends_with(".parquet") {
+                        serde_json::to_value(writer.array_bytes::<omf_crate::array_type::Vertex>(count, &member).unwrap()).unwrap()
+                    } else {
+                        serde_json::to_value(writer.image_bytes(&member).unwrap()).unwrap()
+                    };
+                    map.insert("filename".to_owned(), copied["filename"].clone());
+                } else {
+                    for child in map.values_mut() {
+                        copy_arrays(child, writer, bytes);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|child| copy_arrays(child, writer, bytes)),
+            _ => {}
+        }
+    }
+
+    let mut converted = omf_crate::Project::new(project.name.clone());
+    let mut expected = Vec::new();
+    for element in &project.elements {
+        if kind(element) == Some("drillhole_dataset") {
+            let omf_crate::Geometry::Composite(group) = &element.geometry else { panic!() };
+            let holes = group
+                .elements
+                .iter()
+                .map(|child| DrillHole::deserialize(child.metadata.get("incline:drill_hole").expect("old layout")).unwrap())
+                .collect::<Vec<_>>();
+            let mut dataset = DrillHoleDataset::new(holes);
+            if let Some(ties) = element.metadata.get(META_TIE_INS) {
+                assert_eq!(dataset.apply_stored_ties(crate::model::drill_hole::StoredTieIns::deserialize(ties).unwrap()), 0);
+            }
+            expected.push(dataset.holes.clone());
+            let open = OpenDrillHoleDataset {
+                id: DrillHoleId(element_id(element).unwrap_or(1)),
+                state: ProjectItemState::dirty(MemberKind::DrillHole, None).with_loaded(style_loaded(element.metadata.get(META_STYLE))),
+                name: element.name.clone(),
+                dataset: Arc::new(dataset),
+                color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
+            };
+            let mut rewritten = write_drill_holes(&mut writer, &open).unwrap().unwrap();
+            // Identity, provenance, folder and section travel unchanged.
+            for (key, value) in &element.metadata {
+                if key != META_KIND {
+                    rewritten.metadata.insert(key.clone(), value.clone());
+                }
+            }
+            converted.elements.push(rewritten);
+        } else {
+            let mut value = serde_json::to_value(element).unwrap();
+            copy_arrays(&mut value, &mut writer, &bytes);
+            converted.elements.push(serde_json::from_value(value).unwrap());
+        }
+    }
+    assert!(!expected.is_empty(), "no drillhole datasets to convert");
+    converted.description = project.description.clone();
+    converted.author = project.author.clone();
+    converted.application = project.application.clone();
+    converted.coordinate_reference_system = project.coordinate_reference_system.clone();
+    converted.units = project.units.clone();
+    converted.origin = project.origin;
+    converted.metadata = project.metadata.clone();
+    let output = writer.finish(converted).unwrap().0.into_inner();
+
+    let progress = Progress::new();
+    let bundle = from_bytes("converted.omf", output.clone(), &progress.phase(0.0, 1.0)).unwrap();
+    let mut read = Vec::new();
+    for item in &bundle.drill_holes {
+        match &item.deferred {
+            Some((asset, _)) => read.push(asset.read().unwrap().drill_holes.pop().unwrap().loaded.dataset.holes.clone()),
+            None => read.push(item.loaded.dataset.holes.clone()),
+        }
+    }
+    // Origins were applied by the reader; the old holes are relative to it.
+    let origin = DVec3::from_array(project.origin);
+    for holes in &mut expected {
+        for hole in holes {
+            hole.collar += origin;
+            hole.trace.iter_mut().for_each(|station| station.position += origin);
+        }
+    }
+    assert_eq!(read, expected);
+    eprintln!(
+        "converted {} dataset(s): {} -> {} bytes; warnings: {:?}",
+        expected.len(),
+        bytes.len(),
+        output.len(),
+        bundle.warnings
+    );
+    std::fs::write(&path, output).unwrap();
+}
+
+/// A stored member's bytes, located through the central directory.
+fn zip_member(archive: &[u8], name: &str) -> Vec<u8> {
+    let u16_at = |at: usize| u16::from_le_bytes([archive[at], archive[at + 1]]) as usize;
+    let u32_at = |at: usize| u32::from_le_bytes(archive[at..at + 4].try_into().unwrap()) as u64;
+    let u64_at = |at: usize| u64::from_le_bytes(archive[at..at + 8].try_into().unwrap());
+    let mut offset = 0;
+    while let Some(position) = archive[offset..].windows(4).position(|window| window == [0x50, 0x4b, 0x01, 0x02]) {
+        let start = offset + position;
+        offset = start + 4;
+        let name_len = u16_at(start + 28);
+        if &archive[start + 46..start + 46 + name_len] != name.as_bytes() {
+            continue;
+        }
+        let (mut compressed, mut uncompressed, mut header) = (u32_at(start + 20), u32_at(start + 24), u32_at(start + 42));
+        // Zip64: the extra field holds, in order, whichever of these overflowed.
+        let extra = start + 46 + name_len;
+        let mut at = extra;
+        while at + 4 <= extra + u16_at(start + 30) {
+            let (id, len) = (u16_at(at), u16_at(at + 2));
+            if id == 1 {
+                let mut field = at + 4;
+                for value in [&mut uncompressed, &mut compressed, &mut header] {
+                    if *value == u32::MAX as u64 {
+                        *value = u64_at(field);
+                        field += 8;
+                    }
+                }
+            }
+            at += 4 + len;
+        }
+        let header = header as usize;
+        let data = header + 30 + u16_at(header + 26) + u16_at(header + 28);
+        return archive[data..data + compressed as usize].to_vec();
+    }
+    panic!("member {name} not found");
 }

@@ -29,7 +29,7 @@ use crate::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
@@ -66,7 +66,11 @@ const META_SECTION: &str = "incline:section";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
-const META_DRILL_HOLE: &str = "incline:drill_hole";
+/// Depth ranges each hole is drawn over, where not the whole trace, keyed by
+/// the hole's position in its dataset.
+const META_RENDER_RANGES: &str = "incline:render_ranges";
+/// The category on every drillhole row naming the hole it belongs to.
+const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -977,17 +981,123 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     Ok(element)
 }
 
+/// Write a drillhole dataset as three standard OMF elements under one
+/// composite, each holding every hole: collars as a point set, survey traces
+/// as one line set, and intervals as one line set whose segments are the
+/// intervals themselves. Every row carries a `Hole` category naming its hole,
+/// so the dataset regroups exactly, and the arrays are the only copy of the
+/// data - nothing is repeated in metadata.
 fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenDrillHoleDataset) -> Result<Option<omf_crate::Element>> {
-    let mut holes = Vec::new();
-    for hole in &open.dataset.holes {
-        if let Some(element) = write_drill_hole(writer, hole, &open.dataset)? {
-            holes.push(element);
-        }
-    }
+    use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
+
+    let holes = &open.dataset.holes;
     if holes.is_empty() {
         return Ok(None);
     }
-    let mut element = omf_crate::Element::new(open.name.clone(), omf_crate::Composite::new(holes));
+    let hole_names = holes.iter().map(|hole| hole.dhid.clone()).collect::<Vec<_>>();
+    let hole_category = |writer: &mut omf_crate::file::Writer<W>, location, rows: &dyn Fn(&DrillHole) -> usize| -> Result<Attribute> {
+        let indices = holes.iter().enumerate().flat_map(|(index, hole)| std::iter::repeat_n(Some(index as u32), rows(hole)));
+        Ok(Attribute::from_categories(
+            DRILL_HOLE_ATTRIBUTE,
+            location,
+            writer.array_indices(indices)?,
+            writer.array_names(hole_names.iter().cloned())?,
+            None,
+            [],
+        ))
+    };
+
+    let mut collars = Element::new("Collars", PointSet::new(writer.array_vertices(holes.iter().map(|hole| hole.collar.to_array()))?));
+    collars.attributes.push(hole_category(writer, Location::Vertices, &|_| 1)?);
+    collars.attributes.push(Attribute::from_numbers(
+        "Diameter",
+        Location::Vertices,
+        writer.array_numbers(holes.iter().map(|hole| hole.diameter.filter(|diameter| diameter.is_finite())))?,
+    ));
+    put(&mut collars, META_KIND, "drillhole_collars");
+
+    let mut segments = Vec::new();
+    let mut first = 0u32;
+    for hole in holes {
+        let count = hole.trace.len() as u32;
+        segments.extend((1..count).map(|index| [first + index - 1, first + index]));
+        first += count;
+    }
+    let mut traces = Element::new(
+        "Traces",
+        LineSet::new(
+            writer.array_vertices(holes.iter().flat_map(|hole| hole.trace.iter().map(|station| station.position.to_array())))?,
+            writer.array_segments(segments)?,
+        ),
+    );
+    traces.attributes.push(hole_category(writer, Location::Vertices, &|hole| hole.trace.len())?);
+    traces.attributes.push(Attribute::from_numbers(
+        "Measured depth",
+        Location::Vertices,
+        writer.array_numbers(holes.iter().flat_map(|hole| hole.trace.iter().map(|station| Some(station.depth))))?,
+    ));
+    put(&mut traces, META_KIND, "drillhole_traces");
+
+    // Interval ends are placed on the trace so other applications draw each
+    // interval where it lies; `From` and `To` remain the authority.
+    let interval_count = holes.iter().map(|hole| hole.intervals.len()).sum::<usize>();
+    let ends = holes.iter().flat_map(|hole| {
+        hole.intervals
+            .iter()
+            .flat_map(|interval| [interval.from, interval.to].map(|depth| hole.position_at_depth(depth).filter(|position| position.is_finite()).unwrap_or(hole.collar).to_array()))
+    });
+    let mut intervals = Element::new(
+        "Intervals",
+        LineSet::new(
+            writer.array_vertices(ends)?,
+            writer.array_segments((0..interval_count as u32).map(|index| [2 * index, 2 * index + 1]))?,
+        ),
+    );
+    intervals.attributes.push(hole_category(writer, Location::Primitives, &|hole| hole.intervals.len())?);
+    let all_intervals = || holes.iter().flat_map(|hole| hole.intervals.iter());
+    intervals.attributes.push(Attribute::from_numbers(
+        "From",
+        Location::Primitives,
+        writer.array_numbers(all_intervals().map(|interval| Some(interval.from)))?,
+    ));
+    intervals.attributes.push(Attribute::from_numbers(
+        "To",
+        Location::Primitives,
+        writer.array_numbers(all_intervals().map(|interval| Some(interval.to)))?,
+    ));
+    let keys = all_intervals().flat_map(|interval| interval.values.keys()).collect::<BTreeSet<_>>();
+    for key in keys {
+        let values = || all_intervals().map(|interval| interval.values.get(key));
+        let numeric = values().all(|value| !matches!(value, Some(DrillValue::Category(_))));
+        if numeric {
+            let numbers = writer.array_numbers(values().map(|value| match value {
+                Some(DrillValue::Numeric(value)) if value.is_finite() => Some(*value),
+                _ => None,
+            }))?;
+            intervals.attributes.push(Attribute::from_numbers(key.clone(), Location::Primitives, numbers));
+        } else {
+            // A column holding any text is categorical; a number that shares
+            // one with text is kept as its text.
+            let text = |value: &DrillValue| match value {
+                DrillValue::Category(text) => text.clone(),
+                DrillValue::Numeric(number) => number.to_string(),
+            };
+            let names = values().flatten().map(text).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+            let lookup = names.iter().enumerate().map(|(index, name)| (name.as_str(), index as u32)).collect::<BTreeMap<_, _>>();
+            let indices = writer.array_indices(values().map(|value| value.and_then(|value| lookup.get(text(value).as_str()).copied())))?;
+            intervals.attributes.push(Attribute::from_categories(
+                key.clone(),
+                Location::Primitives,
+                indices,
+                writer.array_names(names.iter().cloned())?,
+                None,
+                [],
+            ));
+        }
+    }
+    put(&mut intervals, META_KIND, "drillhole_intervals");
+
+    let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(vec![collars, traces, intervals]));
     put(&mut element, META_KIND, "drillhole_dataset");
     put_item_identity(
         &mut element,
@@ -1001,117 +1111,16 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
     }
-    Ok(Some(element))
-}
-
-fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole, dataset: &DrillHoleDataset) -> Result<Option<omf_crate::Element>> {
-    if hole.trace.len() < 2 {
-        return Ok(None);
+    // Keyed by position in the collars, which is the dataset's hole order.
+    let render_ranges = holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| !hole.render_ranges.is_empty())
+        .map(|(index, hole)| (index.to_string(), json!(hole.render_ranges)))
+        .collect::<serde_json::Map<_, _>>();
+    if !render_ranges.is_empty() {
+        put(&mut element, META_RENDER_RANGES, Value::Object(render_ranges));
     }
-    let mut depths = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
-    depths.extend(hole.intervals.iter().flat_map(|interval| [interval.from, interval.to]));
-    depths.extend(hole.render_ranges.iter().flat_map(|&(from, to)| [from, to]));
-    depths.retain(|depth| depth.is_finite());
-    depths.sort_by(f64::total_cmp);
-    depths.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
-    let positions = depths.iter().filter_map(|depth| hole.position_at_depth(*depth)).collect::<Vec<_>>();
-    if positions.len() != depths.len() || positions.len() < 2 {
-        return Ok(None);
-    }
-    let mut segments = Vec::new();
-    let mut ranges = Vec::new();
-    for index in 0..depths.len() - 1 {
-        let from = depths[index];
-        let to = depths[index + 1];
-        let midpoint = (from + to) * 0.5;
-        let visible = hole.render_ranges.is_empty() || hole.render_ranges.iter().any(|&(start, end)| midpoint >= start && midpoint <= end);
-        if visible && to > from {
-            segments.push([index as u32, index as u32 + 1]);
-            ranges.push((from, to, midpoint));
-        }
-    }
-    if segments.is_empty() {
-        return Ok(None);
-    }
-    let mut element = omf_crate::Element::new(
-        hole.dhid.clone(),
-        omf_crate::LineSet::new(
-            writer.array_vertices(positions.iter().map(|position| position.to_array()))?,
-            writer.array_segments(segments)?,
-        ),
-    );
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "Measured depth",
-        omf_crate::Location::Vertices,
-        writer.array_numbers(depths.iter().copied().map(Some))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_strings(
-        "Hole ID",
-        omf_crate::Location::Primitives,
-        writer.array_text(ranges.iter().map(|_| Some(hole.dhid.clone())))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "From",
-        omf_crate::Location::Primitives,
-        writer.array_numbers(ranges.iter().map(|(from, _, _)| Some(*from)))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "To",
-        omf_crate::Location::Primitives,
-        writer.array_numbers(ranges.iter().map(|(_, to, _)| Some(*to)))?,
-    ));
-    for field in &dataset.fields {
-        let values = ranges
-            .iter()
-            .map(|(_, _, midpoint)| {
-                hole.intervals
-                    .iter()
-                    .find(|interval| *midpoint >= interval.from && *midpoint < interval.to)
-                    .and_then(|interval| interval.values.get(&field.key))
-            })
-            .collect::<Vec<_>>();
-        match &field.kind {
-            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => {
-                element.attributes.push(omf_crate::Attribute::from_numbers(
-                    field.label.clone(),
-                    omf_crate::Location::Primitives,
-                    writer.array_numbers(values.iter().map(|value| match value {
-                        Some(crate::model::drill_hole::DrillValue::Numeric(value)) if value.is_finite() => Some(*value),
-                        _ => None,
-                    }))?,
-                ));
-            }
-            crate::model::drill_hole::DrillFieldKind::Categorical { .. } => {
-                let names = values
-                    .iter()
-                    .filter_map(|value| match value {
-                        Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.is_empty() => Some(value.clone()),
-                        _ => None,
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if names.is_empty() {
-                    continue;
-                }
-                let lookup = names.iter().enumerate().map(|(index, name)| (name.as_str(), index as u32)).collect::<BTreeMap<_, _>>();
-                let indices = values.iter().map(|value| match value {
-                    Some(crate::model::drill_hole::DrillValue::Category(value)) => lookup.get(value.as_str()).copied(),
-                    _ => None,
-                });
-                element.attributes.push(omf_crate::Attribute::from_categories(
-                    field.label.clone(),
-                    omf_crate::Location::Primitives,
-                    writer.array_indices(indices)?,
-                    writer.array_names(names)?,
-                    None,
-                    [],
-                ));
-            }
-        }
-    }
-    put(&mut element, META_KIND, "drillhole");
-    put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
     Ok(Some(element))
 }
 
@@ -1752,14 +1761,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Where the element being walked sits in the opened archive, when there
     /// is a backing copy of it to find it in again.
-    fn payload_locator(&mut self, element: &omf_crate::Element) -> Option<DeferredAsset> {
+    fn payload_locator(&mut self) -> Option<DeferredAsset> {
         let locator = DeferredAsset::new(self.backing.clone()?, self.element_path.clone());
-        // A composite's descriptor can hold its whole payload - a drillhole
-        // dataset carries every hole in metadata - so retaining it would keep
-        // an unloaded item resident. Those parse the index again instead.
-        if !matches!(element.geometry, omf_crate::Geometry::Composite(_)) {
-            self.indexed.push((locator.element_path.clone(), locator.indexed.clone()));
-        }
+        self.indexed.push((locator.element_path.clone(), locator.indexed.clone()));
         Some(locator)
     }
 
@@ -1776,7 +1780,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let preferred_id = element_id(element);
         let source_name = element_source_name(element);
         let source_format = element_source_format(element);
-        let locator = self.payload_locator(element).context("missing asset backing")?;
+        let locator = self.payload_locator().context("missing asset backing")?;
         let path = virtual_path(self.source_name, &name, "omf");
         if kind(element) == Some("raster") {
             let section = self.element_section(element, MemberKind::Raster);
@@ -1805,7 +1809,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }
         if kind(element) == Some("drillhole_dataset") {
             let count = match &element.geometry {
-                omf_crate::Geometry::Composite(group) => group.elements.len(),
+                omf_crate::Geometry::Composite(group) => group
+                    .elements
+                    .iter()
+                    .find(|child| kind(child) == Some("drillhole_collars"))
+                    .and_then(|collars| match &collars.geometry {
+                        omf_crate::Geometry::PointSet(points) => Some(points.vertices.item_count() as usize),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
                 _ => return Ok(false),
             };
             let section = self.element_section(element, MemberKind::DrillHole);
@@ -1985,7 +1997,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_SOURCE,
             META_STYLE,
             META_ID,
-            META_DRILL_HOLE,
+            META_RENDER_RANGES,
             META_TIE_INS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
@@ -2005,7 +2017,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .attributes
             .iter()
             .filter(|attribute| {
-                if matches!(incline_design_kind, Some("designs" | "design_database" | "drillhole_dataset" | "drillhole" | "raster")) {
+                if matches!(incline_design_kind, Some("designs" | "design_database" | "drillhole_dataset" | "raster")) {
                     return false;
                 }
                 match &element.geometry {
@@ -2279,7 +2291,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         let section = self.element_section(element, MemberKind::Triangulation);
         let folder = self.element_folder(element, section);
-        let payload_source = self.payload_locator(element);
+        let payload_source = self.payload_locator();
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2343,7 +2355,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let style = element.metadata.get(META_STYLE);
         let section = self.element_section(element, MemberKind::PointCloud);
         let folder = self.element_folder(element, section);
-        let payload_source = self.payload_locator(element);
+        let payload_source = self.payload_locator();
         self.bundle.point_clouds.push(ImportedPointCloud {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2631,25 +2643,114 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         transfers
     }
 
+    /// Rebuild a dataset written by [`write_drill_holes`].
     fn read_drill_dataset(&mut self, element: &omf_crate::Element) -> Result<Option<ImportedDrillHoles>> {
+        use crate::model::drill_hole::{DrillInterval, TraceStation};
+
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
             return Ok(None);
         };
-        let mut holes = Vec::new();
-        for child in &composite.elements {
-            self.record_unsupported_content(child);
-            if let Some(value) = child.metadata.get(META_DRILL_HOLE)
-                && let Ok(mut hole) = DrillHole::deserialize(value)
-            {
-                hole.collar += self.project_origin;
-                for station in &mut hole.trace {
-                    station.position += self.project_origin;
-                }
-                holes.push(hole);
-                continue;
+        let part = |part_kind: &str| composite.elements.iter().find(|child| kind(child) == Some(part_kind));
+        let (Some(collars), Some(traces), Some(intervals)) = (part("drillhole_collars"), part("drillhole_traces"), part("drillhole_intervals")) else {
+            bail!("Drillhole dataset '{}' is missing its collars, traces or intervals", element.name);
+        };
+        let context = |part: &str| format!("read {part} of drillhole dataset '{}'", element.name);
+
+        let omf_crate::Geometry::PointSet(collar_points) = &collars.geometry else {
+            bail!("Drillhole collars of '{}' are not a point set", element.name);
+        };
+        let offset = self.project_origin + DVec3::from_array(collar_points.origin);
+        let positions = self.read_vertices(&collar_points.vertices).with_context(|| context("collars"))?;
+        let (collar_holes, names) = self.read_drill_hole_category(collars).with_context(|| context("collars"))?;
+        let diameters = self.read_drill_numbers(collars, "Diameter")?.unwrap_or_default();
+        let mut holes = positions
+            .iter()
+            .enumerate()
+            .map(|(index, position)| DrillHole {
+                dhid: collar_holes
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .and_then(|hole| names.get(hole as usize).cloned())
+                    .unwrap_or_else(|| format!("Hole {}", index + 1)),
+                collar: *position + offset,
+                diameter: diameters.get(index).copied().flatten(),
+                trace: Vec::new(),
+                render_ranges: Vec::new(),
+                intervals: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let omf_crate::Geometry::LineSet(trace_lines) = &traces.geometry else {
+            bail!("Drillhole traces of '{}' are not a line set", element.name);
+        };
+        let offset = self.project_origin + DVec3::from_array(trace_lines.origin);
+        let positions = self.read_vertices(&trace_lines.vertices).with_context(|| context("traces"))?;
+        let (station_holes, _) = self.read_drill_hole_category(traces).with_context(|| context("traces"))?;
+        let depths = self.read_drill_numbers(traces, "Measured depth")?.context("drillhole traces have no measured depths")?;
+        if station_holes.len() != positions.len() || depths.len() != positions.len() {
+            bail!("Drillhole traces of '{}' have mismatched column lengths", element.name);
+        }
+        for ((position, hole), depth) in positions.into_iter().zip(station_holes).zip(depths) {
+            if let (Some(hole), Some(depth)) = (hole.and_then(|hole| holes.get_mut(hole as usize)), depth) {
+                hole.trace.push(TraceStation {
+                    depth,
+                    position: position + offset,
+                });
             }
-            if let Some(hole) = self.read_generic_drill_hole(child)? {
-                holes.push(hole);
+        }
+
+        let (interval_holes, _) = self.read_drill_hole_category(intervals).with_context(|| context("intervals"))?;
+        let from = self.read_drill_numbers(intervals, "From")?.context("drillhole intervals have no From depths")?;
+        let to = self.read_drill_numbers(intervals, "To")?.context("drillhole intervals have no To depths")?;
+        if from.len() != interval_holes.len() || to.len() != interval_holes.len() {
+            bail!("Drillhole intervals of '{}' have mismatched column lengths", element.name);
+        }
+        let mut rows = from
+            .into_iter()
+            .zip(to)
+            .map(|(from, to)| DrillInterval {
+                from: from.unwrap_or(f64::NAN),
+                to: to.unwrap_or(f64::NAN),
+                values: BTreeMap::new(),
+            })
+            .collect::<Vec<_>>();
+        for attribute in intervals
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.location == omf_crate::Location::Primitives && !matches!(attribute.name.as_str(), DRILL_HOLE_ATTRIBUTE | "From" | "To"))
+        {
+            let values: Vec<Option<DrillValue>> = match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } => read_numbers(self.reader, values)?.into_iter().map(|value| value.map(DrillValue::Numeric)).collect(),
+                omf_crate::AttributeData::Category { values, names, .. } => {
+                    let names = collect_results(self.reader.array_names(names)?)?;
+                    collect_results(self.reader.array_indices(values)?)?
+                        .into_iter()
+                        .map(|index| index.and_then(|index| names.get(index as usize)).map(|name| DrillValue::Category(name.clone())))
+                        .collect()
+                }
+                _ => continue,
+            };
+            if values.len() != rows.len() {
+                bail!("Drillhole interval field '{}' of '{}' has the wrong length", attribute.name, element.name);
+            }
+            for (row, value) in rows.iter_mut().zip(values) {
+                if let Some(value) = value {
+                    row.values.insert(attribute.name.clone(), value);
+                }
+            }
+        }
+        for (row, hole) in rows.into_iter().zip(interval_holes) {
+            if let Some(hole) = hole.and_then(|hole| holes.get_mut(hole as usize)) {
+                hole.intervals.push(row);
+            }
+        }
+
+        if let Some(ranges) = element.metadata.get(META_RENDER_RANGES).and_then(Value::as_object) {
+            for (index, ranges) in ranges {
+                if let (Some(hole), Ok(ranges)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), Vec::<(f64, f64)>::deserialize(ranges)) {
+                    hole.render_ranges = ranges;
+                }
             }
         }
         if holes.is_empty() {
@@ -2694,42 +2795,30 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }))
     }
 
-    fn read_generic_drill_hole(&self, element: &omf_crate::Element) -> Result<Option<DrillHole>> {
-        let omf_crate::Geometry::LineSet(lines) = &element.geometry else {
-            return Ok(None);
-        };
-        let offset = self.project_origin + DVec3::from_array(lines.origin);
-        let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-        if vertices.len() < 2 {
-            return Ok(None);
-        }
-        let depths = element
+    /// Each row's hole, as an index into the returned hole names.
+    fn read_drill_hole_category(&self, element: &omf_crate::Element) -> Result<(Vec<Option<u32>>, Vec<String>)> {
+        let Some(omf_crate::AttributeData::Category { values, names, .. }) = element
             .attributes
             .iter()
-            .find(|attribute| attribute.location == omf_crate::Location::Vertices && attribute.name.eq_ignore_ascii_case("measured depth"))
+            .find(|attribute| attribute.name == DRILL_HOLE_ATTRIBUTE)
+            .map(|attribute| &attribute.data)
+        else {
+            bail!("missing the '{DRILL_HOLE_ATTRIBUTE}' category");
+        };
+        Ok((collect_results(self.reader.array_indices(values)?)?, collect_results(self.reader.array_names(names)?)?))
+    }
+
+    fn read_drill_numbers(&self, element: &omf_crate::Element, name: &str) -> Result<Option<Vec<Option<f64>>>> {
+        element
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
             .and_then(|attribute| match &attribute.data {
                 omf_crate::AttributeData::Number { values, .. } => Some(values),
                 _ => None,
             })
             .map(|values| read_numbers(self.reader, values))
-            .transpose()?
-            .map(|values| values.into_iter().enumerate().map(|(index, value)| value.unwrap_or(index as f64)).collect::<Vec<_>>())
-            .unwrap_or_else(|| (0..vertices.len()).map(|index| index as f64).collect());
-        if depths.len() != vertices.len() {
-            return Ok(None);
-        }
-        Ok(Some(DrillHole {
-            dhid: element_name(element).to_owned(),
-            collar: vertices[0],
-            diameter: None,
-            trace: depths
-                .into_iter()
-                .zip(vertices)
-                .map(|(depth, position)| crate::model::drill_hole::TraceStation { depth, position })
-                .collect(),
-            render_ranges: Vec::new(),
-            intervals: Vec::new(),
-        }))
+            .transpose()
     }
 
     fn read_textures(&mut self, element: &omf_crate::Element) -> Result<()> {

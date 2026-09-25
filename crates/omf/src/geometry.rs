@@ -490,3 +490,27 @@ mod tagged_deserialize_tests {
         assert_eq!(serde_json::from_value::<Geometry>(value).unwrap(), a);
     }
 }
+
+#[cfg(test)]
+mod empty_index_tests {
+    use crate::{Element, LineSet, Project, file::Writer};
+
+    fn write(vertices: Vec<[f64; 3]>, segments: Vec<[u32; 2]>) -> Result<(), crate::error::Error> {
+        let mut writer = Writer::new(std::io::Cursor::new(Vec::new()))?;
+        let lines = LineSet::new(
+            writer.array_vertices(vertices)?,
+            writer.array_segments(segments)?,
+        );
+        let mut project = Project::new("test");
+        project.elements.push(Element::new("lines", lines));
+        writer.finish(project).map(|_| ())
+    }
+
+    #[test]
+    fn empty_line_set_is_valid_and_out_of_range_segments_are_not() {
+        write(Vec::new(), Vec::new()).unwrap();
+        write(vec![[0.0; 3], [1.0; 3]], vec![[0, 1]]).unwrap();
+        let error = format!("{:?}", write(vec![[0.0; 3]], vec![[0, 1]]).unwrap_err());
+        assert!(error.contains("IndexOutOfRange"), "{error}");
+    }
+}
