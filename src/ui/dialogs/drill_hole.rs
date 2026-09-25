@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Which surface is hosting [`draw_drill_hole_color_editor`]. The modal
-/// colour dialog is a fixed height and scrolls its own long lists; the
+/// colour dialog scrolls its long lists, and itself on a short window; the
 /// Preferences "Drillholes" page already scrolls as a whole
 /// (`ScrollArea::both` in `ui/elements/properties.rs`), so nesting another
 /// scroll area inside it fights the outer one under the mouse.
@@ -37,12 +37,20 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .memory(|memory| memory.focused())
         .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
     let mut open = true;
-    DragableMenu::new("drill_hole_colour_dialog", tr!("drill-hole-colour-title", name = dataset.name.clone()))
+    let title = tr_format!(literal = "Drill Hole Appearance: %name%", name = dataset.name.clone());
+    DragableMenu::new("drill_hole_colour_dialog", title)
         .open(&mut open)
         .min_width(400.0)
         .max_width(480.0)
         .show(ui.ctx(), |ui| {
-            draw_drill_hole_color_editor(ui, dataset, commands, ColorEditorHost::Dialog);
+            // Room for the title bar and a gap, so a short window scrolls.
+            let max_height = ui.ctx().content_rect().height() - menu::TITLE_BAR_HEIGHT - 48.0;
+            egui::ScrollArea::vertical()
+                .max_height(max_height.max(120.0))
+                .id_salt(("drill_hole_colour_dialog_scroll", id))
+                .show(ui, |ui| {
+                    draw_drill_hole_color_editor(ui, dataset, commands, ColorEditorHost::Dialog);
+                });
         });
     // Colour edits apply live, so there is no confirm step: both keys dismiss.
     // Enter is left alone while a text field - or a slider being typed into,

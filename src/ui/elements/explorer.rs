@@ -1203,7 +1203,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                                 commands.push(UiCommand::CloseDrillHole(dataset.id));
                                                 ui.close();
                                             }
-                                            if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
+                                            if ContextMenuAction::new(tr!(literal = "Appearance...")).show(ui).clicked() {
                                                 commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
                                                 ui.close();
                                             }

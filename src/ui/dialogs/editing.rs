@@ -129,7 +129,7 @@ pub(crate) fn draw_right_click_context(
             }
 
             if let Some(drill_hole_id) = selected_drill_hole
-                && ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked()
+                && ContextMenuAction::new(tr!(literal = "Appearance...")).show(ui).clicked()
             {
                 commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
                 commands.push(UiCommand::CloseCanvasContextMenu);
