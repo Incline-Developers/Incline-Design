@@ -160,8 +160,9 @@ tri-estimated-memory = Estimated peak memory ~{ $estimate }. { $detail }
 block-grid-summary = Grid: { $x } × { $y } × { $z } = { $count } blocks
 status-selected = Selected: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunks: { $rendered }/{ $total } ({ $culled } culled)
+status-faces = Faces: { $drawn } / { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
+status-points = Points: { $drawn } / { $target } of { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 
 ## High-frequency source literals
 
@@ -225,7 +226,9 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Choose the source file or files to import.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Choose this input by clicking a loaded surface in the viewport
 literal-choose-9e53070883acbe06 = Choose...
-literal-chunks-d8bf831735fec9eb = Chunks: --
+literal-faces-chunks-c777e400b789df4e = Faces: -- / -- (--/-- chunks)
+literal-points-of-chunks-ad87b40aa4e63086 = Points: -- / -- of -- (--/-- chunks)
+literal-classify-91c3dd6e6a6997cb = Classify
 literal-clear-b4f1dffbb6be6302 = Clear
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Clear Active Triangulation Texture
 literal-clear-raster-ef94c7849961e88f = Clear Raster
@@ -259,7 +262,8 @@ literal-collide-with-triangulation-3832b9f2facecd00 = Collide with Triangulation
 literal-color-7e85b996d38ae746 = Color:
 literal-colour-7e9d0b96d39e517d = Colour
 literal-colour-drillholes-7ccb9ef2779d0e8b = Colour Drillholes
-literal-colour-gpu-chunks-d6132652c2b280bb = Colour GPU chunks
+literal-surface-chunk-debug-view-b1443ab63056d7a7 = Surface chunk debug view
+literal-point-cloud-chunk-debug-view-fd20f7d3dadff3d3 = Point cloud chunk debug view
 literal-colour-points-by-classification-9ddd5b68c0eace03 = Colour Points by Classification
 literal-colour-by-6a3a01b3fc8fd000 = Colour by...
 literal-colour-mapping-8883078f49b82d0b = Colour mapping
@@ -667,7 +671,8 @@ literal-vertex-count-48fab462ae06a454 = Vertex count
 literal-vertical-exaggeration-3572327bb13435e7 = Vertical Exaggeration
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Vertical rise or fall of each bench before the next berm is created.
 literal-vertical-sync-85fd0e942adbf2be = Vertical sync
-literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Visualises the Morton spatial chunking used for frustum culling.
+literal-colours-each-surface-chunk-outlines-the-box-it-is-frustum-culled-by-and-shows-the-faces-drawn-last-frame-against-the-visible-total-in-the-status-bar-552e2ca96ec0c398 = Colours each surface chunk, outlines the box it is frustum-culled by, and shows the faces drawn last frame against the visible total in the status bar.
+literal-colours-each-point-cloud-chunk-outlines-the-box-it-is-frustum-culled-by-and-shows-the-points-drawn-last-frame-against-the-level-of-detail-target-and-the-visible-total-in-the-status-bar-14dcf04eaded3749 = Colours each point-cloud chunk, outlines the box it is frustum-culled by, and shows the points drawn last frame against the level-of-detail target and the visible total in the status bar.
 literal-website-82665b2ffabc9c0a = Website
 literal-weld-retry-b6c826b7541e89f1 = Weld & Retry
 literal-width-f21fb4f4b9e8911f = Width
@@ -913,10 +918,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Choose a layer
 literal-set-axis-e3f98268c98bcfa0 = Set %axis%
 literal-axis-value-d5e196b32161897d = %axis% value
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Download the free native version at our website ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Saved in browser storage
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Not saved in browser storage
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Distance along slope
 literal-horizontal-distance-643bfda0222c6424 = Horizontal distance

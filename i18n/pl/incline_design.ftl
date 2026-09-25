@@ -156,7 +156,6 @@ tri-estimated-memory = Szacowane szczytowe zużycie pamięci ~{ $estimate }. { $
 block-grid-summary = Siatka: { $x } × { $y } × { $z } = { $count } bloków
 status-selected = Zaznaczono: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Fragmenty: { $rendered }/{ $total } (odrzucono: { $culled })
 status-clip = Bliska/daleka/Δ: { $near } / { $far } / { $delta } m
 
 ## Literały źródłowe o wysokiej częstotliwości
@@ -222,7 +221,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Wybierz plik lub pliki źródłowe do zaimportowania.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Wybierz te dane wejściowe, klikając wczytaną powierzchnię w widoku
 literal-choose-9e53070883acbe06 = Wybierz...
-literal-chunks-d8bf831735fec9eb = Fragmenty: --
 literal-clear-b4f1dffbb6be6302 = Wyczyść
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Wyczyść teksturę aktywnej triangulacji
 literal-clear-raster-ef94c7849961e88f = Wyczyść raster
@@ -909,10 +907,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% – %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Wybierz warstwę
 literal-set-axis-e3f98268c98bcfa0 = Ustaw %axis%
 literal-axis-value-d5e196b32161897d = Wartość %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Pobierz bezpłatną wersję natywną na naszej stronie internetowej ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Zapisano w pamięci przeglądarki
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Nie zapisano w pamięci przeglądarki
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Odległość wzdłuż skarpy
 literal-horizontal-distance-643bfda0222c6424 = Odległość pozioma

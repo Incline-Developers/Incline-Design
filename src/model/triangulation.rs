@@ -44,7 +44,7 @@ pub(crate) struct OpenTriangulation {
     pub(crate) mesh: Arc<mesh_data::Triangulation>,
     pub(crate) spatial: Arc<crate::model::spatial::TriangleBvh>,
     pub(crate) edges: Vec<[u32; 2]>,
-    /// Face indices ordered by XY-Morton code (see `morton_surface_face_order`),
+    /// Face indices in GPU-chunk order (see `spatial_surface_face_order`),
     /// precomputed off-thread so GPU surface chunking never sorts on the render
     /// thread. `Arc` so cloning an `OpenTriangulation` stays cheap.
     pub(crate) surface_face_order: Arc<Vec<u32>>,
@@ -62,16 +62,29 @@ impl OpenTriangulation {
     }
 }
 
-/// Face indices ordered by the 2D (XY) Morton (Z-order) code of each face
-/// centroid, so GPU surface chunks are spatially compact (tight AABBs for
-/// frustum culling). XY-only because topologies/solids are viewed from above:
-/// partitioning the map and letting each chunk own its vertical column culls
-/// far better than 3D height bands you rarely look at edge-on.
+/// Faces per GPU surface chunk. Chunks are the granularity of frustum culling
+/// (and per-chunk debug colouring), so this trades culling precision (smaller
+/// = tighter) against per-chunk draw-call/AABB-test overhead (smaller = more).
+/// ~100k keeps a multi-million-face mesh in tens of chunks.
+pub(crate) const SURFACE_CHUNK_FACES: usize = 100_000;
+
+/// Face indices ordered so every consecutive run of [`SURFACE_CHUNK_FACES`]
+/// covers one compact box of the mesh: a kd split of the face centroids, each
+/// cut along the longest axis of its range.
 ///
+/// Cuts land only on multiples of `SURFACE_CHUNK_FACES` from the start of the
+/// order, so each leaf is exactly one chunk (the last one short) and the GPU
+/// upload keeps slicing the order at fixed size. A plain space-filling-curve
+/// sort cut every 100k faces leaves chunks that straddle the curve's jumps -
+/// L-shapes and ragged strips whose AABBs overlap their neighbours'. Here the
+/// leaves tile the mesh without overlap, and a cliff tall enough to be the
+/// longest axis is split by height too.
+///
+/// `select_nth_unstable` per level instead of a full sort, so the work is
+/// `O(n log(n / SURFACE_CHUNK_FACES))`, with independent halves on rayon.
 /// Computed at mesh build/load time - off the render thread - and stored on
-/// `OpenTriangulation`, so the first GPU upload of a huge mesh doesn't sort
-/// millions of faces during a frame.
-pub(crate) fn morton_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec<u32> {
+/// `OpenTriangulation`, so the first GPU upload of a huge mesh doesn't hitch.
+pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec<u32> {
     use rayon::prelude::*;
 
     let face_count = mesh.face_count();
@@ -79,48 +92,70 @@ pub(crate) fn morton_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec<
         return Vec::new();
     }
     let vertices = mesh.vertices();
-    let bounds = mesh.bounds();
-    let scale = u32::MAX as f64;
-    let (min_x, min_y) = (bounds.min.x, bounds.min.y);
-    let extent_x = (bounds.max.x - bounds.min.x).max(1e-9);
-    let extent_y = (bounds.max.y - bounds.min.y).max(1e-9);
-
-    let mut keyed: Vec<(u64, u32)> = (0..face_count)
+    // Relative to the mesh minimum so `f32` holds plenty of precision for
+    // ordering, which halves the record the partitioning moves around.
+    let origin = mesh.bounds().min;
+    let mut faces: Vec<FaceCentroid> = (0..face_count)
         .into_par_iter()
         .map(|face_index| {
             let face = mesh.face_vertex_indices(face_index).unwrap_or([0, 0, 0]);
-            let mut cx = 0.0;
-            let mut cy = 0.0;
+            let mut centroid = [0.0; 3];
             for vertex_index in face {
                 let point = vertices[vertex_index];
-                cx += point.x;
-                cy += point.y;
+                centroid[0] += point.x - origin.x;
+                centroid[1] += point.y - origin.y;
+                centroid[2] += point.z - origin.z;
             }
-            cx /= 3.0;
-            cy /= 3.0;
-            let qx = (((cx - min_x) / extent_x) * scale).clamp(0.0, scale) as u32;
-            let qy = (((cy - min_y) / extent_y) * scale).clamp(0.0, scale) as u32;
-            (morton2(qx, qy), face_index as u32)
+            FaceCentroid {
+                centroid: centroid.map(|sum| (sum / 3.0) as f32),
+                face: face_index as u32,
+            }
         })
         .collect();
-    keyed.par_sort_unstable_by_key(|&(key, _)| key);
-    keyed.into_iter().map(|(_, face_index)| face_index).collect()
+    split_chunk_range(&mut faces);
+    faces.into_iter().map(|face| face.face).collect()
 }
 
-/// Interleave the 32 bits of two coordinates into a 64-bit Morton code.
-fn morton2(x: u32, y: u32) -> u64 {
-    spread_bits_32(x) | (spread_bits_32(y) << 1)
+struct FaceCentroid {
+    centroid: [f32; 3],
+    face: u32,
 }
 
-/// Spread the 32 bits of `n` so each occupies every other bit position.
-fn spread_bits_32(n: u32) -> u64 {
-    let mut n = n as u64;
-    n = (n | n << 16) & 0x0000_ffff_0000_ffff;
-    n = (n | n << 8) & 0x00ff_00ff_00ff_00ff;
-    n = (n | n << 4) & 0x0f0f_0f0f_0f0f_0f0f;
-    n = (n | n << 2) & 0x3333_3333_3333_3333;
-    n = (n | n << 1) & 0x5555_5555_5555_5555;
-    n
+/// Partition `faces` in place into chunk-sized leaves. The slice always starts
+/// on a chunk boundary, so cutting after a whole number of chunks keeps both
+/// halves aligned.
+fn split_chunk_range(faces: &mut [FaceCentroid]) {
+    let chunks = faces.len().div_ceil(SURFACE_CHUNK_FACES);
+    if chunks <= 1 {
+        return;
+    }
+    let bounds = |(mut min, mut max): ([f32; 3], [f32; 3]), face: &FaceCentroid| {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(face.centroid[axis]);
+            max[axis] = max[axis].max(face.centroid[axis]);
+        }
+        (min, max)
+    };
+    let empty = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    let (min, max) = if faces.len() > 4 * SURFACE_CHUNK_FACES {
+        use rayon::prelude::*;
+        faces.par_iter().fold(|| empty, bounds).reduce(
+            || empty,
+            |(a_min, a_max), (b_min, b_max)| {
+                (
+                    std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                    std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+                )
+            },
+        )
+    } else {
+        faces.iter().fold(empty, bounds)
+    };
+    let axis = (0..3).max_by(|&a, &b| (max[a] - min[a]).total_cmp(&(max[b] - min[b]))).unwrap_or(0);
+    let cut = (chunks / 2) * SURFACE_CHUNK_FACES;
+    faces.select_nth_unstable_by(cut, |a, b| a.centroid[axis].total_cmp(&b.centroid[axis]));
+    let (left, right) = faces.split_at_mut(cut);
+    rayon::join(|| split_chunk_range(left), || split_chunk_range(right));
 }
 
 pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {

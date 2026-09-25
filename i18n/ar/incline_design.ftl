@@ -79,7 +79,6 @@ tri-estimated-memory = ذروة الذاكرة المقدَّرة ~{ $estimate }
 block-grid-summary = الشبكة: { $x } × { $y } × { $z } = كتلة { $count }
 status-selected = مختارة: { $count }
 status-fps = FPS: { $fps }
-status-chunks = قطع: { $rendered }/{ $total } ({ $culled } تم قطعها)
 status-clip = المقطع القريب / بعيد / Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = اختر ملف المصدر أو الملفات التي تريد استيرادها.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = اختر هذا المدخل بالنقر على السطح المحمّل في منفذ العرض
 literal-choose-9e53070883acbe06 = اختر...
-literal-chunks-d8bf831735fec9eb = القطع: --
 literal-clear-b4f1dffbb6be6302 = مسح
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = مسح نسيج الشبكة المثلثية النشطة
 literal-clear-raster-ef94c7849961e88f = مسح البيانات النقطية
@@ -883,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = اختر طبقة
 literal-set-axis-e3f98268c98bcfa0 = تعيين %axis%
 literal-axis-value-d5e196b32161897d = قيمة %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = نزّل الإصدار الأصلي المجاني من موقعنا الإلكتروني ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = محفوظ في مساحة تخزين المتصفح
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = غير محفوظ في مساحة تخزين المتصفح
 literal-distance-along-slope-9f62268eebab148c = المسافة على طول المنحدر
 literal-horizontal-distance-643bfda0222c6424 = المسافة الأفقية
 literal-height-change-2cc1b51980081e52 = تغير الارتفاع

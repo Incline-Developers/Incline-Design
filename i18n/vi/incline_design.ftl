@@ -146,7 +146,6 @@ tri-estimated-memory = Bộ nhớ đỉnh ước tính ~{ $estimate }. { $detail
 block-grid-summary = Lưới: { $x } × { $y } × { $z } = { $count } khối
 status-selected = Đã chọn: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunk: { $rendered }/{ $total } (đã loại { $culled })
 status-clip = Cắt gần/xa/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -212,7 +211,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chọn (các) tệp nguồn cần nhập.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chọn dữ liệu đầu vào này bằng cách nhấp vào một bề mặt đã tải trong khung nhìn
 literal-choose-9e53070883acbe06 = Chọn...
-literal-chunks-d8bf831735fec9eb = Chunk: --
 literal-clear-b4f1dffbb6be6302 = Xóa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Xóa kết cấu lưới tam giác đang hoạt động
 literal-clear-raster-ef94c7849961e88f = Xóa ảnh raster
@@ -899,10 +897,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Chọn một lớp
 literal-set-axis-e3f98268c98bcfa0 = Đặt %axis%
 literal-axis-value-d5e196b32161897d = Giá trị %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Tải phiên bản native miễn phí tại trang web của chúng tôi ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Đã lưu vào bộ nhớ trình duyệt
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Chưa lưu vào bộ nhớ trình duyệt
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Khoảng cách dọc theo mái dốc
 literal-horizontal-distance-643bfda0222c6424 = Khoảng cách ngang

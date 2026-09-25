@@ -146,6 +146,9 @@ panic = "unwind"
 overflow-checks = true
 debug-assertions = true
 
+[profile.dev.package."*"]
+opt-level = 3
+
 [package.metadata.packager]
 product-name = "Incline Design"
 identifier = "net.inclinedesign.incline"

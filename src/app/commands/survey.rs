@@ -371,7 +371,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             ensure!(!cancel.is_cancelled(), "Cancelled");
             item.spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
             ensure!(!cancel.is_cancelled(), "Cancelled");
-            item.surface_face_order = Arc::new(triangulation::morton_surface_face_order(&mesh));
+            item.surface_face_order = Arc::new(triangulation::spatial_surface_face_order(&mesh));
             item.mesh = Arc::new(mesh);
             item.raster_texture = None;
         }

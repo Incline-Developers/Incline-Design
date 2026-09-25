@@ -3,7 +3,10 @@ use std::{cmp::Ordering, collections::BinaryHeap, path::PathBuf, sync::Arc};
 use glam::{DVec3, Vec3};
 use rayon::prelude::*;
 
-use crate::model::project::ProjectItemState;
+use crate::{
+    model::project::ProjectItemState,
+    rendering::{graphics::frustum::OrientedBox, scene::bounds::fit_chunk_box},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PointCloudId(pub(crate) u64);
@@ -215,6 +218,10 @@ pub(crate) struct PreparedPointChunk {
     pub(crate) base_spacing: f32,
     pub(crate) bounds_min: glam::Vec3,
     pub(crate) bounds_max: glam::Vec3,
+    /// Culling box fitted to the chunk's points, relative to the cloud origin:
+    /// a tilted slab on sloping ground where the axis-aligned box above would
+    /// be mostly air (see [`fit_chunk_box`]).
+    pub(crate) bounds: OrientedBox,
     /// Small Morton-coherent ranges used for CPU visibility queries without
     /// scanning an entire 256k-point render chunk on every snap poll.
     pub(crate) pick_groups: Vec<PointPickGroup>,
@@ -291,12 +298,7 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, class
             source_index,
         })
         .collect::<Vec<_>>();
-    // Include the source index so coincident quantized points retain a stable
-    // order even though the faster unstable parallel sort is used. Comparing
-    // the fields in place beats a `(u64, usize)` sort key: the key would be
-    // rebuilt on every comparison, and equal Morton keys are rare enough that
-    // the tie-break is almost never reached.
-    sorted.par_sort_unstable_by(|a, b| a.key.cmp(&b.key).then_with(|| a.source_index.cmp(&b.source_index)));
+    split_chunk_range(&mut sorted, extent);
 
     // Resolve each point's render instance exactly once, here, writing the
     // result in Morton order. `source_index` bears no relation to Morton order,
@@ -355,6 +357,54 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, class
     }
 }
 
+/// Partition `points` in place into chunk-sized kd leaves, as surfaces are
+/// (see `triangulation::spatial_surface_face_order`), then Morton-sort each
+/// leaf for the LOD ordering. Fixed-size runs of one global Morton order were
+/// the old split: a run crossing a high Morton boundary spans far more space
+/// than its points need, so neighbouring chunks' boxes overlapped and a small
+/// view touched several whole chunks. The slice always starts on a chunk
+/// boundary, so cutting after a whole number of chunks keeps both halves
+/// aligned with `build_chunks`' fixed stride.
+fn split_chunk_range(points: &mut [MortonPointIndex], extent: DVec3) {
+    let chunks = points.len().div_ceil(POINTS_PER_SPATIAL_CHUNK);
+    if chunks <= 1 {
+        // Include the source index so coincident quantized points retain a
+        // stable order even though the faster unstable parallel sort is used.
+        // Comparing the fields in place beats a `(u64, usize)` sort key: the
+        // key would be rebuilt on every comparison, and equal Morton keys are
+        // rare enough that the tie-break is almost never reached.
+        points.par_sort_unstable_by(|a, b| a.key.cmp(&b.key).then_with(|| a.source_index.cmp(&b.source_index)));
+        return;
+    }
+    // Quantized cell coordinates decoded from the key, so the split reads
+    // only the compact records rather than gathering source positions.
+    let bounds = |(mut min, mut max): ([u32; 3], [u32; 3]), point: &MortonPointIndex| {
+        for axis in 0..3 {
+            let cell = morton_axis(point.key, axis);
+            min[axis] = min[axis].min(cell);
+            max[axis] = max[axis].max(cell);
+        }
+        (min, max)
+    };
+    let empty = ([u32::MAX; 3], [0; 3]);
+    let (min, max) = points.par_iter().fold(|| empty, bounds).reduce(
+        || empty,
+        |(a_min, a_max), (b_min, b_max)| {
+            (
+                std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+            )
+        },
+    );
+    // Cells are normalized per axis, so compare their spans in world units.
+    let span = |axis: usize| f64::from(max[axis].saturating_sub(min[axis])) * extent[axis];
+    let axis = (0..3).max_by(|&a, &b| span(a).total_cmp(&span(b))).unwrap_or(0);
+    let cut = (chunks / 2) * POINTS_PER_SPATIAL_CHUNK;
+    points.select_nth_unstable_by_key(cut, |point| morton_axis(point.key, axis));
+    let (left, right) = points.split_at_mut(cut);
+    rayon::join(|| split_chunk_range(left, extent), || split_chunk_range(right, extent));
+}
+
 fn gather_instances<T: RenderPoint>(sorted: &[MortonPointIndex], instance: impl Fn(&MortonPointIndex) -> T + Send + Sync) -> Vec<T> {
     sorted.par_iter().map(instance).collect()
 }
@@ -381,6 +431,19 @@ fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], codes: Op
     // instance `i` is the class of the point drawn at `i`.
     let classifications = codes.map(|codes| indices.iter().map(|&index| codes[index]).collect::<Vec<u8>>());
     let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(T::pos));
+    let chunk_origin = ((bounds_min + bounds_max) * 0.5).as_dvec3();
+    let (center, axes, half_extents) = fit_chunk_box(
+        chunk,
+        |point| Vec3::from_array(point.pos()).as_dvec3() - chunk_origin,
+        &[],
+        chunk_origin,
+        (bounds_max - bounds_min).as_dvec3(),
+    );
+    let bounds = OrientedBox {
+        center: center.as_vec3(),
+        axes,
+        half_extents,
+    };
     let pick_groups = build_pick_groups(&ordered, level_counts, T::pos);
     PreparedPointChunk {
         data: wrap(ordered),
@@ -388,6 +451,7 @@ fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], codes: Op
         base_spacing,
         bounds_min,
         bounds_max,
+        bounds,
         pick_groups,
         classifications,
     }
@@ -639,6 +703,16 @@ fn morton_key(point: DVec3, min: DVec3, extent: DVec3) -> u64 {
     let y = (normalized.y * scale) as u32;
     let z = (normalized.z * scale) as u32;
     interleave_21(x) | (interleave_21(y) << 1) | (interleave_21(z) << 2)
+}
+
+/// One axis's quantized coordinate back out of a [`morton_key`].
+fn morton_axis(key: u64, axis: usize) -> u32 {
+    let mut value = (key >> axis) & 0x1249_2492_4924_9249;
+    value = (value | value >> 2) & 0x10c3_0c30_c30c_30c3;
+    value = (value | value >> 4) & 0x100f_00f0_0f00_f00f;
+    value = (value | value >> 8) & 0x001f_0000_ff00_00ff;
+    value = (value | value >> 16) & 0x001f_0000_0000_ffff;
+    ((value | value >> 32) & 0x1f_ffff) as u32
 }
 
 fn interleave_21(value: u32) -> u64 {

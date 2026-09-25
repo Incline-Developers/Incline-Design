@@ -1,75 +1,102 @@
-# Repository Guidelines
+# AGENTS.md
 
-## Project Structure & Module Organization
+Incline is a Rust 2024 mine design app — one binary for Windows/macOS/Linux/WebAssembly on `winit` + `wgpu` + `egui`.
 
-Incline Design is a Rust 2024 desktop/WebAssembly mine design application using `winit`, `wgpu`, and `egui`.
+## Working economy
 
-- `crates/mineflow/`: pure Rust ultimate pit optimization library; see its README for API, numerical behavior, and upstream references.
-- `src/app/`: application state, command handling, and background jobs.
-- `src/model/`: domain geometry, project persistence, and import/export formats.
-- `src/rendering/`: GPU rendering, scene caches, picking, and WGSL shaders.
-- `src/ui/`: widgets, dialogs, menus, and editor state; `src/mac.rs` implements native macOS menus.
-- `res/`: embedded assets; `i18n/`: Fluent translations; `docs/`: documentation assets.
-- `examples/`: import-ready data for manual validation. Format fixtures live under `src/model/formats/fixtures/`.
+Search the relevant subtree, not the repo: `rg -n 'draw_screen_cross' src/rendering`. Exclude `target/` and `dist/`. Read matching functions and their callers, not whole files. Don't re-read a file you just edited or re-run a check that passed until code changed. Run only the checks the change warrants — a UI tweak needs no web build. Keep the table below current when moving code.
 
-## Task Entry Points & Efficient Navigation
+### Where things live
 
-Paths below are relative to `src/`, except `crates/` paths, which are relative to the repository root:
+Paths relative to `src/`, except `crates/` paths, which are relative to the repository root.
 
-| Task | Start here / rule |
+| Task | Start here |
 | --- | --- |
-| Add a UI action | `ui/state.rs` (`UiCommand`, `console_report_spec`), UI call site, `app/commands/mod.rs` (dispatch, `requires_project`). |
-| Change state | `app/mod.rs` owns durable state; `ui/state.rs` owns transient `EditorState`; `model/project.rs` manages projects. |
-| Change ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); check with `cargo check -p mineflow`. |
-| Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry/cache), `rendering/shaders/` (WGSL). |
-| Add background work | Reuse `app/jobs.rs`: compute on workers, apply on the UI thread; preserve `JobKey` dependencies and poll cancellation in long loops. |
-| Change asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, and `history_storage.rs` move payloads to temporary backing in `asset_storage.rs`. |
-| Change persistence | `model/formats/`, `model/atomic_file.rs` (native writes), `app/web_storage.rs` (browser storage). |
+| Add a UI action | `ui/state.rs` (`UiCommand`, `console_report_spec`) → UI call site → `app/commands/mod.rs` (match arm, `requires_project`) |
+| Change state | `app/mod.rs` (durable), `ui/state.rs` (`EditorState`, transient), `model/project.rs` (projects) |
+| Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry + caches), `rendering/shaders/` (WGSL) |
+| Background work | `app/jobs.rs` |
+| Asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, `history_storage.rs` move payloads to temporary backing in `asset_storage.rs` |
+| Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
+| Ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); see its README; check with `cargo check -p mineflow` |
+| Translations | `src/i18n.rs`, `i18n/en/incline_design.ftl` |
+| Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 
-Search the relevant subtree first, e.g. `rg -n 'draw_screen_cross' src/rendering`. Read matching functions and nearby callers before whole files. Exclude generated `target/` and `dist/` from code searches. Run checks appropriate to the change; repeat only after edits or unresolved failures. Keep these pointers current when moving code.
+`res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`.
 
-## Build, Test, and Development Commands
+## Commands
 
-Use `rust-toolchain.toml`'s nightly toolchain. Linux requires `clang` and `mold`; `.cargo/config.toml` enables standard-library rebuilding.
+Toolchain is pinned **nightly**; `.cargo/config.toml` sets `build-std`, so a cold build compiles `std` too. Linux links with `clang` + `mold`.
 
-- `cargo check`: check compilation.
-- `cargo run`: launch the desktop application.
-- `cargo build --release`: build an optimized desktop binary.
-- `cargo fmt --check` / `cargo fmt`: check/apply formatting.
-- `cargo clippy`: run Rust lints.
-- `cargo test`: run the Rust test harness.
-- `trunk serve`: serve the web application at `127.0.0.1:8080`.
-- `trunk build --release`: build web assets into `dist/`.
+```bash
+cargo check                 # fast loop
+cargo clippy
+cargo run                   # desktop app
+cargo build --release
+cargo fmt
+cargo test
+trunk serve                 # web build on 127.0.0.1:8080 (COOP/COEP headers in Trunk.toml)
+trunk build --release       # into dist/
+```
 
-## Coding Style & Naming Conventions
+`rustfmt.toml` sets `max_width = 180` and `group_imports = "StdExternalCrate"` — long single-line signatures are deliberate, don't hand-wrap them.
 
-Follow `rustfmt.toml`: four spaces, Unix newlines, 180 columns, and standard/external/crate import groups. Use `snake_case` for functions/modules, `PascalCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
+No standing test suite. For substantive logic changes add a focused `#[test]` with a behaviour-based name in an adjacent `#[cfg(test)]` module, run it with `cargo test <name>`, then **delete it** before committing. Validate rendering and interaction changes against `examples/` (relevant camera angles, desktop and web), and report validation gaps.
 
-Route UI changes through `UiCommand` and application handlers. Preserve revision-based cache invalidation; avoid unconditional scene rebuilds. Keep domain coordinates in double precision and rebase positions before GPU conversion. Gate platform-specific code appropriately for WebAssembly.
+## Architecture
 
-## Architecture Rules That Prevent Rework
+### The command round-trip
 
-- Use `SceneEntityId` for selection and viewport queries across entity types; start in `src/rendering/pick.rs` and `query.rs`.
-- For larger editor transitions, use `EditorState::apply_action(EditorAction)` and propagate its geometry-dirty result.
-- `ProjectItemState::revision` invalidates caches; `epoch`/`saved_epoch` determine unsaved changes. Undo restores the content epoch while advancing revision; preserve this distinction (`src/model/project.rs`).
-- File/thread changes need native and WebAssembly paths. Browser persistence uses IndexedDB; wasm panics abort, so worker panic recovery cannot help. Preserve Trunk's COOP/COEP headers for shared memory.
+Data flows one way; the UI never mutates application state.
 
-## UI, Translation & Logging Conventions
+```
+winit event → App::window_event (app/mod.rs) → app/events.rs (input, redraw)
+  → Gui::render (ui/mod.rs) → draw_ui → UiFrameOutput { commands, geometry_dirty }
+  → App::handle_ui_commands (app/commands/mod.rs) → per-domain impl in app/commands/*.rs
+```
 
-- Use `tr!("message-id")` for user-facing text; add keys to `i18n/en/incline_design.ftl`. Pass named values with `tr!("greeting", name = who)`. Existing literal-style code supports `tr!(literal = "Apply")` and `tr_format!` for placeholders; see `src/i18n.rs`.
-- Use `userspace_log!`, `userspace_warn!`, and `userspace_error!` for activity-console messages, e.g. `userspace_log!("{}", tr!(literal = "Completed"))`. Reserve `log::` macros for diagnostic logging.
-- Use `themed_icon!(ui, "name.svg")` or `unthemed_icon!("name.svg")` for embedded icons, and `widgets::toolbar::GROUP_CORNER_RADIUS` for rounded UI elements.
-- Keep egui menus, context menus, and native macOS menus synchronized when changing actions.
-- New top-level panels must use `chrome::region_frame` and pass their rectangle to `chrome::paint_regions` in `src/ui/mod.rs`; nested panels do neither. See `src/ui/chrome.rs`.
+`draw_ui` gets an immutable `UiProjectView`, `&mut EditorState`, and `&Document`; anything else it wants changed it requests by pushing a `UiCommand`.
 
-## Testing Guidelines
+### Menus exist in three parallel places
 
-No dedicated test suite or coverage threshold exists. For substantive logic changes, add focused `#[test]` cases in adjacent `#[cfg(test)]` modules with behavior-based names; run with `cargo test <name>`. Once the tests passes and you are satisified with the diff, please remove the test; it is no longer needed and should not be commmited.
+`ui/elements/main_menu.rs` (menu bar), egui context menus (`ui/elements/explorer.rs` for tree entries, `ui/dialogs/editing.rs::draw_right_click_context` for the canvas), and `src/mac.rs` (native `NSMenu`: its own `MacMenuAction` enum, a mapping back to `UiCommand` in `app/mod.rs`, and an enable/check sync pass). Adding or removing an item means editing the egui site *and* `mac.rs`.
 
-Validate rendering/interactions using `examples/`, including relevant camera angles and desktop/web behavior. Report checks and validation gaps.
+### State ownership
 
-## Commit & Pull Request Guidelines
+- **`App`** (`app/mod.rs`) — durable: `ProjectStore` workspace, open entities, undo `History`. Many fields `#[cfg(target_arch = "wasm32")]`-gated.
+- **`EditorState`** (`ui/state.rs`) — transient: active tool, `selected_handles`, hidden/frozen sets, dialog flags. Small changes inline; larger transitions via `EditorState::apply_action(EditorAction)`, which returns whether geometry must rebuild — propagate it.
+- **`UiProjectView`** — derived from `App` each frame, cached behind an allocation-free fingerprint (`ui_project_view_cache`).
 
-Use short, action-oriented commit subjects; history has no mandatory prefix scheme.
+Selection is uniform via `SceneEntityId` (`Object` / `Triangulation` / `BlockModel` / `DrillHole` / `PointCloud`); `rendering/query.rs` and `rendering/pick.rs` return one, so viewport features match on the variant rather than consulting per-kind lists.
 
-Keep PRs focused; explain the problem, resulting behavior, and validation. Link relevant issues, include screenshots for visual changes, and identify platform limitations.
+Tools that consume one kind of thing are **select first, then act**: `app/commands/scene_selection.rs` counts the selection per kind into `EditorState::selection_counts` each frame, the menu entry enables itself from that count (in `ui/elements/main_menu.rs` *and* `mac.rs`), and the open command snapshots the ids so the dialog reports its input instead of offering a picker. While one is open the viewport stops taking selection (`EditorState::selection_locked_by_tool`). Dialogs taking two surfaces still pick theirs inside the dialog: both inputs are the same kind, so a selection cannot say which is which.
+
+### Invalidation and caching
+
+`App::invalidate_geometry()` is called from ~90 sites, mostly editor-state changes with untouched documents. It stays cheap because the composite `scene_document`, the snap index, and the GPU caches in `rendering/scene/*_cache.rs` rebuild only when `ProjectStore::composite_key()` changes. **Never introduce an unconditional per-frame rebuild of scene or cache data.**
+
+### Rendering
+
+Hand-written wgpu renderer (`rendering/graphics/`, WGSL in `rendering/shaders/`); egui composites on top in the same encoder with `LoadOp::Load`. Vertex positions are chunk-origin-relative so `f32` stays precise far from the world origin — keep domain coordinates in `f64` and rebase before GPU conversion.
+
+The scene covers the whole window; the panels in `ui/chrome.rs` are painted over it, not clipped. A new **top-level** panel must do both halves: take `chrome::region_frame`, *and* hand its fill rect to the single `chrome::paint_regions` call at the end of `draw_ui` as a `chrome::Region`. Nested panels do neither. The explorer column is two regions — tree and properties — with a draggable seam.
+
+### Persistence, jobs, wasm
+
+`ProjectStore` holds `OpenProject`s. Each item's `ProjectItemState` (`model/project.rs`) keeps two counters: `revision` invalidates caches, while `epoch` vs `saved_epoch` drives the `*` dirty markers. Undo restores the content epoch while advancing revision — preserve that distinction. Native format is **OMF**; DXF, CSV, LAS/LAZ, GeoTIFF are import/export only. Writes go through `model/atomic_file.rs`.
+
+`app/jobs.rs` is one generic job queue: compute closure plus owned inputs run on a worker pool, the apply closure runs App-side on the UI thread, and `JobKey` dependencies cancel stale jobs when their source changes; poll cancellation in long loops. Use it instead of another bespoke `pending_*` vec and poll function.
+
+wasm is `panic = "abort"` (the job queue's panic recovery does *not* apply), needs COOP/COEP for shared memory and the `wasm-bindgen-rayon` pool, and persists to IndexedDB via `app/web_storage.rs`. Anything touching files or threads needs a native path *and* a wasm path. The COOP/COEP headers live in `Trunk.toml` (dev server) and `web/_headers` (deployments); keep both.
+
+## Conventions
+
+- **Translate user-facing text.** `tr!("message-id")`, `tr!("greeting", name = who)`, or the literal forms `tr!(literal = "Apply")` / `tr_format!` (see `src/i18n.rs`). New keys go in `i18n/en/incline_design.ftl`.
+- `userspace_log!` / `userspace_warn!` / `userspace_error!` (`src/logging.rs`) surface messages in the in-app activity console; plain `log::` macros only reach the log file.
+- `themed_icon!(ui, "name.svg")` / `unthemed_icon!("name.svg")` embed SVGs from `res/ui/` at compile time; `themed_icon!` picks between `icons_dark/` and `icons_light/`.
+- **One corner radius for the whole window.** Panel regions (`chrome::REGION_RADIUS`), floating tiles, toolbar buttons, anything new — all use `widgets::toolbar::GROUP_CORNER_RADIUS`. Never pick a radius by eye.
+- Naming: `snake_case` functions/modules, `PascalCase` types, `SCREAMING_SNAKE_CASE` constants.
+
+## Git
+
+- Short, action-oriented commit subjects; no mandatory prefix scheme. Keep PRs focused: problem, resulting behaviour, validation, platform limitations. Link relevant issues and include screenshots for visual changes.

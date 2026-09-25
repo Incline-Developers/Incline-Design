@@ -2807,7 +2807,7 @@ fn sanitize_file_stem(name: &str) -> String {
 /// already-running file manager and its exit says nothing useful. Windows
 /// `explorer.exe` in particular exits non-zero on success.
 #[cfg(not(target_arch = "wasm32"))]
-fn show_in_file_manager(path: &Path) -> Result<()> {
+pub(crate) fn show_in_file_manager(path: &Path) -> Result<()> {
     use std::process::Command;
 
     #[cfg(target_os = "windows")]

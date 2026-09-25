@@ -196,11 +196,12 @@ impl<'a> App<'a> {
             self.editor.measured_fps = None;
             self.editor.frame_rate_window = (0, 0.0);
         }
-        self.editor.debug_chunk_coloring = preferences.debug_chunk_coloring;
-        if !preferences.debug_chunk_coloring {
-            self.editor.debug_chunk_stats = None;
+        self.editor.debug_surface_chunks = preferences.debug_surface_chunks;
+        if !preferences.debug_surface_chunks {
+            self.editor.debug_surface_stats = None;
         }
         self.editor.debug_clip_planes = preferences.debug_clip_planes;
+        self.editor.debug_point_cloud_chunks = preferences.debug_point_cloud_chunks;
         self.editor.plan_orbit_sensitivity = preferences.plan_orbit_sensitivity;
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
@@ -235,7 +236,7 @@ impl<'a> App<'a> {
             preferences.snap_poll_rate,
             preferences.frame_rate_cap,
             preferences.frame_counter_enabled,
-            preferences.debug_chunk_coloring
+            preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
 
@@ -360,8 +361,9 @@ pub(crate) fn config_from(
         show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
         downscale_raster_previews: preferences.downscale_raster_previews,
         frame_counter_enabled: preferences.frame_counter_enabled,
-        debug_chunk_coloring: preferences.debug_chunk_coloring,
+        debug_surface_chunks: preferences.debug_surface_chunks,
         debug_clip_planes: preferences.debug_clip_planes,
+        debug_point_cloud_chunks: preferences.debug_point_cloud_chunks,
         plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,

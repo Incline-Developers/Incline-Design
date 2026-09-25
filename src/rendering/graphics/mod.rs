@@ -470,10 +470,17 @@ pub(crate) struct Graphics<'a> {
     /// screen-space markers without a display LOD.
     pub(super) design_point_gpu: DesignPointGpuCache,
     pub(super) raster_gpu: RasterGpuCache,
-    /// `(rendered, total)` surface-chunk counts from the last scene pass, for
-    /// the developer chunk-debug readout. One frame stale by the time the UI
+    /// Surface face and chunk counts from the last main scene pass, for the
+    /// developer chunk-debug readout. One frame stale by the time the UI
     /// reads it, which is fine for a debug counter.
-    pub(crate) chunk_render_stats: (u32, u32),
+    pub(crate) surface_render_stats: crate::rendering::scene::gpu_cache::SurfaceRenderStats,
+    /// Point-cloud counts from the last main scene pass, for the developer
+    /// point readout. One frame stale, like `surface_render_stats`.
+    pub(crate) point_render_stats: crate::rendering::scene::point_cloud_cache::PointRenderStats,
+    /// Line geometry outlining each surface chunk's AABB, rebuilt by the main
+    /// scene pass while the developer chunk-bounds view is on and drawn,
+    /// depth-tested, by the editor overlay pass.
+    pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,

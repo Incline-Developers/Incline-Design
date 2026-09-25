@@ -79,7 +79,6 @@ tri-estimated-memory = حداکثر حافظه تخمین زده شده ~{ $esti
 block-grid-summary = شبکه: { $x } × { $y } × { $z } = { $count } بلوک
 status-selected = انتخاب شده: { $count }
 status-fps = FPS: { $fps }
-status-chunks = قطعات: { $rendered }/{ $total } ({ $culled } قطع شده)
 status-clip = کلیپ نزدیک / دور / Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = فایل منبع یا فایل های وارداتی را انتخاب کنید.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = این ورودی را با کلیک روی سطح بارگذاری‌شده در نمای دید انتخاب کنید
 literal-choose-9e53070883acbe06 = انتخاب کن...
-literal-chunks-d8bf831735fec9eb = چانکس:
 literal-clear-b4f1dffbb6be6302 = پاک کردن
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = بافت شفاف فعال مثلث‌بندی
 literal-clear-raster-ef94c7849961e88f = شفاف رستر
@@ -883,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = یک لایه انتخاب کنید
 literal-set-axis-e3f98268c98bcfa0 = تنظیم %axis%
 literal-axis-value-d5e196b32161897d = مقدار %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = نسخه بومی رایگان را از وب‌سایت ما دانلود کنید ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = در فضای ذخیره‌سازی مرورگر ذخیره شده است
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = در فضای ذخیره‌سازی مرورگر ذخیره نشده است
 literal-distance-along-slope-9f62268eebab148c = فاصله در امتداد شیب
 literal-horizontal-distance-643bfda0222c6424 = فاصله افقی
 literal-height-change-2cc1b51980081e52 = تغییر ارتفاع

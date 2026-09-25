@@ -148,7 +148,6 @@ tri-estimated-memory = 推定ピークメモリ使用量 ~{ $estimate }。{ $det
 block-grid-summary = グリッド: { $x } × { $y } × { $z } = { $count } ブロック
 status-selected = 選択中: { $count }
 status-fps = FPS: { $fps }
-status-chunks = チャンク: { $rendered }/{ $total }（{ $culled } 個をカリング）
 status-clip = クリップ near/far/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -214,7 +213,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = インポートする元ファイルを選択してください。
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = ビューポート内の読み込み済み曲面をクリックしてこの入力を選択します
 literal-choose-9e53070883acbe06 = 選択...
-literal-chunks-d8bf831735fec9eb = チャンク: --
 literal-clear-b4f1dffbb6be6302 = クリア
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = アクティブな三角網のテクスチャをクリア
 literal-clear-raster-ef94c7849961e88f = ラスターをクリア
@@ -901,10 +899,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = レイヤーを選択
 literal-set-axis-e3f98268c98bcfa0 = %axis% を設定
 literal-axis-value-d5e196b32161897d = %axis% の値
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = 無料のネイティブ版を弊社ウェブサイトからダウンロード ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = ブラウザーストレージに保存済み
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = ブラウザーストレージに未保存
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = 斜面に沿った距離
 literal-horizontal-distance-643bfda0222c6424 = 水平距離

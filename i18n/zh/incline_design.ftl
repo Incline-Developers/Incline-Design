@@ -79,7 +79,6 @@ tri-estimated-memory = 估计峰值内存约为{ $estimate }。{ $detail }
 block-grid-summary = 网格：{ $x } × { $y } × { $z } = { $count }个块
 status-selected = 已选中：{ $count }
 status-fps = FPS：{ $fps }
-status-chunks = 区块：{ $rendered }/{ $total }（剔除{ $culled }）
 status-clip = 裁剪近/远/Δ：{ $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = 选择要导入的一个或多个源文件。
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = 通过在视口中点击已加载的曲面来选择此输入
 literal-choose-9e53070883acbe06 = 选择...
-literal-chunks-d8bf831735fec9eb = 区块：--
 literal-clear-b4f1dffbb6be6302 = 清除
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = 清除当前活动三角网纹理
 literal-clear-raster-ef94c7849961e88f = 清除栅格
@@ -883,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %kind%%properties%
 literal-choose-a-layer-b780e9cd371a31d2 = 选择图层
 literal-set-axis-e3f98268c98bcfa0 = 设置 %axis%
 literal-axis-value-d5e196b32161897d = %axis% 值
-literal-app-release-22a5f58485e368d3 = %app%：%release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = 在我们的网站下载免费的原生版本 ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = 已保存在浏览器存储中
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = 未保存在浏览器存储中
 literal-distance-along-slope-9f62268eebab148c = 沿坡距离
 literal-horizontal-distance-643bfda0222c6424 = 水平距离
 literal-height-change-2cc1b51980081e52 = 高度变化

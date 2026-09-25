@@ -152,7 +152,6 @@ tri-estimated-memory = Tahmini tepe bellek kullanımı ~{ $estimate }. { $detail
 block-grid-summary = Izgara: { $x } × { $y } × { $z } = { $count } blok
 status-selected = Seçili: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Yığın: { $rendered }/{ $total } ({ $culled } elendi)
 status-clip = Kırpma yakın/uzak/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -218,7 +217,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = İçe aktarılacak kaynak dosyayı veya dosyaları seçin.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Görüntü alanında yüklü bir yüzeye tıklayarak bu girdiyi seçin
 literal-choose-9e53070883acbe06 = Seç...
-literal-chunks-d8bf831735fec9eb = Yığın: --
 literal-clear-b4f1dffbb6be6302 = Temizle
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Etkin Üçgenleme Dokusunu Temizle
 literal-clear-raster-ef94c7849961e88f = Rasteri Temizle
@@ -905,10 +903,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Bir katman seçin
 literal-set-axis-e3f98268c98bcfa0 = %axis% Ayarla
 literal-axis-value-d5e196b32161897d = %axis% değeri
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Ücretsiz masaüstü sürümünü web sitemizden indirin ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Tarayıcı deposunda kaydedildi
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Tarayıcı deposunda kaydedilmedi
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Şev boyunca mesafe
 literal-horizontal-distance-643bfda0222c6424 = Yatay mesafe

@@ -144,7 +144,6 @@ tri-estimated-memory = Kumbukumbu ya juu inayokadiriwa ~{ $estimate }. { $detail
 block-grid-summary = Gridi: { $x } × { $y } × { $z } = vitalu { $count }
 status-selected = Vilivyochaguliwa: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Vipande: { $rendered }/{ $total } ({ $culled } vimeondolewa)
 status-clip = Kata karibu/mbali/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -210,7 +209,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chagua faili au faili za chanzo za kuingiza.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chagua chanzo hiki kwa kubofya uso uliopakiwa kwenye mwonekano
 literal-choose-9e53070883acbe06 = Chagua...
-literal-chunks-d8bf831735fec9eb = Vipande: --
 literal-clear-b4f1dffbb6be6302 = Futa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Futa Umbile la Utatuzi Hai
 literal-clear-raster-ef94c7849961e88f = Futa Rasta
@@ -897,10 +895,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Chagua tabaka
 literal-set-axis-e3f98268c98bcfa0 = Weka %axis%
 literal-axis-value-d5e196b32161897d = thamani ya %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Pakua toleo asili la bure kwenye tovuti yetu ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Imehifadhiwa kwenye hifadhi ya kivinjari
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Haijahifadhiwa kwenye hifadhi ya kivinjari
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Umbali kwenye mteremko
 literal-horizontal-distance-643bfda0222c6424 = Umbali wa mlalo

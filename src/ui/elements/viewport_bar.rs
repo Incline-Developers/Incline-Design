@@ -167,6 +167,18 @@ fn centre_band(strip: egui::Rect, left: egui::Rect, right: egui::Rect) -> Option
 
 /// The project actions, which every workspace carries.
 fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
+    // A toggle, unlike File > Preferences: it reads as pressed while the
+    // panel is up, and a second click puts it away.
+    let preferences = ui.add(
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("preferences-title"))
+            .id_salt("preferences")
+            .selected(editor.show_preferences)
+            .button_side(side),
+    );
+    if preferences.clicked() {
+        editor.show_preferences = !editor.show_preferences;
+    }
+
     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
     let save = ui.add_enabled(
         has_unsaved,

@@ -154,7 +154,6 @@ tri-estimated-memory = Очікуване пікове споживання па
 block-grid-summary = Сітка: { $x } × { $y } × { $z } = { $count } блоків
 status-selected = Вибрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменти: { $rendered }/{ $total } (приховано: { $culled })
 status-clip = Ближня/дальня площина/Δ: { $near } / { $far } / { $delta } м
 
 ## High-frequency source literals
@@ -220,7 +219,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Виберіть вихідний файл або файли для імпорту.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Виберіть цей вхід, клацнувши по завантаженій поверхні в області перегляду
 literal-choose-9e53070883acbe06 = Виберіть...
-literal-chunks-d8bf831735fec9eb = Фрагменти: --
 literal-clear-b4f1dffbb6be6302 = Очистити
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистити текстуру активної тріангуляції
 literal-clear-raster-ef94c7849961e88f = Очистити растр
@@ -907,10 +905,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% об'єкта «%kind%»
 literal-choose-a-layer-b780e9cd371a31d2 = Виберіть шар
 literal-set-axis-e3f98268c98bcfa0 = Задати %axis%
 literal-axis-value-d5e196b32161897d = Значення %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Завантажте безкоштовну нативну версію на нашому сайті ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Збережено в сховищі браузера
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Не збережено в сховищі браузера
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Відстань уздовж укосу
 literal-horizontal-distance-643bfda0222c6424 = Горизонтальна відстань

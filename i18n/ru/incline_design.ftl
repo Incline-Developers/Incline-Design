@@ -150,7 +150,6 @@ tri-estimated-memory = Пиковое потребление памяти: ок�
 block-grid-summary = Сетка: { $x } × { $y } × { $z } = { $count } блоков
 status-selected = Выбрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменты: { $rendered }/{ $total } (скрыто: { $culled })
 status-clip = Ближняя/дальняя плоскость/Δ: { $near } / { $far } / { $delta } м
 
 
@@ -217,7 +216,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Выберите исходный файл или файлы для импорта.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Выберите этот вход, щёлкнув по загруженной поверхности в области просмотра
 literal-choose-9e53070883acbe06 = Выберите...
-literal-chunks-d8bf831735fec9eb = Фрагменты: --
 literal-clear-b4f1dffbb6be6302 = Очистить
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистить текстуру активной триангуляции
 literal-clear-raster-ef94c7849961e88f = Очистить растр
@@ -930,10 +928,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% объекта «%kind%�
 literal-choose-a-layer-b780e9cd371a31d2 = Выберите слой
 literal-set-axis-e3f98268c98bcfa0 = Задать %axis%
 literal-axis-value-d5e196b32161897d = Значение %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Скачайте бесплатную нативную версию на нашем сайте ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Сохранено в хранилище браузера
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Не сохранено в хранилище браузера
 literal-distance-along-slope-9f62268eebab148c = Расстояние по склону
 literal-horizontal-distance-643bfda0222c6424 = Горизонтальное расстояние
 literal-height-change-2cc1b51980081e52 = Перепад высоты

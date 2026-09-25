@@ -79,7 +79,6 @@ tri-estimated-memory = La mémoire maximale estimée est ~{ $estimate }. { $deta
 block-grid-summary = Grille : { $x } × { $y } × { $z } = { $count } blocs
 status-selected = Sélectionné: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Segments : { $rendered }/{ $total } ({ $culled } exclus)
 status-clip = Clip proche/lointain/Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -170,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Choisissez le fichier source ou les fichiers à importer.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Choisissez cette entrée en cliquant sur une surface chargée dans le point de vue
 literal-choose-9e53070883acbe06 = Choisissez...
-literal-chunks-d8bf831735fec9eb = Segments : --
 literal-clear-b4f1dffbb6be6302 = Effacer
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Effacer la texture de la triangulation active
 literal-clear-raster-ef94c7849961e88f = Effacer le raster
@@ -883,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% de %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = Choisir un calque
 literal-set-axis-e3f98268c98bcfa0 = Définir %axis%
 literal-axis-value-d5e196b32161897d = Valeur de %axis%
-literal-app-release-22a5f58485e368d3 = %app% : %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Téléchargez la version native gratuite sur notre site ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Enregistré dans le stockage du navigateur
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Non enregistré dans le stockage du navigateur
 literal-distance-along-slope-9f62268eebab148c = Distance le long de la pente
 literal-horizontal-distance-643bfda0222c6424 = Distance horizontale
 literal-height-change-2cc1b51980081e52 = Variation de hauteur

@@ -63,8 +63,9 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_block_model_boundary_highlights: bool,
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
-    pub(crate) debug_chunk_coloring: bool,
+    pub(crate) debug_surface_chunks: bool,
     pub(crate) debug_clip_planes: bool,
+    pub(crate) debug_point_cloud_chunks: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -106,8 +107,9 @@ impl Default for PreferencesDraft {
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
-            debug_chunk_coloring: false,
+            debug_surface_chunks: false,
             debug_clip_planes: false,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -1197,16 +1199,22 @@ pub(crate) struct EditorState {
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
     pub(crate) frame_rate_window: (u32, f32),
-    /// Developer view: colour each surface chunk distinctly to visualise the
-    /// Morton spatial chunking (and drive the chunk-cull stats readout).
-    pub(crate) debug_chunk_coloring: bool,
-    /// `(rendered, total)` surface chunks from the last frame; shown in the
-    /// status bar while `debug_chunk_coloring` is on.
-    pub(crate) debug_chunk_stats: Option<(u32, u32)>,
+    /// Developer view of surface chunking: colour each chunk distinctly,
+    /// outline its culling AABB, and show the chunk-cull readout.
+    pub(crate) debug_surface_chunks: bool,
+    /// Last frame's surface faces and chunks after culling; shown in the
+    /// status bar while `debug_surface_chunks` is on.
+    pub(crate) debug_surface_stats: Option<crate::rendering::scene::gpu_cache::SurfaceRenderStats>,
     /// Current projection near/far values, shown in the status bar when the
     /// developer clip-plane readout is enabled.
     pub(crate) debug_clip_plane_distances: Option<(f64, f64)>,
     pub(crate) debug_clip_planes: bool,
+    /// Last frame's point-cloud draw against the LOD target, shown in the
+    /// status bar when the developer point readout is enabled.
+    pub(crate) debug_point_stats: Option<crate::rendering::scene::point_cloud_cache::PointRenderStats>,
+    /// Developer view of point-cloud chunking: colour each chunk distinctly,
+    /// outline its culling AABB, and show the point readout.
+    pub(crate) debug_point_cloud_chunks: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -2337,8 +2345,9 @@ impl EditorState {
             show_block_model_boundary_highlights: self.show_block_model_boundary_highlights,
             downscale_raster_previews: self.downscale_raster_previews,
             frame_counter_enabled: self.frame_counter_enabled,
-            debug_chunk_coloring: self.debug_chunk_coloring,
+            debug_surface_chunks: self.debug_surface_chunks,
             debug_clip_planes: self.debug_clip_planes,
+            debug_point_cloud_chunks: self.debug_point_cloud_chunks,
             plan_orbit_sensitivity: self.plan_orbit_sensitivity,
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
             plan_invert_vertical_look: self.plan_invert_vertical_look,
@@ -2403,10 +2412,12 @@ impl EditorState {
             frame_counter_enabled: false,
             measured_fps: None,
             frame_rate_window: (0, 0.0),
-            debug_chunk_coloring: false,
-            debug_chunk_stats: None,
+            debug_surface_chunks: false,
+            debug_surface_stats: None,
             debug_clip_plane_distances: None,
             debug_clip_planes: false,
+            debug_point_stats: None,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -3195,6 +3206,10 @@ pub(crate) enum UiCommand {
     /// browser can do, so it is not offered there.
     #[cfg(not(target_arch = "wasm32"))]
     ShowProjectInFileManager,
+    /// Open the file manager on a remembered project's file, from the
+    /// splash's Recent list.
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowTrackedProjectInFileManager(PathBuf),
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
@@ -3802,6 +3817,8 @@ impl UiCommand {
             Self::RemoveTrackedProject(id) => report(tr!(literal = "Remove Project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ShowProjectInFileManager => report(tr!(literal = "Show Project"), tr!(literal = "Open the containing folder")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ShowTrackedProjectInFileManager(path) => report(tr!(literal = "Show Project"), path.display().to_string()),
             Self::ImportOmfPaths(paths) => report(tr!(literal = "Import OMF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportDxfPathsInto(paths) => report(tr!(literal = "Import DXF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportTriangulationPaths(paths) => report(tr!(literal = "Import Triangulation"), tr_format!(literal = "%count% file(s)", count = paths.len())),

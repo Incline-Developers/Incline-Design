@@ -153,7 +153,6 @@ tri-estimated-memory = Тооцоолсон дээд санах ой ~{ $estimat
 block-grid-summary = Тор: { $x } × { $y } × { $z } = { $count } блок
 status-selected = Сонгогдсон: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Хэсгүүд: { $rendered }/{ $total } ({ $culled } хасагдсан)
 status-clip = Огтлолын ойр/хол/Δ: { $near } / { $far } / { $delta } м
 
 ## Их давтамжтай эх кодын шууд мөрүүд
@@ -219,7 +218,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Импортлох эх файл(ууд)-ыг сонгоно уу.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Харагдах цонхон дахь ачаалагдсан гадаргуу дээр товшиж энэ оролтыг сонгоно уу
 literal-choose-9e53070883acbe06 = Сонгох...
-literal-chunks-d8bf831735fec9eb = Хэсгүүд: --
 literal-clear-b4f1dffbb6be6302 = Цэвэрлэх
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Идэвхтэй триангуляцын текстурыг цэвэрлэх
 literal-clear-raster-ef94c7849961e88f = Растерыг цэвэрлэх
@@ -906,10 +904,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Давхарга сонгох
 literal-set-axis-e3f98268c98bcfa0 = %axis%-ыг тохируулах
 literal-axis-value-d5e196b32161897d = %axis% утга
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Манай вэбсайтаас үнэгүй суурин хувилбарыг татаж авах ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Хөтчийн санах ойд хадгалагдсан
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Хөтчийн санах ойд хадгалагдаагүй
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Налуугийн дагуух зай
 literal-horizontal-distance-643bfda0222c6424 = Хэвтээ зай
