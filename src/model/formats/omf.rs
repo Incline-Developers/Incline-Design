@@ -18,7 +18,7 @@ use anyhow::{Context, Result, bail};
 use glam::{DMat3, DVec3};
 use omf as omf_crate;
 use rayon::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
@@ -45,9 +45,14 @@ use crate::{
 
 const META_KIND: &str = "incline:kind";
 const META_NAME: &str = "incline:name";
-const META_OBJECT: &str = "incline:object";
+/// A design layer's [`DesignRecord`]s.
+const META_OBJECTS: &str = "incline:objects";
+/// The per-row column naming the design object a segment or point belongs to.
+const DESIGN_OBJECT_ATTRIBUTE: &str = "Object";
+/// Per-segment DXF bulge of a design polyline; absent when every segment is straight.
+const DESIGN_BULGE_ATTRIBUTE: &str = "Bulge";
 /// Ring resolution for a circle's native OMF geometry, which has no arcs. Only
-/// readers that ignore `incline:object` metadata ever see this approximation.
+/// readers that ignore `incline:objects` metadata ever see this approximation.
 const CIRCLE_EXPORT_SEGMENTS: u32 = 64;
 const META_LAYER: &str = "incline:layer";
 /// Every section's explorer folder names, keyed by [`SectionKind::key`].
@@ -552,13 +557,11 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             document
         };
 
-        let mut objects = Vec::new();
-        for object in document.objects().iter().filter(|object| object.layer() == layer.id) {
-            objects.push(write_design_object(writer, document, object)?);
-        }
-        let mut element = omf_crate::Element::new(layer.name.clone(), omf_crate::Composite::new(objects));
+        let (parts, records) = write_design_layer(writer, document, layer)?;
+        let mut element = omf_crate::Element::new(layer.name.clone(), omf_crate::Composite::new(parts));
         element.color = Some(rgba8(layer.color));
         put(&mut element, META_KIND, "design_layer");
+        put(&mut element, META_OBJECTS, serde_json::to_value(records)?);
         let mut portable_layer = layer.clone();
         portable_layer.id = crate::model::LayerId(layer.id.0 & LOCAL_MASK);
         // Folder and section travel in META_FOLDER/META_SECTION instead of
@@ -580,60 +583,167 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     Ok(element)
 }
 
-fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, object: &Object) -> Result<omf_crate::Element> {
+/// A design object's settings, in document order on its layer's element.
+/// Geometry is not repeated here: it lives in the layer's `Lines` and `Points`
+/// sets, whose [`DESIGN_OBJECT_ATTRIBUTE`] rows name the object they belong to.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum DesignRecord {
+    Point {
+        id: u64,
+        color: ObjectColor,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    /// Vertices, bulges and closure come from the object's run of segments.
+    Polyline {
+        id: u64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    /// The segments are only a tessellated ring for other readers; the exact
+    /// centre and radius are here.
+    Circle {
+        id: u64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+        center: DVec3,
+        radius: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    Text {
+        id: u64,
+        color: ObjectColor,
+        content: String,
+        height: f64,
+        rotation: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+}
+
+/// One layer's objects as a composite of at most two elements: every polyline
+/// and circle in one `Lines` set, every point and text in one `Points` set.
+/// Polyline `i` owns vertices `b..b+n` and the segments `[b+k, b+k+1]`, plus
+/// `[b+n-1, b]` when closed - so closure is read back from the segments. A
+/// segment's `Bulge` (written only when some bulge is non-zero) is the DXF
+/// bulge of the vertex it starts at.
+fn write_design_layer<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, layer: &Layer) -> Result<(Vec<omf_crate::Element>, Vec<DesignRecord>)> {
+    use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
     const LOCAL_MASK: u64 = u32::MAX as u64;
-    let local_id = object.id().0 & LOCAL_MASK;
-    let (name, geometry): (String, omf_crate::Geometry) = match object {
-        Object::Point { pos, .. } => (format!("Point {local_id}"), omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into()),
-        Object::Polyline { verts, closed, .. } => {
-            let vertices = verts.iter().map(|vertex| vertex.pos.to_array());
-            let mut segments = (0..verts.len().saturating_sub(1)).map(|index| [index as u32, index as u32 + 1]).collect::<Vec<_>>();
-            if *closed && verts.len() > 2 {
-                segments.push([(verts.len() - 1) as u32, 0]);
-            }
-            (
-                format!("{} {local_id}", if verts.len() == 2 { "Line" } else { "Polyline" }),
-                omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
-            )
-        }
-        // OMF has no arc primitive, so the native geometry is a tessellated
-        // ring. The exact centre and radius travel in `incline:object`
-        // metadata below; this is what other OMF tools - and older Incline
-        // builds, which cannot decode the metadata - fall back to. Writing the
-        // two-semicircle encoding here instead would hand them a bare diameter
-        // line, which is what happened before circles had a variant.
-        Object::Circle { center, radius, .. } => {
-            let vertices = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| {
-                let angle = std::f64::consts::TAU * (f64::from(step) / f64::from(CIRCLE_EXPORT_SEGMENTS));
-                [center.x + radius * angle.cos(), center.y + radius * angle.sin(), center.z]
-            });
-            let segments = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| [step, (step + 1) % CIRCLE_EXPORT_SEGMENTS]);
-            (
-                format!("Circle {local_id}"),
-                omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
-            )
-        }
-        Object::Text { pos, content, .. } => (
-            if content.trim().is_empty() { format!("Text {local_id}") } else { content.clone() },
-            omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into(),
-        ),
-    };
-    let mut element = omf_crate::Element::new(name, geometry);
-    element.color = Some(rgba8(document.object_rgba(object)));
-    put(
-        &mut element,
-        META_KIND,
+
+    let mut records = Vec::new();
+    let (mut line_vertices, mut segments, mut segment_objects, mut bulges) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut point_vertices, mut point_objects) = (Vec::new(), Vec::new());
+    for object in document.objects().iter().filter(|object| object.layer() == layer.id) {
+        let id = object.id().0 & LOCAL_MASK;
+        let color = object.color();
+        let hidden = document.is_object_hidden(object.id());
         match object {
-            Object::Point { .. } => "design_point",
-            Object::Polyline { .. } => "design_polyline",
-            Object::Circle { .. } => "design_circle",
-            Object::Text { .. } => "design_text",
-        },
-    );
-    let portable_object = object.with_id_and_layer(crate::model::ObjectId(local_id), crate::model::LayerId(object.layer().0 & LOCAL_MASK));
-    put(&mut element, META_OBJECT, serde_json::to_value(portable_object)?);
-    put(&mut element, META_STYLE, json!({ "visible": !document.is_object_hidden(object.id()) }));
-    Ok(element)
+            Object::Point { pos, .. } => {
+                point_vertices.push(pos.to_array());
+                point_objects.push(Some(id as i64));
+                records.push(DesignRecord::Point { id, color, hidden });
+            }
+            Object::Text {
+                pos, content, height, rotation, ..
+            } => {
+                point_vertices.push(pos.to_array());
+                point_objects.push(Some(id as i64));
+                records.push(DesignRecord::Text {
+                    id,
+                    color,
+                    content: content.clone(),
+                    height: *height,
+                    rotation: *rotation,
+                    hidden,
+                });
+            }
+            Object::Polyline {
+                verts, closed, fill, line_weight, ..
+            } => {
+                if verts.len() < 2 {
+                    bail!("polyline {id} on layer '{}' has fewer than two vertices", layer.name);
+                }
+                let first = line_vertices.len() as u32;
+                let count = verts.len() as u32;
+                line_vertices.extend(verts.iter().map(|vertex| vertex.pos.to_array()));
+                segments.extend((0..count - 1).map(|index| [first + index, first + index + 1]));
+                if *closed {
+                    segments.push([first + count - 1, first]);
+                }
+                let segment_count = if *closed { verts.len() } else { verts.len() - 1 };
+                bulges.extend(verts[..segment_count].iter().map(|vertex| Some(vertex.bulge)));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), segment_count));
+                records.push(DesignRecord::Polyline {
+                    id,
+                    color,
+                    fill: *fill,
+                    line_weight: *line_weight,
+                    hidden,
+                });
+            }
+            // OMF has no arc primitive, so other readers see a tessellated ring.
+            Object::Circle {
+                center,
+                radius,
+                fill,
+                line_weight,
+                ..
+            } => {
+                let first = line_vertices.len() as u32;
+                line_vertices.extend((0..CIRCLE_EXPORT_SEGMENTS).map(|step| {
+                    let angle = std::f64::consts::TAU * (f64::from(step) / f64::from(CIRCLE_EXPORT_SEGMENTS));
+                    [center.x + radius * angle.cos(), center.y + radius * angle.sin(), center.z]
+                }));
+                segments.extend((0..CIRCLE_EXPORT_SEGMENTS).map(|step| [first + step, first + (step + 1) % CIRCLE_EXPORT_SEGMENTS]));
+                bulges.extend(std::iter::repeat_n(None, CIRCLE_EXPORT_SEGMENTS as usize));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), CIRCLE_EXPORT_SEGMENTS as usize));
+                records.push(DesignRecord::Circle {
+                    id,
+                    color,
+                    fill: *fill,
+                    line_weight: *line_weight,
+                    center: *center,
+                    radius: *radius,
+                    hidden,
+                });
+            }
+        }
+    }
+
+    let mut elements = Vec::new();
+    if !segments.is_empty() {
+        let mut lines = Element::new("Lines", LineSet::new(writer.array_vertices(line_vertices)?, writer.array_segments(segments)?));
+        lines.color = Some(rgba8(layer.color));
+        lines.attributes.push(Attribute::from_numbers(
+            DESIGN_OBJECT_ATTRIBUTE,
+            Location::Primitives,
+            writer.array_numbers(segment_objects)?,
+        ));
+        if bulges.iter().flatten().any(|bulge| *bulge != 0.0) {
+            lines
+                .attributes
+                .push(Attribute::from_numbers(DESIGN_BULGE_ATTRIBUTE, Location::Primitives, writer.array_numbers(bulges)?));
+        }
+        put(&mut lines, META_KIND, "design_lines");
+        elements.push(lines);
+    }
+    if !point_vertices.is_empty() {
+        let mut points = Element::new("Points", PointSet::new(writer.array_vertices(point_vertices)?));
+        points.color = Some(rgba8(layer.color));
+        points
+            .attributes
+            .push(Attribute::from_numbers(DESIGN_OBJECT_ATTRIBUTE, Location::Vertices, writer.array_numbers(point_objects)?));
+        put(&mut points, META_KIND, "design_points");
+        elements.push(points);
+    }
+    Ok((elements, records))
 }
 
 fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, triangulation: &OpenTriangulation) -> Result<omf_crate::Element> {
@@ -1989,7 +2099,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         const KNOWN_METADATA: &[&str] = &[
             META_KIND,
             META_NAME,
-            META_OBJECT,
+            META_OBJECTS,
             META_LAYER,
             META_FOLDERS,
             META_FOLDER,
@@ -2017,7 +2127,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .attributes
             .iter()
             .filter(|attribute| {
-                if matches!(incline_design_kind, Some("designs" | "design_database" | "drillhole_dataset" | "raster")) {
+                if matches!(
+                    incline_design_kind,
+                    Some("designs" | "design_database" | "design_lines" | "design_points" | "drillhole_dataset" | "raster")
+                ) {
                     return false;
                 }
                 match &element.geometry {
@@ -2110,34 +2223,24 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
             };
-            for object_element in children {
-                if !std::ptr::eq(layer_element, object_element) {
-                    self.record_unsupported_content(object_element);
+            let mut lines = None;
+            let mut points = None;
+            for child in children {
+                if !std::ptr::eq(layer_element, child) {
+                    self.record_unsupported_content(child);
                 }
-                if let Some(value) = object_element.metadata.get(META_OBJECT) {
-                    match Object::deserialize(value) {
-                        Ok(mut object) => {
-                            object.translate(self.project_origin);
-                            let source_id = object.id();
-                            let id = if source_id.0 <= u32::MAX as u64 && document.get_object(source_id).is_none() {
-                                source_id
-                            } else {
-                                document.allocate_object_id()
-                            };
-                            document.insert_object(object.with_id_and_layer(id, layer_id));
-                            if style_bool(object_element.metadata.get(META_STYLE), "visible") == Some(false) {
-                                document.set_object_hidden(id, true);
-                            }
-                            continue;
-                        }
-                        Err(error) => self.bundle.warnings.push(format!(
-                            "Design object '{}' has invalid Incline Design metadata and was reconstructed from native geometry where possible: {error}",
-                            object_element.name
-                        )),
-                    }
+                match (kind(child), &child.geometry) {
+                    (Some("design_lines"), omf_crate::Geometry::LineSet(set)) => lines = Some((child, set)),
+                    (Some("design_points"), omf_crate::Geometry::PointSet(set)) => points = Some((child, set)),
+                    _ => self.append_design_geometry(&mut document, layer_id, child)?,
                 }
-                self.append_design_geometry(&mut document, layer_id, object_element)?;
             }
+            let Some(records) = layer_element.metadata.get(META_OBJECTS) else {
+                continue;
+            };
+            let records = Vec::<DesignRecord>::deserialize(records).with_context(|| format!("read the objects of design layer '{}'", layer_element.name))?;
+            self.read_design_layer(&mut document, layer_id, records, lines, points)
+                .with_context(|| format!("read design layer '{}'", layer_element.name))?;
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool
@@ -2164,6 +2267,164 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             // membership; a decoded `ProjectFile` never carries its own.
             folders: FolderRegistry::default(),
         })
+    }
+
+    /// Rebuild a layer written by [`write_design_layer`]: each record, in
+    /// order, takes the next run of `Lines` segments or the next `Points` row.
+    fn read_design_layer(
+        &mut self,
+        document: &mut Document,
+        layer: crate::model::LayerId,
+        records: Vec<DesignRecord>,
+        lines: Option<(&omf_crate::Element, &omf_crate::LineSet)>,
+        points: Option<(&omf_crate::Element, &omf_crate::PointSet)>,
+    ) -> Result<()> {
+        let object_column = |element: &omf_crate::Element, name: &str| -> Result<Option<Vec<Option<f64>>>> {
+            element
+                .attributes
+                .iter()
+                .find(|attribute| attribute.name == name)
+                .and_then(|attribute| match &attribute.data {
+                    omf_crate::AttributeData::Number { values, .. } => Some(values),
+                    _ => None,
+                })
+                .map(|values| read_numbers(self.reader, values))
+                .transpose()
+        };
+
+        let (mut line_vertices, mut segments, mut segment_objects, mut bulges) = (Vec::new(), Vec::new(), Vec::new(), None);
+        if let Some((element, set)) = lines {
+            let offset = self.project_origin + DVec3::from_array(set.origin);
+            line_vertices = self.read_vertices(&set.vertices)?.into_iter().map(|point| point + offset).collect();
+            segments = self.reader.array_segments_vec(&set.segments)?;
+            segment_objects = object_column(element, DESIGN_OBJECT_ATTRIBUTE)?.context("design lines have no object column")?;
+            bulges = object_column(element, DESIGN_BULGE_ATTRIBUTE)?;
+            if segment_objects.len() != segments.len() || bulges.as_ref().is_some_and(|bulges| bulges.len() != segments.len()) {
+                bail!("design lines have mismatched column lengths");
+            }
+        }
+        let (mut point_vertices, mut point_objects) = (Vec::new(), Vec::new());
+        if let Some((element, set)) = points {
+            let offset = self.project_origin + DVec3::from_array(set.origin);
+            point_vertices = self.read_vertices(&set.vertices)?.into_iter().map(|point| point + offset).collect();
+            point_objects = object_column(element, DESIGN_OBJECT_ATTRIBUTE)?.context("design points have no object column")?;
+            if point_objects.len() != point_vertices.len() {
+                bail!("design points have mismatched column lengths");
+            }
+        }
+
+        let mut next_segment = 0;
+        let mut next_point = 0;
+        for record in records {
+            let (id, hidden) = match &record {
+                DesignRecord::Point { id, hidden, .. }
+                | DesignRecord::Polyline { id, hidden, .. }
+                | DesignRecord::Circle { id, hidden, .. }
+                | DesignRecord::Text { id, hidden, .. } => (*id, *hidden),
+            };
+            let belongs = |value: Option<f64>| value == Some(id as f64);
+            let mut take_point = || -> Result<DVec3> {
+                if !point_objects.get(next_point).copied().is_some_and(belongs) {
+                    bail!("design object {id} has no point");
+                }
+                next_point += 1;
+                Ok(point_vertices[next_point - 1])
+            };
+            let run_start = next_segment;
+            let mut take_run = || -> Result<std::ops::Range<usize>> {
+                while segment_objects.get(next_segment).copied().is_some_and(belongs) {
+                    next_segment += 1;
+                }
+                if next_segment == run_start {
+                    bail!("design object {id} has no segments");
+                }
+                Ok(run_start..next_segment)
+            };
+            let object_id = crate::model::ObjectId(id);
+            let object = match record {
+                DesignRecord::Point { color, .. } => Object::Point {
+                    id: object_id,
+                    layer,
+                    pos: take_point()?,
+                    color,
+                },
+                DesignRecord::Text {
+                    color, content, height, rotation, ..
+                } => Object::Text {
+                    id: object_id,
+                    layer,
+                    pos: take_point()?,
+                    content,
+                    height,
+                    rotation,
+                    color,
+                },
+                DesignRecord::Circle {
+                    color,
+                    fill,
+                    line_weight,
+                    center,
+                    radius,
+                    ..
+                } => {
+                    take_run()?;
+                    Object::Circle {
+                        id: object_id,
+                        layer,
+                        center: center + self.project_origin,
+                        radius,
+                        color,
+                        fill,
+                        line_weight,
+                    }
+                }
+                DesignRecord::Polyline { color, fill, line_weight, .. } => {
+                    let run = take_run()?;
+                    let run_segments = &segments[run.clone()];
+                    let first = run_segments[0][0];
+                    let closed = run_segments.len() >= 2 && run_segments[run_segments.len() - 1][1] == first;
+                    let count = if closed { run_segments.len() } else { run_segments.len() + 1 };
+                    let sequential = run_segments[..count - 1]
+                        .iter()
+                        .enumerate()
+                        .all(|(index, segment)| *segment == [first + index as u32, first + index as u32 + 1]);
+                    let vertices = line_vertices.get(first as usize..first as usize + count);
+                    let (true, Some(vertices)) = (sequential, vertices) else {
+                        bail!("design polyline {id} has segments that are not one string");
+                    };
+                    let bulge = |index: usize| bulges.as_ref().and_then(|bulges| bulges.get(run.start + index).copied().flatten()).unwrap_or(0.0);
+                    Object::Polyline {
+                        id: object_id,
+                        layer,
+                        verts: vertices
+                            .iter()
+                            .enumerate()
+                            .map(|(index, pos)| PolyVertex {
+                                pos: *pos,
+                                bulge: if index < run_segments.len() { bulge(index) } else { 0.0 },
+                            })
+                            .collect(),
+                        closed,
+                        color,
+                        fill,
+                        line_weight,
+                    }
+                }
+            };
+            let id = if id <= u32::MAX as u64 && document.get_object(object_id).is_none() {
+                object_id
+            } else {
+                document.allocate_object_id()
+            };
+            document.insert_object(object.with_id_and_layer(id, layer));
+            if hidden {
+                document.set_object_hidden(id, true);
+            }
+        }
+        if next_segment != segments.len() || next_point != point_vertices.len() {
+            bail!("design layer has geometry that no object record claims");
+        }
+        Ok(())
     }
 
     fn append_design_geometry(&mut self, document: &mut Document, layer: crate::model::LayerId, element: &omf_crate::Element) -> Result<()> {
