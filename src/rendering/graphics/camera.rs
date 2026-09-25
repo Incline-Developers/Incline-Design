@@ -1459,7 +1459,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
         let (forward, up) = standard_view_basis(view);
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
     }
 

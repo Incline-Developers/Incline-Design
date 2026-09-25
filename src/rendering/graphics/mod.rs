@@ -873,7 +873,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
         self.touch_gesture = Default::default();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
@@ -1003,7 +1003,7 @@ impl<'a> Graphics<'a> {
         let saved_camera = self.camera.clone();
         let saved_zoom = self.projection.zoom;
         self.camera_controller.cancel_view_transition();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
 
         // Frame the drawn line: it spans the view horizontally with padding.
