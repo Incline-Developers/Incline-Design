@@ -2197,7 +2197,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         attribute.data,
                         omf_crate::AttributeData::MappedTexture { .. } | omf_crate::AttributeData::ProjectedTexture { .. }
                     ),
-                    omf_crate::Geometry::PointSet(_) => !matches!(attribute.data, omf_crate::AttributeData::Color { .. }),
+                    omf_crate::Geometry::PointSet(_) => match attribute.data {
+                        omf_crate::AttributeData::Color { .. } => false,
+                        // Decoded by `read_point_classification`.
+                        omf_crate::AttributeData::Category { .. } => attribute.name != POINT_CLASSIFICATION_ATTRIBUTE || attribute.location != omf_crate::Location::Vertices,
+                        _ => true,
+                    },
                     omf_crate::Geometry::BlockModel(_) => !matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }),
                     omf_crate::Geometry::LineSet(_) | omf_crate::Geometry::Composite(_) => true,
                 }
@@ -2670,6 +2675,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             })
             .transpose()?;
         let classifications = self.read_point_classification(element, positions.len())?;
+        if classifications.is_none() && element.attributes.iter().any(|attribute| attribute.name == POINT_CLASSIFICATION_ATTRIBUTE) {
+            self.bundle.warnings.push(format!(
+                "Element '{}' has a classification attribute that could not be decoded and will be omitted",
+                element.name
+            ));
+        }
         let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
         let prepared = prepare_for_render(&positions, colors.as_deref(), classifications.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
