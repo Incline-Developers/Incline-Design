@@ -9,6 +9,7 @@
 use std::{collections::HashSet, ops::Range};
 
 use glam::{DMat4, DVec2, DVec3};
+use rayon::prelude::*;
 
 use crate::{
     Size,
@@ -16,7 +17,7 @@ use crate::{
         Document, Object, ObjectId, ObjectPoint, SceneEntityId,
         spatial::{ObjectSnapIndex, projected_box_overlaps},
     },
-    rendering::{StrokeVertex, Vertex, camera::SectionSlab},
+    rendering::{StrokeInstance, Vertex, camera::SectionSlab},
 };
 
 #[derive(Clone, Debug)]
@@ -26,10 +27,8 @@ pub(crate) struct PickRecord {
     /// record. Picking projects this small box before touching potentially
     /// very large CPU vertex/index ranges.
     pub(crate) world_bounds: (DVec3, DVec3),
-    /// Half-open range into the stroke vertex buffer.
+    /// Half-open range into the stroke instance buffer.
     pub(crate) stroke_range: (u32, u32),
-    /// Half-open range into the stroke index buffer, used for picking.
-    pub(crate) stroke_index_range: (u32, u32),
     /// Half-open range into the fill vertex buffer.
     pub(crate) fill_range: (u32, u32),
     /// Half-open range into the fill index buffer.
@@ -53,10 +52,148 @@ pub(crate) struct PickGeometry<'a> {
     /// skips every member record without touching the CPU geometry.
     pub(crate) world_bounds: Option<(DVec3, DVec3)>,
     pub(crate) records: &'a [PickRecord],
-    pub(crate) stroke_verts: &'a [StrokeVertex],
-    pub(crate) stroke_indices: &'a [u32],
+    pub(crate) strokes: &'a [StrokeInstance],
+    /// Block bounds over `strokes`, built alongside them.
+    pub(crate) stroke_blocks: &'a StrokeBlocks,
     pub(crate) fill_verts: &'a [Vertex],
     pub(crate) fill_indices: &'a [u32],
+}
+
+/// Consecutive stroke instances per block.
+const STROKE_BLOCK: usize = 16;
+/// Blocks per BVH leaf.
+const BLOCKS_PER_LEAF: usize = 4;
+
+/// A BVH over the world bounds of fixed runs of consecutive stroke
+/// instances. A record's own bounds say little when it encloses the cursor -
+/// concentric contours put every ring's box under it - but consecutive
+/// segments of one string are neighbours, so their runs bound tightly, and a
+/// pick visits only the runs near the cursor wherever their records are.
+#[derive(Default)]
+pub(crate) struct StrokeBlocks {
+    /// Instance count the blocks were built over; picking a stream of any
+    /// other length walks it whole rather than trust stale bounds.
+    len: usize,
+    blocks: Vec<(DVec3, DVec3)>,
+    /// Block indices in leaf order.
+    order: Vec<u32>,
+    nodes: Vec<StrokeBlockNode>,
+}
+
+#[derive(Clone, Copy)]
+struct StrokeBlockNode {
+    min: DVec3,
+    max: DVec3,
+    /// Leaf: first index into `order`. Interior: the right child; the left
+    /// child follows its parent.
+    start_or_right: u32,
+    /// Blocks in a leaf; zero for an interior node.
+    count: u32,
+}
+
+impl StrokeBlocks {
+    pub(crate) fn build(strokes: &[StrokeInstance], scene_origin: DVec3) -> Self {
+        let blocks = strokes
+            .par_chunks(STROKE_BLOCK)
+            .map(|block| {
+                world_bounds_from_local_positions(
+                    block.iter().flat_map(|stroke| {
+                        let (start, end) = stroke.world_ends();
+                        [start, end]
+                    }),
+                    scene_origin,
+                )
+                .unwrap_or((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)))
+            })
+            .collect::<Vec<_>>();
+        let mut order = (0..blocks.len() as u32)
+            .filter(|&block| blocks[block as usize].0.cmple(blocks[block as usize].1).all())
+            .collect::<Vec<_>>();
+        let mut nodes = Vec::with_capacity(2 * order.len().div_ceil(BLOCKS_PER_LEAF));
+        if !order.is_empty() {
+            let len = order.len();
+            build_block_node(&blocks, &mut order, 0, len, &mut nodes);
+        }
+        Self {
+            len: strokes.len(),
+            blocks,
+            order,
+            nodes,
+        }
+    }
+
+    /// Visit, in ascending order, the instance ranges of blocks whose bounds
+    /// project within `threshold` pixels of `cursor`; the whole stream when
+    /// the blocks were built for another.
+    fn for_each_near(&self, len: usize, view_proj: &DMat4, screen: Size, cursor: DVec2, threshold: f64, mut visit: impl FnMut(Range<usize>)) {
+        if self.len != len {
+            if len > 0 {
+                visit(0..len);
+            }
+            return;
+        }
+        let mut near: Vec<u32> = Vec::new();
+        let mut stack = if self.nodes.is_empty() { Vec::new() } else { vec![0_usize] };
+        while let Some(index) = stack.pop() {
+            let node = self.nodes[index];
+            if !projected_box_overlaps(node.min, node.max, view_proj, screen, cursor, threshold) {
+                continue;
+            }
+            if node.count > 0 {
+                let leaf = &self.order[node.start_or_right as usize..(node.start_or_right + node.count) as usize];
+                near.extend(leaf.iter().filter(|&&block| {
+                    let (min, max) = self.blocks[block as usize];
+                    projected_box_overlaps(min, max, view_proj, screen, cursor, threshold)
+                }));
+            } else {
+                stack.push(node.start_or_right as usize);
+                stack.push(index + 1);
+            }
+        }
+        near.sort_unstable();
+        for block in near {
+            let start = block as usize * STROKE_BLOCK;
+            visit(start..(start + STROKE_BLOCK).min(len));
+        }
+    }
+}
+
+fn build_block_node(blocks: &[(DVec3, DVec3)], order: &mut [u32], start: usize, end: usize, nodes: &mut Vec<StrokeBlockNode>) -> usize {
+    let (min, max) = order[start..end]
+        .iter()
+        .fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(min, max), &block| {
+            let (a, b) = blocks[block as usize];
+            (min.min(a), max.max(b))
+        });
+    let index = nodes.len();
+    nodes.push(StrokeBlockNode {
+        min,
+        max,
+        start_or_right: start as u32,
+        count: (end - start) as u32,
+    });
+    if end - start <= BLOCKS_PER_LEAF {
+        return index;
+    }
+    let extent = max - min;
+    let axis = if extent.x >= extent.y && extent.x >= extent.z {
+        0
+    } else if extent.y >= extent.z {
+        1
+    } else {
+        2
+    };
+    let middle = start + (end - start) / 2;
+    let centre = |block: &u32| {
+        let (a, b) = blocks[*block as usize];
+        (a[axis] + b[axis]) * 0.5
+    };
+    order[start..end].select_nth_unstable_by(middle - start, |a, b| centre(a).total_cmp(&centre(b)));
+    build_block_node(blocks, order, start, middle, nodes);
+    let right = build_block_node(blocks, order, middle, end, nodes);
+    nodes[index].start_or_right = right as u32;
+    nodes[index].count = 0;
+    index
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -248,76 +385,66 @@ pub(crate) fn pick_nearest(
         let PickGeometry {
             world_bounds,
             records,
-            stroke_verts,
-            stroke_indices,
+            strokes,
+            stroke_blocks,
             fill_verts,
             fill_indices,
         } = *group;
         if world_bounds.is_some_and(|bounds| !projected_box_overlaps(bounds.0, bounds.1, view_proj, screen, cursor, threshold_px as f64)) {
             continue;
         }
-        for rec in records {
-            // Frozen entities are visible but not selectable.
-            if frozen.contains(&rec.entity) || !record_projects_near_cursor(rec, view_proj, screen, cursor, threshold_px as f64) {
-                continue;
-            }
-            let stroke_indices = &stroke_indices[clamped_range(rec.stroke_index_range, stroke_indices.len())];
-            let mut tested_stroke_centerlines = false;
-            for quad in stroke_indices.as_chunks::<6>().0 {
-                let Some(base) = stroke_line_quad_base(quad) else {
-                    continue;
-                };
-                let (Some(a), Some(b)) = (stroke_verts.get(base), stroke_verts.get(base + 2)) else {
-                    continue;
-                };
-                let wa = local_vertex_world(a.pos, scene_origin);
-                let wb = local_vertex_world(b.pos, scene_origin);
-                if (wb - wa).length_squared() <= f64::EPSILON {
+        // Strokes: only the instance runs near the cursor, attributed back
+        // to their records, which the builders emit in stream order.
+        let mut last_record = 0;
+        stroke_blocks.for_each_near(strokes.len(), view_proj, screen, cursor, threshold_px as f64, |near| {
+            let first = records[last_record..].partition_point(|rec| (rec.stroke_range.1 as usize) <= near.start) + last_record;
+            last_record = first;
+            for rec in records[first..].iter().take_while(|rec| (rec.stroke_range.0 as usize) < near.end) {
+                // Frozen entities are visible but not selectable.
+                if frozen.contains(&rec.entity) {
                     continue;
                 }
-                tested_stroke_centerlines = true;
-                let Some((wa, wb)) = slab_clipped_segment(slab, wa, wb) else {
-                    continue;
-                };
-                if let (Some(sa), Some(sb)) = (world_to_screen(view_proj, wa, screen), world_to_screen(view_proj, wb, screen)) {
-                    let t = closest_t_on_segment(cursor, sa, sb);
-                    let dist = (sa + (sb - sa) * t).distance(cursor);
-                    let world = perspective_correct_segment_point(view_proj, wa, wb, t);
-                    let depth = projected_depth(view_proj, world);
-                    if screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
-                        best_dist = dist;
-                        best_stroke_depth = depth;
-                        best_stroke_hit = Some(PickHit { entity: rec.entity, world });
+                let owned = clamped_range(rec.stroke_range, strokes.len());
+                let span = owned.start.max(near.start)..owned.end.min(near.end);
+                // Lines are measured along their length. A record with none
+                // (a point's cross, a lone marker) is measured at its
+                // anchors; a line's joins sit on its own ends and add nothing.
+                let has_lines = strokes[owned]
+                    .iter()
+                    .any(|stroke| !stroke.selection_only() && stroke.world_ends().0 != stroke.world_ends().1);
+                for stroke in strokes[span].iter().filter(|stroke| !stroke.selection_only()) {
+                    let (a, b) = stroke.world_ends();
+                    if has_lines && a == b {
+                        continue;
                     }
-                }
-            }
-
-            if !tested_stroke_centerlines {
-                for triangle in stroke_indices.as_chunks::<3>().0 {
-                    for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
-                        let (Some(a), Some(b)) = (stroke_verts.get(a as usize), stroke_verts.get(b as usize)) else {
-                            continue;
-                        };
-                        let wa = local_vertex_world(a.pos, scene_origin);
-                        let wb = local_vertex_world(b.pos, scene_origin);
-                        let Some((wa, wb)) = slab_clipped_segment(slab, wa, wb) else {
-                            continue;
-                        };
-                        if let (Some(sa), Some(sb)) = (world_to_screen(view_proj, wa, screen), world_to_screen(view_proj, wb, screen)) {
-                            let t = closest_t_on_segment(cursor, sa, sb);
-                            let dist = (sa + (sb - sa) * t).distance(cursor);
-                            let world = perspective_correct_segment_point(view_proj, wa, wb, t);
-                            let depth = projected_depth(view_proj, world);
-                            if screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
-                                best_dist = dist;
-                                best_stroke_depth = depth;
-                                best_stroke_hit = Some(PickHit { entity: rec.entity, world });
-                            }
+                    let (wa, wb) = (local_vertex_world(a, scene_origin), local_vertex_world(b, scene_origin));
+                    let Some((wa, wb)) = slab_clipped_segment(slab, wa, wb) else {
+                        continue;
+                    };
+                    if let (Some(sa), Some(sb)) = (world_to_screen(view_proj, wa, screen), world_to_screen(view_proj, wb, screen)) {
+                        let t = closest_t_on_segment(cursor, sa, sb);
+                        let dist = (sa + (sb - sa) * t).distance(cursor);
+                        let world = perspective_correct_segment_point(view_proj, wa, wb, t);
+                        let depth = projected_depth(view_proj, world);
+                        if screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
+                            best_dist = dist;
+                            best_stroke_depth = depth;
+                            best_stroke_hit = Some(PickHit { entity: rec.entity, world });
                         }
                     }
                 }
             }
+        });
 
+        for rec in records {
+            // Fills are judged per record; a record without one is skipped
+            // before any projection.
+            if rec.fill_range.0 == rec.fill_range.1 && rec.fill_index_range.0 == rec.fill_index_range.1 {
+                continue;
+            }
+            if frozen.contains(&rec.entity) || !record_projects_near_cursor(rec, view_proj, screen, cursor, threshold_px as f64) {
+                continue;
+            }
             for vert in &fill_verts[clamped_range(rec.fill_range, fill_verts.len())] {
                 let world = local_vertex_world(vert.pos, scene_origin);
                 if let Some(sp) = slab_screen_point(slab, view_proj, screen, world) {
@@ -380,11 +507,6 @@ pub(crate) fn pick_nearest(
         return Some(hit);
     }
     best_fill_hit
-}
-
-fn stroke_line_quad_base(indices: &[u32]) -> Option<usize> {
-    let [a, b, c, d, e, f]: [u32; 6] = indices.try_into().ok()?;
-    (d == b && c == f && a == b.wrapping_add(1) && e == b.wrapping_add(2) && c == b.wrapping_add(3)).then_some(b as usize)
 }
 
 /// True only when every corner of the quad lies beyond the same slab wall.

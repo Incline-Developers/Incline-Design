@@ -294,15 +294,15 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                 let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
                 ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
                     // Three clusters placed against the same strip, the way the
-                    // viewport bar lays its own out - see [`cluster`] - so the
+                    // viewport bar lays its own out - see [`super::cluster`] - so the
                     // centred run is not pushed along by what is beside it.
-                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_measure_tools(ui, editor, commands, side);
                     });
                     // Task progress hugs the right end of the strip, out of the
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.
-                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         crate::ui::widgets::progress::draw_task_progress(ui, editor);
                     });
 
@@ -317,7 +317,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     let band_right = right.left() - CENTRE_CLEARANCE;
                     let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
                     let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
-                    cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_cursor_modes(ui, editor, commands, side);
                     });
 
@@ -330,21 +330,6 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
         })
         .response
         .rect
-}
-
-/// Lay one of the bottom toolbar's clusters out over `rect`, and report what it
-/// drew into.
-///
-/// The three are placed against the same strip rather than in sequence, so each
-/// is given the rect it should align itself in and none of them consumes space
-/// the next one wanted.
-fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        add_contents(ui);
-    })
-    .response
-    .rect
 }
 
 /// The measuring run, which only a workspace designing a pit has anything to

@@ -6,7 +6,7 @@ use crate::{
     Size,
     model::{Document, Object, ObjectPoint, geometry::circle_polyline_vertices},
     rendering::{
-        StrokeVertex, Vertex,
+        StrokeInstance, Vertex,
         geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, tessellate_polyline_stroke},
         graphics::{ACTIVE_POINT_COLOR, DOC_LINE_WIDTH, MEASUREMENT_COLOR, PREVIEW_COLOR},
         pick::world_to_screen,
@@ -17,8 +17,7 @@ use crate::{
 pub(crate) struct OverlaySceneBuildInput<'a> {
     pub(crate) editor: &'a EditorState,
     pub(crate) document: &'a Document,
-    pub(crate) overlay_vertex_buf: &'a mut Vec<StrokeVertex>,
-    pub(crate) overlay_index_buf: &'a mut Vec<u32>,
+    pub(crate) overlay_strokes: &'a mut Vec<StrokeInstance>,
     pub(crate) view_proj: DMat4,
     pub(crate) screen_size: Size,
     pub(crate) scene_origin: DVec3,
@@ -74,27 +73,18 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     let OverlaySceneBuildInput {
         editor,
         document,
-        overlay_vertex_buf,
-        overlay_index_buf,
+        overlay_strokes,
         view_proj,
         screen_size,
         scene_origin,
         scale_factor,
     } = input;
 
-    overlay_vertex_buf.clear();
-    overlay_index_buf.clear();
+    overlay_strokes.clear();
 
     let mut unused_fill_vertices: Vec<Vertex> = Vec::new();
     let mut unused_fill_indices = Vec::new();
-    let mut overlay = DrawContext {
-        stroke_vertex_buf: overlay_vertex_buf,
-        stroke_index_buf: overlay_index_buf,
-        fill_vertex_buf: &mut unused_fill_vertices,
-        fill_index_buf: &mut unused_fill_indices,
-        scene_origin,
-        scale_factor,
-    };
+    let mut overlay = DrawContext::unstyled(overlay_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
 
     let stroke_preview = editor.pending_stroke.clone();
     for pair in stroke_preview.windows(2) {

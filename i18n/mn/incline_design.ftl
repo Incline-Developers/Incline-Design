@@ -98,8 +98,8 @@ tri-create-run = Триангуляц хийх
 
 tri-selection-selected = { $summary } сонгогдсон
 
-tri-type-open-surface = Задгай гадаргуу
-tri-type-solid-closed = Хатуу бие – бүрэн хаалттай
+tri-type-open-surface = Гадаргуу
+tri-type-solid-closed = Хатуу бие
 
 # Сонголтын тоймын хэсгүүд, ж: "3 полилиниа, 1 цэг". Нэр үг бүр өөрийн
 # тоогоор олонлогжсон тул хоёроос олон олонлогийн хэлбэртэй хэлүүдэд ч
@@ -1219,7 +1219,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Энэ 
 literal-restore-the-full-model-range-23c0898e378be1df = Загварын бүтэн мужийг сэргээх
 literal-axis-minimum-8a51a7bda9747700 = %axis% доод
 literal-axis-maximum-fa149d72f9564fca = %axis% дээд
-literal-name-no-range-4f328990327afd0b = %name% (муж алга)
 literal-choose-a-variable-62b267fd35bdce31 = Хувьсагч сонгох
 literal-no-usable-range-6bd2da592be04b0c = (ашиглах боломжтой муж алга)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Хоосон утганд ашиглах өнгийг засах

@@ -366,6 +366,8 @@ pub(crate) struct CameraController {
     zoom_towards_cursor: bool,
     pub(crate) mouse_loc: (f32, f32),
     orbit_anchor: Option<DVec3>,
+    /// The button is up but motion from before the release is still queued; the anchor holds until `update_camera` spends it.
+    orbit_releasing: bool,
     view_transition: Option<ViewTransition>,
 }
 
@@ -390,6 +392,7 @@ impl CameraController {
             zoom_towards_cursor: true,
             mouse_loc: (0., 0.),
             orbit_anchor: None,
+            orbit_releasing: false,
             view_transition: None,
         }
     }
@@ -412,14 +415,28 @@ impl CameraController {
     pub(crate) fn begin_orbit(&mut self, anchor: DVec3) {
         self.view_transition = None;
         self.orbit_anchor = Some(anchor);
+        self.orbit_releasing = false;
     }
 
     pub(crate) fn cancel_view_transition(&mut self) {
         self.view_transition = None;
     }
 
+    /// A fast flick can release between its last motion event and the next frame; that motion still turns about the orbit's pivot, not the target.
     pub(crate) fn end_orbit(&mut self) {
+        if self.rotate_horizontal == 0.0 && self.rotate_vertical == 0.0 {
+            self.orbit_anchor = None;
+        } else {
+            self.orbit_releasing = true;
+        }
+    }
+
+    /// Ends an orbit and drops any motion still queued for it.
+    pub(crate) fn cancel_orbit(&mut self) {
+        self.rotate_horizontal = 0.0;
+        self.rotate_vertical = 0.0;
         self.orbit_anchor = None;
+        self.orbit_releasing = false;
     }
 
     pub(crate) fn orbit_angles(&self, dx: f64, dy: f64) -> DVec2 {
@@ -595,6 +612,10 @@ impl CameraController {
 
             self.rotate_horizontal = 0.0;
             self.rotate_vertical = 0.0;
+        }
+        if self.orbit_releasing {
+            self.orbit_anchor = None;
+            self.orbit_releasing = false;
         }
 
         // Scale orthographic bounds by camera-to-target distance for zoom effect

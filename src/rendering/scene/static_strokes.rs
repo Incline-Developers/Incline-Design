@@ -6,8 +6,10 @@
 //! polylines into the document. This cache claims those polylines, groups them
 //! into per-layer chunks with their own GPU buffers, and re-tessellates only
 //! the chunks whose members actually changed. Everything else - points, text,
-//! filled polylines, and any polyline the editor is currently styling
-//! (selection, highlight, translucency) - stays on the per-rebuild path.
+//! filled polylines, and translucent polylines, which need the blended
+//! document stage - stays on the per-rebuild path. Selection and hover are
+//! applied by the stroke shader through each member's style slot, so they
+//! never evict a member from its chunk.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -19,18 +21,19 @@ use glam::DVec3;
 use crate::{
     model::{Document, FillStyle, LayerId, Object, ObjectId, SceneEntityId},
     rendering::{
-        StrokeVertex, Vertex,
+        StrokeInstance, Vertex,
         geometry::{DrawContext, tessellate_polyline_stroke},
-        pick::{PickRecord, world_bounds_from_local_positions},
+        pick::{PickRecord, StrokeBlocks, world_bounds_from_local_positions},
+        scene::document_style::DocumentStyleSlots,
     },
     ui::state::EditorState,
 };
 
-/// Soft per-chunk stroke-vertex budget (~27 MiB of vertex data). Small enough
-/// that re-tessellating one chunk (an edited or newly selected member) stays
-/// within a frame; large enough that contour-scale documents need only dozens
-/// of draw calls.
-const CHUNK_VERTEX_BUDGET: usize = 512 * 1024;
+/// Soft per-chunk stroke-instance budget (24 MiB of instance data). Small
+/// enough that re-tessellating one chunk (an edited member) stays within a
+/// frame; large enough that contour-scale documents need only dozens of draw
+/// calls.
+const CHUNK_INSTANCE_BUDGET: usize = 512 * 1024;
 
 pub(crate) struct StaticStrokeChunk {
     layer: LayerId,
@@ -38,26 +41,23 @@ pub(crate) struct StaticStrokeChunk {
     /// chunk without rebuilding anything when a layer is toggled.
     pub(crate) layer_visible: bool,
     members: Vec<ObjectId>,
-    /// Estimated stroke vertices including members assigned since the last
+    /// Estimated stroke instances including members assigned since the last
     /// rebuild; used only to decide when to start a new chunk.
-    estimated_vertices: usize,
-    estimated_indices: usize,
+    estimated_instances: usize,
     dirty: bool,
-    /// CPU copies are retained for picking (cursor pick and box select read
-    /// vertex positions back).
-    pub(crate) vertices: Vec<StrokeVertex>,
-    pub(crate) indices: Vec<u32>,
+    /// CPU copy retained for picking (cursor pick and box select read
+    /// positions back).
+    pub(crate) strokes: Vec<StrokeInstance>,
+    pub(crate) stroke_blocks: StrokeBlocks,
     /// Per-member pick records with ranges into this chunk's buffers (fill
     /// ranges are always empty - filled polylines are ineligible).
     pub(crate) records: Vec<PickRecord>,
     /// Union of member pick bounds, used to reject this entire CPU stream on
     /// cursor queries that land elsewhere.
     pub(crate) world_bounds: Option<(DVec3, DVec3)>,
-    pub(crate) vertex_gpu: Option<wgpu::Buffer>,
-    pub(crate) index_gpu: Option<wgpu::Buffer>,
-    vertex_capacity: usize,
-    index_capacity: usize,
-    pub(crate) index_count: u32,
+    pub(crate) instance_gpu: Option<wgpu::Buffer>,
+    instance_capacity: usize,
+    pub(crate) instance_count: u32,
 }
 
 impl StaticStrokeChunk {
@@ -66,23 +66,20 @@ impl StaticStrokeChunk {
             layer,
             layer_visible: true,
             members: Vec::new(),
-            estimated_vertices: 0,
-            estimated_indices: 0,
+            estimated_instances: 0,
             dirty: false,
-            vertices: Vec::new(),
-            indices: Vec::new(),
+            strokes: Vec::new(),
+            stroke_blocks: StrokeBlocks::default(),
             records: Vec::new(),
             world_bounds: None,
-            vertex_gpu: None,
-            index_gpu: None,
-            vertex_capacity: 0,
-            index_capacity: 0,
-            index_count: 0,
+            instance_gpu: None,
+            instance_capacity: 0,
+            instance_count: 0,
         }
     }
 
     pub(crate) fn drawable(&self) -> bool {
-        self.layer_visible && self.index_count > 0
+        self.layer_visible && self.instance_count > 0
     }
 }
 
@@ -92,6 +89,9 @@ pub(crate) struct StaticStrokeCache {
     /// Chunk index and last-built fingerprint per claimed object.
     object_chunk: HashMap<ObjectId, (usize, u64)>,
     claimed: HashSet<ObjectId>,
+    /// Order-independent fingerprint of `claimed`, so the stream builder can
+    /// tell when the set it must skip has changed.
+    claimed_key: u64,
     cached_scene_origin: DVec3,
     cached_scale_factor: f32,
 }
@@ -106,9 +106,8 @@ fn fingerprint(object_revision: u64, rgba: [f32; 4], layer: LayerId) -> u64 {
     hasher.finish()
 }
 
-/// Whether the cache may own this object's stroke geometry. Anything the
-/// editor is currently restyling stays on the per-rebuild path, which already
-/// implements recoloring, fills, and draw-on-top ordering for it.
+/// Whether the cache may own this object's stroke geometry. Hidden objects
+/// draw nothing, and translucent ones need the blended document stage.
 fn eligible(object: &Object, editor: &EditorState, rgba: [f32; 4]) -> bool {
     let Object::Polyline { closed, fill, .. } = object else {
         return false;
@@ -122,24 +121,12 @@ fn eligible(object: &Object, editor: &EditorState, rgba: [f32; 4]) -> bool {
         return false;
     }
     let handle = SceneEntityId::Object(object.id());
-    !(editor.hidden_handles.contains(&handle)
-        || editor.frozen_handles.contains(&handle)
-        || editor.selected_handles.contains(&handle)
-        || editor.translucent_handles.contains(&handle)
-        || editor.tri_hover_handles.contains(&handle)
-        || editor.tool_highlight_id == Some(object.id()))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct StrokeEstimate {
-    vertices: usize,
-    indices: usize,
+    !(editor.hidden_handles.contains(&handle) || editor.translucent_handles.contains(&handle))
 }
 
 #[derive(Clone, Copy)]
 struct StaticStrokeLimits {
-    vertices: usize,
-    indices: usize,
+    instances: usize,
     buffer_bytes: usize,
 }
 
@@ -147,15 +134,9 @@ impl StaticStrokeLimits {
     fn from_device(device: &wgpu::Device) -> Self {
         let buffer_bytes = usize::try_from(device.limits().max_buffer_size).unwrap_or(usize::MAX);
         Self {
-            vertices: (buffer_bytes / size_of::<StrokeVertex>()).min(CHUNK_VERTEX_BUDGET),
-            // Every stroke primitive is a triangle, so leave no partial one.
-            indices: buffer_bytes / size_of::<u32>() / 3 * 3,
+            instances: (buffer_bytes / size_of::<StrokeInstance>()).min(CHUNK_INSTANCE_BUDGET),
             buffer_bytes,
         }
-    }
-
-    fn contains(self, estimate: StrokeEstimate) -> bool {
-        estimate.vertices <= self.vertices && estimate.indices <= self.indices
     }
 }
 
@@ -163,7 +144,7 @@ impl StaticStrokeLimits {
 /// stay on the checked main stream because one logical arc may expand to
 /// thousands of primitives and does not make a predictable static-cache
 /// member.
-fn estimate_stroke(object: &Object) -> Option<StrokeEstimate> {
+fn estimate_stroke(object: &Object) -> Option<usize> {
     let Object::Polyline { verts, closed, .. } = object else {
         return None;
     };
@@ -172,13 +153,9 @@ fn estimate_stroke(object: &Object) -> Option<StrokeEstimate> {
     }
     let segments = verts.len().saturating_sub(1).saturating_add(usize::from(*closed && verts.len() >= 2));
     let joins = if *closed && verts.len() >= 2 { verts.len() } else { verts.len().saturating_sub(2) };
-    // A segment emits four vertices/six indices. A maximum-resolution round
-    // join emits eighteen vertices/forty-eight indices. Degenerate and nearly
-    // collinear geometry only reduces these counts.
-    Some(StrokeEstimate {
-        vertices: segments.saturating_mul(4).saturating_add(joins.saturating_mul(18)),
-        indices: segments.saturating_mul(6).saturating_add(joins.saturating_mul(48)),
-    })
+    // A segment and a round join are one instance each. Degenerate and
+    // nearly collinear geometry only reduces the count.
+    Some(segments.saturating_add(joins))
 }
 
 fn can_append(current: usize, next: usize, limit: usize) -> bool {
@@ -192,6 +169,10 @@ impl StaticStrokeCache {
         &self.claimed
     }
 
+    pub(crate) fn claimed_key(&self) -> u64 {
+        self.claimed_key
+    }
+
     pub(crate) fn chunks(&self) -> &[StaticStrokeChunk] {
         &self.chunks
     }
@@ -200,9 +181,19 @@ impl StaticStrokeCache {
     /// re-tessellating and re-uploading only chunks with changed members.
     /// Runs on every geometry rebuild, so per-object work here must stay
     /// cheap (a fingerprint compare) for unchanged objects.
-    pub(crate) fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, document: &Document, editor: &EditorState, scene_origin: DVec3, scale_factor: f32) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        document: &Document,
+        editor: &EditorState,
+        slots: &mut DocumentStyleSlots,
+        scene_origin: DVec3,
+        scale_factor: f32,
+    ) {
         let limits = StaticStrokeLimits::from_device(device);
-        // Origin and scale factor are baked into every vertex.
+        // Origin and scale factor are baked into every instance.
         if scene_origin != self.cached_scene_origin || (scale_factor - self.cached_scale_factor).abs() > f32::EPSILON {
             self.chunks.clear();
             self.object_chunk.clear();
@@ -211,6 +202,7 @@ impl StaticStrokeCache {
         }
 
         self.claimed.clear();
+        self.claimed_key = 0;
         for object in document.objects() {
             let rgba = document.object_rgba(object);
             if !document.layer(object.layer()).is_some_and(|layer| layer.loaded) || !eligible(object, editor, rgba) {
@@ -219,7 +211,7 @@ impl StaticStrokeCache {
             // Oversized and bulged members remain on the main stream, whose
             // checked truncation handles them without creating an unbounded
             // cache allocation.
-            let Some(estimate) = estimate_stroke(object).filter(|estimate| limits.contains(*estimate)) else {
+            let Some(estimate) = estimate_stroke(object).filter(|estimate| *estimate <= limits.instances) else {
                 continue;
             };
             let id = object.id();
@@ -237,6 +229,11 @@ impl StaticStrokeCache {
                 None => self.assign(object.layer(), id, estimate, limits),
             }
             self.claimed.insert(id);
+            self.claimed_key ^= {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                id.hash(&mut hasher);
+                hasher.finish()
+            };
         }
 
         // Members that vanished or became ineligible release their chunk.
@@ -261,7 +258,7 @@ impl StaticStrokeCache {
 
         for chunk_index in 0..self.chunks.len() {
             if self.chunks[chunk_index].dirty {
-                self.rebuild_chunk(chunk_index, device, queue, document, scene_origin, scale_factor, limits);
+                self.rebuild_chunk(chunk_index, device, queue, document, slots, scene_origin, scale_factor, limits);
             }
         }
     }
@@ -287,23 +284,18 @@ impl StaticStrokeCache {
         self.claimed.shrink_to_fit();
     }
 
-    fn assign(&mut self, layer: LayerId, id: ObjectId, estimate: StrokeEstimate, limits: StaticStrokeLimits) {
+    fn assign(&mut self, layer: LayerId, id: ObjectId, estimate: usize, limits: StaticStrokeLimits) {
         let chunk_index = self
             .chunks
             .iter()
-            .position(|chunk| {
-                chunk.layer == layer
-                    && can_append(chunk.estimated_vertices, estimate.vertices, limits.vertices)
-                    && can_append(chunk.estimated_indices, estimate.indices, limits.indices)
-            })
+            .position(|chunk| chunk.layer == layer && can_append(chunk.estimated_instances, estimate, limits.instances))
             .unwrap_or_else(|| {
                 self.chunks.push(StaticStrokeChunk::new(layer));
                 self.chunks.len() - 1
             });
         let chunk = &mut self.chunks[chunk_index];
         chunk.members.push(id);
-        chunk.estimated_vertices += estimate.vertices;
-        chunk.estimated_indices += estimate.indices;
+        chunk.estimated_instances += estimate;
         chunk.dirty = true;
         // The real fingerprint is stored when the chunk rebuilds.
         self.object_chunk.insert(id, (chunk_index, 0));
@@ -322,13 +314,13 @@ impl StaticStrokeCache {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         document: &Document,
+        slots: &mut DocumentStyleSlots,
         scene_origin: DVec3,
         scale_factor: f32,
         limits: StaticStrokeLimits,
     ) {
         let chunk = &mut self.chunks[chunk_index];
-        chunk.vertices.clear();
-        chunk.indices.clear();
+        chunk.strokes.clear();
         chunk.records.clear();
 
         // Eligible polylines never emit fill geometry; these stay empty.
@@ -344,29 +336,26 @@ impl StaticStrokeCache {
                 continue;
             };
             let rgba = document.object_rgba(object);
-            let stroke_start = chunk.vertices.len() as u32;
-            let stroke_index_start = chunk.indices.len() as u32;
+            let stroke_start = chunk.strokes.len() as u32;
             {
-                let mut draw_ctx = DrawContext {
-                    stroke_vertex_buf: &mut chunk.vertices,
-                    stroke_index_buf: &mut chunk.indices,
-                    fill_vertex_buf: &mut unused_fill_vertices,
-                    fill_index_buf: &mut unused_fill_indices,
-                    scene_origin,
-                    scale_factor,
-                };
+                let mut draw_ctx = DrawContext::unstyled(&mut chunk.strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
+                draw_ctx.style = slots.slot(id);
                 tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, rgba);
             }
-            let stroke_end = chunk.vertices.len() as u32;
+            let stroke_end = chunk.strokes.len() as u32;
             if stroke_end > stroke_start
-                && let Some(world_bounds) =
-                    world_bounds_from_local_positions(chunk.vertices[stroke_start as usize..stroke_end as usize].iter().map(|vertex| vertex.pos), scene_origin)
+                && let Some(world_bounds) = world_bounds_from_local_positions(
+                    chunk.strokes[stroke_start as usize..stroke_end as usize].iter().flat_map(|stroke| {
+                        let (start, end) = stroke.world_ends();
+                        [start, end]
+                    }),
+                    scene_origin,
+                )
             {
                 chunk.records.push(PickRecord {
                     entity: SceneEntityId::Object(id),
                     world_bounds,
                     stroke_range: (stroke_start, stroke_end),
-                    stroke_index_range: (stroke_index_start, chunk.indices.len() as u32),
                     fill_range: (0, 0),
                     fill_index_range: (0, 0),
                     fill_opaque: false,
@@ -376,8 +365,8 @@ impl StaticStrokeCache {
             self.object_chunk.insert(id, (chunk_index, fp));
         }
 
-        chunk.estimated_vertices = chunk.vertices.len();
-        chunk.estimated_indices = chunk.indices.len();
+        chunk.estimated_instances = chunk.strokes.len();
+        chunk.stroke_blocks = StrokeBlocks::build(&chunk.strokes, scene_origin);
         chunk.world_bounds = chunk
             .records
             .iter()
@@ -385,31 +374,17 @@ impl StaticStrokeCache {
             .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)));
         chunk.dirty = false;
 
-        let vertex_uploaded = upload(
+        let uploaded = upload(
             device,
             queue,
-            &mut chunk.vertex_gpu,
-            &mut chunk.vertex_capacity,
-            bytemuck::cast_slice(&chunk.vertices),
+            &mut chunk.instance_gpu,
+            &mut chunk.instance_capacity,
+            bytemuck::cast_slice(&chunk.strokes),
             wgpu::BufferUsages::VERTEX,
-            "Static Stroke Chunk Vertex Buffer",
+            "Static Stroke Chunk Instance Buffer",
             limits.buffer_bytes,
         );
-        let index_uploaded = upload(
-            device,
-            queue,
-            &mut chunk.index_gpu,
-            &mut chunk.index_capacity,
-            bytemuck::cast_slice(&chunk.indices),
-            wgpu::BufferUsages::INDEX,
-            "Static Stroke Chunk Index Buffer",
-            limits.buffer_bytes,
-        );
-        chunk.index_count = if vertex_uploaded && index_uploaded {
-            u32::try_from(chunk.indices.len()).unwrap_or(0)
-        } else {
-            0
-        };
+        chunk.instance_count = if uploaded { u32::try_from(chunk.strokes.len()).unwrap_or(0) } else { 0 };
     }
 }
 

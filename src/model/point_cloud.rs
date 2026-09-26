@@ -184,15 +184,6 @@ impl PreparedPointData {
             Self::Colored(points) => points.get(index).map(|point| point.pos),
         }
     }
-
-    /// The instances behind a coloured layout, which is the only one whose
-    /// colour channel can be restaged.
-    pub(crate) fn colored(&self) -> Option<&[PointInstance]> {
-        match self {
-            Self::Colored(points) => Some(points),
-            Self::Uncolored(_) => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -225,11 +216,6 @@ pub(crate) struct PreparedPointChunk {
     /// Small Morton-coherent ranges used for CPU visibility queries without
     /// scanning an entire 256k-point render chunk on every snap poll.
     pub(crate) pick_groups: Vec<PointPickGroup>,
-    /// Classification codes in the same order as `data`, carried only when the
-    /// colour channel already holds the file's own RGB and so has no room for
-    /// the classification colours - see [`PointColorChannel`]. The renderer
-    /// stages colours from these when the Survey classification view is on.
-    pub(crate) classifications: Option<Vec<u8>>,
 }
 
 /// What a prepared cloud's instance colour channel holds, which decides how the
@@ -238,9 +224,10 @@ pub(crate) struct PreparedPointChunk {
 /// A cloud with classifications but no RGB bakes the classification colours
 /// straight into the channel, because the view it toggles back to is the
 /// cloud's own uniform colour - which the shader applies without touching the
-/// vertex buffer. A cloud that also carries RGB has to keep that in the
-/// channel and stage the classification colours over it, which is the one case
-/// that costs a re-upload.
+/// vertex buffer. A cloud that also carries RGB keeps that in the channel and
+/// its classification code in the otherwise unused alpha byte, which the
+/// shader maps through the class palette while the view is on. Neither
+/// toggle touches the vertex buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PointColorChannel {
     /// No colour channel at all: 12-byte instances drawn in the uniform colour.
@@ -256,9 +243,8 @@ pub(crate) struct PreparedPointCloud {
     pub(crate) chunks: Vec<PreparedPointChunk>,
     pub(crate) colored: bool,
     pub(crate) color_channel: PointColorChannel,
-    /// Whether the chunks carry classification codes to stage colours from.
-    /// Settled here rather than scanned per frame: the renderer asks this of
-    /// every cloud every frame, and the chunk list runs to hundreds.
+    /// Whether the instances' alpha bytes hold classification codes (only
+    /// ever alongside `PointColorChannel::Source`).
     pub(crate) chunk_classifications: bool,
 }
 
@@ -309,22 +295,22 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, class
     // walking chunk-local slices that stay in cache.
     match (colors, classifications) {
         (Some(colors), _) => {
-            let instances = gather_instances(&sorted, |point| PointInstance {
-                pos: (points[point.source_index] - origin).as_vec3().to_array(),
-                color: colors.get(point.source_index).copied().unwrap_or(0xffff_ffff),
-            });
-            // Only worth carrying when both channels exist: with RGB in the
-            // instances there is nowhere else for the codes to live.
-            let codes = classifications.map(|codes| {
-                sorted
-                    .par_iter()
-                    .map(|point| codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED))
-                    .collect::<Vec<u8>>()
+            // Points are drawn opaque, so the alpha byte is free to carry the
+            // classification code the shader colours by in that view.
+            let instances = gather_instances(&sorted, |point| {
+                let color = colors.get(point.source_index).copied().unwrap_or(0xffff_ffff);
+                PointInstance {
+                    pos: (points[point.source_index] - origin).as_vec3().to_array(),
+                    color: match classifications {
+                        Some(codes) => (color & 0x00ff_ffff) | (u32::from(codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED)) << 24),
+                        None => color,
+                    },
+                }
             });
             PreparedPointCloud {
                 origin,
-                chunk_classifications: codes.is_some(),
-                chunks: build_chunks(&sorted, &instances, codes.as_deref(), PreparedPointData::Colored),
+                chunk_classifications: classifications.is_some(),
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Colored),
                 colored: true,
                 color_channel: PointColorChannel::Source,
             }
@@ -336,7 +322,7 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, class
             });
             PreparedPointCloud {
                 origin,
-                chunks: build_chunks(&sorted, &instances, None, PreparedPointData::Colored),
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Colored),
                 colored: true,
                 color_channel: PointColorChannel::Classification,
                 chunk_classifications: false,
@@ -348,7 +334,7 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, class
             });
             PreparedPointCloud {
                 origin,
-                chunks: build_chunks(&sorted, &instances, None, PreparedPointData::Uncolored),
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Uncolored),
                 colored: false,
                 color_channel: PointColorChannel::None,
                 chunk_classifications: false,
@@ -409,27 +395,20 @@ fn gather_instances<T: RenderPoint>(sorted: &[MortonPointIndex], instance: impl 
     sorted.par_iter().map(instance).collect()
 }
 
-fn build_chunks<T: RenderPoint>(sorted: &[MortonPointIndex], instances: &[T], codes: Option<&[u8]>, wrap: fn(Vec<T>) -> PreparedPointData) -> Vec<PreparedPointChunk> {
+fn build_chunks<T: RenderPoint>(sorted: &[MortonPointIndex], instances: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> Vec<PreparedPointChunk> {
     sorted
         .par_chunks(POINTS_PER_SPATIAL_CHUNK)
         .zip(instances.par_chunks(POINTS_PER_SPATIAL_CHUNK))
-        .enumerate()
-        .map(|(index, (keys, chunk))| {
-            let start = index * POINTS_PER_SPATIAL_CHUNK;
-            build_chunk(keys, chunk, codes.map(|codes| &codes[start..start + keys.len()]), wrap)
-        })
+        .map(|(keys, chunk)| build_chunk(keys, chunk, wrap))
         .collect()
 }
 
-fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], codes: Option<&[u8]>, wrap: fn(Vec<T>) -> PreparedPointData) -> PreparedPointChunk {
+fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> PreparedPointChunk {
     // Measured while the chunk is still in Morton order, and by walking it
     // forwards, before the LOD permutation below scrambles it.
     let base_spacing = chunk_base_spacing(chunk);
     let (indices, level_counts) = density_aware_prefix_indices(keys);
     let ordered = indices.iter().map(|&index| chunk[index]).collect::<Vec<_>>();
-    // Permuted alongside the instances so a classification colour staged for
-    // instance `i` is the class of the point drawn at `i`.
-    let classifications = codes.map(|codes| indices.iter().map(|&index| codes[index]).collect::<Vec<u8>>());
     let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(T::pos));
     let chunk_origin = ((bounds_min + bounds_max) * 0.5).as_dvec3();
     let (center, axes, half_extents) = fit_chunk_box(
@@ -453,7 +432,6 @@ fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], codes: Op
         bounds_max,
         bounds,
         pick_groups,
-        classifications,
     }
 }
 

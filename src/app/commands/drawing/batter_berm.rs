@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
+    app::App,
     logging::CommandReportSpec,
     model::{Command, Object, PolyVertex, SceneEntityId},
     ui::state::{ActiveTool, BatterBermMode, BatterBermPreviewKey},
@@ -39,11 +39,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn pick_batter_berm_target(&mut self) {
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         if let Some((SceneEntityId::Object(id), _)) = picked
             && self.activate_project_for_object(id)
             && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. } | Object::Circle { .. }))

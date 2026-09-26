@@ -15,10 +15,13 @@
 //! features do not depend on which tile it fell in.
 
 use anyhow::{Result, ensure};
-use glam::{DVec2, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 use rayon::prelude::*;
 
-use crate::{app::jobs::CancelFlag, model::progress::Phase};
+use crate::{
+    app::jobs::CancelFlag,
+    model::{geometry::symmetric_eigen, progress::Phase},
+};
 
 /// Voxel edge, in metres, at each scale.
 const SCALES: [f64; 4] = [1.0, 2.0, 4.0, 8.0];
@@ -275,7 +278,7 @@ impl Shape {
             [xy / n - mean.x * mean.y, yy / n - mean.y * mean.y, yz / n - mean.y * mean.z],
             [xz / n - mean.x * mean.z, yz / n - mean.y * mean.z, zz / n - mean.z * mean.z],
         ];
-        let (values, vectors) = symmetric_eigen(covariance);
+        let (values, vectors) = symmetric_eigen(DMat3::from_cols_array_2d(&covariance));
         let [largest, middle, smallest] = values.map(|value| value.max(0.0));
         let mut shape = Self {
             mean,
@@ -321,44 +324,4 @@ impl Shape {
             ((self.high - offset.z) / scale) as f32,
         ]
     }
-}
-
-/// Eigenvalues of a symmetric 3x3 matrix, largest first, and their unit
-/// eigenvectors, by cyclic Jacobi rotation.
-fn symmetric_eigen(mut a: [[f64; 3]; 3]) -> ([f64; 3], [DVec3; 3]) {
-    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    for _ in 0..32 {
-        let off = a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
-        let scale = a[0][0].abs() + a[1][1].abs() + a[2][2].abs();
-        if off <= 1e-14 * scale || off == 0.0 {
-            break;
-        }
-        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
-            if a[p][q] == 0.0 {
-                continue;
-            }
-            let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
-            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-            let c = 1.0 / (t * t + 1.0).sqrt();
-            let s = t * c;
-            for row in &mut a {
-                let (kp, kq) = (row[p], row[q]);
-                row[p] = c * kp - s * kq;
-                row[q] = s * kp + c * kq;
-            }
-            for k in 0..3 {
-                let (pk, qk) = (a[p][k], a[q][k]);
-                a[p][k] = c * pk - s * qk;
-                a[q][k] = s * pk + c * qk;
-            }
-            for row in &mut v {
-                let (kp, kq) = (row[p], row[q]);
-                row[p] = c * kp - s * kq;
-                row[q] = s * kp + c * kq;
-            }
-        }
-    }
-    let mut order = [0, 1, 2];
-    order.sort_by(|&i, &j| a[j][j].total_cmp(&a[i][i]));
-    (order.map(|i| a[i][i]), order.map(|i| DVec3::new(v[0][i], v[1][i], v[2][i])))
 }

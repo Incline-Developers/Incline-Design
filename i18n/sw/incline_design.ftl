@@ -90,8 +90,8 @@ tri-create-run = Tatua (Triangulate)
 
 tri-selection-selected = { $summary } vimechaguliwa
 
-tri-type-open-surface = Uso wazi
-tri-type-solid-closed = Kigumu – kimefungwa kabisa
+tri-type-open-surface = Uso
+tri-type-solid-closed = Kigumu
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". Each noun is pluralised
 # by its own count so languages with more than two plural forms read correctly.
@@ -1210,7 +1210,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Jenga u
 literal-restore-the-full-model-range-23c0898e378be1df = Rejesha wigo kamili wa mfano
 literal-axis-minimum-8a51a7bda9747700 = kima cha chini cha %axis%
 literal-axis-maximum-fa149d72f9564fca = kima cha juu cha %axis%
-literal-name-no-range-4f328990327afd0b = %name% (hakuna wigo)
 literal-choose-a-variable-62b267fd35bdce31 = Chagua kigezo
 literal-no-usable-range-6bd2da592be04b0c = (hakuna wigo unaotumika)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Hariri rangi inayotumika kwa thamani tupu

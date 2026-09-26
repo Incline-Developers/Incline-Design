@@ -1,7 +1,7 @@
 use glam::DVec3;
 
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
+    app::App,
     i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
@@ -36,11 +36,7 @@ impl<'a> App<'a> {
 
     /// Phase 0 pick: user clicked the source line while no dialog was open.
     fn pick_relimit_source(&mut self) {
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         if let Some((SceneEntityId::Object(id), _)) = picked
             && matches!(self.active_document().get_object(id), Some(Object::Polyline { closed: false, .. }))
         {
@@ -74,11 +70,7 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!(literal = "Relimit: click ignored, tool is not currently waiting for a target pick"));
             return;
         }
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(second_id), _)) = picked else {
             userspace_warn!("{}", tr!(literal = "Relimit: click did not hit any object (nothing under cursor)"));
             return;
@@ -140,15 +132,7 @@ impl<'a> App<'a> {
 
     /// Highlight the object that the current Relimit pick phase would accept.
     pub(crate) fn update_relimit_hover_line(&mut self) {
-        let picked = self.graphics.as_ref().and_then(|graphics| {
-            graphics.pick_at_cursor(
-                PICK_THRESHOLD_PX,
-                &self.triangulations,
-                &self.editor.hidden_handles,
-                &self.editor.frozen_handles,
-                self.editor.xray_enabled,
-            )
-        });
+        let picked = self.pick_under_cursor();
         let candidate = picked.and_then(|(entity, _)| match entity {
             SceneEntityId::Object(id)
                 if self.editor.relimit_awaiting_source_pick && matches!(self.active_document().get_object(id), Some(Object::Polyline { closed: false, .. })) =>

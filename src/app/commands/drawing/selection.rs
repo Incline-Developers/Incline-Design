@@ -53,11 +53,7 @@ impl<'a> App<'a> {
         if self.delete_polyline_vertex_at_cursor() {
             return;
         }
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(object_id), world)) = picked else {
             return;
         };
@@ -106,21 +102,10 @@ impl<'a> App<'a> {
     }
 
     fn pick_hovered_object(&self) -> Option<ObjectId> {
-        self.graphics
-            .as_ref()
-            .and_then(|graphics| {
-                graphics.pick_at_cursor(
-                    PICK_THRESHOLD_PX,
-                    &self.triangulations,
-                    &self.editor.hidden_handles,
-                    &self.editor.frozen_handles,
-                    self.editor.xray_enabled,
-                )
-            })
-            .and_then(|(entity, _)| match entity {
-                SceneEntityId::Object(object_id) => Some(object_id),
-                _ => None,
-            })
+        self.pick_under_cursor().and_then(|(entity, _)| match entity {
+            SceneEntityId::Object(object_id) => Some(object_id),
+            _ => None,
+        })
     }
 
     fn delete_polyline_vertex_at_cursor(&mut self) -> bool {

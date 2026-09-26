@@ -214,128 +214,7 @@ impl<'a> App<'a> {
             project.lossy_save_confirmed = false;
         }
 
-        let mut raster_id_map = std::collections::HashMap::new();
-        for imported in rasters {
-            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_raster_texture_id, self.raster_textures.iter().map(|item| item.id.0));
-            let preferred_id = imported.preferred_id;
-            let source_name = imported.source_name;
-            let source_format = imported.source_format;
-            let folder = project::merged_folder(&folder_map, imported.folder);
-            self.add_loaded_raster(imported.loaded);
-            if let Some(open) = self.raster_textures.last_mut() {
-                open.id = crate::model::raster::RasterTextureId(target_id);
-                open.state.set_provenance(source_name, source_format);
-                open.state = open
-                    .state
-                    .clone()
-                    .with_loaded(imported.is_loaded)
-                    .with_deferred(imported.deferred)
-                    .with_section(imported.section)
-                    .with_folder(folder);
-                open.state.payload_source = PayloadSource::for_raster(imported.payload_source, open);
-            }
-            if let Some(preferred_id) = preferred_id {
-                raster_id_map.insert(preferred_id, crate::model::raster::RasterTextureId(target_id));
-            }
-        }
-
-        for imported in triangulations {
-            let preferred_id = imported.preferred_id;
-            let source_name = imported.source_name;
-            let source_format = imported.source_format;
-            let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
-            let folder = project::merged_folder(&folder_map, imported.folder);
-            let LoadedTriangulation {
-                mut name,
-                path: _,
-                mesh,
-                spatial,
-                edges,
-                surface_face_order,
-            } = imported.loaded;
-            name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
-            let id = TriangulationId(allocate_item_id(
-                preferred_id,
-                &mut self.next_triangulation_id,
-                self.triangulations.iter().map(|item| item.id.0),
-            ));
-            self.triangulations.push(OpenTriangulation {
-                id,
-                state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::Triangulation, source_name, source_format)
-                    .with_loaded(imported.is_loaded)
-                    .with_deferred(imported.deferred)
-                    .with_section(imported.section)
-                    .with_folder(folder),
-                name,
-                mesh,
-                spatial,
-                edges,
-                surface_face_order,
-                color: imported.color,
-                line_color: imported.line_color,
-                line_weight: imported.line_weight,
-                raster_texture,
-                raster_opacity: imported.raster_opacity,
-            });
-            if let Some(open) = self.triangulations.last_mut() {
-                open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
-            }
-            self.touch_active_project_content();
-            if imported.is_loaded {
-                self.active_triangulation.get_or_insert(id);
-            }
-        }
-        for imported in block_models {
-            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0));
-            let folder = project::merged_folder(&folder_map, imported.folder);
-            self.add_loaded_block_model(imported.loaded);
-            if let Some(open) = self.block_models.last_mut() {
-                open.id = crate::model::block_model::BlockModelId(target_id);
-                open.state.set_provenance(imported.source_name, imported.source_format);
-                open.state = open
-                    .state
-                    .clone()
-                    .with_loaded(imported.is_loaded)
-                    .with_deferred(imported.deferred)
-                    .with_section(imported.section)
-                    .with_folder(folder);
-                open.color = imported.color;
-                open.slice = imported.slice;
-                if !open.state.loaded {
-                    open.color_transfers.clear();
-                }
-                open.color_transfers.extend(imported.color_transfers);
-                open.hide_empty_color_values = imported.hide_empty_color_values;
-            }
-        }
-        for imported in drill_holes {
-            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0));
-            let folder = project::merged_folder(&folder_map, imported.folder);
-            self.add_loaded_drill_holes(imported.loaded);
-            if let Some(open) = self.drill_holes.last_mut() {
-                open.id = crate::model::drill_hole::DrillHoleId(target_id);
-                open.state.set_provenance(imported.source_name, imported.source_format);
-                open.state = open
-                    .state
-                    .clone()
-                    .with_loaded(imported.is_loaded)
-                    .with_deferred(imported.deferred)
-                    .with_section(imported.section)
-                    .with_folder(folder);
-                open.color = imported.color;
-            }
-        }
-        for imported in point_clouds {
-            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0));
-            let folder = project::merged_folder(&folder_map, imported.folder);
-            self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);
-            if let Some(open) = self.point_clouds.last_mut() {
-                open.id = crate::model::point_cloud::PointCloudId(target_id);
-                open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
-                open.state.set_provenance(imported.source_name, imported.source_format);
-                open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
-            }
-        }
+        self.install_bundle_items(BundleIds::Preserve, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
 
         // Every membership above came from `folder_map`, so it already
         // resolves in the project's (just-installed) folder registry; no
@@ -531,121 +410,7 @@ impl<'a> App<'a> {
                 }
             }
 
-            // Install rasters first so triangulation drape relationships can
-            // be remapped from source IDs to newly allocated destination IDs.
-            let mut raster_id_map = std::collections::HashMap::new();
-            for mut raster in rasters {
-                let preferred_id = raster.preferred_id;
-                let visible = raster.is_loaded;
-                let deferred = raster.deferred;
-                let section = raster.section;
-                let folder = project::merged_folder(&folder_map, raster.folder);
-                raster.loaded.name = project::unique_item_name(raster.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
-                self.add_loaded_raster(raster.loaded);
-                if let Some(open) = self.raster_textures.last_mut() {
-                    open.state.set_provenance(raster.source_name, raster.source_format);
-                    open.state = open.state.clone().with_loaded(visible).with_deferred(deferred).with_section(section).with_folder(folder);
-                    open.state.payload_source = PayloadSource::for_raster(raster.payload_source, open);
-                    if let Some(preferred_id) = preferred_id {
-                        raster_id_map.insert(preferred_id, open.id);
-                    }
-                }
-            }
-
-            for imported in triangulations {
-                let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
-                let folder = project::merged_folder(&folder_map, imported.folder);
-                let LoadedTriangulation {
-                    mut name,
-                    path: _,
-                    mesh,
-                    spatial,
-                    edges,
-                    surface_face_order,
-                } = imported.loaded;
-                name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
-                let id = TriangulationId(self.next_triangulation_id);
-                self.next_triangulation_id += 1;
-                self.triangulations.push(OpenTriangulation {
-                    id,
-                    state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::Triangulation, imported.source_name, imported.source_format)
-                        .with_loaded(imported.is_loaded)
-                        .with_deferred(imported.deferred)
-                        .with_section(imported.section)
-                        .with_folder(folder),
-                    name,
-                    mesh,
-                    spatial,
-                    edges,
-                    surface_face_order,
-                    color: imported.color,
-                    line_color: imported.line_color,
-                    line_weight: imported.line_weight,
-                    raster_texture,
-                    raster_opacity: imported.raster_opacity,
-                });
-                if let Some(open) = self.triangulations.last_mut() {
-                    open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
-                }
-                self.touch_active_project_content();
-                if self.active_triangulation.is_none() {
-                    self.active_triangulation = Some(id);
-                }
-            }
-
-            for imported in block_models {
-                let mut loaded = imported.loaded;
-                let folder = project::merged_folder(&folder_map, imported.folder);
-                loaded.name = project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
-                self.add_loaded_block_model(loaded);
-                if let Some(open) = self.block_models.last_mut() {
-                    open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.state = open
-                        .state
-                        .clone()
-                        .with_loaded(imported.is_loaded)
-                        .with_deferred(imported.deferred)
-                        .with_section(imported.section)
-                        .with_folder(folder);
-                    open.color = imported.color;
-                    open.slice = imported.slice;
-                    if !open.state.loaded {
-                        open.color_transfers.clear();
-                    }
-                    open.color_transfers.extend(imported.color_transfers);
-                    open.hide_empty_color_values = imported.hide_empty_color_values;
-                }
-            }
-            for imported in drill_holes {
-                let mut loaded = imported.loaded;
-                let folder = project::merged_folder(&folder_map, imported.folder);
-                loaded.name = project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
-                self.add_loaded_drill_holes(loaded);
-                if let Some(open) = self.drill_holes.last_mut() {
-                    open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.state = open
-                        .state
-                        .clone()
-                        .with_loaded(imported.is_loaded)
-                        .with_deferred(imported.deferred)
-                        .with_section(imported.section)
-                        .with_folder(folder);
-                    open.color = imported.color;
-                }
-            }
-            for imported in point_clouds {
-                let mut loaded = imported.loaded;
-                let folder = project::merged_folder(&folder_map, imported.folder);
-                loaded.name = project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
-                self.add_loaded_point_cloud(loaded, imported.is_loaded, imported.color, imported.point_size);
-                if let Some(open) = self.point_clouds.last_mut() {
-                    open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
-                }
-                if let Some(open) = self.point_clouds.last_mut() {
-                    open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
-                }
-            }
+            self.install_bundle_items(BundleIds::Fresh, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
             imported_items += count;
             userspace_log!(
                 "{}",
@@ -664,6 +429,166 @@ impl<'a> App<'a> {
                 self.fit_view_to_extents();
             }
             self.persist_session();
+        }
+    }
+
+    /// Install a bundle's items into the active project, their folders
+    /// resolved through `folder_map`.
+    #[allow(clippy::too_many_arguments)]
+    fn install_bundle_items(
+        &mut self,
+        ids: BundleIds,
+        folder_map: &std::collections::HashMap<FolderId, FolderId>,
+        rasters: Vec<omf::ImportedRaster>,
+        triangulations: Vec<omf::ImportedTriangulation>,
+        block_models: Vec<omf::ImportedBlockModel>,
+        drill_holes: Vec<omf::ImportedDrillHoles>,
+        point_clouds: Vec<omf::ImportedPointCloud>,
+    ) {
+        let fresh = ids == BundleIds::Fresh;
+        let preferred = |id: Option<u64>| if fresh { None } else { id };
+
+        // Rasters first, so triangulation drapes can be remapped from the
+        // file's raster ids to the ones installed here.
+        let mut raster_id_map = std::collections::HashMap::new();
+        for mut imported in rasters {
+            let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_raster_texture_id, self.raster_textures.iter().map(|item| item.id.0)));
+            if fresh {
+                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
+            }
+            let folder = project::merged_folder(folder_map, imported.folder);
+            self.add_loaded_raster(imported.loaded);
+            if let Some(open) = self.raster_textures.last_mut() {
+                if let Some(id) = kept_id {
+                    open.id = crate::model::raster::RasterTextureId(id);
+                }
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
+                open.state.payload_source = PayloadSource::for_raster(imported.payload_source, open);
+                if let Some(preferred_id) = imported.preferred_id {
+                    raster_id_map.insert(preferred_id, open.id);
+                }
+            }
+        }
+
+        for imported in triangulations {
+            let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
+            let folder = project::merged_folder(folder_map, imported.folder);
+            let LoadedTriangulation {
+                mut name,
+                path: _,
+                mesh,
+                spatial,
+                edges,
+                surface_face_order,
+            } = imported.loaded;
+            name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
+            let id = TriangulationId(allocate_item_id(
+                preferred(imported.preferred_id),
+                &mut self.next_triangulation_id,
+                self.triangulations.iter().map(|item| item.id.0),
+            ));
+            self.triangulations.push(OpenTriangulation {
+                id,
+                state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::Triangulation, imported.source_name, imported.source_format)
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder),
+                name,
+                mesh,
+                spatial,
+                edges,
+                surface_face_order,
+                color: imported.color,
+                line_color: imported.line_color,
+                line_weight: imported.line_weight,
+                raster_texture,
+                raster_opacity: imported.raster_opacity,
+            });
+            if let Some(open) = self.triangulations.last_mut() {
+                open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
+            }
+            self.touch_active_project_content();
+            // Only a surface that is on show can be the one tools act on.
+            if imported.is_loaded {
+                self.active_triangulation.get_or_insert(id);
+            }
+        }
+
+        for mut imported in block_models {
+            let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0)));
+            if fresh {
+                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
+            }
+            let folder = project::merged_folder(folder_map, imported.folder);
+            self.add_loaded_block_model(imported.loaded);
+            if let Some(open) = self.block_models.last_mut() {
+                if let Some(id) = kept_id {
+                    open.id = crate::model::block_model::BlockModelId(id);
+                }
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
+                open.color = imported.color;
+                open.slice = imported.slice;
+                if !open.state.loaded {
+                    open.color_transfers.clear();
+                }
+                open.color_transfers.extend(imported.color_transfers);
+                open.hide_empty_color_values = imported.hide_empty_color_values;
+            }
+        }
+
+        for mut imported in drill_holes {
+            let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0)));
+            if fresh {
+                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
+            }
+            let folder = project::merged_folder(folder_map, imported.folder);
+            self.add_loaded_drill_holes(imported.loaded);
+            if let Some(open) = self.drill_holes.last_mut() {
+                if let Some(id) = kept_id {
+                    open.id = crate::model::drill_hole::DrillHoleId(id);
+                }
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.state = open
+                    .state
+                    .clone()
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred)
+                    .with_section(imported.section)
+                    .with_folder(folder);
+                open.color = imported.color;
+            }
+        }
+
+        for mut imported in point_clouds {
+            let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0)));
+            if fresh {
+                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+            }
+            let folder = project::merged_folder(folder_map, imported.folder);
+            self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);
+            if let Some(open) = self.point_clouds.last_mut() {
+                if let Some(id) = kept_id {
+                    open.id = crate::model::point_cloud::PointCloudId(id);
+                }
+                open.state = open.state.clone().with_deferred(imported.deferred).with_section(imported.section).with_folder(folder);
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
+            }
         }
     }
 
@@ -732,6 +657,17 @@ impl<'a> App<'a> {
             },
         );
     }
+}
+
+/// How items installed from an OMF bundle are identified.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BundleIds {
+    /// Opening a project: items keep the ids the file gave them wherever
+    /// those are free, so saved references between them still resolve.
+    Preserve,
+    /// Merging into a project: every item gets a fresh id and a name distinct
+    /// from what is already open.
+    Fresh,
 }
 
 fn allocate_item_id(preferred: Option<u64>, next: &mut u64, used: impl Iterator<Item = u64>) -> u64 {

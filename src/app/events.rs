@@ -377,7 +377,7 @@ impl<'a> App<'a> {
                                 if self.editor.active_tool != ActiveTool::FuseIntoPolyline
                                     && (self.editor.fuse_awaiting_endpoint.is_some() || !self.editor.fuse_segments.is_empty())
                                 {
-                                    self.cancel_fuse();
+                                    self.reset_fuse();
                                 }
                                 // Auto-initiate fuse from an existing selection when the fuse
                                 // tool is first activated with exactly one selected line/polyline.
@@ -1388,7 +1388,7 @@ impl<'a> App<'a> {
                 {
                     self.cancel_relimit();
                 } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
-                    self.cancel_fuse();
+                    self.reset_fuse();
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
@@ -1431,15 +1431,7 @@ impl<'a> App<'a> {
                 self.toggle_rotation_centre();
             }
             KeyCode::Backquote => {
-                let picked = self.graphics.as_ref().and_then(|graphics| {
-                    graphics.pick_at_cursor(
-                        crate::app::PICK_THRESHOLD_PX,
-                        &self.triangulations,
-                        &self.editor.hidden_handles,
-                        &self.editor.frozen_handles,
-                        self.editor.xray_enabled,
-                    )
-                });
+                let picked = self.pick_under_cursor();
                 if let Some((_handle, world)) = picked
                     && world.z.is_finite()
                 {
@@ -1511,7 +1503,7 @@ impl<'a> App<'a> {
         } else if self.editor.relimit_confirming_end || self.editor.relimit_waiting_for_pick || self.editor.relimit_awaiting_source_pick || self.editor.relimit_dialog_open {
             self.cancel_relimit();
         } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
-            self.cancel_fuse();
+            self.reset_fuse();
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();

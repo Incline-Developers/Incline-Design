@@ -306,12 +306,17 @@ impl<'a> App<'a> {
     }
     /// Apply the result of a background job that produces one triangulation
     /// with a single completion log line: log + insert on success, warn on
-    /// failure. Shared by the backgrounded cut/create paths.
-    pub(crate) fn apply_generated_triangulation_job(&mut self, result: Result<crate::model::triangulation::GeneratedTriangulationLog>) {
+    /// failure. Shared by the backgrounded cut/create paths. `unload` names
+    /// the sources the result replaces; they are unloaded only on success,
+    /// once the job has finished and closing them can no longer cancel it.
+    pub(crate) fn apply_generated_triangulation_job(&mut self, result: Result<crate::model::triangulation::GeneratedTriangulationLog>, unload: &[TriangulationId]) {
         match result {
             Ok(log) => {
                 userspace_log!("{}", log.message);
                 self.insert_generated_triangulation(log.generated);
+                for &id in unload {
+                    self.close_triangulation(id);
+                }
             }
             Err(err) => {
                 let message = format!("{err:#}");

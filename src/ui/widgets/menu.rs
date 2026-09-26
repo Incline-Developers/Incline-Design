@@ -475,7 +475,6 @@ impl<'open> DragableMenu<'open> {
 /// No divider under it. The whole card is the drag target, so the bar does not
 /// have to announce itself as one; the tint alone sets the title apart.
 fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::Rect, surface: egui::Color32, show_close_button: bool, close_clicked: &mut bool) {
-    let dark_mode = ui.visuals().dark_mode;
     ui.painter().rect_filled(
         rect,
         egui::CornerRadius {
@@ -484,31 +483,39 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
             sw: 0,
             se: 0,
         },
-        title_bar_fill(surface, dark_mode),
+        title_bar_fill(surface, ui.visuals().dark_mode),
     );
 
     paint_title_text(ui, &title, rect, show_close_button);
 
-    if show_close_button {
-        let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-        let response = ui.interact(close_rect, ui.id().with("close"), egui::Sense::click());
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
-        }
-        let color = if response.hovered() {
-            ui.visuals().text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let stroke = egui::Stroke::new(1.3, color);
-        let icon_rect = close_rect.shrink(6.0);
-        ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
-        ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
-        if response.clicked() {
-            *close_clicked = true;
-        }
+    if show_close_button && title_bar_close_button(ui, rect, surface) {
+        *close_clicked = true;
     }
+}
+
+/// The close cross in the right-hand slot of a title bar `rect`, for cards
+/// that paint their own bar. Returns whether it was clicked.
+pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
+    let dark_mode = ui.visuals().dark_mode;
+    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
+    let response = ui
+        .interact(close_rect, ui.id().with("close"), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr!(literal = "Close"));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
+    }
+    let color = if response.hovered() {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let stroke = egui::Stroke::new(1.3, color);
+    let icon_rect = close_rect.shrink(6.0);
+    ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
+    ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
+    response.clicked()
 }
 
 /// How much weight a [`MenuButton`] carries in its row.

@@ -1,6 +1,6 @@
 //! Double-precision geometry shared by import, editing and scene preparation.
 
-use glam::{DMat4, DQuat, DVec2, DVec3};
+use glam::{DMat3, DMat4, DQuat, DVec2, DVec3};
 
 use crate::model::PolyVertex;
 
@@ -876,4 +876,46 @@ fn compute_offset_centroid(verts: &[DVec3], closed: bool, signed_dist: f64) -> D
     }
     let sum: DVec2 = offset.iter().map(|v| v.truncate()).sum();
     sum / offset.len() as f64
+}
+
+/// Eigenvalues of a symmetric 3x3 matrix, largest first, and their unit
+/// eigenvectors, by cyclic Jacobi rotation.
+pub(crate) fn symmetric_eigen(matrix: DMat3) -> ([f64; 3], [DVec3; 3]) {
+    // Symmetric, so the column-major array reads the same as row-major.
+    let mut a = matrix.to_cols_array_2d();
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for _ in 0..32 {
+        let off = a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
+        let scale = a[0][0].abs() + a[1][1].abs() + a[2][2].abs();
+        if off <= 1e-14 * scale || off == 0.0 {
+            break;
+        }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if a[p][q] == 0.0 {
+                continue;
+            }
+            let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            let s = t * c;
+            for row in &mut a {
+                let (kp, kq) = (row[p], row[q]);
+                row[p] = c * kp - s * kq;
+                row[q] = s * kp + c * kq;
+            }
+            for k in 0..3 {
+                let (pk, qk) = (a[p][k], a[q][k]);
+                a[p][k] = c * pk - s * qk;
+                a[q][k] = s * pk + c * qk;
+            }
+            for row in &mut v {
+                let (kp, kq) = (row[p], row[q]);
+                row[p] = c * kp - s * kq;
+                row[q] = s * kp + c * kq;
+            }
+        }
+    }
+    let mut order = [0, 1, 2];
+    order.sort_by(|&i, &j| a[j][j].total_cmp(&a[i][i]));
+    (order.map(|i| a[i][i]), order.map(|i| DVec3::new(v[0][i], v[1][i], v[2][i])))
 }

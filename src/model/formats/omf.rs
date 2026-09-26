@@ -27,7 +27,7 @@ use crate::{
         Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
-            opaque_irregular_surface_block_count, opaque_surface_block_count,
+            compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
         drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset},
         formats::{
@@ -967,15 +967,9 @@ fn number_range_bounds(range: &omf_crate::NumberRange) -> (f64, f64) {
     match range {
         omf_crate::NumberRange::Float { min, max } => (*min, *max),
         omf_crate::NumberRange::Integer { min, max } => (*min as f64, *max as f64),
-        omf_crate::NumberRange::Date { min, max } => (date_to_f64(*min), date_to_f64(*max)),
+        omf_crate::NumberRange::Date { min, max } => (omf_crate::date_time::date_to_f64(*min), omf_crate::date_time::date_to_f64(*max)),
         omf_crate::NumberRange::DateTime { min, max } => (min.timestamp() as f64, max.timestamp() as f64),
     }
-}
-
-/// Days since the 1970-01-01 epoch, the numeric form OMF defines for dates.
-fn date_to_f64(date: chrono::NaiveDate) -> f64 {
-    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch is a valid date"))
-        .num_days() as f64
 }
 
 fn read_boundaries<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, array: &omf_crate::Array<omf_crate::array_type::Boundary>) -> Result<Vec<Boundary>> {
@@ -2859,7 +2853,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             || opaque_irregular_surface_block_count(&blocks, &renderable),
             |grid| opaque_surface_block_count(&blocks, &renderable, grid),
         );
-        let world_bounds = block_world_bounds(&model, &blocks, &renderable);
+        let world_bounds = compute_world_bounds(&model, &blocks, &renderable);
         let style = element.metadata.get(META_STYLE);
         let active_color_variable = style_value::<Option<String>>(style, "active_color_variable")
             .flatten()
@@ -3498,24 +3492,6 @@ fn subblock_bounds(parent: [u32; 3], corners: [f64; 6], edges: &[Vec<f64>; 3]) -
         lower: DVec3::from_array(lower),
         upper: DVec3::from_array(upper),
     })
-}
-
-fn block_world_bounds(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices) -> Option<(DVec3, DVec3)> {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for index in renderable.iter() {
-        let block = blocks.get(index)?;
-        for x in [block.lower.x, block.upper.x] {
-            for y in [block.lower.y, block.upper.y] {
-                for z in [block.lower.z, block.upper.z] {
-                    let point = model.local_to_world(DVec3::new(x, y, z));
-                    min = min.min(point);
-                    max = max.max(point);
-                }
-            }
-        }
-    }
-    (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
 fn line_strings(vertices: &[DVec3], segments: &[[u32; 2]]) -> Vec<(Vec<DVec3>, bool)> {

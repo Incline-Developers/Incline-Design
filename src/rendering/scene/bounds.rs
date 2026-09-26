@@ -6,7 +6,7 @@ use crate::model::{
     Document, Object, SceneEntityId,
     block_model::OpenBlockModel,
     drill_hole::OpenDrillHoleDataset,
-    geometry::{polyline_bulge_bounds, text_bounds_corners},
+    geometry::{polyline_bulge_bounds, symmetric_eigen, text_bounds_corners},
     point_cloud::OpenPointCloud,
     triangulation::OpenTriangulation,
 };
@@ -186,10 +186,7 @@ pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, e
         let offset = *point - mean;
         covariance += DMat3::from_cols(offset * offset.x, offset * offset.y, offset * offset.z);
     }
-    let weakest = symmetric_eigenvectors(covariance)
-        .into_iter()
-        .min_by(|a, b| a.dot(covariance * *a).total_cmp(&b.dot(covariance * *b)))
-        .unwrap_or(DVec3::Z);
+    let weakest = symmetric_eigen(covariance).1[2];
 
     // Smallest-volume `[u, v, normal]` over the candidates.
     let mut best: Option<(f64, [DVec3; 3])> = None;
@@ -244,37 +241,4 @@ pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, e
     let center_local = (min + max) * 0.5;
     let center = chunk_origin + axes[0] * center_local.x + axes[1] * center_local.y + axes[2] * center_local.z;
     (center, axes.map(|axis| axis.as_vec3()), half_extents.as_vec3())
-}
-
-/// Orthonormal eigenvectors of a symmetric 3x3 matrix by cyclic Jacobi
-/// rotations: each rotation zeroes one off-diagonal entry, and a handful of
-/// sweeps drives all three to rounding noise.
-fn symmetric_eigenvectors(matrix: DMat3) -> [DVec3; 3] {
-    let mut a = matrix;
-    let mut vectors = DMat3::IDENTITY;
-    let scale = a.x_axis.x.abs() + a.y_axis.y.abs() + a.z_axis.z.abs();
-    for _ in 0..16 {
-        let off_diagonal = a.y_axis.x.powi(2) + a.z_axis.x.powi(2) + a.z_axis.y.powi(2);
-        if off_diagonal <= (scale * 1e-12).powi(2) {
-            break;
-        }
-        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
-            let apq = a.col(q)[p];
-            if apq.abs() <= f64::MIN_POSITIVE {
-                continue;
-            }
-            let theta = (a.col(q)[q] - a.col(p)[p]) / (2.0 * apq);
-            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-            let c = 1.0 / (t * t + 1.0).sqrt();
-            let s = t * c;
-            let mut rotation = DMat3::IDENTITY;
-            rotation.col_mut(p)[p] = c;
-            rotation.col_mut(q)[q] = c;
-            rotation.col_mut(q)[p] = s;
-            rotation.col_mut(p)[q] = -s;
-            a = rotation.transpose() * a * rotation;
-            vectors *= rotation;
-        }
-    }
-    [vectors.x_axis.normalize(), vectors.y_axis.normalize(), vectors.z_axis.normalize()]
 }

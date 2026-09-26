@@ -98,8 +98,8 @@ tri-create-run = Tạo lưới tam giác
 
 tri-selection-selected = Đã chọn { $summary }
 
-tri-type-open-surface = Mặt hở
-tri-type-solid-closed = Khối đặc – khép kín hoàn toàn
+tri-type-open-surface = Mặt
+tri-type-solid-closed = Khối đặc
 
 # Các thành phần tóm tắt lựa chọn, ví dụ: "3 đường đa tuyến, 1 điểm".
 tri-count-polylines =
@@ -1212,7 +1212,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Xây d�
 literal-restore-the-full-model-range-23c0898e378be1df = Khôi phục toàn bộ khoảng mô hình
 literal-axis-minimum-8a51a7bda9747700 = %axis% tối thiểu
 literal-axis-maximum-fa149d72f9564fca = %axis% tối đa
-literal-name-no-range-4f328990327afd0b = %name% (không có khoảng)
 literal-choose-a-variable-62b267fd35bdce31 = Chọn một biến
 literal-no-usable-range-6bd2da592be04b0c = (không có khoảng sử dụng được)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Sửa màu dùng cho giá trị trống
