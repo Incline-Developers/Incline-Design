@@ -98,6 +98,49 @@ pub(crate) fn curve_kind(role: &CsvDrillColumnRole) -> Option<LogKind> {
     }
 }
 
+/// Order file names as a person would: a run of digits compares as a
+/// number, so `_2` sorts before `_10`, the rest ignoring case. Names equal
+/// that way fall back to a plain compare, so the order is total.
+pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let mut ai = a.chars().peekable();
+    let mut bi = b.chars().peekable();
+    loop {
+        let (ca, cb) = match (ai.peek(), bi.peek()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(&ca), Some(&cb)) => (ca, cb),
+        };
+        if ca.is_ascii_digit() && cb.is_ascii_digit() {
+            match digit_run(&mut ai).cmp(&digit_run(&mut bi)) {
+                Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        match ca.to_ascii_lowercase().cmp(&cb.to_ascii_lowercase()) {
+            Ordering::Equal => {
+                ai.next();
+                bi.next();
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Take the run of digits `chars` is on, without leading zeros, as its
+/// length and then its digits, which compare as the number does.
+fn digit_run(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> (usize, String) {
+    let mut digits = String::new();
+    while let Some(&c) = chars.peek().filter(|c| c.is_ascii_digit()) {
+        digits.push(c);
+        chars.next();
+    }
+    let trimmed = digits.trim_start_matches('0');
+    (trimmed.len(), trimmed.to_owned())
+}
+
 /// A linked file's index, and what reading it through found.
 pub(crate) struct IndexedFile {
     pub(crate) file: LinkedFile,

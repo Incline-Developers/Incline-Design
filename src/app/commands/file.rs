@@ -142,13 +142,13 @@ pub(crate) enum FileDialogAction {
     ImportRaster(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     SetImportSourcePaths { kind: DataMenu, paths: Vec<PathBuf> },
-    /// Link the geophysics CSV at `path` to a drillhole dataset.
+    /// Link the geophysics CSVs at `paths` to a drillhole dataset.
     #[cfg(not(target_arch = "wasm32"))]
-    LinkGeophysics { dataset: DrillHoleId, path: PathBuf },
-    /// Link a picked geophysics CSV to a drillhole dataset, or give a saved
-    /// link its file again this session.
+    LinkGeophysics { dataset: DrillHoleId, paths: Vec<PathBuf> },
+    /// Link picked geophysics CSVs to a drillhole dataset, or give a saved
+    /// link its files again this session.
     #[cfg(target_arch = "wasm32")]
-    WebLinkGeophysics { dataset: DrillHoleId, file: web_sys::File },
+    WebLinkGeophysics { dataset: DrillHoleId, files: Vec<web_sys::File> },
     #[cfg(target_arch = "wasm32")]
     WebSetImportSourceFiles {
         kind: DataMenu,
@@ -582,13 +582,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::LinkGeophysics { dataset, path } => {
-                self.link_geophysics_path(dataset, path);
+            FileDialogAction::LinkGeophysics { dataset, paths } => {
+                self.link_geophysics_paths(dataset, paths);
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebLinkGeophysics { dataset, file } => {
-                self.link_geophysics_file(dataset, file);
+            FileDialogAction::WebLinkGeophysics { dataset, files } => {
+                self.link_geophysics_files(dataset, files);
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1558,8 +1558,8 @@ impl<'a> App<'a> {
         });
     }
 
-    /// Ask for a geophysics file to link to a dataset, replacing any link
-    /// it has.
+    /// Ask for geophysics files to link to a dataset, replacing any link it
+    /// has. Several are linked in name order, `_2` before `_10`.
     pub(crate) fn choose_geophysics_file(&mut self, id: DrillHoleId) {
         if self.known_holes(id).is_none() {
             userspace_warn!("{}", tr!(literal = "Load the drillhole dataset before linking geophysics to it"));
@@ -1568,19 +1568,27 @@ impl<'a> App<'a> {
         let filter = tr!(literal = "Downhole geophysics CSV");
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
-            let file = AsyncFileDialog::new().add_filter(filter, &["csv"]).pick_file().await?;
-            Some(FileDialogAction::LinkGeophysics {
-                dataset: id,
-                path: file.path().to_owned(),
-            })
+            let mut paths: Vec<PathBuf> = AsyncFileDialog::new()
+                .add_filter(filter, &["csv"])
+                .pick_files()
+                .await?
+                .into_iter()
+                .map(FileHandleExt::into_path)
+                .collect();
+            paths.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&file_name(a), &file_name(b)));
+            Some(FileDialogAction::LinkGeophysics { dataset: id, paths })
         });
         #[cfg(target_arch = "wasm32")]
         self.spawn_file_dialog(async move {
-            let file = AsyncFileDialog::new().add_filter(filter, &["csv"]).pick_file().await?;
-            Some(FileDialogAction::WebLinkGeophysics {
-                dataset: id,
-                file: file.inner().clone(),
-            })
+            let mut files: Vec<web_sys::File> = AsyncFileDialog::new()
+                .add_filter(filter, &["csv"])
+                .pick_files()
+                .await?
+                .into_iter()
+                .map(|handle| handle.inner().clone())
+                .collect();
+            files.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&a.name(), &b.name()));
+            Some(FileDialogAction::WebLinkGeophysics { dataset: id, files })
         });
     }
 

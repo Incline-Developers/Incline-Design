@@ -55,33 +55,55 @@ impl<'a> App<'a> {
         }
     }
 
-    /// A file picked for a dataset (from the dataset menu or the
-    /// inspector's "Pick" button): identify it on the page thread, then
-    /// either hold it for an already-known link or index it as a new one.
-    pub(crate) fn link_geophysics_file(&mut self, id: DrillHoleId, file: web_sys::File) {
+    /// Files picked for a dataset (from the dataset menu or the
+    /// inspector's "Pick" button): identify them on the page thread, then
+    /// either hold them for an already-known link or index them as a new one.
+    pub(crate) fn link_geophysics_files(&mut self, id: DrillHoleId, files: Vec<web_sys::File>) {
         let Some(proxy) = self.web_event_loop_proxy.clone() else { return };
         wasm_bindgen_futures::spawn_local(async move {
-            let identity = identify_browser_file(&file).await;
-            let _ = proxy.send_event(crate::app::AppEvent::GeophysicsFileIdentified { dataset: id, file, identity });
+            let mut identified = Vec::with_capacity(files.len());
+            for file in files {
+                let identity = identify_browser_file(&file).await;
+                identified.push((file, identity));
+            }
+            let _ = proxy.send_event(crate::app::AppEvent::GeophysicsFileIdentified { dataset: id, files: identified });
         });
     }
 
-    /// A picked file's identity, back from the page thread.
-    pub(super) fn handle_geophysics_file_identified(&mut self, id: DrillHoleId, file: web_sys::File, identity: std::result::Result<FileIdentity, String>) {
-        let identity = match identity {
-            Ok(identity) => identity,
-            Err(error) => {
-                userspace_warn!("{}", tr_format!(literal = "Could not read '%name%': %error%", name = file.name(), error = error));
-                return;
+    /// Picked files' identities, back from the page thread. One that cannot
+    /// be identified is left out; the rest are held when every one is a file
+    /// of the current link, else indexed as a new link.
+    pub(super) fn handle_geophysics_file_identified(&mut self, id: DrillHoleId, files: Vec<(web_sys::File, std::result::Result<FileIdentity, String>)>) {
+        let several = files.len() > 1;
+        let mut identified = Vec::with_capacity(files.len());
+        for (file, identity) in files {
+            match identity {
+                Ok(identity) => identified.push((file, identity)),
+                Err(error) => {
+                    if several {
+                        left_out(&file.name(), &error);
+                    } else {
+                        userspace_warn!("{}", tr_format!(literal = "Could not read '%name%': %error%", name = file.name(), error = error));
+                    }
+                }
             }
-        };
+        }
+        if identified.is_empty() {
+            return;
+        }
         let current = self.geophysics_link(id);
         if let Some(link) = current.clone()
-            && let Some(matched) = link.files.iter().find(|linked| linked.identity.matches(&identity))
+            && identified.iter().all(|(_, identity)| link.files.iter().any(|linked| linked.identity.matches(identity)))
         {
-            let name = matched.identity.name.clone();
-            self.hold_geophysics_file(identity, file, id);
-            userspace_log!("{}", tr_format!(literal = "'%name%' is used for this session's downhole geophysics", name = name));
+            for (file, identity) in identified {
+                let name = link
+                    .files
+                    .iter()
+                    .find(|linked| linked.identity.matches(&identity))
+                    .map_or_else(|| identity.name.clone(), |linked| linked.identity.name.clone());
+                self.hold_geophysics_file(identity, file, id);
+                userspace_log!("{}", tr_format!(literal = "'%name%' is used for this session's downhole geophysics", name = name));
+            }
             self.resolve_browser_link(id, link);
             return;
         }
@@ -91,7 +113,11 @@ impl<'a> App<'a> {
         }
         let generation = self.restart_geophysics(id, current.as_ref(), LinkState::Indexing);
         let previous = current.as_ref().and_then(|link| link.files.first()).map(|linked| linked.columns.clone());
-        self.spawn_browser_index(id, generation, vec![(Columns::Previous(previous), file, identity)]);
+        let tasks = identified
+            .into_iter()
+            .map(|(file, identity)| (Columns::Previous(previous.clone()), file, identity))
+            .collect();
+        self.spawn_browser_index(id, generation, tasks);
     }
 
     /// A freshly loaded CSV bundle's geophysics mappings: identify each

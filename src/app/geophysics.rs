@@ -352,20 +352,28 @@ mod native {
             self.spawn_native_index(id, Some(link), tasks);
         }
 
-        /// Link the file at `path` to a dataset in place of any link it
-        /// has, keeping the old index when it is the same file unchanged.
-        pub(crate) fn link_geophysics_path(&mut self, id: DrillHoleId, path: PathBuf) {
+        /// Link the files at `paths`, in that order, to a dataset in place
+        /// of any link it has, keeping the old index when one file is picked
+        /// and it is the same file unchanged.
+        pub(crate) fn link_geophysics_paths(&mut self, id: DrillHoleId, paths: Vec<PathBuf>) {
             let Some(current) = self.drill_holes.iter().find(|item| item.id == id).map(|item| item.geophysics.clone()) else {
                 return;
             };
-            let task = IndexTask {
-                path,
-                replaces: None,
-                // Only a one-file link is kept whole: a pick replaces them all.
-                reuse: current.as_ref().filter(|link| link.files.len() == 1).map(|link| link.files[0].clone()),
-                previous: current.as_ref().and_then(|link| link.files.first()).map(|file| file.columns.clone()),
-            };
-            self.spawn_native_index(id, None, vec![task]);
+            let previous = current.as_ref().and_then(|link| link.files.first()).map(|file| file.columns.clone());
+            // Only a one-file link is kept whole: a pick replaces them all.
+            let mut reuse = (paths.len() == 1)
+                .then(|| current.as_ref().filter(|link| link.files.len() == 1).map(|link| link.files[0].clone()))
+                .flatten();
+            let tasks = paths
+                .into_iter()
+                .map(|path| IndexTask {
+                    path,
+                    replaces: None,
+                    reuse: reuse.take(),
+                    previous: previous.clone(),
+                })
+                .collect();
+            self.spawn_native_index(id, None, tasks);
         }
 
         /// Index `tasks` against the dataset's holes on the job queue.

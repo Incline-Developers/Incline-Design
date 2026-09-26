@@ -2402,8 +2402,8 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     self.redraw_requested = true;
                 }
             }
-            AppEvent::GeophysicsFileIdentified { dataset, file, identity } => {
-                self.handle_geophysics_file_identified(dataset, file, identity);
+            AppEvent::GeophysicsFileIdentified { dataset, files } => {
+                self.handle_geophysics_file_identified(dataset, files);
             }
             AppEvent::GeophysicsBundleIdentified { dataset, generation, result } => {
                 self.handle_geophysics_bundle_identified(dataset, generation, result);
@@ -2489,11 +2489,10 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
-    /// A picked geophysics file's identity, computed on the page thread.
+    /// Picked geophysics files' identities, computed on the page thread.
     GeophysicsFileIdentified {
         dataset: crate::model::drill_hole::DrillHoleId,
-        file: web_sys::File,
-        identity: std::result::Result<crate::model::geophysics::FileIdentity, String>,
+        files: Vec<(web_sys::File, std::result::Result<crate::model::geophysics::FileIdentity, String>)>,
     },
     /// A freshly loaded CSV bundle's geophysics files' identities.
     GeophysicsBundleIdentified {
