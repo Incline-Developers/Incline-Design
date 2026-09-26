@@ -35,7 +35,7 @@ use std::sync::{Mutex, OnceLock};
 
 use super::App;
 use crate::{
-    i18n::tr_format,
+    i18n::{tr, tr_format},
     model::{progress::Progress, triangulation::TriangulationId},
 };
 
@@ -64,6 +64,24 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// Work on a dataset's linked geophysics files: an index pass, a check
+    /// or a hole read. Stale once the dataset's link is taken up again
+    /// under another generation, by a relink or a reopen.
+    Geophysics {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+    },
+    /// A drillhole bundle loading for the project with this runtime id,
+    /// `source` a hash of the bundle's files and mappings. A second import of
+    /// the same bundle is refused while one is in flight; the job is
+    /// cancelled once its project stops being the active one, whether by a
+    /// switch or a close (`App::cancel_drill_hole_loads_for_other_projects`);
+    /// a result that still arrives for a project no longer active is
+    /// discarded (`job_dependencies_are_current`).
+    DrillHoleLoad {
+        source: u64,
+        runtime_id: u32,
+    },
     Raster(crate::model::raster::RasterTextureId),
     Project {
         runtime_id: u32,
@@ -203,6 +221,8 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
+            JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
@@ -331,6 +351,18 @@ impl<'a> App<'a> {
         self.pending_jobs.push(BackgroundJob { ticket, keys, cancel, poll });
     }
 
+    /// Called from a job's apply step when it handed the renderer data to
+    /// upload, so the job's busy state lasts until that upload is done.
+    pub(crate) fn job_needs_gpu_upload(&mut self) {
+        self.applied_job_needs_gpu = true;
+    }
+
+    /// Whether any pending job lists `key` among its dependencies. Lets a
+    /// caller refuse to start a second job for a source already in flight.
+    pub(crate) fn job_pending(&self, key: &JobKey) -> bool {
+        self.pending_jobs.iter().any(|job| job.keys.contains(key))
+    }
+
     /// Drain finished background jobs, running their apply closures on the UI
     /// thread. Call once per frame alongside the other polls.
     pub(crate) fn poll_jobs(&mut self) {
@@ -343,13 +375,15 @@ impl<'a> App<'a> {
         let mut residency_settled = false;
         let mut still_pending = Vec::with_capacity(self.pending_jobs.len());
         for mut job in std::mem::take(&mut self.pending_jobs) {
+            self.applied_job_needs_gpu = false;
             if (job.poll)(self) {
                 residency_settled |= job
                     .keys
                     .iter()
                     .any(|key| matches!(key, JobKey::Residency { .. } | JobKey::LayerResidency { .. } | JobKey::HistoryResidency { .. }));
                 // Settled: balance the begin_topology_load() from spawn_job.
-                self.finish_background_task(job.ticket, false);
+                let needs_gpu = std::mem::take(&mut self.applied_job_needs_gpu);
+                self.finish_background_task(job.ticket, needs_gpu);
                 self.redraw_requested = true;
             } else {
                 still_pending.push(job);
@@ -388,4 +422,44 @@ impl<'a> App<'a> {
             self.cancel_background_task(ticket);
         }
     }
+
+    /// Cancel any drillhole bundle load left over for a project that is no
+    /// longer the active one. Called wherever the active project changes,
+    /// a close included, so a load does not run on for a project no one sees.
+    pub(crate) fn cancel_drill_hole_loads_for_other_projects(&mut self) {
+        let active_runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+        self.cancel_drill_hole_loads(|key| drill_hole_load_is_stale(key, active_runtime_id));
+    }
+
+    /// Cancel the drillhole bundle loads `stale` picks, saying which.
+    pub(crate) fn cancel_drill_hole_loads(&mut self, stale: impl Fn(&JobKey) -> bool) {
+        let stale_tickets: Vec<crate::app::BackgroundTaskTicket> = self
+            .pending_jobs
+            .iter()
+            .filter(|job| job.keys.iter().any(|key| matches!(key, JobKey::DrillHoleLoad { .. }) && stale(key)))
+            .map(|job| job.ticket)
+            .collect();
+        let labels: Vec<String> = stale_tickets
+            .iter()
+            .map(|ticket| {
+                self.background_tasks
+                    .reported
+                    .iter()
+                    .find(|task| task.ticket == *ticket)
+                    .map(|task| task.label.clone())
+                    .unwrap_or_else(|| tr!(literal = "a drillhole import"))
+            })
+            .collect();
+        self.cancel_jobs(|key| matches!(key, JobKey::DrillHoleLoad { .. }) && stale(key));
+        for label in labels {
+            crate::userspace_log!("{}", tr_format!(literal = "Cancelled '%label%': its project is no longer active", label = label));
+        }
+    }
+}
+
+/// Whether a `DrillHoleLoad` job belongs to a project other than
+/// `active_runtime_id` (`None` when no project is active) and so should be
+/// cancelled. Every other `JobKey` variant is never stale by this rule.
+pub(crate) fn drill_hole_load_is_stale(key: &JobKey, active_runtime_id: Option<u32>) -> bool {
+    matches!(key, JobKey::DrillHoleLoad { runtime_id, .. } if Some(*runtime_id) != active_runtime_id)
 }

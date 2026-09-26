@@ -1851,6 +1851,15 @@ literal-no-point-clouds-are-loaded-import-them-via-file-import-first-987b60f8be3
 literal-point-clouds-daa4c5f978d933f1 = Point clouds
 literal-remove-sources-1d26959a5edd50b3 = Remove sources
 
+# Borehole log sideways scale
+literal-sideways-scale-48792a4ea98c2cc4 = Sideways scale
+literal-fit-the-hole-to-the-track-fa4dca3418825178 = Fit the hole to the track
+literal-squeeze-sideways-just-enough-to-keep-the-hole-in-view-never-stretches-4d8852bf13f33388 = Squeeze sideways just enough to keep the hole in view. Never stretches.
+literal-1-1-true-shape-7769dcfa4efafab0 = 1:1, true shape
+literal-1-ratio-ff7d9153f367eba3 = 1:%ratio%
+literal-m-from-collar-toward-bearing-55039a23d8c0b942 = m from collar, toward %bearing%°
+literal-h-1-ratio-08912617e562f373 = H 1:%ratio%
+
 # Remaining source literals
 literal-a-cloth-resolution-about-one-and-a-half-times-the-spacing-of-the-sparsest-selected-cloud-s-points-so-every-particle-has-returns-under-it-8fb5d8a630aa2e77 = A cloth resolution about one and a half times the spacing of the sparsest selected cloud's points, so every particle has returns under it.
 literal-cinematic-view-shadows-method-c8dbed4bff1cef59 = Cinematic view shadows: %method%

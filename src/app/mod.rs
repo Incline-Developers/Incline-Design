@@ -1,6 +1,9 @@
 pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
 pub(crate) mod events; // Handles window events
+pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
@@ -47,7 +50,7 @@ use crate::{
     model::{
         Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
         block_model::{BlockModelSource, OpenBlockModel},
-        drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
+        drill_hole::{CollarRotation, DrillHoleRef, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -316,6 +319,15 @@ pub(crate) struct App<'a> {
     tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
     #[cfg(not(target_arch = "wasm32"))]
     tracked_project_paths: Vec<PathBuf>,
+    /// Whether each loaded dataset's linked geophysics files can be read
+    /// this session, and the holes read from them lately. The links
+    /// themselves are the datasets'.
+    pub(crate) well_logs: crate::model::geophysics::GeophysicsSession,
+    /// Geophysics files picked this session, by their identity, so a saved
+    /// link finds its file again without another pick. A page cannot open a
+    /// file by path.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) geophysics_files: Vec<(crate::model::geophysics::FileIdentity, web_sys::File)>,
     /// Latest non-zero window size awaiting surface reconfiguration. Resize
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
@@ -405,7 +417,6 @@ pub(crate) struct App<'a> {
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
-    pending_drill_hole_loads: Vec<PendingLoad<DrillHoleSource, crate::model::drill_hole::LoadedDrillHoleDataset>>,
     pending_point_cloud_loads: Vec<PendingLoad<PathBuf, crate::model::point_cloud::LoadedPointCloud>>,
     pending_raster_loads: Vec<PendingLoad<PathBuf, crate::model::raster::LoadedRasterTexture>>,
     /// project paths currently being parsed. They remain reserved until the job
@@ -426,8 +437,18 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
+    /// Set by a job's apply step that handed the renderer new geometry to
+    /// upload; read and cleared by `poll_jobs`, which keeps that job's busy
+    /// state until the GPU upload finishes instead of settling it early.
+    applied_job_needs_gpu: bool,
     #[cfg(target_arch = "wasm32")]
     web_import_files: Option<(crate::ui::state::DataMenu, Vec<crate::model::input::InputFile>)>,
+    /// Files picked for the current drillhole CSV bundle, in the order of
+    /// `EditorState::import_drill_csv`. Only their heads were read, for the
+    /// mapping, so the import reads its tables from these and links its
+    /// geophysics files.
+    #[cfg(target_arch = "wasm32")]
+    web_import_picked_files: Option<Vec<web_sys::File>>,
     window_focused: bool,
 }
 
@@ -464,6 +485,9 @@ impl<'a> Default for App<'a> {
             tracked_browser_projects: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
+            well_logs: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            geophysics_files: Vec::new(),
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
@@ -514,7 +538,6 @@ impl<'a> Default for App<'a> {
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
-            pending_drill_hole_loads: Vec::new(),
             pending_point_cloud_loads: Vec::new(),
             pending_raster_loads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -527,8 +550,11 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
+            applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
+            #[cfg(target_arch = "wasm32")]
+            web_import_picked_files: None,
             window_focused: true,
         }
     }
@@ -537,7 +563,10 @@ impl<'a> Default for App<'a> {
 impl<'a> App<'a> {
     #[cfg(target_os = "macos")]
     fn handle_mac_menu_action(&mut self, action: crate::mac::MacMenuAction) {
-        use crate::{mac::MacMenuAction, ui::state::UiCommand};
+        use crate::{
+            mac::MacMenuAction,
+            ui::state::{UiCommand, ViewToggle},
+        };
 
         let active_project_id = self.workspace.active_project().map(|project| project.runtime_id);
         let command = match action {
@@ -583,11 +612,16 @@ impl<'a> App<'a> {
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
             MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
+            MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
+            MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
+            // Named rather than indexed: this switch is a Drillholes menu row
+            // of its own, not one of the View menu's.
+            MacMenuAction::ToggleBoreholeInspector => Some(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector)),
         };
 
         if let Some(command) = command {
@@ -655,8 +689,10 @@ impl<'a> App<'a> {
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
         crate::i18n::select_language(config.language);
+        self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
+        self.editor.show_borehole_inspector = config.show_borehole_inspector;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
@@ -1043,8 +1079,8 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| !self.drill_holes.iter().any(|item| item.id == anchor.dataset)) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| self.drill_holes.iter().any(|item| item.id == hole.dataset));
-        self.editor.selected_tie_ins.retain(|tie| self.drill_holes.iter().any(|item| item.id == tie.dataset));
+        let drill_holes = &self.drill_holes;
+        self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
         if self
             .editor
             .initiation_dialog
@@ -1183,6 +1219,9 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // Drillhole loads are said by name, as a project switch says them;
+        // the rest go silently.
+        self.cancel_drill_hole_loads(|_| true);
         // A browser save already holds its own snapshot and still owes the
         // completion handler a result; cancelling it would strand the pending
         // flag and lose a save the user asked for.
@@ -1197,12 +1236,6 @@ impl<'a> App<'a> {
             }
         }
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_block_model_loads) {
-            self.cancel_background_task(ticket);
-            if let Some(report) = report {
-                report.cancel();
-            }
-        }
-        for (ticket, _, _, report) in std::mem::take(&mut self.pending_drill_hole_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
                 report.cancel();
@@ -1233,6 +1266,7 @@ impl<'a> App<'a> {
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();
+        self.well_logs.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
         self.next_point_cloud_id = 0;
@@ -1263,6 +1297,7 @@ impl<'a> App<'a> {
         self.editor.active_tool = active_tool;
         self.workspace.set_active_index(index);
         self.history.activate(self.workspace.projects[index].runtime_id);
+        self.cancel_drill_hole_loads_for_other_projects();
         self.persist_session();
         self.invalidate_overlay();
     }
@@ -1645,6 +1680,7 @@ impl<'a> App<'a> {
             #[cfg(target_arch = "wasm32")]
             matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
             project.project.metadata.name.hash(&mut hasher);
+            project.project.metadata.coordinate_reference_system.hash(&mut hasher);
             project.lossy_save_warnings.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
@@ -1654,7 +1690,7 @@ impl<'a> App<'a> {
             for layer in project.project.document.layers() {
                 layer.hash_row(&mut hasher);
             }
-            // All six sections at once: the registry is shared project
+            // Every section at once: the registry is shared project
             // content, not just the Designs tree's.
             project.project.folders.hash_into(&mut hasher);
         }
@@ -1903,6 +1939,11 @@ impl<'a> App<'a> {
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
+        let coordinate_reference_system = self
+            .workspace
+            .active_project()
+            .map(|p| p.project.metadata.coordinate_reference_system.clone())
+            .unwrap_or_default();
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
         // A section's item membership can stay byte-identical while its
         // folder list changes - a folder created and left empty, say - so
@@ -1914,10 +1955,27 @@ impl<'a> App<'a> {
                 .active_project()
                 .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
         };
-        let triangulations_membership_dirty = !same_membership(
-            &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
-            &self.project_asset_baseline.triangulations,
-        ) || section_folders_dirty(SectionKind::Triangulations);
+        // Triangulations sit under two sections and the baseline records no
+        // section, so an added or moved id marks the section it is in now,
+        // and a deleted one marks every section its kind can sit in.
+        let section_membership_dirty = |section: SectionKind, current: &[(u64, SectionKind)], saved: &[(u64, u64)]| {
+            let added = current
+                .iter()
+                .any(|(id, item_section)| *item_section == section && !saved.iter().any(|(saved_id, _)| saved_id == id));
+            let deleted = saved.iter().any(|(saved_id, _)| !current.iter().any(|(id, _)| id == saved_id));
+            added || deleted
+        };
+        let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
+        let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Triangulations);
+        // Modelling's own half of the same question. Its layers belong here
+        // rather than with the rows: a deleted one has no row left to mark.
+        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Modelling)
+            || self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -1942,6 +2000,7 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
+            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
@@ -1949,6 +2008,7 @@ impl<'a> App<'a> {
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
+            coordinate_reference_system,
             active_triangulation_for_menu,
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
@@ -2100,6 +2160,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         }
 
         self.poll_file_dialogs();
+        self.sync_geophysics();
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2341,6 +2402,48 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     self.redraw_requested = true;
                 }
             }
+            AppEvent::GeophysicsFileIdentified { dataset, files } => {
+                self.handle_geophysics_file_identified(dataset, files);
+            }
+            AppEvent::GeophysicsBundleIdentified { dataset, generation, result } => {
+                self.handle_geophysics_bundle_identified(dataset, generation, result);
+            }
+            AppEvent::GeophysicsHoleRunsRead {
+                dataset,
+                generation,
+                dhid,
+                runs,
+                reservation,
+            } => {
+                self.handle_geophysics_hole_runs_read(dataset, generation, dhid, runs, reservation);
+            }
+            AppEvent::DrillHoleTablesRead {
+                key,
+                source,
+                geophysics,
+                ticket,
+                workspace,
+                result,
+            } => {
+                let active_runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+                if workspace != self.workspace_generation || jobs::drill_hole_load_is_stale(&key, active_runtime_id) {
+                    let label = self
+                        .background_tasks
+                        .reported
+                        .iter()
+                        .find(|task| task.ticket == ticket)
+                        .map(|task| task.label.clone())
+                        .unwrap_or_else(|| crate::i18n::tr!(literal = "a drillhole import"));
+                    self.cancel_background_task(ticket);
+                    userspace_log!(
+                        "{}",
+                        crate::i18n::tr_format!(literal = "Cancelled '%label%': its project is no longer active", label = label)
+                    );
+                    return;
+                }
+                self.finish_background_task(ticket, false);
+                self.continue_web_drill_hole_import(key, source, geophysics, result);
+            }
         }
     }
 }
@@ -2386,6 +2489,45 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// Picked geophysics files' identities, computed on the page thread.
+    GeophysicsFileIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        files: Vec<(web_sys::File, std::result::Result<crate::model::geophysics::FileIdentity, String>)>,
+    },
+    /// A freshly loaded CSV bundle's geophysics files' identities.
+    GeophysicsBundleIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        result: std::result::Result<
+            Vec<(
+                crate::model::formats::csv_drill_hole::CsvDrillFileMapping,
+                web_sys::File,
+                crate::model::geophysics::FileIdentity,
+            )>,
+            String,
+        >,
+    },
+    /// One hole's geophysics run bytes, read from the linked files on the
+    /// page thread and ready to parse on the job queue.
+    GeophysicsHoleRunsRead {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        dhid: String,
+        runs: std::result::Result<Vec<Vec<u8>>, String>,
+        /// Browser memory claimed for the bytes and their parse.
+        reservation: crate::app::memory::MemoryReservation,
+    },
+    /// A browser drillhole CSV bundle's table files, read whole on the page
+    /// thread with their mappings; ready to parse on the job queue.
+    DrillHoleTablesRead {
+        key: crate::app::jobs::JobKey,
+        source: crate::model::drill_hole::DrillHoleSource,
+        geophysics: Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, web_sys::File)>,
+        ticket: BackgroundTaskTicket,
+        /// Which workspace the read started in; runtime ids are recycled.
+        workspace: u64,
+        result: std::result::Result<Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, crate::model::input::InputFile)>, String>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]

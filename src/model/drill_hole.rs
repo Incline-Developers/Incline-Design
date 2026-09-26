@@ -1,10 +1,15 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    hash::{Hash, Hasher},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState},
 };
 
@@ -20,7 +25,12 @@ pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = 3.0;
 pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+/// How many stops a numeric ramp may carry. A limit on the ramp only: a
+/// categorical field colours every code it has.
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// Distinct codes above which a categorical column is named on load as
+/// likely free text. Nothing is dropped at any count.
+pub(crate) const WIDE_CATEGORY_FIELD_HINT: usize = 256;
 /// Upper bound for an interactively generated blast pattern. It keeps a bad
 /// unit/spacing entry from building millions of preview primitives on the UI
 /// thread while remaining comfortably above ordinary production rounds.
@@ -29,6 +39,23 @@ pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// holes it joins. Its physical width follows the pattern, while the renderer
 /// applies the same screen-space floor as a drill-hole trace.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
+/// A disc's diameter, in metres, where a set has not chosen one: ten times
+/// an HQ core hole, so a disc never reads as the hole itself, and small
+/// beside the closest drill spacings, so neighbouring discs never touch.
+/// Far out the pixel floor below sets the size, not this.
+pub(crate) const DEFAULT_DISC_DIAMETER: f64 = 1.0;
+/// What the disc diameter control accepts, in metres.
+pub(crate) const DISC_DIAMETER_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+/// The string's on-screen width where a set has not chosen one.
+pub(crate) const DEFAULT_STRING_PIXEL_WIDTH: f32 = 2.0;
+/// What the string width control accepts, in pixels.
+pub(crate) const STRING_PIXEL_WIDTH_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+/// How much wider than the string a disc is always drawn, in pixels: two
+/// pixels of colour either side of it however far the eye is.
+pub(crate) const DISC_PIXEL_MARGIN: f32 = 4.0;
+/// The least a disc is drawn along the string, in pixels, so a ply a few
+/// centimetres thick still shows from kilometres away.
+pub(crate) const DISC_MIN_PIXEL_LENGTH: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -78,11 +105,38 @@ pub(crate) enum DrillValue {
     Category(String),
 }
 
+/// One interval as the site logged it, and its identity within its hole.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LoggedInterval {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) values: BTreeMap<String, DrillValue>,
+}
+
+/// One interval as interpreted: what every reader, colour and section sees.
+/// `logged` is what the site sent, or `None` when nothing has parted them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillInterval {
     pub(crate) from: f64,
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) logged: Option<LoggedInterval>,
+}
+
+impl DrillInterval {
+    pub(crate) fn logged(&self) -> (f64, f64, &BTreeMap<String, DrillValue>) {
+        match &self.logged {
+            Some(logged) => (logged.from, logged.to, &logged.values),
+            None => (self.from, self.to, &self.values),
+        }
+    }
+
+    pub(crate) fn is_corrected(&self) -> bool {
+        self.logged
+            .as_ref()
+            .is_some_and(|logged| logged.from != self.from || logged.to != self.to || logged.values != self.values)
+    }
 }
 
 /// One surface connector: the delay laid between two holes, and which way the
@@ -158,6 +212,28 @@ pub(crate) struct StoredInitiation {
     pub(crate) delay_ms: u32,
 }
 
+/// Where a hole's orientation came from: measured, assumed, or unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum OrientationSource {
+    /// A survey record placed or steered the trace.
+    Measured,
+    /// No survey; the direction was set by hand or by design.
+    Assumed,
+    /// Nothing recorded; the trace is only a projection.
+    #[default]
+    Unknown,
+}
+
+impl OrientationSource {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Measured => tr!(literal = "Measured"),
+            Self::Assumed => tr!(literal = "Assumed"),
+            Self::Unknown => tr!(literal = "Unknown"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
@@ -170,6 +246,9 @@ pub(crate) struct DrillHole {
     /// trace is continuous.
     pub(crate) render_ranges: Vec<(f64, f64)>,
     pub(crate) intervals: Vec<DrillInterval>,
+    /// Defaults to `Unknown` for a project saved before this field existed.
+    #[serde(default)]
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Row arrangement used when filling a blast boundary with collars.
@@ -390,6 +469,7 @@ pub(crate) fn generate_pattern_collars(
 pub(crate) struct HolePlacement {
     pub(crate) collar: DVec3,
     pub(crate) trace: Vec<TraceStation>,
+    pub(crate) orientation_source: OrientationSource,
 }
 
 /// Where a hole points, in the terms a drill plan is written in: `azimuth`
@@ -504,6 +584,7 @@ impl DrillHole {
         HolePlacement {
             collar: self.collar,
             trace: self.trace.clone(),
+            orientation_source: self.orientation_source,
         }
     }
 
@@ -514,6 +595,7 @@ impl DrillHole {
     pub(crate) fn set_placement(&mut self, placement: &HolePlacement, delta: DVec3) {
         self.collar = placement.collar + delta;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if delta != DVec3::ZERO {
             for station in &mut self.trace {
                 station.position += delta;
@@ -532,6 +614,7 @@ impl DrillHole {
     pub(crate) fn set_rotated_placement(&mut self, placement: &HolePlacement, rotation: CollarRotation) {
         self.collar = placement.collar;
         self.trace.clone_from(&placement.trace);
+        self.orientation_source = placement.orientation_source;
         if rotation.is_identity() {
             // The restore path, taken on every rollback: the trace copy above
             // is already the whole of it.
@@ -552,6 +635,7 @@ impl DrillHole {
         for station in &mut self.trace {
             station.position = pivot + quat * (station.position - pivot);
         }
+        self.orientation_source = OrientationSource::Assumed;
     }
 
     /// The physical world radius of the hole. A dataset without diameters uses
@@ -574,21 +658,98 @@ impl DrillHole {
         trace_orientation(self.collar_position(), &self.trace)
     }
 
+    /// Where the trace stands at `depth`. Binary search, not a walk from the
+    /// collar, so building a hole stops being quadratic in its station count.
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {
         let first = *self.trace.first()?;
         if depth <= first.depth {
             return Some(first.position);
         }
-        for pair in self.trace.windows(2) {
-            let [a, b] = [pair[0], pair[1]];
-            if depth <= b.depth {
-                let span = b.depth - a.depth;
-                let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
-                return Some(a.position.lerp(b.position, t));
-            }
-        }
-        self.trace.last().map(|station| station.position)
+        let index = self.trace.partition_point(|station| station.depth < depth);
+        // Past the toe there is no bracketing pair, and a depth that is not a
+        // number lands at zero: both fall through to the last station.
+        let Some(&[a, b]) = index.checked_sub(1).and_then(|above| self.trace.get(above..=index)) else {
+            return self.trace.last().map(|station| station.position);
+        };
+        let span = b.depth - a.depth;
+        let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
+        Some(a.position.lerp(b.position, t))
     }
+
+    /// The straight pieces the trace is drawn in between depths `from` and
+    /// `to`, clamped to the trace: cut at every station, at the ends of
+    /// `render_ranges`, and at `cuts`. A piece whose middle lies outside
+    /// every render range is not drawn and is left out, as is one with no
+    /// length. Every builder of a hole's geometry and the pick walk the
+    /// trace through this, so what is clickable is what is drawn.
+    pub(crate) fn trace_pieces(&self, from: f64, to: f64, cuts: &[f64]) -> Vec<TracePiece> {
+        let (Some(first), Some(last)) = (self.trace.first(), self.trace.last()) else {
+            return Vec::new();
+        };
+        let (from, to) = (from.max(first.depth), to.min(last.depth));
+        if !from.is_finite() || !to.is_finite() || to <= from {
+            return Vec::new();
+        }
+        let inside = |depth: &f64| *depth > from && *depth < to;
+        let mut boundaries: Vec<f64> = self
+            .trace
+            .iter()
+            .map(|station| station.depth)
+            .filter(inside)
+            .chain(self.render_ranges.iter().flat_map(|&(start, end)| [start, end]).filter(inside))
+            .chain(cuts.iter().copied().filter(inside))
+            .chain([from, to])
+            .collect();
+        boundaries.sort_by(f64::total_cmp);
+        boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+
+        let mut pieces = Vec::with_capacity(boundaries.len().saturating_sub(1));
+        let mut previous = self.position_at_depth(boundaries[0]);
+        for pair in boundaries.windows(2) {
+            let start = previous;
+            let end = self.position_at_depth(pair[1]);
+            previous = end;
+            if pair[1] <= pair[0] + 1.0e-9 {
+                continue;
+            }
+            let (Some(start), Some(end)) = (start, end) else {
+                continue;
+            };
+            if start.distance_squared(end) <= 1.0e-18 {
+                continue;
+            }
+            let midpoint = (pair[0] + pair[1]) * 0.5;
+            if !self.render_ranges.is_empty() && !self.render_ranges.iter().any(|(start, end)| *start <= midpoint && midpoint < *end) {
+                continue;
+            }
+            pieces.push(TracePiece {
+                from: pair[0],
+                to: pair[1],
+                start,
+                end,
+            });
+        }
+        pieces
+    }
+}
+
+/// One straight piece of a drawn trace: its depths and where they stand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TracePiece {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) start: DVec3,
+    pub(crate) end: DVec3,
+}
+
+fn trace_box(collar: DVec3, trace: &[TraceStation]) -> WorldBox {
+    let mut min = collar;
+    let mut max = collar;
+    for station in trace {
+        min = min.min(station.position);
+        max = max.max(station.position);
+    }
+    (min, max)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -609,6 +770,9 @@ pub(crate) struct DrillHoleDataset {
     pub(crate) holes: Vec<DrillHole>,
     pub(crate) fields: Vec<DrillField>,
     pub(crate) bounds: Option<(DVec3, DVec3)>,
+    /// One box per hole, in `holes` order, worked out in the same pass as
+    /// `bounds` so a pick can test a hole before walking it. Not saved.
+    pub(crate) hole_boxes: Vec<WorldBox>,
     /// The surface connectors tying the pattern in. Content rather than
     /// styling: they dirty the project and are undone with everything else.
     pub(crate) ties: Vec<TieIn>,
@@ -620,15 +784,29 @@ pub(crate) struct DrillHoleDataset {
 impl DrillHoleDataset {
     pub(crate) fn new(mut holes: Vec<DrillHole>) -> Self {
         holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.dhid, &b.dhid));
+        // position_at_depth binary-searches on depth, so a trace must ascend.
+        for hole in &mut holes {
+            hole.trace.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+        }
         let fields = collect_fields(&holes);
-        let bounds = drill_bounds(&holes);
-        Self {
+        let mut dataset = Self {
             holes,
             fields,
-            bounds,
+            bounds: None,
+            hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
-        }
+        };
+        // The one gate every importer and project load passes through, so the
+        // boxes cannot fall out of step with the traces.
+        dataset.refresh_bounds();
+        dataset
+    }
+
+    /// An absent box is safe: the caller walks the hole. A stale one is not:
+    /// the gate says no, so hole geometry changes must end in `refresh_bounds`.
+    pub(crate) fn hole_box(&self, index: usize) -> Option<WorldBox> {
+        self.hole_boxes.get(index).copied()
     }
 
     /// The connector between two holes, whichever way round it runs.
@@ -776,22 +954,51 @@ impl DrillHoleDataset {
                                                 }
                                         })
                                         .fold(0usize, usize::saturating_add)
+                                    + interval.logged.as_ref().map_or(0, |logged| {
+                                        logged
+                                            .values
+                                            .iter()
+                                            .map(|(key, value)| {
+                                                key.len()
+                                                    + size_of::<DrillValue>()
+                                                    + match value {
+                                                        DrillValue::Category(text) => text.len(),
+                                                        DrillValue::Numeric(_) => 0,
+                                                    }
+                                            })
+                                            .fold(0usize, usize::saturating_add)
+                                    })
                             })
                             .fold(0usize, usize::saturating_add)
                 })
                 .fold(0usize, usize::saturating_add)
+            + self.hole_boxes.len() * size_of::<WorldBox>()
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self
+                .fields
+                .iter()
+                .map(|field| {
+                    size_of::<DrillField>()
+                        + field.key.len()
+                        + field.label.len()
+                        + match &field.kind {
+                            DrillFieldKind::Categorical { categories } => categories.iter().map(|value| size_of::<String>() + value.len()).fold(0usize, usize::saturating_add),
+                            DrillFieldKind::Numeric { .. } => 0,
+                        }
+                })
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
         self.fields.iter().find(|field| field.key == key)
     }
 
-    /// Recompute the dataset's extent after its holes have moved. Fields are
-    /// interval values rather than geometry, so only the bounds go stale.
     pub(crate) fn refresh_bounds(&mut self) {
-        self.bounds = drill_bounds(&self.holes);
+        let (bounds, hole_boxes) = drill_extents(&self.holes);
+        self.bounds = bounds;
+        self.hole_boxes = hole_boxes;
+        debug_assert_eq!(self.hole_boxes.len(), self.holes.len());
     }
 }
 
@@ -851,12 +1058,435 @@ pub(crate) struct DrillCategoryColor {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Vec<DrillCategoryColor>", into = "Vec<DrillCategoryColor>")]
+pub(crate) struct CategoryTable {
+    entries: Vec<DrillCategoryColor>,
+    hash: u64,
+}
+
+impl CategoryTable {
+    fn new(mut entries: Vec<DrillCategoryColor>) -> Self {
+        entries.sort_by(|a, b| a.value.cmp(&b.value));
+        entries.dedup_by(|a, b| a.value == b.value);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for entry in &entries {
+            entry.value.hash(&mut hasher);
+            for channel in entry.color {
+                channel.to_bits().hash(&mut hasher);
+            }
+        }
+        Self { entries, hash: hasher.finish() }
+    }
+
+    pub(crate) fn content_hash(&self) -> u64 {
+        self.hash
+    }
+}
+
+impl From<Vec<DrillCategoryColor>> for CategoryTable {
+    fn from(entries: Vec<DrillCategoryColor>) -> Self {
+        Self::new(entries)
+    }
+}
+
+impl From<CategoryTable> for Vec<DrillCategoryColor> {
+    fn from(table: CategoryTable) -> Self {
+        table.entries
+    }
+}
+
+impl Default for CategoryTable {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl std::ops::Deref for CategoryTable {
+    type Target = [DrillCategoryColor];
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillColorState {
     pub(crate) active_field: Option<String>,
     pub(crate) preset: DrillColorPreset,
     pub(crate) smooth: bool,
     pub(crate) stops: Vec<DrillColorStop>,
-    pub(crate) categories: Vec<DrillCategoryColor>,
+    pub(crate) categories: CategoryTable,
+    /// Multiplies the drilled diameter where a hole is drawn: at true width a
+    /// hole reads as a pipe beside the geology and a set of thousands as a
+    /// mat, so how wide a set draws is the set's to choose.
+    #[serde(default = "default_radius_scale", deserialize_with = "clamped_radius_scale")]
+    pub(crate) radius_scale: f64,
+    /// Narrowest a hole is drawn, whatever the scale above and however far
+    /// the eye is: below this it would flicker out rather than thin.
+    #[serde(default = "default_min_pixel_diameter", deserialize_with = "clamped_min_pixel_diameter")]
+    pub(crate) min_pixel_diameter: f32,
+    /// Named groups of codes mined together, kept per source field. They
+    /// travel with the colour state so a project written before them loads
+    /// with none.
+    #[serde(default, deserialize_with = "lenient_working_sections")]
+    pub(crate) working_sections: Vec<WorkingSection>,
+    /// Colour the active field by working section: a code in a group takes
+    /// the group's colour, any other code keeps its own.
+    #[serde(default)]
+    pub(crate) by_working_section: bool,
+    /// How the set is drawn. A set saved before there was a choice reads
+    /// back at its true diameter, the look it was saved with; an imported
+    /// set starts as string and discs (see `Self::for_logged_holes`).
+    #[serde(default = "saved_before_styles_hole_style", deserialize_with = "lenient_hole_style")]
+    pub(crate) hole_style: DrillHoleStyle,
+    /// The discs' diameter in metres, drawn string and discs.
+    #[serde(default = "default_disc_diameter", deserialize_with = "clamped_disc_diameter")]
+    pub(crate) disc_diameter: f64,
+    /// The string's width on screen in pixels, drawn string and discs: it
+    /// neither thins nor thickens with zoom.
+    #[serde(default = "default_string_pixel_width", deserialize_with = "clamped_string_pixel_width")]
+    pub(crate) string_pixel_width: f32,
+}
+
+/// How a drill hole set is drawn in the 3D view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) enum DrillHoleStyle {
+    /// A cylinder at the drilled diameter times the set's width scale.
+    TrueDiameter,
+    /// A thin string of constant screen width along the trace, and a disc of
+    /// a chosen diameter on every interval with a value in the colour field.
+    StringAndDiscs,
+}
+
+impl DrillHoleStyle {
+    pub(crate) const ALL: [Self; 2] = [Self::TrueDiameter, Self::StringAndDiscs];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::TrueDiameter => tr!(literal = "True diameter"),
+            Self::StringAndDiscs => tr!(literal = "String and discs"),
+        }
+    }
+}
+
+/// Seams or plies of one categorical field that are mined as one unit.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct WorkingSection {
+    pub(crate) name: String,
+    pub(crate) field: String,
+    pub(crate) codes: Vec<String>,
+}
+
+/// Why a working section cannot be kept as named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SectionProblem {
+    /// Blank once trimmed.
+    NoName,
+    /// A code of the field outside the section has the name, ignoring
+    /// case: a pick under it could mean either. A code inside it may share
+    /// the name, as a seam's section is named after the seam.
+    NameIsCode,
+    /// As [`Self::NameIsCode`], where the code of that name is outside
+    /// because another section already holds it.
+    CodeClaimed { code: String, section: String },
+    /// Another section of the field has the name, ignoring case.
+    DuplicateName,
+    /// Every code it lists is blank or already in an earlier section of the
+    /// field.
+    NoCodes,
+}
+
+impl SectionProblem {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::NoName => tr!(literal = "A working section needs a name."),
+            Self::NameIsCode => tr!(literal = "A code outside this section has that name. A section may share its name only with a code it holds."),
+            Self::CodeClaimed { code, section } => tr_format!(literal = "%code% is already in working section %section%.", code = code.clone(), section = section.clone()),
+            Self::DuplicateName => tr!(literal = "Another working section of this field has that name."),
+            Self::NoCodes => tr!(literal = "Every code it lists is already in another working section."),
+        }
+    }
+}
+
+/// A section [`tidy_working_sections`] left out, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DroppedSection {
+    pub(crate) name: String,
+    pub(crate) problem: SectionProblem,
+}
+
+/// Case-blind comparison of two names, without allocating.
+fn same_name(a: &str, b: &str) -> bool {
+    a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// What stops `name` naming a new working section of `field` holding
+/// `members`. The editor asks before offering to add one and
+/// [`tidy_working_sections`] before keeping one, so the two agree.
+pub(crate) fn working_section_name_problem(name: &str, field: &str, codes: &[String], members: &[String], sections: &[WorkingSection]) -> Option<SectionProblem> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Some(SectionProblem::NoName);
+    }
+    if let Some(code) = codes.iter().find(|code| same_name(code, name) && !members.contains(code)) {
+        // Say where the code went when another section has it: that is the
+        // cause, not the name.
+        return Some(
+            sections
+                .iter()
+                .find(|section| section.field == field && section.codes.contains(code))
+                .map_or(SectionProblem::NameIsCode, |section| SectionProblem::CodeClaimed {
+                    code: code.clone(),
+                    section: section.name.clone(),
+                }),
+        );
+    }
+    if sections.iter().any(|section| section.field == field && same_name(&section.name, name)) {
+        Some(SectionProblem::DuplicateName)
+    } else {
+        None
+    }
+}
+
+/// The codes `fields` lists for `key`, or none for a field that is not
+/// categorical or not there.
+fn field_codes<'a>(fields: &'a [DrillField], key: &str) -> &'a [String] {
+    match fields.iter().find(|field| field.key == key).map(|field| &field.kind) {
+        Some(DrillFieldKind::Categorical { categories }) => categories,
+        _ => &[],
+    }
+}
+
+/// A list of working sections as the app keeps it: names trimmed, each code
+/// in at most one section per field (the first that claims it), and no
+/// section kept whose name is blank, is a code of its field it does not
+/// hold, or repeats another's, ignoring case. What is left out comes back
+/// with the reason. A section of a field `fields` does not hold is kept as
+/// it is, as a colour for a code a shorter extract lacks is.
+pub(crate) fn tidy_working_sections(sections: Vec<WorkingSection>, fields: &[DrillField]) -> (Vec<WorkingSection>, Vec<DroppedSection>) {
+    let mut kept: Vec<WorkingSection> = Vec::new();
+    let mut dropped = Vec::new();
+    for mut section in sections {
+        section.name = section.name.trim().to_owned();
+        // The codes first: whether the name may be one of them depends on
+        // which of them this section still holds once earlier ones claimed
+        // theirs.
+        let mut codes: Vec<String> = Vec::new();
+        for code in std::mem::take(&mut section.codes) {
+            let claimed = kept.iter().any(|other| other.field == section.field && other.codes.contains(&code));
+            if !code.trim().is_empty() && !claimed && !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+        if let Some(problem) = working_section_name_problem(&section.name, &section.field, field_codes(fields, &section.field), &codes, &kept) {
+            dropped.push(DroppedSection { name: section.name, problem });
+            continue;
+        }
+        if codes.is_empty() {
+            dropped.push(DroppedSection {
+                name: section.name,
+                problem: SectionProblem::NoCodes,
+            });
+            continue;
+        }
+        section.codes = codes;
+        kept.push(section);
+    }
+    (kept, dropped)
+}
+
+/// Working sections the names of `field`'s codes suggest, for the editor to
+/// offer, never applied unasked. A root is a code of two or more characters
+/// that other codes begin with; only the shortest roots count, so no two
+/// suggestions share a code. Each holds its root and every code beginning
+/// with it. A common beginning that is not itself a code (KAL1A and KAL4B,
+/// no KAL) or a code of digits alone is no root, and a code carrying on a
+/// root's number (P10 after P1) is not under it. Codes already in a section
+/// take no part, and what is offered is what [`tidy_working_sections`] keeps.
+pub(crate) fn suggested_working_sections(field: &str, codes: &[String], sections: &[WorkingSection]) -> Vec<WorkingSection> {
+    let taken = |code: &String| sections.iter().any(|section| section.field == field && section.codes.contains(code));
+    let mut free: Vec<&String> = codes.iter().filter(|code| !code.trim().is_empty() && !taken(code)).collect();
+    free.sort_unstable();
+    free.dedup();
+    // A code that carries on a root's number is not under it: P10 is not a
+    // ply of P1.
+    let extends = |root: &str, code: &str| {
+        code.starts_with(root) && !(root.ends_with(|character: char| character.is_ascii_digit()) && code[root.len()..].starts_with(|character: char| character.is_ascii_digit()))
+    };
+    // Sorted, every code beginning with a root follows the root directly, so
+    // one pass finds each shortest root and the codes under it.
+    let mut suggested = Vec::new();
+    let mut consumed = vec![false; free.len()];
+    for index in 0..free.len() {
+        if consumed[index] {
+            continue;
+        }
+        let root = free[index];
+        let span = free[index + 1..].iter().take_while(|code| code.starts_with(root.as_str())).count();
+        let numeric = root.trim().chars().all(|character| character.is_ascii_digit() || character == '.');
+        if span == 0 || root.trim().chars().count() < 2 || numeric {
+            continue;
+        }
+        let under: Vec<usize> = (index + 1..=index + span).filter(|&other| !consumed[other] && extends(root, free[other])).collect();
+        if under.is_empty() {
+            continue;
+        }
+        consumed[index] = true;
+        for &other in &under {
+            consumed[other] = true;
+        }
+        let mut section_codes: Vec<String> = Vec::new();
+        for code in codes {
+            let member = code == root || under.iter().any(|&other| free[other] == code);
+            if member && !section_codes.contains(code) {
+                section_codes.push(code.clone());
+            }
+        }
+        suggested.push((root, section_codes));
+    }
+    suggested.sort_by_key(|(root, _)| codes.iter().position(|code| code == *root));
+    let mut offered: Vec<WorkingSection> = Vec::new();
+    for (root, section_codes) in suggested {
+        let name = root.trim();
+        if working_section_name_problem(name, field, codes, &section_codes, sections).is_none() && !offered.iter().any(|other| same_name(&other.name, name)) {
+            offered.push(WorkingSection {
+                name: name.to_owned(),
+                field: field.to_owned(),
+                codes: section_codes,
+            });
+        }
+    }
+    offered
+}
+
+/// Reads the working sections an entry at a time, so one malformed entry,
+/// or a value that is not a list at all, costs only itself and not the
+/// colours saved beside it. [`skipped_working_sections`] counts what this
+/// passes over, for the loader to report.
+fn lenient_working_sections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<WorkingSection>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Section(WorkingSection),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Entries(Vec<Entry>),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match List::deserialize(deserializer)? {
+        List::Entries(entries) => entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Section(section) => Some(section),
+                Entry::Unreadable(_) => None,
+            })
+            .collect(),
+        List::Unreadable(_) => Vec::new(),
+    })
+}
+
+/// How many saved working sections the reader passes over in a colour
+/// state's JSON: each list entry that is not a section, or one for a value
+/// that is not a list. Nothing saved counts nothing.
+pub(crate) fn skipped_working_sections(color: &serde_json::Value) -> usize {
+    match color.get("working_sections") {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| WorkingSection::deserialize(*entry).is_err()).count(),
+        Some(_) => 1,
+    }
+}
+
+/// A dataset is drawn at its drilled width until someone says otherwise.
+pub(crate) fn default_radius_scale() -> f64 {
+    1.0
+}
+
+fn default_min_pixel_diameter() -> f32 {
+    MIN_RENDER_PIXEL_DIAMETER
+}
+
+/// What the width controls accept: a hole thinner than a twentieth of its
+/// drilled width is a line, and one twice it is a shaft.
+pub(crate) const RADIUS_SCALE_RANGE: std::ops::RangeInclusive<f64> = 0.05..=2.0;
+/// One pixel is the thinnest a hole can be and still be drawn at all.
+pub(crate) const MIN_PIXEL_DIAMETER_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+
+// Clamped where a value comes in, not only where the dialog sets one: a file
+// edited by hand must not draw a hole at nothing and then save that back.
+fn clamped_radius_scale<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*RADIUS_SCALE_RANGE.start(), *RADIUS_SCALE_RANGE.end())
+    } else {
+        default_radius_scale()
+    })
+}
+
+fn clamped_min_pixel_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = f32::deserialize(deserializer)?;
+    Ok(if value.is_finite() {
+        value.clamp(*MIN_PIXEL_DIAMETER_RANGE.start(), *MIN_PIXEL_DIAMETER_RANGE.end())
+    } else {
+        default_min_pixel_diameter()
+    })
+}
+
+/// The style of a set saved before there was one: drawn at its true
+/// diameter, as it was when saved. Deliberately not what a new set gets.
+fn saved_before_styles_hole_style() -> DrillHoleStyle {
+    DrillHoleStyle::TrueDiameter
+}
+
+/// A style this build does not know, from a newer one, reads as the saved
+/// look rather than costing the set every colour saved beside it.
+fn lenient_hole_style<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<DrillHoleStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Style {
+        Known(DrillHoleStyle),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Style::deserialize(deserializer)? {
+        Style::Known(style) => style,
+        Style::Unknown(_) => saved_before_styles_hole_style(),
+    })
+}
+
+pub(crate) fn default_disc_diameter() -> f64 {
+    DEFAULT_DISC_DIAMETER
+}
+
+pub(crate) fn default_string_pixel_width() -> f32 {
+    DEFAULT_STRING_PIXEL_WIDTH
+}
+
+/// The disc diameter as the controls and a saved file may set it: a value
+/// that is not a number is the default, anything else is held in range.
+pub(crate) fn clamp_disc_diameter(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(*DISC_DIAMETER_RANGE.start(), *DISC_DIAMETER_RANGE.end())
+    } else {
+        default_disc_diameter()
+    }
+}
+
+/// The string width as the controls and a saved file may set it.
+pub(crate) fn clamp_string_pixel_width(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(*STRING_PIXEL_WIDTH_RANGE.start(), *STRING_PIXEL_WIDTH_RANGE.end())
+    } else {
+        default_string_pixel_width()
+    }
+}
+
+fn clamped_disc_diameter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(clamp_disc_diameter(f64::deserialize(deserializer)?))
+}
+
+fn clamped_string_pixel_width<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    Ok(clamp_string_pixel_width(f32::deserialize(deserializer)?))
 }
 
 impl Default for DrillColorState {
@@ -867,8 +1497,194 @@ impl Default for DrillColorState {
             preset,
             smooth: preset.smooth(),
             stops: preset.stops(),
-            categories: Vec::new(),
+            categories: CategoryTable::default(),
+            radius_scale: default_radius_scale(),
+            min_pixel_diameter: default_min_pixel_diameter(),
+            working_sections: Vec::new(),
+            by_working_section: false,
+            // The look a set had before there was a choice. A new set takes
+            // the constructor for where it came from instead.
+            hole_style: saved_before_styles_hole_style(),
+            disc_diameter: default_disc_diameter(),
+            string_pixel_width: default_string_pixel_width(),
         }
+    }
+}
+
+impl DrillColorState {
+    /// A set of logged holes, imported: drawn as string and discs, the
+    /// picture a modeller reads intervals by.
+    pub(crate) fn for_logged_holes() -> Self {
+        Self {
+            hole_style: DrillHoleStyle::StringAndDiscs,
+            ..Self::default()
+        }
+    }
+
+    /// A set of planned holes, laid out as a pattern: drawn at their true
+    /// diameter. They carry no intervals to put discs on, and their design
+    /// diameter, and the tie-ins sized from it, must read as drawn.
+    pub(crate) fn for_planned_holes() -> Self {
+        Self {
+            hole_style: DrillHoleStyle::TrueDiameter,
+            ..Self::default()
+        }
+    }
+
+    /// The narrowest a disc is drawn on screen, in pixels: always wider than
+    /// the string it sits on, so its colour shows either side.
+    pub(crate) fn disc_min_pixel_diameter(&self) -> f32 {
+        self.string_pixel_width + DISC_PIXEL_MARGIN
+    }
+
+    /// The colour kept under a code or a section's [`section_color_key`]. A
+    /// section with no entry yet shows the colour under its bare name until
+    /// [`Self::reconcile_categories`] gives it one.
+    pub(crate) fn category_color(&self, value: &str) -> Option<[f32; 3]> {
+        let find = |value: &str| {
+            self.categories
+                .binary_search_by(|entry| entry.value.as_str().cmp(value))
+                .ok()
+                .map(|index| self.categories[index].color)
+        };
+        find(value).or_else(|| value.strip_prefix(SECTION_COLOR_PREFIX).and_then(find))
+    }
+
+    /// The working section of `field` that holds `code`, if any.
+    pub(crate) fn working_section_of(&self, field: &str, code: &str) -> Option<&WorkingSection> {
+        self.working_sections
+            .iter()
+            .find(|section| section.field == field && section.codes.iter().any(|member| member == code))
+    }
+
+    /// The working section of `field` called `name`, if any.
+    pub(crate) fn working_section_named(&self, field: &str, name: &str) -> Option<&WorkingSection> {
+        self.working_sections.iter().find(|section| section.field == field && section.name == name)
+    }
+
+    /// The colour key of each code's section, gathered once for a rebuild;
+    /// empty unless colouring the active field by working section.
+    pub(crate) fn section_lookup(&self) -> SectionLookup<'_> {
+        let mut keys = Vec::new();
+        let mut index = HashMap::new();
+        if self.by_working_section
+            && let Some(field) = self.active_field.as_deref()
+        {
+            for section in self.working_sections.iter().filter(|section| section.field == field) {
+                keys.push(section_color_key(&section.name));
+                for code in &section.codes {
+                    index.entry(code.as_str()).or_insert(keys.len() - 1);
+                }
+            }
+        }
+        SectionLookup { keys, index }
+    }
+
+    /// The colour table key an interval of `code` is coloured by: its
+    /// working section's key when colouring by section and the code is in
+    /// one, otherwise the code. This walks the section list; a pass over
+    /// many intervals takes a [`Self::section_lookup`] instead.
+    pub(crate) fn color_key<'a>(&'a self, code: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.by_working_section {
+            return code.into();
+        }
+        self.active_field
+            .as_deref()
+            .and_then(|field| self.working_section_of(field, code))
+            .map_or(code.into(), |section| section_color_key(&section.name).into())
+    }
+
+    /// What the colour table lists for `field` coloured by section: every
+    /// section, then each code no section holds, in the field's order.
+    pub(crate) fn working_section_view<'a>(&'a self, field: &str, categories: &'a [String]) -> Vec<ColorRow<'a>> {
+        let mut view: Vec<ColorRow<'a>> = self
+            .working_sections
+            .iter()
+            .filter(|section| section.field == field)
+            .map(|section| ColorRow {
+                label: &section.name,
+                key: section_color_key(&section.name).into(),
+                section: Some(section),
+            })
+            .collect();
+        for code in categories {
+            if self.working_section_of(field, code).is_none() && !view.iter().any(|row| row.key == code.as_str()) {
+                view.push(ColorRow::code(code));
+            }
+        }
+        view
+    }
+
+    /// Every write goes through here so the order the lookup searches holds.
+    pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
+        self.categories = CategoryTable::new(categories);
+    }
+
+    /// Give every code in `field`, and every working section of it, a
+    /// colour, keeping every colour already chosen, and return how many of
+    /// the field's codes were filled in; section names are not counted.
+    /// Entries for codes absent from `field` stay: a shorter extract must not
+    /// lose the full one's picks.
+    pub(crate) fn reconcile_categories(&mut self, field: &DrillField) -> usize {
+        let DrillFieldKind::Categorical { categories } = &field.kind else {
+            return 0;
+        };
+        let added = self.fill_category_colors(categories);
+        if self.working_sections.iter().any(|section| section.field == field.key) {
+            // A section saved before sections had keys keeps the colour under
+            // its bare name, and one named after a code it holds starts in it.
+            let adopted: Vec<DrillCategoryColor> = self
+                .working_sections
+                .iter()
+                .filter(|section| section.field == field.key)
+                .filter_map(|section| {
+                    let key = section_color_key(&section.name);
+                    let own = self.categories.binary_search_by(|entry| entry.value.as_str().cmp(&key)).is_ok();
+                    let bare = self.category_color(&section.name);
+                    bare.filter(|_| !own).map(|color| DrillCategoryColor { value: key, color })
+                })
+                .collect();
+            if !adopted.is_empty() {
+                let mut table = Vec::from(std::mem::take(&mut self.categories));
+                table.extend(adopted);
+                self.set_categories(table);
+            }
+            let keys: Vec<String> = self.working_section_view(&field.key, categories).into_iter().map(|row| row.key.into_owned()).collect();
+            self.fill_category_colors(&keys);
+        }
+        added
+    }
+
+    /// Give each of `categories` a colour where it has none, avoiding the
+    /// colours the others already hold, and return how many were filled in.
+    pub(crate) fn fill_category_colors(&mut self, categories: &[String]) -> usize {
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        let mut used: Vec<[f32; 3]> = Vec::new();
+        for value in categories {
+            if let Ok(index) = table.binary_search_by(|entry| entry.value.as_str().cmp(value)) {
+                used.push(table[index].color);
+            }
+        }
+        let mut filled = Vec::new();
+        for (index, value) in categories.iter().enumerate() {
+            if table.binary_search_by(|entry| entry.value.as_str().cmp(value)).is_err() {
+                let mut color = None;
+                for offset in 0..=used.len() {
+                    let candidate = default_color(categories, index, offset);
+                    if !used.contains(&candidate) {
+                        color = Some(candidate);
+                        break;
+                    }
+                }
+                let color = color.unwrap_or_else(|| default_color(categories, index, 0));
+                used.push(color);
+                filled.push(DrillCategoryColor { value: value.clone(), color });
+            }
+        }
+        let added = filled.len();
+        table.append(&mut filled);
+        self.set_categories(table);
+        added
     }
 }
 
@@ -886,6 +1702,10 @@ pub(crate) struct OpenDrillHoleDataset {
     pub(crate) name: String,
     pub(crate) dataset: Arc<DrillHoleDataset>,
     pub(crate) color: DrillColorState,
+    /// Downhole geophysics files linked to the dataset, saved with it.
+    /// Relinking replaces the link rather than editing it, so a reader can
+    /// tell a new link from the one it checked by pointer.
+    pub(crate) geophysics: Option<Arc<crate::model::geophysics::GeophysicsLink>>,
 }
 
 impl OpenDrillHoleDataset {
@@ -917,10 +1737,17 @@ pub(crate) struct SurveyObservation {
     pub(crate) position: Option<DVec3>,
 }
 
-pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> Vec<TraceStation> {
+/// A resolved trace and whether an observation steered it past the collar.
+pub(crate) struct ResolvedTrace {
+    pub(crate) stations: Vec<TraceStation>,
+    pub(crate) steered: bool,
+}
+
+pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation], target_depth: f64) -> ResolvedTrace {
     observations.sort_by(|a, b| a.depth.total_cmp(&b.depth));
     let mut trace = vec![TraceStation { depth: 0.0, position: collar }];
     let mut last_orientation = observations.iter().find_map(SurveyObservation::orientation);
+    let mut steered = false;
     for observation in observations.iter().copied() {
         if !observation.depth.is_finite() || observation.depth < 0.0 {
             continue;
@@ -930,11 +1757,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
             continue;
         }
         let stored_position = observation.position.filter(|position| position.is_finite());
+        steered |= observation.orientation().is_some();
         let position = stored_position.unwrap_or_else(|| {
             let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
             project_tangent(previous.position, observation.depth - previous.depth, azimuth, dip)
         });
         if observation.depth > previous.depth + 1.0e-9 {
+            steered |= stored_position.is_some() || last_orientation.is_some();
             trace.push(TraceStation {
                 depth: observation.depth,
                 position,
@@ -950,12 +1779,13 @@ pub(crate) fn resolve_trace(collar: DVec3, observations: &mut [SurveyObservation
     let previous = *trace.last().expect("collar station exists");
     if target_depth.is_finite() && target_depth > previous.depth + 1.0e-9 {
         let (azimuth, dip) = last_orientation.unwrap_or((0.0, -90.0));
+        steered |= last_orientation.is_some();
         trace.push(TraceStation {
             depth: target_depth,
             position: project_tangent(previous.position, target_depth - previous.depth, azimuth, dip),
         });
     }
-    trace
+    ResolvedTrace { stations: trace, steered }
 }
 
 impl SurveyObservation {
@@ -981,26 +1811,37 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
-    let mut numeric: BTreeMap<String, (String, f64, f64)> = BTreeMap::new();
-    let mut categorical: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
+    let mut categorical: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for hole in holes {
         for interval in &hole.intervals {
             for (key, value) in &interval.values {
                 let label = key.clone();
                 match value {
+                    // Sentinels stay out of the range; the field still shows.
                     DrillValue::Numeric(value) if value.is_finite() => {
+                        let sentinel = crate::model::block_model::is_no_data_sentinel(*value);
                         numeric
                             .entry(key.clone())
-                            .and_modify(|(_, min, max)| {
-                                *min = min.min(*value);
-                                *max = max.max(*value);
+                            .and_modify(|(_, min, max, has_real)| {
+                                if sentinel {
+                                    return;
+                                }
+                                if *has_real {
+                                    *min = min.min(*value);
+                                    *max = max.max(*value);
+                                } else {
+                                    *min = *value;
+                                    *max = *value;
+                                    *has_real = true;
+                                }
                             })
-                            .or_insert((label, *value, *value));
+                            .or_insert_with(|| if sentinel { (label, 0.0, 0.0, false) } else { (label, *value, *value, true) });
                     }
                     DrillValue::Category(value) if !value.trim().is_empty() => {
-                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, Vec::new())).1;
-                        if !values.contains(value) {
-                            values.push(value.clone());
+                        let values = &mut categorical.entry(key.clone()).or_insert_with(|| (label, BTreeSet::new())).1;
+                        if !values.contains(value.as_str()) {
+                            values.insert(value.clone());
                         }
                     }
                     _ => {}
@@ -1009,14 +1850,15 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
         }
     }
     let mut fields = Vec::new();
-    fields.extend(numeric.into_iter().map(|(key, (label, min, max))| DrillField {
+    fields.extend(numeric.into_iter().map(|(key, (label, min, max, _))| DrillField {
         key,
         label,
         kind: DrillFieldKind::Numeric { min, max },
     }));
-    fields.extend(categorical.into_iter().map(|(key, (label, mut categories))| {
+    fields.extend(categorical.into_iter().map(|(key, (label, categories))| {
+        // Every distinct code reaches the model; the ramp limit is not theirs.
+        let mut categories = categories.into_iter().collect::<Vec<_>>();
         categories.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
-        categories.truncate(MAX_DRILL_COLOR_STOPS);
         DrillField {
             key,
             label,
@@ -1027,51 +1869,338 @@ fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
     fields
 }
 
-fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
+pub(crate) type WorldBox = (DVec3, DVec3);
+
+/// One walk of the stations, so the dataset bounds and the per-hole boxes
+/// cannot come from different station sets.
+fn drill_extents(holes: &[DrillHole]) -> (Option<WorldBox>, Vec<WorldBox>) {
     let mut min = DVec3::splat(f64::INFINITY);
     let mut max = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
+    let mut boxes = Vec::with_capacity(holes.len());
     for hole in holes {
-        // A collar without a resolvable measured-depth segment remains part
-        // of the dataset/explorer counts, but it is not rendered and must not
-        // pull camera fitting toward an otherwise empty coordinate.
-        if hole.trace.len() < 2 {
-            continue;
-        }
-        // Conservatively cover both the trace and the world-sized collar. The
-        // trace's pixel floor has no stable world radius to add here.
+        let hole_box = trace_box(hole.collar_position(), &hole.trace);
+        boxes.push(hole_box);
+        // The bounds cover the collar marker; the hole's box is geometry alone.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
-        for station in &hole.trace {
-            min = min.min(station.position - DVec3::splat(radius));
-            max = max.max(station.position + DVec3::splat(radius));
-            any = true;
-        }
+        min = min.min(hole_box.0 - DVec3::splat(radius));
+        max = max.max(hole_box.1 + DVec3::splat(radius));
+        any = true;
     }
-    any.then_some((min, max))
+    (any.then_some((min, max)), boxes)
 }
 
-pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
-    const COLORS: [[f32; 3]; 12] = [
-        [0.12, 0.47, 0.71],
-        [1.00, 0.50, 0.05],
-        [0.17, 0.63, 0.17],
-        [0.84, 0.15, 0.16],
-        [0.58, 0.40, 0.74],
-        [0.55, 0.34, 0.29],
-        [0.89, 0.47, 0.76],
-        [0.50, 0.50, 0.50],
-        [0.74, 0.74, 0.13],
-        [0.09, 0.75, 0.81],
-        [0.30, 0.60, 0.90],
-        [0.90, 0.60, 0.20],
+/// The default colour for the code at `index` in a field's code list,
+/// generated so no code can fall past the end of a palette: hues advance by
+/// the golden angle through nine saturation and lightness bands, so near
+/// hues still differ in tone, and no band reaches white, the no-value colour.
+pub(crate) fn generated_category_color(index: usize) -> [f32; 3] {
+    const GOLDEN_STEP: f64 = 0.618_033_988_749_895;
+    const HUE_ORIGIN: f64 = 0.58;
+    const BANDS: [(f32, f32); 9] = [
+        (0.60, 0.52),
+        (0.90, 0.70),
+        (0.45, 0.32),
+        (0.75, 0.60),
+        (0.98, 0.42),
+        (0.55, 0.46),
+        (0.80, 0.36),
+        (0.70, 0.66),
+        (0.50, 0.40),
     ];
-    categories
+    let hue = (HUE_ORIGIN + index as f64 * GOLDEN_STEP).rem_euclid(1.0) as f32;
+    let (saturation, lightness) = BANDS[index % BANDS.len()];
+    hsl_to_rgb(hue, saturation, lightness)
+}
+
+/// Plain HSL to sRGB, in the component convention the shader takes.
+fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = hue.rem_euclid(1.0) * 6.0;
+    let second = chroma * (1.0 - (sector % 2.0 - 1.0).abs());
+    let (red, green, blue) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = lightness - chroma * 0.5;
+    [red + base, green + base, blue + base]
+}
+
+/// Working sections take full-strength hues, the most contrasting first, so
+/// a handful of seams read apart at a glance; codes keep the generated tones.
+const SECTION_COLORS: [[f32; 3]; 12] = [
+    [1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0],
+    [1.0, 1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 0.5, 0.0],
+    [0.5, 0.0, 1.0],
+    [0.5, 1.0, 0.0],
+    [0.0, 0.5, 1.0],
+    [1.0, 0.0, 0.5],
+    [0.0, 1.0, 0.5],
+];
+
+/// The default colour for `keys[index]`, `offset` steps along its palette: a
+/// section key counts only the sections before it, so the first section is
+/// red wherever it sits among the codes.
+fn default_color(keys: &[String], index: usize, offset: usize) -> [f32; 3] {
+    let is_section = |key: &String| key.starts_with(SECTION_COLOR_PREFIX);
+    if !is_section(&keys[index]) {
+        return generated_category_color(index + offset);
+    }
+    let rank = keys[..index].iter().filter(|key| is_section(key)).count() + offset;
+    SECTION_COLORS.get(rank).copied().unwrap_or_else(|| generated_category_color(rank))
+}
+
+/// A colour for every code in `categories`, sorted by code for the lookup.
+pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
+    let colors = categories
         .iter()
-        .take(MAX_DRILL_COLOR_STOPS)
         .enumerate()
         .map(|(index, value)| DrillCategoryColor {
             value: value.clone(),
-            color: COLORS[index],
+            color: default_color(categories, index, 0),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    CategoryTable::new(colors).into()
+}
+
+/// Colour table keys of working sections begin with this Unicode
+/// noncharacter, reserved for internal use, so a section's colour does not
+/// share an entry with a code of its name.
+const SECTION_COLOR_PREFIX: char = '\u{FDD0}';
+
+/// The colour table key a working section called `name` is coloured by.
+pub(crate) fn section_color_key(name: &str) -> String {
+    let mut key = String::with_capacity(name.len() + SECTION_COLOR_PREFIX.len_utf8());
+    key.push(SECTION_COLOR_PREFIX);
+    key.push_str(name);
+    key
+}
+
+/// One row of the colour list: what it is called, the colour table key it
+/// sets, and the section it stands for, if it is one.
+pub(crate) struct ColorRow<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) key: std::borrow::Cow<'a, str>,
+    pub(crate) section: Option<&'a WorkingSection>,
+}
+
+impl<'a> ColorRow<'a> {
+    /// A code's own row, coloured under the code.
+    pub(crate) fn code(code: &'a str) -> Self {
+        Self {
+            label: code,
+            key: code.into(),
+            section: None,
+        }
+    }
+}
+
+/// The section colour key of each code of the active field; see
+/// [`DrillColorState::section_lookup`].
+pub(crate) struct SectionLookup<'a> {
+    keys: Vec<String>,
+    index: HashMap<&'a str, usize>,
+}
+
+impl SectionLookup<'_> {
+    /// The key `code` is coloured by: its section's, or `code` where it is
+    /// in none.
+    pub(crate) fn color_key<'b>(&'b self, code: &'b str) -> &'b str {
+        self.index.get(code).map_or(code, |&section| self.keys[section].as_str())
+    }
+}
+
+/// What a reference pick is made on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReferenceTarget {
+    /// One logged code.
+    Code(String),
+    /// Every code of the working section of this name.
+    Section(String),
+}
+
+impl ReferenceTarget {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Code(name) | Self::Section(name) => name,
+        }
+    }
+
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Code(code) => code.clone(),
+            Self::Section(name) => tr_format!(literal = "%name% (working section)", name = name.clone()),
+        }
+    }
+}
+
+/// Which boundary of a working section a reference surface is built from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ReferenceSide {
+    #[default]
+    Roof,
+    Floor,
+}
+
+impl ReferenceSide {
+    pub(crate) const ALL: [Self; 2] = [Self::Roof, Self::Floor];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Roof => tr!(literal = "Roof"),
+            Self::Floor => tr!(literal = "Floor"),
+        }
+    }
+}
+
+/// What one hole contributes to a reference surface for one working section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ReferencePick {
+    /// Down-hole depth of the chosen boundary, or `None` where the hole never
+    /// holds the value.
+    pub(crate) depth: Option<f64>,
+    /// How many separate runs of the value the hole holds. Two or more is a
+    /// possible fault repeat: the uppermost run is used and the hole flagged.
+    pub(crate) runs: usize,
+}
+
+/// The pick a hole gives for `value` in `field`, on `side`.
+///
+/// Intervals carrying the value form runs. An interval with no value in that
+/// field sits inside a run without breaking it, since a parting is still the
+/// same working section, while a different value ends it. The roof is the
+/// top of a run's first interval, the floor its deepest base; with more
+/// than one run the uppermost is taken and `runs` says so.
+///
+/// `codes` is one code, or every code of a working section: consecutive
+/// intervals holding any of them form a single run.
+pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], side: ReferenceSide) -> ReferencePick {
+    let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
+    intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut open: Option<(f64, f64)> = None;
+    for interval in intervals {
+        match interval.values.get(field) {
+            Some(DrillValue::Category(code)) if codes.contains(code) => {
+                // A nested or duplicated row sorts after the interval that
+                // contains it, so the base is the deepest `to` in the run.
+                open = Some(match open {
+                    Some((top, base)) => (top, base.max(interval.to)),
+                    None => (interval.from, interval.to),
+                });
+            }
+            Some(DrillValue::Category(code)) if code.trim().is_empty() => {}
+            None => {}
+            Some(_) => {
+                if let Some(run) = open.take() {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+    if let Some(run) = open {
+        runs.push(run);
+    }
+    let depth = runs.first().map(|&(top, base)| match side {
+        ReferenceSide::Roof => top,
+        ReferenceSide::Floor => base,
+    });
+    ReferencePick { depth, runs: runs.len() }
+}
+
+/// One disc of a hole drawn as string and discs: a stretch of the trace and
+/// the interval whose value colours it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HoleDisc {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    /// Index into the hole's `intervals`.
+    pub(crate) interval: usize,
+}
+
+/// Whether a value earns its interval a disc. A blank code, or a number that
+/// is not one or is a no-data marker, is nothing at all - the colour path
+/// draws it white for the same reason - so that interval shows only string.
+pub(crate) fn disc_value(value: &DrillValue) -> bool {
+    match value {
+        DrillValue::Category(code) => !code.trim().is_empty(),
+        DrillValue::Numeric(number) => number.is_finite() && !crate::model::block_model::is_no_data_sentinel(*number),
+    }
+}
+
+/// The discs `hole` shows for the colour field `field`, shallowest first,
+/// clamped to the trace and to `render_ranges`.
+///
+/// Where intervals holding a value overlap - a seam logged whole and again
+/// as its plies - the shortest one covering a depth is drawn there, ties to
+/// the first logged: the plies show, and the whole seam fills only what
+/// they leave. Discs therefore never overlap one another, so no two of them
+/// fight for the same pixels.
+pub(crate) fn hole_discs(hole: &DrillHole, field: &str) -> Vec<HoleDisc> {
+    let (Some(first), Some(last)) = (hole.trace.first(), hole.trace.last()) else {
+        return Vec::new();
+    };
+    let (min_depth, max_depth) = (first.depth, last.depth);
+    // Also refuses a depth that is not a number.
+    if min_depth.partial_cmp(&max_depth) != Some(std::cmp::Ordering::Less) {
+        return Vec::new();
+    }
+    let mut candidates: Vec<usize> = hole
+        .intervals
+        .iter()
+        .enumerate()
+        .filter(|(_, interval)| interval.from.is_finite() && interval.to.is_finite() && interval.from < interval.to)
+        .filter(|(_, interval)| interval.values.get(field).is_some_and(disc_value))
+        .map(|(index, _)| index)
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut boundaries: Vec<f64> = candidates
+        .iter()
+        .flat_map(|&index| [hole.intervals[index].from, hole.intervals[index].to])
+        .chain(hole.render_ranges.iter().flat_map(|&(from, to)| [from, to]))
+        .filter(|depth| depth.is_finite())
+        .map(|depth| depth.clamp(min_depth, max_depth))
+        .collect();
+    boundaries.sort_by(f64::total_cmp);
+    boundaries.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+
+    candidates.sort_by(|&a, &b| hole.intervals[a].from.total_cmp(&hole.intervals[b].from).then(a.cmp(&b)));
+    let length = |index: usize| hole.intervals[index].to - hole.intervals[index].from;
+    let mut next = 0usize;
+    let mut active: Vec<usize> = Vec::new();
+    let mut discs: Vec<HoleDisc> = Vec::new();
+    for pair in boundaries.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if to <= from + 1.0e-9 {
+            continue;
+        }
+        let midpoint = (from + to) * 0.5;
+        while next < candidates.len() && hole.intervals[candidates[next]].from <= midpoint {
+            active.push(candidates[next]);
+            next += 1;
+        }
+        active.retain(|&index| midpoint < hole.intervals[index].to);
+        if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(start, end)| *start <= midpoint && midpoint < *end) {
+            continue;
+        }
+        let Some(winner) = active.iter().copied().min_by(|&a, &b| length(a).total_cmp(&length(b)).then(a.cmp(&b))) else {
+            continue;
+        };
+        match discs.last_mut() {
+            Some(disc) if disc.interval == winner && (disc.to - from).abs() <= 1.0e-9 => disc.to = to,
+            _ => discs.push(HoleDisc { from, to, interval: winner }),
+        }
+    }
+    discs
 }

@@ -1037,7 +1037,7 @@ impl BlockModelGpuCache {
     }
 }
 
-fn ray_aabb_distance(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
+pub(crate) fn ray_aabb_distance(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
     let mut near = 0.0_f64;
     let mut far = f64::INFINITY;
     for axis in 0..3 {

@@ -42,6 +42,12 @@ struct MenuState {
     /// Whether exactly one loaded drill-hole collection is selected, which is
     /// what block-model estimation runs on.
     can_create_block_model: bool,
+    /// Whether any hole is selected, which is what reference points are
+    /// placed on.
+    can_build_reference_points: bool,
+    /// Whether enough design points are selected to triangulate a surface
+    /// from, which is what Build Surface runs on.
+    can_build_reference_surface: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -55,6 +61,8 @@ struct MenuState {
     active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
+    /// Its own field, so a change here still trips `sync_menu_state`'s check.
+    show_borehole_inspector: bool,
     /// The File > Open Recent rows, as name and the project each opens.
     recent: Vec<(String, PathBuf)>,
 }
@@ -98,6 +106,12 @@ pub(crate) enum MacMenuAction {
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
+    /// The Drillholes menu's row; the View menu's copy rides [`VIEW_TOGGLES`].
+    ToggleBoreholeInspector,
+    /// The Drillholes menu's row that opens the reference points dialog.
+    OpenReferencePoints,
+    /// The Drillholes menu's row that opens the build surface dialog.
+    OpenReferenceSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -106,8 +120,8 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same two - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
+/// the same three - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::BoreholeInspector, ViewToggle::DarkMode];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.
@@ -166,6 +180,9 @@ impl MacMenuAction {
         Self::OpenAbout,
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
+        Self::ToggleBoreholeInspector,
+        Self::OpenReferencePoints,
+        Self::OpenReferenceSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -488,6 +505,26 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_separator(&drill_hole_menu, mtm);
+    // The inspector's own switch, kept in sync by `sync_menu_state`.
+    add_action(
+        &drill_hole_menu,
+        &ViewToggle::BoreholeInspector.label(),
+        "",
+        MacMenuAction::ToggleBoreholeInspector,
+        &target,
+        mtm,
+    );
+    add_separator(&drill_hole_menu, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!(literal = "Reference Points..."),
+        "",
+        MacMenuAction::OpenReferencePoints,
+        &target,
+        mtm,
+    );
+    add_action(&drill_hole_menu, &tr!(literal = "Build Surface..."), "", MacMenuAction::OpenReferenceSurface, &target, mtm);
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 
@@ -624,6 +661,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         one_surface_selected: editor.selection_counts.triangulations == 1,
         can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
         can_create_block_model: editor.selection_counts.drill_holes == 1,
+        can_build_reference_points: editor.selection_counts.reference_holes > 0,
+        can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
@@ -632,6 +671,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
+        show_borehole_inspector: ViewToggle::BoreholeInspector.get(editor),
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
@@ -663,6 +703,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     // opened with rather than on a pick list filled inside their dialog.
     set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
+    set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
+    set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);
@@ -678,4 +720,5 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+    set_checked(&root, MacMenuAction::ToggleBoreholeInspector, state.show_borehole_inspector);
 }

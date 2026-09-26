@@ -31,6 +31,58 @@ pub(crate) enum ViewOnOpen {
     Keep,
 }
 
+/// Reconcile colour state restored from an OMF style blob with the dataset it
+/// now belongs to: every saved colour is kept, every unnamed code gets a
+/// generated one, nothing is marked dirty, and the gap is reported.
+pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole::OpenDrillHoleDataset) {
+    let (kept, dropped) = crate::model::drill_hole::tidy_working_sections(std::mem::take(&mut open.color.working_sections), &open.dataset.fields);
+    open.color.working_sections = kept;
+    if !dropped.is_empty() {
+        let details = dropped
+            .iter()
+            .map(|section| tr_format!(literal = "'%name%': %reason%", name = section.name.clone(), reason = section.problem.message()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        userspace_warn!(
+            "{}",
+            tr_format!(
+                literal = "Dataset '%name%': %count% working section(s) could not be restored: %details%",
+                name = open.name.clone(),
+                count = dropped.len(),
+                details = details
+            )
+        );
+    }
+    if open.color.by_working_section
+        && let Some(field) = open.color.active_field.as_deref()
+        && !open.color.working_sections.iter().any(|section| section.field == field)
+    {
+        open.color.by_working_section = false;
+    }
+
+    let Some(key) = open.color.active_field.clone() else { return };
+    let dataset = std::sync::Arc::clone(&open.dataset);
+    let Some(field) = dataset.field(&key) else { return };
+    let crate::model::drill_hole::DrillFieldKind::Categorical { categories } = &field.kind else {
+        return;
+    };
+    let total = categories.len();
+    let saved = categories.iter().filter(|code| open.color.category_color(code).is_some()).count();
+    let filled = open.color.reconcile_categories(field);
+    if filled > 0 {
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Dataset '%name%': field '%field%' was saved with %saved% of %total% codes coloured; the rest were given generated colours.",
+                name = open.name.clone(),
+                field = field.label.clone(),
+                saved = saved,
+                total = total
+            )
+        );
+    }
+}
+
 /// How much of the project's folder registry a snapshot carries.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FolderScope {
@@ -43,7 +95,7 @@ enum FolderScope {
     Referenced,
 }
 
-/// Every folder id a snapshot's own content sits in, across all six sections.
+/// Every folder id a snapshot's own content sits in, across every section.
 fn referenced_folders(snapshot: &ProjectSnapshot) -> std::collections::HashSet<FolderId> {
     let mut referenced = std::collections::HashSet::new();
     if let Some(design) = &snapshot.designs {
@@ -181,7 +233,7 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
-        // Merged once, for all six sections, before anything is installed:
+        // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
         for imported in designs {
@@ -391,7 +443,7 @@ impl<'a> App<'a> {
                 );
             }
 
-            // Merged once, for all six sections, before any design, layer or
+            // Merged once, for every section, before any design, layer or
             // item below looks its own membership up in the same map. Unlike
             // opening a whole project, the target registry already has
             // content of its own, so an incoming name is never assumed to be
@@ -571,6 +623,8 @@ impl<'a> App<'a> {
                     .with_section(imported.section)
                     .with_folder(folder);
                 open.color = imported.color;
+                open.geophysics = imported.geophysics;
+                reconcile_restored_drill_color(open);
             }
         }
 

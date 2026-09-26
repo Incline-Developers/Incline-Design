@@ -35,6 +35,10 @@ pub(super) const GROUND_INTENSITY: f32 = 0.12;
 /// design strings.
 pub(super) const SCENE_EXPOSURE: f32 = 0.8;
 
+const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 7] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32, 4 => Float32x2, 5 => Float32x3, 6 => Float32x3];
+const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32, 4 => Float32];
+
 /// The bind group layouts the scene pipelines are laid out against. Everything
 /// but `camera` is shared by both copies; `camera` is the plain camera layout
 /// for the ordinary view and the camera-plus-lighting layout for the cinematic
@@ -51,6 +55,8 @@ pub(crate) struct ScenePipelineLayouts<'a> {
     pub(crate) point_cloud_style: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_transparency_composite: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_volume_upscale: &'a wgpu::BindGroupLayout,
+    /// The drill selection bitset, group 1 of both drill pipelines.
+    pub(crate) drill_selection: &'a wgpu::BindGroupLayout,
 }
 
 /// How the scene pass shades what it draws.
@@ -215,19 +221,24 @@ pub(crate) fn create_scene_pipelines(
             include_str!("../shaders/point_cloud.wgsl")
         ),
     );
-    let drill_hole_shader = shading.lit_shader(device, "../shaders/drill_hole.wgsl", include_str!("../shaders/drill_hole.wgsl"));
-    let drill_collar_shader = make_shader(device, "../shaders/drill_collar.wgsl", include_str!("../shaders/drill_collar.wgsl"));
+    // The selection block is one file both drill shaders take as a prelude,
+    // the way `make_shader` hands every shader the camera one.
+    let drill_selection = include_str!("../shaders/drill_selection_common.wgsl");
+    let drill_hole_body = format!("{drill_selection}{}", include_str!("../shaders/drill_hole.wgsl"));
+    let drill_hole_shader = shading.lit_shader(device, "../shaders/drill_hole.wgsl", &drill_hole_body);
+    let drill_collar_body = format!("{drill_selection}{}", include_str!("../shaders/drill_collar.wgsl"));
+    let drill_collar_shader = make_shader(device, "../shaders/drill_collar.wgsl", &drill_collar_body);
     let design_point_shader = make_shader(device, "../shaders/design_point.wgsl", include_str!("../shaders/design_point.wgsl"));
     let raster_plane_shader = make_shader(device, "../shaders/raster_plane.wgsl", include_str!("../shaders/raster_plane.wgsl"));
 
-    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[Some(layouts.camera)],
-        immediate_size: 0,
-    });
     let document_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Document Pipeline Layout"),
         bind_group_layouts: &[Some(layouts.camera), Some(layouts.document_style)],
+        immediate_size: 0,
+    });
+    let drill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Drill Hole Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera), Some(layouts.drill_selection)],
         immediate_size: 0,
     });
     let grid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -308,12 +319,12 @@ pub(crate) fn create_scene_pipelines(
     let drill_hole_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<DrillSegmentInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+        attributes: &DRILL_SEGMENT_ATTRIBUTES,
     })];
     let drill_collar_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<DrillCollarInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+        attributes: &DRILL_COLLAR_ATTRIBUTES,
     })];
 
     let create_stroke_pipeline = |label, depth_stencil: Option<wgpu::DepthStencilState>| {
@@ -478,7 +489,7 @@ pub(crate) fn create_scene_pipelines(
     let create_drill_hole_pipeline = |label, depth_stencil| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&drill_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &drill_hole_shader,
                 entry_point: Some("vs_main"),
@@ -517,7 +528,7 @@ pub(crate) fn create_scene_pipelines(
     let create_drill_collar_pipeline = |label, depth_stencil| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&drill_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &drill_collar_shader,
                 entry_point: Some("vs_main"),
