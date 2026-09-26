@@ -1670,13 +1670,13 @@ impl DrillColorState {
             if table.binary_search_by(|entry| entry.value.as_str().cmp(value)).is_err() {
                 let mut color = None;
                 for offset in 0..=used.len() {
-                    let candidate = generated_category_color(index + offset);
+                    let candidate = default_color(categories, index, offset);
                     if !used.contains(&candidate) {
                         color = Some(candidate);
                         break;
                     }
                 }
-                let color = color.unwrap_or_else(|| generated_category_color(index));
+                let color = color.unwrap_or_else(|| default_color(categories, index, 0));
                 used.push(color);
                 filled.push(DrillCategoryColor { value: value.clone(), color });
             }
@@ -1930,6 +1930,35 @@ fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
     [red + base, green + base, blue + base]
 }
 
+/// Working sections take full-strength hues, the most contrasting first, so
+/// a handful of seams read apart at a glance; codes keep the generated tones.
+const SECTION_COLORS: [[f32; 3]; 12] = [
+    [1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0],
+    [1.0, 1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 0.5, 0.0],
+    [0.5, 0.0, 1.0],
+    [0.5, 1.0, 0.0],
+    [0.0, 0.5, 1.0],
+    [1.0, 0.0, 0.5],
+    [0.0, 1.0, 0.5],
+];
+
+/// The default colour for `keys[index]`, `offset` steps along its palette: a
+/// section key counts only the sections before it, so the first section is
+/// red wherever it sits among the codes.
+fn default_color(keys: &[String], index: usize, offset: usize) -> [f32; 3] {
+    let is_section = |key: &String| key.starts_with(SECTION_COLOR_PREFIX);
+    if !is_section(&keys[index]) {
+        return generated_category_color(index + offset);
+    }
+    let rank = keys[..index].iter().filter(|key| is_section(key)).count() + offset;
+    SECTION_COLORS.get(rank).copied().unwrap_or_else(|| generated_category_color(rank))
+}
+
 /// A colour for every code in `categories`, sorted by code for the lookup.
 pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategoryColor> {
     let colors = categories
@@ -1937,7 +1966,7 @@ pub(crate) fn default_category_colors(categories: &[String]) -> Vec<DrillCategor
         .enumerate()
         .map(|(index, value)| DrillCategoryColor {
             value: value.clone(),
-            color: generated_category_color(index),
+            color: default_color(categories, index, 0),
         })
         .collect::<Vec<_>>();
     CategoryTable::new(colors).into()
