@@ -366,6 +366,7 @@ fn append_glyph_mesh(mesh: &Mesh2D, glyph_x: f32, baseline_y: f32, font_size: f3
         Vertex {
             pos: transform.transform_point3(local).to_array(),
             color,
+            style: crate::rendering::scene::document_style::STYLE_SLOT_NONE,
         }
     }));
     indices.extend(mesh.indices.iter().map(|index| base_vertex + index));

@@ -1,7 +1,4 @@
-use std::{
-    io::{BufReader, Read},
-    sync::Arc,
-};
+use std::{io::Read, sync::Arc};
 
 use flate2::read::GzDecoder;
 
@@ -147,11 +144,17 @@ impl<R: ReadAt> Reader<R> {
     /// fails. Validation warnings are returned alongside the project if successful or included
     /// with the errors if not.
     pub fn project(&self) -> Result<(Project, Problems), Error> {
-        let mut project: Project = serde_json::from_reader(BufReader::new(LimitedRead::new(
+        // Inflated whole and parsed from the slice: serde_json's reader path pulls one
+        // byte at a time through `Read` and is several times slower on a large index.
+        let mut json = Vec::new();
+        LimitedRead::new(
             GzDecoder::new(self.archive.open(INDEX_NAME)?),
             self.limits().json_bytes.unwrap_or(u64::MAX),
-        )))
-        .map_err(Error::DeserializationFailed)?;
+        )
+        .read_to_end(&mut json)?;
+        let mut project: Project =
+            serde_json::from_slice(&json).map_err(Error::DeserializationFailed)?;
+        drop(json);
         let mut val = Validator::new()
             .with_filenames(self.archive.filenames())
             .with_limit(self.limits().validation);

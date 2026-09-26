@@ -11,12 +11,17 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     model::{
-        block_model::{BlockBounds, BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, color_variable_default},
+        block_model::{
+            BlockBounds, BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, block_bounds_key, block_world_corners, color_variable_default,
+        },
         formats::mesh_data,
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
     },
-    rendering::{BlockInstance, SurfaceVertex, graphics::frustum::OrientedBox},
+    rendering::{
+        BlockInstance, SurfaceVertex,
+        graphics::{frustum::OrientedBox, make_translucent},
+    },
     ui::state::EditorState,
 };
 
@@ -27,7 +32,7 @@ const HIDDEN_BLOCK_GRADE: f32 = -2.0;
 /// Grades below this are discarded by `block_model.wgsl` (`grade < -1.5`).
 /// Geometry building must treat such blocks as absent - a discarded block
 /// leaves a hole, so it can't be allowed to cull its neighbours' faces.
-use super::block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, is_hidden_block_grade, make_translucent, ramp_alpha};
+use super::block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, is_hidden_block_grade, ramp_alpha};
 
 #[derive(Clone, Copy)]
 enum BlockSurfaceSelection {
@@ -2114,7 +2119,7 @@ fn build_block_model_surface_chunks(
                 // Chunk bounds are the scene-relative world AABB, so keep
                 // walking the block's rotated corners here (frustum culling /
                 // depth sort).
-                for corner in block_corners(model, block) {
+                for corner in block_world_corners(model, block) {
                     let scene_rel = (corner - scene_origin).as_vec3();
                     bounds_min = bounds_min.min(scene_rel);
                     bounds_max = bounds_max.max(scene_rel);
@@ -2484,7 +2489,7 @@ fn build_block_occupancy(block_model: &OpenBlockModel, drawn: &[bool]) -> BlockO
         }
         return BlockOccupancy::Lattice { lattice, bits };
     }
-    BlockOccupancy::Keys(drawn_blocks(block_model, drawn).map(block_key).collect())
+    BlockOccupancy::Keys(drawn_blocks(block_model, drawn).map(block_bounds_key).collect())
 }
 
 /// The blocks the shader draws, in `renderable_block_indices` order. `drawn`
@@ -2543,7 +2548,7 @@ impl BlockOccupancy {
                     DVec3::new(0.0, 0.0, size.z),
                 ];
                 neighbours.iter().all(|&delta| {
-                    let neighbour = block_key(BlockBounds {
+                    let neighbour = block_bounds_key(BlockBounds {
                         lower: block.lower + delta,
                         upper: block.upper + delta,
                     });
@@ -2587,7 +2592,7 @@ impl BlockOccupancy {
                 let size = block.upper - block.lower;
                 FACE_OFFSETS.map(|offset| {
                     let delta = DVec3::new(offset[0] as f64 * size.x, offset[1] as f64 * size.y, offset[2] as f64 * size.z);
-                    let neighbour = block_key(BlockBounds {
+                    let neighbour = block_bounds_key(BlockBounds {
                         lower: block.lower + delta,
                         upper: block.upper + delta,
                     });
@@ -2596,21 +2601,6 @@ impl BlockOccupancy {
             }
         }
     }
-}
-
-fn block_key(block: BlockBounds) -> [u64; 6] {
-    [
-        quantize(block.lower.x),
-        quantize(block.lower.y),
-        quantize(block.lower.z),
-        quantize(block.upper.x),
-        quantize(block.upper.y),
-        quantize(block.upper.z),
-    ]
-}
-
-fn quantize(value: f64) -> u64 {
-    (value * 1_000_000.0).round().to_bits()
 }
 
 fn is_empty_grade_value(value: f64, default: Option<f64>) -> bool {
@@ -2709,7 +2699,7 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
                 continue;
             }
         }
-        let corners = block_corners(&block_model.model, block);
+        let corners = block_world_corners(&block_model.model, block);
         for ([a, b], [face_a, face_b]) in BLOCK_EDGE_FACES {
             if !exposed[face_a] && !exposed[face_b] {
                 continue;
@@ -2730,19 +2720,4 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
         chunks.push(chunk);
     }
     chunks
-}
-
-fn block_corners(model: &crate::model::formats::block_model_data::BlockModelData, block: crate::model::block_model::BlockBounds) -> [DVec3; 8] {
-    let lo = block.lower;
-    let hi = block.upper;
-    [
-        model.local_to_world(DVec3::new(lo.x, lo.y, lo.z)),
-        model.local_to_world(DVec3::new(hi.x, lo.y, lo.z)),
-        model.local_to_world(DVec3::new(hi.x, hi.y, lo.z)),
-        model.local_to_world(DVec3::new(lo.x, hi.y, lo.z)),
-        model.local_to_world(DVec3::new(lo.x, lo.y, hi.z)),
-        model.local_to_world(DVec3::new(hi.x, lo.y, hi.z)),
-        model.local_to_world(DVec3::new(hi.x, hi.y, hi.z)),
-        model.local_to_world(DVec3::new(lo.x, hi.y, hi.z)),
-    ]
 }

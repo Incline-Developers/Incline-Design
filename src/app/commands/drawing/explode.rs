@@ -1,10 +1,8 @@
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
-    i18n::tr,
+    app::App,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, SceneEntityId},
     ui::state::ActiveTool,
-    userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -12,11 +10,7 @@ impl<'a> App<'a> {
         if !self.editing_ready() {
             return;
         }
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
             return;
         };
@@ -27,7 +21,6 @@ impl<'a> App<'a> {
         // happens to be two semicircular arcs, but that is an encoding detail
         // and not something to hand the user as the result of a tool.
         if matches!(self.active_document().get_object(object_id), Some(Object::Circle { .. })) {
-            userspace_warn!("{}", tr!(literal = "A circle cannot be exploded: it is a single shape, not a series of segments"));
             return;
         }
         self.editor.tool_highlight_id = None;
@@ -36,11 +29,7 @@ impl<'a> App<'a> {
 
     /// Update the hover highlight for the Explode tool on cursor move.
     pub(crate) fn update_explode_hover(&mut self) {
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let hovered = picked.and_then(|(h, _)| match h {
             SceneEntityId::Object(id)
                 if self

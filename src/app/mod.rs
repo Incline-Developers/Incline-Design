@@ -784,6 +784,18 @@ impl<'a> App<'a> {
         self.workspace.active_document().unwrap_or(&self.empty_document)
     }
 
+    /// What the cursor is over at the standard pick threshold, honouring the
+    /// editor's hidden and frozen sets and x-ray.
+    pub(crate) fn pick_under_cursor(&self) -> Option<(SceneEntityId, DVec3)> {
+        self.graphics.as_ref()?.pick_at_cursor(
+            PICK_THRESHOLD_PX,
+            &self.triangulations,
+            &self.editor.hidden_handles,
+            &self.editor.frozen_handles,
+            self.editor.xray_enabled,
+        )
+    }
+
     pub(crate) fn activate_project_for_object(&mut self, object_id: ObjectId) -> bool {
         let Some(index) = self.workspace.project_index_for_object(object_id) else {
             return false;

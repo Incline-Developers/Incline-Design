@@ -61,7 +61,7 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
-        self.cancel_fuse();
+        self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
         // A step that put an item back may have restored one the editor had
@@ -1111,10 +1111,17 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_poly_object_name = boundary_name;
                 self.editor.tri_cut_poly_mode = crate::ui::state::TriPolylineClipMode::KeepInside;
                 self.editor.tri_cut_poly_name_input = name;
+                self.editor.tri_cut_poly_unload_source = true;
                 Ok(())
             }
-            UiCommand::ExecuteCutTriangulationByPolyline { tri_id, polyline_id, mode, name } => {
-                let result = self.cut_triangulation_by_polyline(tri_id, polyline_id, mode, name);
+            UiCommand::ExecuteCutTriangulationByPolyline {
+                tri_id,
+                polyline_id,
+                mode,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_triangulation_by_polyline(tri_id, polyline_id, mode, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_poly_open = false;
                     self.editor.tool_highlight_id = None;
@@ -1137,10 +1144,17 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_z_min_input = bounds.min.z;
                 self.editor.tri_cut_z_max_input = bounds.max.z;
                 self.editor.tri_cut_z_name_input = name;
+                self.editor.tri_cut_z_unload_source = true;
                 Ok(())
             }
-            UiCommand::ExecuteCutTriangulationByZ { tri_id, z_min, z_max, name } => {
-                let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name);
+            UiCommand::ExecuteCutTriangulationByZ {
+                tri_id,
+                z_min,
+                z_max,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_z_open = false;
                 }
@@ -1156,6 +1170,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_surface_target_id = None;
                 self.editor.tri_cut_surface_side = crate::ui::state::TriSurfaceCutSide::CutTop;
                 self.editor.tri_cut_surface_name_input.clear();
+                self.editor.tri_cut_surface_unload_source = true;
                 Ok(())
             }
             UiCommand::ExecuteCutTriangulationBySurface {
@@ -1163,8 +1178,9 @@ impl<'a> App<'a> {
                 reference_id,
                 side,
                 name,
+                unload_source,
             } => {
-                let result = self.cut_triangulation_by_surface(target_id, reference_id, side, name);
+                let result = self.cut_triangulation_by_surface(target_id, reference_id, side, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_surface_open = false;
                 }
@@ -1175,6 +1191,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_pitshell_name_auto = true;
                 self.editor.tri_cut_pitshell_topology_id = self.active_triangulation;
                 self.editor.tri_cut_pitshell_pitshell_id = None;
+                self.editor.tri_cut_pitshell_unload_source = true;
                 self.editor.tri_cut_pitshell_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
@@ -1182,8 +1199,13 @@ impl<'a> App<'a> {
                     .unwrap_or_default();
                 Ok(())
             }
-            UiCommand::ExecuteCutTopologyByPitShell { topology_id, pit_shell_id, name } => {
-                let result = self.cut_topology_by_pit_shell(topology_id, pit_shell_id, name);
+            UiCommand::ExecuteCutTopologyByPitShell {
+                topology_id,
+                pit_shell_id,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_topology_by_pit_shell(topology_id, pit_shell_id, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_pitshell_open = false;
                 }

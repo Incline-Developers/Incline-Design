@@ -525,6 +525,27 @@ impl<'a> App<'a> {
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
+        self.clear_drill_hole_editor_refs(id);
+        self.invalidate_topology_bounds_and_redraw();
+    }
+
+    pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
+        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
+        let entity = SceneEntityId::DrillHole(id);
+        self.editor.selected_handles.remove(&entity);
+        self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
+        self.editor.frozen_handles.remove(&entity);
+        self.editor.translucent_handles.remove(&entity);
+        self.clear_drill_hole_editor_refs(id);
+        self.delete_project_item(ItemRef::DrillHole(id));
+        self.request_topology_redraw();
+    }
+
+    /// Drop every editor reference into dataset `id`: its dialogs, the active
+    /// and selected holes, and any tie-in chain anchored on it.
+    fn clear_drill_hole_editor_refs(&mut self, id: DrillHoleId) {
         if self.editor.drill_hole_color_dialog == Some(id) {
             self.editor.drill_hole_color_dialog = None;
         }
@@ -538,30 +559,6 @@ impl<'a> App<'a> {
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
-        self.invalidate_topology_bounds_and_redraw();
-    }
-
-    pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
-        self.cancel_collar_move_touching(id);
-        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
-        let entity = SceneEntityId::DrillHole(id);
-        self.editor.selected_handles.remove(&entity);
-        self.editor.hidden_handles.remove(&entity);
-        self.editor.explicitly_frozen.remove(&entity);
-        self.editor.frozen_handles.remove(&entity);
-        self.editor.translucent_handles.remove(&entity);
-        if self.editor.active_drill_hole == Some(id) {
-            self.editor.active_drill_hole = None;
-        }
-        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
-            self.editor.end_tie_chain();
-        }
-        self.editor.retain_drill_hole_datasets(|dataset| dataset != id);
-        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
-            self.editor.initiation_dialog = None;
-        }
-        self.delete_project_item(ItemRef::DrillHole(id));
-        self.request_topology_redraw();
     }
 
     /// Sends one hole to the borehole inspector, opening the panel if it is

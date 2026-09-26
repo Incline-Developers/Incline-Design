@@ -11,13 +11,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Cursor, Seek, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::{Context, Result, bail};
 use glam::{DMat3, DVec3};
 use omf as omf_crate;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
@@ -26,9 +27,9 @@ use crate::{
         Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
-            opaque_irregular_surface_block_count, opaque_surface_block_count,
+            compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset, skipped_working_sections},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, skipped_working_sections},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
@@ -44,9 +45,14 @@ use crate::{
 
 const META_KIND: &str = "incline:kind";
 const META_NAME: &str = "incline:name";
-const META_OBJECT: &str = "incline:object";
+/// A design layer's [`DesignRecord`]s.
+const META_OBJECTS: &str = "incline:objects";
+/// The per-row column naming the design object a segment or point belongs to.
+const DESIGN_OBJECT_ATTRIBUTE: &str = "Object";
+/// Per-segment DXF bulge of a design polyline; absent when every segment is straight.
+const DESIGN_BULGE_ATTRIBUTE: &str = "Bulge";
 /// Ring resolution for a circle's native OMF geometry, which has no arcs. Only
-/// readers that ignore `incline:object` metadata ever see this approximation.
+/// readers that ignore `incline:objects` metadata ever see this approximation.
 const CIRCLE_EXPORT_SEGMENTS: u32 = 64;
 const META_LAYER: &str = "incline:layer";
 /// Every section's explorer folder names, keyed by [`SectionKind::key`].
@@ -65,7 +71,11 @@ const META_SECTION: &str = "incline:section";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
-const META_DRILL_HOLE: &str = "incline:drill_hole";
+/// Depth ranges each hole is drawn over, where not the whole trace, keyed by
+/// the hole's position in its dataset.
+const META_RENDER_RANGES: &str = "incline:render_ranges";
+/// The category on every drillhole row naming the hole it belongs to.
+const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -200,6 +210,8 @@ pub(crate) struct ImportedRaster {
     pub(crate) loaded: LoadedRasterTexture,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
+    /// The archive element the image was read from; see [`PayloadSource`].
+    pub(crate) payload_source: Option<DeferredAsset>,
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
@@ -380,15 +392,23 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         progress.set_items(complete, total);
     }
     for raster in &snapshot.rasters {
-        let restored;
-        let raster = if raster.state.deferred.is_some() {
-            restored = crate::model::OpenItem::Raster(Box::new(raster.clone())).materialize()?;
-            let crate::model::OpenItem::Raster(item) = &restored else { unreachable!() };
-            item.as_ref()
-        } else {
-            raster
+        let copied = match sources.unchanged(&raster.state, &PayloadIdentity::raster(raster)) {
+            Some((reader, element)) => copy_raster_image(&mut writer, reader, element)?,
+            None => None,
         };
-        let mut element = write_raster(&mut writer, raster)?;
+        let mut element = match copied {
+            Some(image) => write_raster(&mut writer, raster, image)?,
+            None if raster.state.deferred.is_some() => {
+                let restored = crate::model::OpenItem::Raster(Box::new(raster.clone())).materialize()?;
+                let crate::model::OpenItem::Raster(item) = &restored else { unreachable!() };
+                let image = writer.image_bytes(&encode_png(item.source_size, &item.full_rgba)?)?;
+                write_raster(&mut writer, item, image)?
+            }
+            None => {
+                let image = writer.image_bytes(&encode_png(raster.source_size, &raster.full_rgba)?)?;
+                write_raster(&mut writer, raster, image)?
+            }
+        };
         tag_folder(&mut element, &snapshot.folders, raster.state.section, raster.state.folder);
         tag_section(&mut element, MemberKind::Raster, raster.state.section);
         elements.push(element);
@@ -450,34 +470,6 @@ fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: Sect
 
 fn kind(element: &omf_crate::Element) -> Option<&str> {
     element.metadata.get(META_KIND).and_then(Value::as_str)
-}
-
-/// Builds the stations only: `DrillHoleDataset::new` puts them in depth
-/// order later, but the collar is needed before that gate runs.
-fn line_set_trace(depths: Vec<f64>, vertices: Vec<DVec3>) -> (Vec<crate::model::drill_hole::TraceStation>, DVec3) {
-    let trace = depths
-        .into_iter()
-        .zip(vertices)
-        .map(|(depth, position)| crate::model::drill_hole::TraceStation { depth, position })
-        .collect::<Vec<_>>();
-    // total_cmp, not partial_cmp: a depth that is not a number sorts to one
-    // end instead of panicking.
-    let collar = trace.iter().min_by(|a, b| a.depth.total_cmp(&b.depth)).map_or(DVec3::ZERO, |station| station.position);
-    (trace, collar)
-}
-
-/// Depth as distance along the polyline in file order: monotone by
-/// construction, and a true measured depth rather than a vertex index.
-fn cumulative_length_depths(vertices: &[DVec3]) -> Vec<f64> {
-    let mut depth = 0.0;
-    let mut depths = Vec::with_capacity(vertices.len());
-    for (index, &vertex) in vertices.iter().enumerate() {
-        if index > 0 {
-            depth += vertex.distance(vertices[index - 1]);
-        }
-        depths.push(depth);
-    }
-    depths
 }
 
 fn element_name(element: &omf_crate::Element) -> &str {
@@ -576,13 +568,11 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             document
         };
 
-        let mut objects = Vec::new();
-        for object in document.objects().iter().filter(|object| object.layer() == layer.id) {
-            objects.push(write_design_object(writer, document, object)?);
-        }
-        let mut element = omf_crate::Element::new(layer.name.clone(), omf_crate::Composite::new(objects));
+        let (parts, records) = write_design_layer(writer, document, layer)?;
+        let mut element = omf_crate::Element::new(layer.name.clone(), omf_crate::Composite::new(parts));
         element.color = Some(rgba8(layer.color));
         put(&mut element, META_KIND, "design_layer");
+        put(&mut element, META_OBJECTS, serde_json::to_value(records)?);
         let mut portable_layer = layer.clone();
         portable_layer.id = crate::model::LayerId(layer.id.0 & LOCAL_MASK);
         // Folder and section travel in META_FOLDER/META_SECTION instead of
@@ -604,60 +594,167 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     Ok(element)
 }
 
-fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, object: &Object) -> Result<omf_crate::Element> {
+/// A design object's settings, in document order on its layer's element.
+/// Geometry is not repeated here: it lives in the layer's `Lines` and `Points`
+/// sets, whose [`DESIGN_OBJECT_ATTRIBUTE`] rows name the object they belong to.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum DesignRecord {
+    Point {
+        id: u64,
+        color: ObjectColor,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    /// Vertices, bulges and closure come from the object's run of segments.
+    Polyline {
+        id: u64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    /// The segments are only a tessellated ring for other readers; the exact
+    /// centre and radius are here.
+    Circle {
+        id: u64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+        center: DVec3,
+        radius: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+    Text {
+        id: u64,
+        color: ObjectColor,
+        content: String,
+        height: f64,
+        rotation: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
+}
+
+/// One layer's objects as a composite of at most two elements: every polyline
+/// and circle in one `Lines` set, every point and text in one `Points` set.
+/// Polyline `i` owns vertices `b..b+n` and the segments `[b+k, b+k+1]`, plus
+/// `[b+n-1, b]` when closed - so closure is read back from the segments. A
+/// segment's `Bulge` (written only when some bulge is non-zero) is the DXF
+/// bulge of the vertex it starts at.
+fn write_design_layer<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, layer: &Layer) -> Result<(Vec<omf_crate::Element>, Vec<DesignRecord>)> {
+    use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
     const LOCAL_MASK: u64 = u32::MAX as u64;
-    let local_id = object.id().0 & LOCAL_MASK;
-    let (name, geometry): (String, omf_crate::Geometry) = match object {
-        Object::Point { pos, .. } => (format!("Point {local_id}"), omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into()),
-        Object::Polyline { verts, closed, .. } => {
-            let vertices = verts.iter().map(|vertex| vertex.pos.to_array());
-            let mut segments = (0..verts.len().saturating_sub(1)).map(|index| [index as u32, index as u32 + 1]).collect::<Vec<_>>();
-            if *closed && verts.len() > 2 {
-                segments.push([(verts.len() - 1) as u32, 0]);
-            }
-            (
-                format!("{} {local_id}", if verts.len() == 2 { "Line" } else { "Polyline" }),
-                omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
-            )
-        }
-        // OMF has no arc primitive, so the native geometry is a tessellated
-        // ring. The exact centre and radius travel in `incline:object`
-        // metadata below; this is what other OMF tools - and older Incline
-        // builds, which cannot decode the metadata - fall back to. Writing the
-        // two-semicircle encoding here instead would hand them a bare diameter
-        // line, which is what happened before circles had a variant.
-        Object::Circle { center, radius, .. } => {
-            let vertices = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| {
-                let angle = std::f64::consts::TAU * (f64::from(step) / f64::from(CIRCLE_EXPORT_SEGMENTS));
-                [center.x + radius * angle.cos(), center.y + radius * angle.sin(), center.z]
-            });
-            let segments = (0..CIRCLE_EXPORT_SEGMENTS).map(|step| [step, (step + 1) % CIRCLE_EXPORT_SEGMENTS]);
-            (
-                format!("Circle {local_id}"),
-                omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
-            )
-        }
-        Object::Text { pos, content, .. } => (
-            if content.trim().is_empty() { format!("Text {local_id}") } else { content.clone() },
-            omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into(),
-        ),
-    };
-    let mut element = omf_crate::Element::new(name, geometry);
-    element.color = Some(rgba8(document.object_rgba(object)));
-    put(
-        &mut element,
-        META_KIND,
+
+    let mut records = Vec::new();
+    let (mut line_vertices, mut segments, mut segment_objects, mut bulges) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut point_vertices, mut point_objects) = (Vec::new(), Vec::new());
+    for object in document.objects().iter().filter(|object| object.layer() == layer.id) {
+        let id = object.id().0 & LOCAL_MASK;
+        let color = object.color();
+        let hidden = document.is_object_hidden(object.id());
         match object {
-            Object::Point { .. } => "design_point",
-            Object::Polyline { .. } => "design_polyline",
-            Object::Circle { .. } => "design_circle",
-            Object::Text { .. } => "design_text",
-        },
-    );
-    let portable_object = object.with_id_and_layer(crate::model::ObjectId(local_id), crate::model::LayerId(object.layer().0 & LOCAL_MASK));
-    put(&mut element, META_OBJECT, serde_json::to_value(portable_object)?);
-    put(&mut element, META_STYLE, json!({ "visible": !document.is_object_hidden(object.id()) }));
-    Ok(element)
+            Object::Point { pos, .. } => {
+                point_vertices.push(pos.to_array());
+                point_objects.push(Some(id as i64));
+                records.push(DesignRecord::Point { id, color, hidden });
+            }
+            Object::Text {
+                pos, content, height, rotation, ..
+            } => {
+                point_vertices.push(pos.to_array());
+                point_objects.push(Some(id as i64));
+                records.push(DesignRecord::Text {
+                    id,
+                    color,
+                    content: content.clone(),
+                    height: *height,
+                    rotation: *rotation,
+                    hidden,
+                });
+            }
+            Object::Polyline {
+                verts, closed, fill, line_weight, ..
+            } => {
+                if verts.len() < 2 {
+                    bail!("polyline {id} on layer '{}' has fewer than two vertices", layer.name);
+                }
+                let first = line_vertices.len() as u32;
+                let count = verts.len() as u32;
+                line_vertices.extend(verts.iter().map(|vertex| vertex.pos.to_array()));
+                segments.extend((0..count - 1).map(|index| [first + index, first + index + 1]));
+                if *closed {
+                    segments.push([first + count - 1, first]);
+                }
+                let segment_count = if *closed { verts.len() } else { verts.len() - 1 };
+                bulges.extend(verts[..segment_count].iter().map(|vertex| Some(vertex.bulge)));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), segment_count));
+                records.push(DesignRecord::Polyline {
+                    id,
+                    color,
+                    fill: *fill,
+                    line_weight: *line_weight,
+                    hidden,
+                });
+            }
+            // OMF has no arc primitive, so other readers see a tessellated ring.
+            Object::Circle {
+                center,
+                radius,
+                fill,
+                line_weight,
+                ..
+            } => {
+                let first = line_vertices.len() as u32;
+                line_vertices.extend((0..CIRCLE_EXPORT_SEGMENTS).map(|step| {
+                    let angle = std::f64::consts::TAU * (f64::from(step) / f64::from(CIRCLE_EXPORT_SEGMENTS));
+                    [center.x + radius * angle.cos(), center.y + radius * angle.sin(), center.z]
+                }));
+                segments.extend((0..CIRCLE_EXPORT_SEGMENTS).map(|step| [first + step, first + (step + 1) % CIRCLE_EXPORT_SEGMENTS]));
+                bulges.extend(std::iter::repeat_n(None, CIRCLE_EXPORT_SEGMENTS as usize));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), CIRCLE_EXPORT_SEGMENTS as usize));
+                records.push(DesignRecord::Circle {
+                    id,
+                    color,
+                    fill: *fill,
+                    line_weight: *line_weight,
+                    center: *center,
+                    radius: *radius,
+                    hidden,
+                });
+            }
+        }
+    }
+
+    let mut elements = Vec::new();
+    if !segments.is_empty() {
+        let mut lines = Element::new("Lines", LineSet::new(writer.array_vertices(line_vertices)?, writer.array_segments(segments)?));
+        lines.color = Some(rgba8(layer.color));
+        lines.attributes.push(Attribute::from_numbers(
+            DESIGN_OBJECT_ATTRIBUTE,
+            Location::Primitives,
+            writer.array_numbers(segment_objects)?,
+        ));
+        if bulges.iter().flatten().any(|bulge| *bulge != 0.0) {
+            lines
+                .attributes
+                .push(Attribute::from_numbers(DESIGN_BULGE_ATTRIBUTE, Location::Primitives, writer.array_numbers(bulges)?));
+        }
+        put(&mut lines, META_KIND, "design_lines");
+        elements.push(lines);
+    }
+    if !point_vertices.is_empty() {
+        let mut points = Element::new("Points", PointSet::new(writer.array_vertices(point_vertices)?));
+        points.color = Some(rgba8(layer.color));
+        points
+            .attributes
+            .push(Attribute::from_numbers(DESIGN_OBJECT_ATTRIBUTE, Location::Vertices, writer.array_numbers(point_objects)?));
+        put(&mut points, META_KIND, "design_points");
+        elements.push(points);
+    }
+    Ok((elements, records))
 }
 
 fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, triangulation: &OpenTriangulation) -> Result<omf_crate::Element> {
@@ -743,7 +840,11 @@ fn point_cloud_element(cloud: &OpenPointCloud, geometry: omf_crate::Geometry, at
 fn write_point_classification<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, codes: &[u8]) -> Result<omf_crate::Attribute> {
     use crate::model::point_cloud::{classification_color, classification_name};
 
-    let used: Vec<u8> = codes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut seen = [false; 256];
+    for code in codes {
+        seen[usize::from(*code)] = true;
+    }
+    let used: Vec<u8> = (0..=u8::MAX).filter(|code| seen[usize::from(*code)]).collect();
     let mut lookup = [0u32; 256];
     for (index, code) in used.iter().enumerate() {
         lookup[usize::from(*code)] = index as u32;
@@ -867,15 +968,9 @@ fn number_range_bounds(range: &omf_crate::NumberRange) -> (f64, f64) {
     match range {
         omf_crate::NumberRange::Float { min, max } => (*min, *max),
         omf_crate::NumberRange::Integer { min, max } => (*min as f64, *max as f64),
-        omf_crate::NumberRange::Date { min, max } => (date_to_f64(*min), date_to_f64(*max)),
+        omf_crate::NumberRange::Date { min, max } => (omf_crate::date_time::date_to_f64(*min), omf_crate::date_time::date_to_f64(*max)),
         omf_crate::NumberRange::DateTime { min, max } => (min.timestamp() as f64, max.timestamp() as f64),
     }
-}
-
-/// Days since the 1970-01-01 epoch, the numeric form OMF defines for dates.
-fn date_to_f64(date: chrono::NaiveDate) -> f64 {
-    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch is a valid date"))
-        .num_days() as f64
 }
 
 fn read_boundaries<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, array: &omf_crate::Array<omf_crate::array_type::Boundary>) -> Result<Vec<Boundary>> {
@@ -1005,15 +1100,123 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     Ok(element)
 }
 
+/// Write a drillhole dataset as three standard OMF elements under one
+/// composite, each holding every hole: collars as a point set, survey traces
+/// as one line set, and intervals as one line set whose segments are the
+/// intervals themselves. Every row carries a `Hole` category naming its hole,
+/// so the dataset regroups exactly, and the arrays are the only copy of the
+/// data - nothing is repeated in metadata.
 fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenDrillHoleDataset) -> Result<Option<omf_crate::Element>> {
-    let mut holes = Vec::new();
-    for hole in &open.dataset.holes {
-        holes.push(write_drill_hole(writer, hole, &open.dataset)?);
-    }
+    use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
+
+    let holes = &open.dataset.holes;
     if holes.is_empty() {
         return Ok(None);
     }
-    let mut element = omf_crate::Element::new(open.name.clone(), omf_crate::Composite::new(holes));
+    let hole_names = holes.iter().map(|hole| hole.dhid.clone()).collect::<Vec<_>>();
+    let hole_category = |writer: &mut omf_crate::file::Writer<W>, location, rows: &dyn Fn(&DrillHole) -> usize| -> Result<Attribute> {
+        let indices = holes.iter().enumerate().flat_map(|(index, hole)| std::iter::repeat_n(Some(index as u32), rows(hole)));
+        Ok(Attribute::from_categories(
+            DRILL_HOLE_ATTRIBUTE,
+            location,
+            writer.array_indices(indices)?,
+            writer.array_names(hole_names.iter().cloned())?,
+            None,
+            [],
+        ))
+    };
+
+    let mut collars = Element::new("Collars", PointSet::new(writer.array_vertices(holes.iter().map(|hole| hole.collar.to_array()))?));
+    collars.attributes.push(hole_category(writer, Location::Vertices, &|_| 1)?);
+    collars.attributes.push(Attribute::from_numbers(
+        "Diameter",
+        Location::Vertices,
+        writer.array_numbers(holes.iter().map(|hole| hole.diameter.filter(|diameter| diameter.is_finite())))?,
+    ));
+    put(&mut collars, META_KIND, "drillhole_collars");
+
+    let mut segments = Vec::new();
+    let mut first = 0u32;
+    for hole in holes {
+        let count = hole.trace.len() as u32;
+        segments.extend((1..count).map(|index| [first + index - 1, first + index]));
+        first += count;
+    }
+    let mut traces = Element::new(
+        "Traces",
+        LineSet::new(
+            writer.array_vertices(holes.iter().flat_map(|hole| hole.trace.iter().map(|station| station.position.to_array())))?,
+            writer.array_segments(segments)?,
+        ),
+    );
+    traces.attributes.push(hole_category(writer, Location::Vertices, &|hole| hole.trace.len())?);
+    traces.attributes.push(Attribute::from_numbers(
+        "Measured depth",
+        Location::Vertices,
+        writer.array_numbers(holes.iter().flat_map(|hole| hole.trace.iter().map(|station| Some(station.depth))))?,
+    ));
+    put(&mut traces, META_KIND, "drillhole_traces");
+
+    // Interval ends are placed on the trace so other applications draw each
+    // interval where it lies; `From` and `To` remain the authority.
+    let interval_count = holes.iter().map(|hole| hole.intervals.len()).sum::<usize>();
+    let ends = holes.iter().flat_map(|hole| {
+        hole.intervals
+            .iter()
+            .flat_map(|interval| [interval.from, interval.to].map(|depth| hole.position_at_depth(depth).filter(|position| position.is_finite()).unwrap_or(hole.collar).to_array()))
+    });
+    let mut intervals = Element::new(
+        "Intervals",
+        LineSet::new(
+            writer.array_vertices(ends)?,
+            writer.array_segments((0..interval_count as u32).map(|index| [2 * index, 2 * index + 1]))?,
+        ),
+    );
+    intervals.attributes.push(hole_category(writer, Location::Primitives, &|hole| hole.intervals.len())?);
+    let all_intervals = || holes.iter().flat_map(|hole| hole.intervals.iter());
+    intervals.attributes.push(Attribute::from_numbers(
+        "From",
+        Location::Primitives,
+        writer.array_numbers(all_intervals().map(|interval| Some(interval.from)))?,
+    ));
+    intervals.attributes.push(Attribute::from_numbers(
+        "To",
+        Location::Primitives,
+        writer.array_numbers(all_intervals().map(|interval| Some(interval.to)))?,
+    ));
+    let keys = all_intervals().flat_map(|interval| interval.values.keys()).collect::<BTreeSet<_>>();
+    for key in keys {
+        let values = || all_intervals().map(|interval| interval.values.get(key));
+        let numeric = values().all(|value| !matches!(value, Some(DrillValue::Category(_))));
+        if numeric {
+            let numbers = writer.array_numbers(values().map(|value| match value {
+                Some(DrillValue::Numeric(value)) if value.is_finite() => Some(*value),
+                _ => None,
+            }))?;
+            intervals.attributes.push(Attribute::from_numbers(key.clone(), Location::Primitives, numbers));
+        } else {
+            // A column holding any text is categorical; a number that shares
+            // one with text is kept as its text.
+            let text = |value: &DrillValue| match value {
+                DrillValue::Category(text) => text.clone(),
+                DrillValue::Numeric(number) => number.to_string(),
+            };
+            let names = values().flatten().map(text).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+            let lookup = names.iter().enumerate().map(|(index, name)| (name.as_str(), index as u32)).collect::<BTreeMap<_, _>>();
+            let indices = writer.array_indices(values().map(|value| value.and_then(|value| lookup.get(text(value).as_str()).copied())))?;
+            intervals.attributes.push(Attribute::from_categories(
+                key.clone(),
+                Location::Primitives,
+                indices,
+                writer.array_names(names.iter().cloned())?,
+                None,
+                [],
+            ));
+        }
+    }
+    put(&mut intervals, META_KIND, "drillhole_intervals");
+
+    let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(vec![collars, traces, intervals]));
     put(&mut element, META_KIND, "drillhole_dataset");
     put_item_identity(
         &mut element,
@@ -1032,129 +1235,26 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
     }
+    // Keyed by position in the collars, which is the dataset's hole order.
+    let render_ranges = holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| !hole.render_ranges.is_empty())
+        .map(|(index, hole)| (index.to_string(), json!(hole.render_ranges)))
+        .collect::<serde_json::Map<_, _>>();
+    if !render_ranges.is_empty() {
+        put(&mut element, META_RENDER_RANGES, Value::Object(render_ranges));
+    }
     Ok(Some(element))
 }
 
-/// A hole with no drawable trace, written as its collar with the same metadata.
-fn write_drill_hole_collar<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole) -> Result<omf_crate::Element> {
-    let mut element = omf_crate::Element::new(hole.dhid.clone(), omf_crate::PointSet::new(writer.array_vertices([hole.collar_position().to_array()])?));
-    put(&mut element, META_KIND, "drillhole");
-    put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
-    Ok(element)
-}
-
-fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, hole: &DrillHole, dataset: &DrillHoleDataset) -> Result<omf_crate::Element> {
-    if hole.trace.len() < 2 {
-        return write_drill_hole_collar(writer, hole);
-    }
-    let mut depths = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
-    depths.extend(hole.intervals.iter().flat_map(|interval| [interval.from, interval.to]));
-    depths.extend(hole.render_ranges.iter().flat_map(|&(from, to)| [from, to]));
-    depths.retain(|depth| depth.is_finite());
-    depths.sort_by(f64::total_cmp);
-    depths.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
-    let positions = depths.iter().filter_map(|depth| hole.position_at_depth(*depth)).collect::<Vec<_>>();
-    if positions.len() != depths.len() || positions.len() < 2 {
-        return write_drill_hole_collar(writer, hole);
-    }
-    let mut segments = Vec::new();
-    let mut ranges = Vec::new();
-    for index in 0..depths.len() - 1 {
-        let from = depths[index];
-        let to = depths[index + 1];
-        let midpoint = (from + to) * 0.5;
-        let visible = hole.render_ranges.is_empty() || hole.render_ranges.iter().any(|&(start, end)| midpoint >= start && midpoint <= end);
-        if visible && to > from {
-            segments.push([index as u32, index as u32 + 1]);
-            ranges.push((from, to, midpoint));
-        }
-    }
-    if segments.is_empty() {
-        return write_drill_hole_collar(writer, hole);
-    }
-    let mut element = omf_crate::Element::new(
-        hole.dhid.clone(),
-        omf_crate::LineSet::new(
-            writer.array_vertices(positions.iter().map(|position| position.to_array()))?,
-            writer.array_segments(segments)?,
-        ),
-    );
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "Measured depth",
-        omf_crate::Location::Vertices,
-        writer.array_numbers(depths.iter().copied().map(Some))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_strings(
-        "Hole ID",
-        omf_crate::Location::Primitives,
-        writer.array_text(ranges.iter().map(|_| Some(hole.dhid.clone())))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "From",
-        omf_crate::Location::Primitives,
-        writer.array_numbers(ranges.iter().map(|(from, _, _)| Some(*from)))?,
-    ));
-    element.attributes.push(omf_crate::Attribute::from_numbers(
-        "To",
-        omf_crate::Location::Primitives,
-        writer.array_numbers(ranges.iter().map(|(_, to, _)| Some(*to)))?,
-    ));
-    for field in &dataset.fields {
-        let values = ranges
-            .iter()
-            .map(|(_, _, midpoint)| {
-                hole.intervals
-                    .iter()
-                    .find(|interval| *midpoint >= interval.from && *midpoint < interval.to)
-                    .and_then(|interval| interval.values.get(&field.key))
-            })
-            .collect::<Vec<_>>();
-        match &field.kind {
-            crate::model::drill_hole::DrillFieldKind::Numeric { .. } => {
-                element.attributes.push(omf_crate::Attribute::from_numbers(
-                    field.label.clone(),
-                    omf_crate::Location::Primitives,
-                    writer.array_numbers(values.iter().map(|value| match value {
-                        Some(crate::model::drill_hole::DrillValue::Numeric(value)) if value.is_finite() => Some(*value),
-                        _ => None,
-                    }))?,
-                ));
-            }
-            crate::model::drill_hole::DrillFieldKind::Categorical { .. } => {
-                let names = values
-                    .iter()
-                    .filter_map(|value| match value {
-                        Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.is_empty() => Some(value.clone()),
-                        _ => None,
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if names.is_empty() {
-                    continue;
-                }
-                let lookup = names.iter().enumerate().map(|(index, name)| (name.as_str(), index as u32)).collect::<BTreeMap<_, _>>();
-                let indices = values.iter().map(|value| match value {
-                    Some(crate::model::drill_hole::DrillValue::Category(value)) => lookup.get(value.as_str()).copied(),
-                    _ => None,
-                });
-                element.attributes.push(omf_crate::Attribute::from_categories(
-                    field.label.clone(),
-                    omf_crate::Location::Primitives,
-                    writer.array_indices(indices)?,
-                    writer.array_names(names)?,
-                    None,
-                    [],
-                ));
-            }
-        }
-    }
-    put(&mut element, META_KIND, "drillhole");
-    put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
-    Ok(element)
-}
-
-fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, raster: &OpenRasterTexture) -> Result<omf_crate::Element> {
+/// `image` is the raster's pixels already in the archive, encoded afresh or
+/// copied; everything else is written here.
+fn write_raster<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    raster: &OpenRasterTexture,
+    image: omf_crate::Array<omf_crate::array_type::Image>,
+) -> Result<omf_crate::Element> {
     let [a, b, c, d, e, f] = raster.world_to_uv;
     let determinant = a * e - b * d;
     if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
@@ -1176,10 +1276,9 @@ fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             writer.array_triangles([[0, 1, 2], [0, 2, 3]])?,
         ),
     );
-    let png = encode_png(raster.source_size, &raster.full_rgba)?;
     element.attributes.push(omf_crate::Attribute::from_texture_map(
         "Raster",
-        writer.image_bytes(&png)?,
+        image,
         omf_crate::Location::Vertices,
         writer.array_texcoords([[0.0_f64, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])?,
     ));
@@ -1216,6 +1315,10 @@ fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>> {
         let mut encoder = png::Encoder::new(&mut bytes, size[0], size[1]);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        // fdeflate's PNG-tuned mode. On an 8000x8333 orthophoto the default
+        // (Balanced) took 4.9s for a file only 3% smaller, and the result also
+        // decodes slower.
+        encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header()?;
         writer.write_image_data(rgba)?;
     }
@@ -1228,28 +1331,73 @@ fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>> {
 pub(crate) struct DeferredAsset {
     pub(crate) backing: crate::model::asset_storage::Backing,
     pub(crate) element_path: Vec<usize>,
+    /// The element itself, moved out of the index parse that located it, so
+    /// loading the payload or copying it into a save need not parse the whole
+    /// project index again. Empty until that parse finishes, and for elements
+    /// not worth retaining; either way `element_path` still finds it.
+    indexed: Arc<OnceLock<IndexedElement>>,
+}
+
+/// An archive element, with the project fields its decode depends on.
+#[derive(Debug)]
+struct IndexedElement {
+    element: omf_crate::Element,
+    origin: [f64; 3],
+    coordinate_reference_system: String,
+    units: String,
 }
 
 impl DeferredAsset {
+    pub(crate) fn new(backing: crate::model::asset_storage::Backing, element_path: Vec<usize>) -> Self {
+        Self {
+            backing,
+            element_path,
+            indexed: Arc::default(),
+        }
+    }
+
     pub(crate) fn read(&self) -> Result<ImportBundle> {
-        let mut reader = omf_crate::file::Reader::new(self.backing.read()?)?;
+        // Natively this opens the file for positioned reads, so only the
+        // element's own arrays come off disk rather than the whole archive.
+        let mut reader = omf_crate::file::Reader::new(self.backing.open()?)?;
         reader.set_limits(reader_limits());
-        let (project, _) = reader.project()?;
-        let selected = locate_element(&project.elements, &self.element_path).context("unloaded asset is missing from its backing archive")?;
+        let parsed;
+        let (element, origin, crs, units) = match self.indexed.get() {
+            Some(indexed) => (&indexed.element, indexed.origin, &indexed.coordinate_reference_system, &indexed.units),
+            None => {
+                parsed = reader.project()?.0;
+                let element = locate_element(&parsed.elements, &self.element_path).context("unloaded asset is missing from its backing archive")?;
+                (element, parsed.origin, &parsed.coordinate_reference_system, &parsed.units)
+            }
+        };
         let mut decoder = Decoder {
             reader: &reader,
-            project_origin: DVec3::from_array(project.origin),
-            project_crs: project.coordinate_reference_system,
-            project_units: project.units,
+            project_origin: DVec3::from_array(origin),
+            project_crs: crs.clone(),
+            project_units: units.clone(),
             source_name: "asset.omf",
             bundle: ImportBundle::default(),
             generic_design: Document::new(),
             backing: None,
             element_path: Vec::new(),
+            indexed: Vec::new(),
         };
-        decoder.walk(selected)?;
+        decoder.walk(element)?;
         decoder.finish()
     }
+}
+
+/// Follow `path` through nested composite elements, mutably.
+fn locate_element_mut<'a>(elements: &'a mut [omf_crate::Element], path: &[usize]) -> Option<&'a mut omf_crate::Element> {
+    let (&first, rest) = path.split_first()?;
+    let mut element = elements.get_mut(first)?;
+    for &index in rest {
+        let omf_crate::Geometry::Composite(group) = &mut element.geometry else {
+            return None;
+        };
+        element = group.elements.get_mut(index)?;
+    }
+    Some(element)
 }
 
 /// Follow `path` through nested composite elements.
@@ -1299,6 +1447,14 @@ impl PayloadSource {
         })
     }
 
+    /// Record `asset` as the source of `item`'s payload as it stands now.
+    pub(crate) fn for_raster(asset: Option<DeferredAsset>, item: &OpenRasterTexture) -> Option<Self> {
+        Some(Self {
+            asset: asset?,
+            resident: item.state.deferred.is_none().then(|| PayloadIdentity::raster(item)),
+        })
+    }
+
     /// The archive element that still holds exactly the payload `current`
     /// names, if there is one.
     fn unchanged(&self, deferred: bool, current: &PayloadIdentity) -> Option<&DeferredAsset> {
@@ -1333,6 +1489,7 @@ pub(crate) enum PayloadIdentity {
         colors: Option<std::sync::Weak<Vec<u32>>>,
         classifications: Option<std::sync::Weak<Vec<u8>>>,
     },
+    Raster(std::sync::Weak<Vec<u8>>),
 }
 
 impl PayloadIdentity {
@@ -1346,6 +1503,10 @@ impl PayloadIdentity {
             colors: item.colors.as_ref().map(Arc::downgrade),
             classifications: item.classifications.as_ref().map(Arc::downgrade),
         }
+    }
+
+    pub(crate) fn raster(item: &OpenRasterTexture) -> Self {
+        Self::Raster(Arc::downgrade(&item.full_rgba))
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -1370,6 +1531,7 @@ impl PayloadIdentity {
                     classifications: b_classes,
                 },
             ) => a.ptr_eq(b) && same_optional(a_colors, b_colors) && same_optional(a_classes, b_classes),
+            (Self::Raster(a), Self::Raster(b)) => a.ptr_eq(b),
             _ => false,
         }
     }
@@ -1377,10 +1539,11 @@ impl PayloadIdentity {
 
 type SourceReader = omf_crate::file::Reader<crate::model::asset_storage::BackingData>;
 
-/// Archives a save copies unchanged payloads out of, each opened and its
-/// index parsed once however many items it holds.
+/// Archives a save copies unchanged payloads out of, each opened once however
+/// many items it holds. The index is parsed only for an item whose locator did
+/// not retain its element.
 #[derive(Default)]
-struct SourceArchives(Vec<(crate::model::asset_storage::Backing, SourceReader, omf_crate::Project)>);
+struct SourceArchives(Vec<(crate::model::asset_storage::Backing, SourceReader, OnceLock<omf_crate::Project>)>);
 
 impl SourceArchives {
     /// The archive element holding `state`'s payload, when `current` is still
@@ -1388,7 +1551,7 @@ impl SourceArchives {
     ///
     /// A backing that cannot be read is logged and treated as no source: the
     /// payload can still be encoded afresh, so it must not fail the save.
-    fn unchanged(&mut self, state: &project::ProjectItemState, current: &PayloadIdentity) -> Option<(&SourceReader, &omf_crate::Element)> {
+    fn unchanged<'a>(&'a mut self, state: &'a project::ProjectItemState, current: &PayloadIdentity) -> Option<(&'a SourceReader, &'a omf_crate::Element)> {
         let asset = state.payload_source.as_ref()?.unchanged(state.deferred.is_some(), current)?;
         let index = match self.0.iter().position(|(backing, ..)| backing.same(&asset.backing)) {
             Some(index) => index,
@@ -1396,11 +1559,10 @@ impl SourceArchives {
                 let opened = asset.backing.open().and_then(|data| {
                     let mut reader = omf_crate::file::Reader::new(data)?;
                     reader.set_limits(reader_limits());
-                    let (project, _) = reader.project()?;
-                    Ok((reader, project))
+                    Ok(reader)
                 });
                 match opened {
-                    Ok((reader, project)) => self.0.push((asset.backing.clone(), reader, project)),
+                    Ok(reader) => self.0.push((asset.backing.clone(), reader, OnceLock::new())),
                     Err(error) => {
                         log::warn!("Encoding an unchanged item afresh: its source archive could not be read: {error:#}");
                         return None;
@@ -1410,13 +1572,52 @@ impl SourceArchives {
             }
         };
         let (_, reader, project) = &self.0[index];
+        let (origin, element) = match asset.indexed.get() {
+            Some(indexed) => (indexed.origin, &indexed.element),
+            None => {
+                if project.get().is_none() {
+                    match reader.project() {
+                        Ok((parsed, _)) => {
+                            let _ = project.set(parsed);
+                        }
+                        Err(error) => {
+                            log::warn!("Encoding an unchanged item afresh: its source archive index could not be read: {error:#}");
+                            return None;
+                        }
+                    }
+                }
+                let project = project.get()?;
+                (project.origin, locate_element(&project.elements, &asset.element_path)?)
+            }
+        };
         // Saved coordinates are relative to a zero project origin; arrays
         // stored against any other origin would move.
-        if project.origin != [0.0; 3] {
+        if origin != [0.0; 3] {
             return None;
         }
-        Some((reader, locate_element(&project.elements, &asset.element_path)?))
+        Some((reader, element))
     }
+}
+
+/// Copy an unchanged raster's image from the element it was read from, the
+/// one array worth copying: re-encoding a large orthophoto costs far more than
+/// the rest of a save. `None` when the element is not in the shape
+/// [`write_raster`] produces.
+fn copy_raster_image<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    reader: &SourceReader,
+    element: &omf_crate::Element,
+) -> Result<Option<omf_crate::Array<omf_crate::array_type::Image>>> {
+    if kind(element) != Some("raster") {
+        return Ok(None);
+    }
+    let [attribute] = element.attributes.as_slice() else {
+        return Ok(None);
+    };
+    let omf_crate::AttributeData::MappedTexture { image, .. } = &attribute.data else {
+        return Ok(None);
+    };
+    Ok(Some(writer.array_copy(reader, image)?))
 }
 
 /// Copy an unchanged triangulation's arrays from the element it was read
@@ -1571,6 +1772,7 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         generic_design: Document::new(),
         backing: None,
         element_path: Vec::new(),
+        indexed: Vec::new(),
     };
     decoder.backing = Some(backing);
     let total = project.elements.len().max(1) as u64;
@@ -1578,6 +1780,18 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         decoder.element_path = vec![index];
         decoder.walk(element)?;
         progress.set_items(index as u64 + 1, total);
+    }
+    let mut elements = project.elements;
+    for (path, slot) in std::mem::take(&mut decoder.indexed) {
+        if let Some(element) = locate_element_mut(&mut elements, &path) {
+            let element = std::mem::replace(element, omf_crate::Element::new(String::new(), omf_crate::Composite::new(Vec::new())));
+            let _ = slot.set(IndexedElement {
+                element,
+                origin: project.origin,
+                coordinate_reference_system: decoder.project_crs.clone(),
+                units: decoder.project_units.clone(),
+            });
+        }
     }
     decoder.finish()
 }
@@ -1606,6 +1820,9 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
     generic_design: Document,
     backing: Option<crate::model::asset_storage::Backing>,
     element_path: Vec<usize>,
+    /// Slots of the locators handed out, by element path, to be filled with
+    /// their elements once the walk no longer borrows the project.
+    indexed: Vec<(Vec<usize>, Arc<OnceLock<IndexedElement>>)>,
 }
 
 impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
@@ -1712,11 +1929,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Where the element being walked sits in the opened archive, when there
     /// is a backing copy of it to find it in again.
-    fn payload_locator(&self) -> Option<DeferredAsset> {
-        Some(DeferredAsset {
-            backing: self.backing.clone()?,
-            element_path: self.element_path.clone(),
-        })
+    fn payload_locator(&mut self) -> Option<DeferredAsset> {
+        let locator = DeferredAsset::new(self.backing.clone()?, self.element_path.clone());
+        self.indexed.push((locator.element_path.clone(), locator.indexed.clone()));
+        Some(locator)
     }
 
     /// Warn once when a drill-hole dataset's saved `incline:style` JSON named
@@ -1750,10 +1966,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let preferred_id = element_id(element);
         let source_name = element_source_name(element);
         let source_format = element_source_format(element);
-        let locator = DeferredAsset {
-            backing: self.backing.clone().context("missing asset backing")?,
-            element_path: self.element_path.clone(),
-        };
+        let locator = self.payload_locator().context("missing asset backing")?;
         let path = virtual_path(self.source_name, &name, "omf");
         if kind(element) == Some("raster") {
             let section = self.element_section(element, MemberKind::Raster);
@@ -1763,6 +1976,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 source_name,
                 source_format,
                 is_loaded: false,
+                payload_source: Some(locator.clone()),
                 deferred: Some((locator, AssetSummary::default())),
                 folder,
                 section,
@@ -1782,7 +1996,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }
         if kind(element) == Some("drillhole_dataset") {
             let count = match &element.geometry {
-                omf_crate::Geometry::Composite(group) => group.elements.len(),
+                omf_crate::Geometry::Composite(group) => group
+                    .elements
+                    .iter()
+                    .find(|child| kind(child) == Some("drillhole_collars"))
+                    .and_then(|collars| match &collars.geometry {
+                        omf_crate::Geometry::PointSet(points) => Some(points.vertices.item_count() as usize),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
                 _ => return Ok(false),
             };
             let section = self.element_section(element, MemberKind::DrillHole);
@@ -1956,7 +2178,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         const KNOWN_METADATA: &[&str] = &[
             META_KIND,
             META_NAME,
-            META_OBJECT,
+            META_OBJECTS,
             META_LAYER,
             META_FOLDERS,
             META_FOLDER,
@@ -1964,7 +2186,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_SOURCE,
             META_STYLE,
             META_ID,
-            META_DRILL_HOLE,
+            META_RENDER_RANGES,
             META_TIE_INS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
@@ -1984,7 +2206,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .attributes
             .iter()
             .filter(|attribute| {
-                if matches!(incline_design_kind, Some("designs" | "design_database" | "drillhole_dataset" | "drillhole" | "raster")) {
+                if matches!(
+                    incline_design_kind,
+                    Some("designs" | "design_database" | "design_lines" | "design_points" | "drillhole_dataset" | "raster")
+                ) {
                     return false;
                 }
                 match &element.geometry {
@@ -1992,7 +2217,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         attribute.data,
                         omf_crate::AttributeData::MappedTexture { .. } | omf_crate::AttributeData::ProjectedTexture { .. }
                     ),
-                    omf_crate::Geometry::PointSet(_) => !matches!(attribute.data, omf_crate::AttributeData::Color { .. }),
+                    omf_crate::Geometry::PointSet(_) => match attribute.data {
+                        omf_crate::AttributeData::Color { .. } => false,
+                        // Decoded by `read_point_classification`.
+                        omf_crate::AttributeData::Category { .. } => attribute.name != POINT_CLASSIFICATION_ATTRIBUTE || attribute.location != omf_crate::Location::Vertices,
+                        _ => true,
+                    },
                     omf_crate::Geometry::BlockModel(_) => !matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }),
                     omf_crate::Geometry::LineSet(_) | omf_crate::Geometry::Composite(_) => true,
                 }
@@ -2024,11 +2254,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         // Legacy migration path: a file written before folders covered every
         // section carried the Designs list here instead of the project
         // record. `ensure` is idempotent, so carrying both keys is harmless.
-        if let Some(names) = element
-            .metadata
-            .get(META_FOLDERS)
-            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
-        {
+        if let Some(names) = element.metadata.get(META_FOLDERS).and_then(|value| Vec::<String>::deserialize(value).ok()) {
             for name in names {
                 self.bundle.folders.ensure(SectionKind::Designs, &name);
             }
@@ -2039,11 +2265,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             // folder when the section actually changes, so the folder must be
             // resolved against the section the layer ends up in, not Designs.
             let section = self.element_section(layer_element, MemberKind::Layer);
-            let mut layer_template = layer_element
-                .metadata
-                .get(META_LAYER)
-                .cloned()
-                .and_then(|value| serde_json::from_value::<Layer>(value).ok());
+            let mut layer_template = layer_element.metadata.get(META_LAYER).and_then(|value| Layer::deserialize(value).ok());
             if let Some(layer) = layer_template.as_mut() {
                 layer.elevation += self.project_origin.z as f32;
             }
@@ -2085,34 +2307,24 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
             };
-            for object_element in children {
-                if !std::ptr::eq(layer_element, object_element) {
-                    self.record_unsupported_content(object_element);
+            let mut lines = None;
+            let mut points = None;
+            for child in children {
+                if !std::ptr::eq(layer_element, child) {
+                    self.record_unsupported_content(child);
                 }
-                if let Some(value) = object_element.metadata.get(META_OBJECT).cloned() {
-                    match serde_json::from_value::<Object>(value) {
-                        Ok(mut object) => {
-                            object.translate(self.project_origin);
-                            let source_id = object.id();
-                            let id = if source_id.0 <= u32::MAX as u64 && document.get_object(source_id).is_none() {
-                                source_id
-                            } else {
-                                document.allocate_object_id()
-                            };
-                            document.insert_object(object.with_id_and_layer(id, layer_id));
-                            if style_bool(object_element.metadata.get(META_STYLE), "visible") == Some(false) {
-                                document.set_object_hidden(id, true);
-                            }
-                            continue;
-                        }
-                        Err(error) => self.bundle.warnings.push(format!(
-                            "Design object '{}' has invalid Incline Design metadata and was reconstructed from native geometry where possible: {error}",
-                            object_element.name
-                        )),
-                    }
+                match (kind(child), &child.geometry) {
+                    (Some("design_lines"), omf_crate::Geometry::LineSet(set)) => lines = Some((child, set)),
+                    (Some("design_points"), omf_crate::Geometry::PointSet(set)) => points = Some((child, set)),
+                    _ => self.append_design_geometry(&mut document, layer_id, child)?,
                 }
-                self.append_design_geometry(&mut document, layer_id, object_element)?;
             }
+            let Some(records) = layer_element.metadata.get(META_OBJECTS) else {
+                continue;
+            };
+            let records = Vec::<DesignRecord>::deserialize(records).with_context(|| format!("read the objects of design layer '{}'", layer_element.name))?;
+            self.read_design_layer(&mut document, layer_id, records, lines, points)
+                .with_context(|| format!("read design layer '{}'", layer_element.name))?;
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool
@@ -2139,6 +2351,164 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             // membership; a decoded `ProjectFile` never carries its own.
             folders: FolderRegistry::default(),
         })
+    }
+
+    /// Rebuild a layer written by [`write_design_layer`]: each record, in
+    /// order, takes the next run of `Lines` segments or the next `Points` row.
+    fn read_design_layer(
+        &mut self,
+        document: &mut Document,
+        layer: crate::model::LayerId,
+        records: Vec<DesignRecord>,
+        lines: Option<(&omf_crate::Element, &omf_crate::LineSet)>,
+        points: Option<(&omf_crate::Element, &omf_crate::PointSet)>,
+    ) -> Result<()> {
+        let object_column = |element: &omf_crate::Element, name: &str| -> Result<Option<Vec<Option<f64>>>> {
+            element
+                .attributes
+                .iter()
+                .find(|attribute| attribute.name == name)
+                .and_then(|attribute| match &attribute.data {
+                    omf_crate::AttributeData::Number { values, .. } => Some(values),
+                    _ => None,
+                })
+                .map(|values| read_numbers(self.reader, values))
+                .transpose()
+        };
+
+        let (mut line_vertices, mut segments, mut segment_objects, mut bulges) = (Vec::new(), Vec::new(), Vec::new(), None);
+        if let Some((element, set)) = lines {
+            let offset = self.project_origin + DVec3::from_array(set.origin);
+            line_vertices = self.read_vertices(&set.vertices)?.into_iter().map(|point| point + offset).collect();
+            segments = self.reader.array_segments_vec(&set.segments)?;
+            segment_objects = object_column(element, DESIGN_OBJECT_ATTRIBUTE)?.context("design lines have no object column")?;
+            bulges = object_column(element, DESIGN_BULGE_ATTRIBUTE)?;
+            if segment_objects.len() != segments.len() || bulges.as_ref().is_some_and(|bulges| bulges.len() != segments.len()) {
+                bail!("design lines have mismatched column lengths");
+            }
+        }
+        let (mut point_vertices, mut point_objects) = (Vec::new(), Vec::new());
+        if let Some((element, set)) = points {
+            let offset = self.project_origin + DVec3::from_array(set.origin);
+            point_vertices = self.read_vertices(&set.vertices)?.into_iter().map(|point| point + offset).collect();
+            point_objects = object_column(element, DESIGN_OBJECT_ATTRIBUTE)?.context("design points have no object column")?;
+            if point_objects.len() != point_vertices.len() {
+                bail!("design points have mismatched column lengths");
+            }
+        }
+
+        let mut next_segment = 0;
+        let mut next_point = 0;
+        for record in records {
+            let (id, hidden) = match &record {
+                DesignRecord::Point { id, hidden, .. }
+                | DesignRecord::Polyline { id, hidden, .. }
+                | DesignRecord::Circle { id, hidden, .. }
+                | DesignRecord::Text { id, hidden, .. } => (*id, *hidden),
+            };
+            let belongs = |value: Option<f64>| value == Some(id as f64);
+            let mut take_point = || -> Result<DVec3> {
+                if !point_objects.get(next_point).copied().is_some_and(belongs) {
+                    bail!("design object {id} has no point");
+                }
+                next_point += 1;
+                Ok(point_vertices[next_point - 1])
+            };
+            let run_start = next_segment;
+            let mut take_run = || -> Result<std::ops::Range<usize>> {
+                while segment_objects.get(next_segment).copied().is_some_and(belongs) {
+                    next_segment += 1;
+                }
+                if next_segment == run_start {
+                    bail!("design object {id} has no segments");
+                }
+                Ok(run_start..next_segment)
+            };
+            let object_id = crate::model::ObjectId(id);
+            let object = match record {
+                DesignRecord::Point { color, .. } => Object::Point {
+                    id: object_id,
+                    layer,
+                    pos: take_point()?,
+                    color,
+                },
+                DesignRecord::Text {
+                    color, content, height, rotation, ..
+                } => Object::Text {
+                    id: object_id,
+                    layer,
+                    pos: take_point()?,
+                    content,
+                    height,
+                    rotation,
+                    color,
+                },
+                DesignRecord::Circle {
+                    color,
+                    fill,
+                    line_weight,
+                    center,
+                    radius,
+                    ..
+                } => {
+                    take_run()?;
+                    Object::Circle {
+                        id: object_id,
+                        layer,
+                        center: center + self.project_origin,
+                        radius,
+                        color,
+                        fill,
+                        line_weight,
+                    }
+                }
+                DesignRecord::Polyline { color, fill, line_weight, .. } => {
+                    let run = take_run()?;
+                    let run_segments = &segments[run.clone()];
+                    let first = run_segments[0][0];
+                    let closed = run_segments.len() >= 2 && run_segments[run_segments.len() - 1][1] == first;
+                    let count = if closed { run_segments.len() } else { run_segments.len() + 1 };
+                    let sequential = run_segments[..count - 1]
+                        .iter()
+                        .enumerate()
+                        .all(|(index, segment)| *segment == [first + index as u32, first + index as u32 + 1]);
+                    let vertices = line_vertices.get(first as usize..first as usize + count);
+                    let (true, Some(vertices)) = (sequential, vertices) else {
+                        bail!("design polyline {id} has segments that are not one string");
+                    };
+                    let bulge = |index: usize| bulges.as_ref().and_then(|bulges| bulges.get(run.start + index).copied().flatten()).unwrap_or(0.0);
+                    Object::Polyline {
+                        id: object_id,
+                        layer,
+                        verts: vertices
+                            .iter()
+                            .enumerate()
+                            .map(|(index, pos)| PolyVertex {
+                                pos: *pos,
+                                bulge: if index < run_segments.len() { bulge(index) } else { 0.0 },
+                            })
+                            .collect(),
+                        closed,
+                        color,
+                        fill,
+                        line_weight,
+                    }
+                }
+            };
+            let id = if id <= u32::MAX as u64 && document.get_object(object_id).is_none() {
+                object_id
+            } else {
+                document.allocate_object_id()
+            };
+            document.insert_object(object.with_id_and_layer(id, layer));
+            if hidden {
+                document.set_object_hidden(id, true);
+            }
+        }
+        if next_segment != segments.len() || next_point != point_vertices.len() {
+            bail!("design layer has geometry that no object record claims");
+        }
+        Ok(())
     }
 
     fn append_design_geometry(&mut self, document: &mut Document, layer: crate::model::LayerId, element: &omf_crate::Element) -> Result<()> {
@@ -2266,6 +2636,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         let section = self.element_section(element, MemberKind::Triangulation);
         let folder = self.element_folder(element, section);
+        let payload_source = self.payload_locator();
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2279,13 +2650,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 surface_face_order,
             },
             deferred: None,
-            payload_source: self.payload_locator(),
+            payload_source,
             is_loaded: style_loaded(style),
             color,
             line_color: style_value(style, "line_color").unwrap_or([0.05, 0.08, 0.10, 1.0]),
             line_weight: style
                 .and_then(|value| value.get("line_weight"))
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .and_then(|value| Deserialize::deserialize(value).ok())
                 .unwrap_or(Some(1.0)),
             raster_opacity: style_f32(style, "raster_opacity").unwrap_or(1.0),
             raster_texture_id: style_value(style, "raster_texture_id"),
@@ -2313,16 +2684,29 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 _ => None,
             })
             .map(|values| {
-                collect_results(self.reader.array_colors(values)?)
-                    .map(|colors| colors.into_iter().map(|color| color.unwrap_or([255; 4])).map(u32::from_le_bytes).collect::<Vec<_>>())
+                ensure_items(values.item_count(), "colours")?;
+                anyhow::Ok(
+                    self.reader
+                        .array_colors_vec(values)?
+                        .into_iter()
+                        .map(|color| u32::from_le_bytes(color.unwrap_or([255; 4])))
+                        .collect::<Vec<_>>(),
+                )
             })
             .transpose()?;
         let classifications = self.read_point_classification(element, positions.len())?;
+        if classifications.is_none() && element.attributes.iter().any(|attribute| attribute.name == POINT_CLASSIFICATION_ATTRIBUTE) {
+            self.bundle.warnings.push(format!(
+                "Element '{}' has a classification attribute that could not be decoded and will be omitted",
+                element.name
+            ));
+        }
         let bounds = bounds.with_context(|| format!("OMF point set '{}' contains no finite points", element.name))?;
         let prepared = prepare_for_render(&positions, colors.as_deref(), classifications.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
         let section = self.element_section(element, MemberKind::PointCloud);
         let folder = self.element_folder(element, section);
+        let payload_source = self.payload_locator();
         self.bundle.point_clouds.push(ImportedPointCloud {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -2337,7 +2721,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 bounds,
             },
             deferred: None,
-            payload_source: self.payload_locator(),
+            payload_source,
             is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
             point_size: style_f32(style, "point_size").unwrap_or(0.1),
@@ -2389,13 +2773,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if codes.len() != category_count {
             return Ok(None);
         }
-        let values = collect_results(self.reader.array_indices(values)?)?;
+        ensure_items(values.item_count(), "classifications")?;
+        let values = self.reader.array_indices_vec(values)?;
         if values.len() != point_count {
             return Ok(None);
         }
         Ok(Some(
             values
-                .into_iter()
+                .into_par_iter()
                 .map(|value| {
                     value
                         .and_then(|index| codes.get(index as usize).copied())
@@ -2458,19 +2843,26 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             self.bundle.warnings.push(format!("Skipped empty OMF block model '{}'", element.name));
             return Ok(());
         }
-        let mut columns = Vec::new();
-        for attribute in &element.attributes {
-            let expansion = if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
-                Some(parent_indices.as_slice())
-            } else if attribute.location == location {
-                None
-            } else {
-                continue;
-            };
-            if let Some(column) = self.read_block_column(attribute, expansion)? {
-                columns.push(column);
-            }
-        }
+        // Each variable is its own array, so they decode side by side; a
+        // block model's variables are usually far more numerous than its row groups.
+        let reader = self.reader;
+        let columns = element
+            .attributes
+            .par_iter()
+            .filter_map(|attribute| {
+                if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
+                    Some((attribute, Some(parent_indices.as_slice())))
+                } else if attribute.location == location {
+                    Some((attribute, None))
+                } else {
+                    None
+                }
+            })
+            .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         let upper = DVec3::new(*edges[0].last().unwrap_or(&0.0), *edges[1].last().unwrap_or(&0.0), *edges[2].last().unwrap_or(&0.0));
         let rotation = DMat3::from_cols(
             DVec3::from_array(geometry.orient.u),
@@ -2487,7 +2879,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             || opaque_irregular_surface_block_count(&blocks, &renderable),
             |grid| opaque_surface_block_count(&blocks, &renderable, grid),
         );
-        let world_bounds = block_world_bounds(&model, &blocks, &renderable);
+        let world_bounds = compute_world_bounds(&model, &blocks, &renderable);
         let style = element.metadata.get(META_STYLE);
         let active_color_variable = style_value::<Option<String>>(style, "active_color_variable")
             .flatten()
@@ -2603,93 +2995,116 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         transfers
     }
 
-    fn read_block_column(&self, attribute: &omf_crate::Attribute, expansion: Option<&[usize]>) -> Result<Option<BlockModelColumn>> {
-        match &attribute.data {
-            omf_crate::AttributeData::Number { values, .. } => {
-                let values = read_numbers(self.reader, values)?.into_iter().map(|value| value.unwrap_or(f64::NAN)).collect::<Vec<_>>();
-                let values = expand_block_values(values, expansion)?;
-                Ok(Some(BlockModelColumn {
-                    name: attribute.name.clone(),
-                    values: Arc::new(values),
-                    categories: None,
-                    category_colors: BTreeMap::new(),
-                }))
-            }
-            omf_crate::AttributeData::Category {
-                values,
-                names,
-                gradient,
-                attributes,
-            } => {
-                let names = collect_results(self.reader.array_names(names)?)?;
-                let original_codes = attributes
-                    .iter()
-                    .find(|attribute| attribute.name == "Incline category code" && attribute.location == omf_crate::Location::Categories)
-                    .and_then(|attribute| match &attribute.data {
-                        omf_crate::AttributeData::Number { values, .. } => Some(values),
-                        _ => None,
-                    })
-                    .map(|values| read_numbers(self.reader, values))
-                    .transpose()?
-                    .and_then(|values| {
-                        (values.len() == names.len())
-                            .then(|| {
-                                values
-                                    .into_iter()
-                                    .map(|value| {
-                                        value
-                                            .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(value))
-                                            .map(|value| value as u32)
-                                    })
-                                    .collect::<Option<Vec<_>>>()
-                            })
-                            .flatten()
-                    });
-                let codes = original_codes.unwrap_or_else(|| (0..names.len() as u32).collect());
-                // The file's own palette, when it ships one, beats Incline Design's
-                // generic categorical colours.
-                let category_colors = gradient
-                    .as_ref()
-                    .map(|gradient| collect_results(self.reader.array_gradient(gradient)?))
-                    .transpose()?
-                    .map(|colors| codes.iter().copied().zip(colors).map(|(code, color)| (code, linear_rgba(color))).collect())
-                    .unwrap_or_default();
-                let categories = names.into_iter().zip(codes.iter().copied()).map(|(name, code)| (code, name)).collect();
-                let values = collect_results(self.reader.array_indices(values)?)?
-                    .into_iter()
-                    .map(|value| value.and_then(|index| codes.get(index as usize).copied()).map_or(f64::NAN, f64::from))
-                    .collect::<Vec<_>>();
-                let values = expand_block_values(values, expansion)?;
-                Ok(Some(BlockModelColumn {
-                    name: attribute.name.clone(),
-                    values: Arc::new(values),
-                    categories: Some(categories),
-                    category_colors,
-                }))
-            }
-            _ => Ok(None),
-        }
-    }
-
+    /// Rebuild a dataset written by [`write_drill_holes`].
     fn read_drill_dataset(&mut self, element: &omf_crate::Element) -> Result<Option<ImportedDrillHoles>> {
+        use crate::model::drill_hole::{DrillInterval, OrientationSource, TraceStation};
+
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
             return Ok(None);
         };
-        let mut holes = Vec::new();
-        for child in &composite.elements {
-            self.record_unsupported_content(child);
-            if let Some(value) = child.metadata.get(META_DRILL_HOLE).cloned()
-                && let Ok(mut hole) = serde_json::from_value::<DrillHole>(value)
-            {
-                hole.collar += self.project_origin;
-                for station in &mut hole.trace {
-                    station.position += self.project_origin;
-                }
-                holes.push(hole);
-                continue;
+        let part = |part_kind: &str| composite.elements.iter().find(|child| kind(child) == Some(part_kind));
+        let (Some(collars), Some(traces), Some(intervals)) = (part("drillhole_collars"), part("drillhole_traces"), part("drillhole_intervals")) else {
+            bail!("Drillhole dataset '{}' is missing its collars, traces or intervals", element.name);
+        };
+        let context = |part: &str| format!("read {part} of drillhole dataset '{}'", element.name);
+
+        let omf_crate::Geometry::PointSet(collar_points) = &collars.geometry else {
+            bail!("Drillhole collars of '{}' are not a point set", element.name);
+        };
+        let offset = self.project_origin + DVec3::from_array(collar_points.origin);
+        let positions = self.read_vertices(&collar_points.vertices).with_context(|| context("collars"))?;
+        let (collar_holes, names) = self.read_drill_hole_category(collars).with_context(|| context("collars"))?;
+        let diameters = self.read_drill_numbers(collars, "Diameter")?.unwrap_or_default();
+        let mut holes = positions
+            .iter()
+            .enumerate()
+            .map(|(index, position)| DrillHole {
+                dhid: collar_holes
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .and_then(|hole| names.get(hole as usize).cloned())
+                    .unwrap_or_else(|| format!("Hole {}", index + 1)),
+                collar: *position + offset,
+                diameter: diameters.get(index).copied().flatten(),
+                trace: Vec::new(),
+                render_ranges: Vec::new(),
+                intervals: Vec::new(),
+                orientation_source: OrientationSource::Unknown,
+            })
+            .collect::<Vec<_>>();
+
+        let omf_crate::Geometry::LineSet(trace_lines) = &traces.geometry else {
+            bail!("Drillhole traces of '{}' are not a line set", element.name);
+        };
+        let offset = self.project_origin + DVec3::from_array(trace_lines.origin);
+        let positions = self.read_vertices(&trace_lines.vertices).with_context(|| context("traces"))?;
+        let (station_holes, _) = self.read_drill_hole_category(traces).with_context(|| context("traces"))?;
+        let depths = self.read_drill_numbers(traces, "Measured depth")?.context("drillhole traces have no measured depths")?;
+        if station_holes.len() != positions.len() || depths.len() != positions.len() {
+            bail!("Drillhole traces of '{}' have mismatched column lengths", element.name);
+        }
+        for ((position, hole), depth) in positions.into_iter().zip(station_holes).zip(depths) {
+            if let (Some(hole), Some(depth)) = (hole.and_then(|hole| holes.get_mut(hole as usize)), depth) {
+                hole.trace.push(TraceStation {
+                    depth,
+                    position: position + offset,
+                });
             }
-            if let Some(hole) = self.read_generic_drill_hole(child)? {
-                holes.push(hole);
+        }
+
+        let (interval_holes, _) = self.read_drill_hole_category(intervals).with_context(|| context("intervals"))?;
+        let from = self.read_drill_numbers(intervals, "From")?.context("drillhole intervals have no From depths")?;
+        let to = self.read_drill_numbers(intervals, "To")?.context("drillhole intervals have no To depths")?;
+        if from.len() != interval_holes.len() || to.len() != interval_holes.len() {
+            bail!("Drillhole intervals of '{}' have mismatched column lengths", element.name);
+        }
+        let mut rows = from
+            .into_iter()
+            .zip(to)
+            .map(|(from, to)| DrillInterval {
+                from: from.unwrap_or(f64::NAN),
+                to: to.unwrap_or(f64::NAN),
+                values: BTreeMap::new(),
+                logged: None,
+            })
+            .collect::<Vec<_>>();
+        for attribute in intervals
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.location == omf_crate::Location::Primitives && !matches!(attribute.name.as_str(), DRILL_HOLE_ATTRIBUTE | "From" | "To"))
+        {
+            let values: Vec<Option<DrillValue>> = match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } => read_numbers(self.reader, values)?.into_iter().map(|value| value.map(DrillValue::Numeric)).collect(),
+                omf_crate::AttributeData::Category { values, names, .. } => {
+                    let names = collect_results(self.reader.array_names(names)?)?;
+                    collect_results(self.reader.array_indices(values)?)?
+                        .into_iter()
+                        .map(|index| index.and_then(|index| names.get(index as usize)).map(|name| DrillValue::Category(name.clone())))
+                        .collect()
+                }
+                _ => continue,
+            };
+            if values.len() != rows.len() {
+                bail!("Drillhole interval field '{}' of '{}' has the wrong length", attribute.name, element.name);
+            }
+            for (row, value) in rows.iter_mut().zip(values) {
+                if let Some(value) = value {
+                    row.values.insert(attribute.name.clone(), value);
+                }
+            }
+        }
+        for (row, hole) in rows.into_iter().zip(interval_holes) {
+            if let Some(hole) = hole.and_then(|hole| holes.get_mut(hole as usize)) {
+                hole.intervals.push(row);
+            }
+        }
+
+        if let Some(ranges) = element.metadata.get(META_RENDER_RANGES).and_then(Value::as_object) {
+            for (index, ranges) in ranges {
+                if let (Some(hole), Ok(ranges)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), Vec::<(f64, f64)>::deserialize(ranges)) {
+                    hole.render_ranges = ranges;
+                }
             }
         }
         if holes.is_empty() {
@@ -2698,8 +3113,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let mut dataset = DrillHoleDataset::new(holes);
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
-        if let Some(value) = element.metadata.get(META_TIE_INS).cloned()
-            && let Ok(stored) = serde_json::from_value::<crate::model::drill_hole::StoredTieIns>(value)
+        if let Some(value) = element.metadata.get(META_TIE_INS)
+            && let Ok(stored) = crate::model::drill_hole::StoredTieIns::deserialize(value)
         {
             let dropped = dataset.apply_stored_ties(stored);
             if dropped > 0 {
@@ -2737,46 +3152,30 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }))
     }
 
-    fn read_generic_drill_hole(&self, element: &omf_crate::Element) -> Result<Option<DrillHole>> {
-        let omf_crate::Geometry::LineSet(lines) = &element.geometry else {
-            return Ok(None);
-        };
-        let offset = self.project_origin + DVec3::from_array(lines.origin);
-        let vertices = self.read_vertices(&lines.vertices)?.into_iter().map(|point| point + offset).collect::<Vec<_>>();
-        if vertices.len() < 2 {
-            return Ok(None);
-        }
-        let raw_depths = element
+    /// Each row's hole, as an index into the returned hole names.
+    fn read_drill_hole_category(&self, element: &omf_crate::Element) -> Result<(Vec<Option<u32>>, Vec<String>)> {
+        let Some(omf_crate::AttributeData::Category { values, names, .. }) = element
             .attributes
             .iter()
-            .find(|attribute| attribute.location == omf_crate::Location::Vertices && attribute.name.eq_ignore_ascii_case("measured depth"))
+            .find(|attribute| attribute.name == DRILL_HOLE_ATTRIBUTE)
+            .map(|attribute| &attribute.data)
+        else {
+            bail!("missing the '{DRILL_HOLE_ATTRIBUTE}' category");
+        };
+        Ok((collect_results(self.reader.array_indices(values)?)?, collect_results(self.reader.array_names(names)?)?))
+    }
+
+    fn read_drill_numbers(&self, element: &omf_crate::Element, name: &str) -> Result<Option<Vec<Option<f64>>>> {
+        element
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
             .and_then(|attribute| match &attribute.data {
                 omf_crate::AttributeData::Number { values, .. } => Some(values),
                 _ => None,
             })
             .map(|values| read_numbers(self.reader, values))
-            .transpose()?;
-        if raw_depths.as_ref().is_some_and(|values| values.len() != vertices.len()) {
-            return Ok(None);
-        }
-        // One missing depth condemns the attribute: filling that gap from the
-        // vertex index mixes index units with measured ones and zig-zags.
-        let depths = match raw_depths {
-            Some(values) if values.iter().all(Option::is_some) => values.into_iter().map(Option::unwrap_or_default).collect(),
-            _ => cumulative_length_depths(&vertices),
-        };
-        let (trace, collar) = line_set_trace(depths, vertices);
-        Ok(Some(DrillHole {
-            dhid: element_name(element).to_owned(),
-            // `collar` only stands in for a hole that arrived without a trace.
-            collar,
-            diameter: None,
-            trace,
-            render_ranges: Vec::new(),
-            intervals: Vec::new(),
-            // An imported line set says nothing about the hole's survey.
-            orientation_source: crate::model::drill_hole::OrientationSource::Unknown,
-        }))
+            .transpose()
     }
 
     fn read_textures(&mut self, element: &omf_crate::Element) -> Result<()> {
@@ -2811,12 +3210,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 _ => continue,
             };
-            let decoded = self.reader.image(image).with_context(|| format!("decode texture '{}'", attribute.name))?.to_rgba8();
+            let decoded = self.reader.image(image).with_context(|| format!("decode texture '{}'", attribute.name))?.into_rgba8();
             let size = [decoded.width(), decoded.height()];
             let style = element.metadata.get(META_STYLE);
             let world_to_uv = style
                 .and_then(|style| style.get("world_to_uv"))
-                .and_then(|value| serde_json::from_value::<[f64; 6]>(value.clone()).ok())
+                .and_then(|value| <[f64; 6]>::deserialize(value).ok())
                 .map(|[a, b, c, d, e, f]| {
                     [
                         a,
@@ -2837,7 +3236,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             };
             let declared_source_size = style
                 .and_then(|style| style.get("source_size"))
-                .and_then(|value| serde_json::from_value::<[u32; 2]>(value.clone()).ok())
+                .and_then(|value| <[u32; 2]>::deserialize(value).ok())
                 .unwrap_or(size);
             if declared_source_size != size {
                 self.bundle.warnings.push(format!(
@@ -2851,7 +3250,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             }
             let preview_size = style
                 .and_then(|style| style.get("preview_size"))
-                .and_then(|value| serde_json::from_value::<[u32; 2]>(value.clone()).ok())
+                .and_then(|value| <[u32; 2]>::deserialize(value).ok())
                 .filter(|[width, height]| *width > 0 && *height > 0 && *width <= size[0] && *height <= size[1])
                 .unwrap_or(size);
             let projection = style
@@ -2865,11 +3264,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             } else {
                 Arc::new(crate::model::raster::downscale_rgba(&full_rgba, size, preview_size)?)
             };
+            // Only an element this app wrote holds exactly `full_rgba` in the
+            // layout a save would give it; see `copy_raster_image`.
+            let payload_source = if kind(element) == Some("raster") { self.payload_locator() } else { None };
             self.bundle.rasters.push(ImportedRaster {
                 preferred_id: element_id(element),
                 source_name: element_source_name(element),
                 source_format: element_source_format(element),
                 deferred: None,
+                payload_source,
                 is_loaded: style_loaded(style),
                 loaded: LoadedRasterTexture {
                     name: if attribute.name == "Raster" {
@@ -2958,6 +3361,78 @@ fn affine_from_texcoords(vertices: &[DVec3], texcoords: &[[f64; 2]]) -> Option<[
         }
     }
     None
+}
+
+fn read_block_column<R: omf_crate::file::ReadAt>(
+    reader: &omf_crate::file::Reader<R>,
+    attribute: &omf_crate::Attribute,
+    expansion: Option<&[usize]>,
+) -> Result<Option<BlockModelColumn>> {
+    match &attribute.data {
+        omf_crate::AttributeData::Number { values, .. } => {
+            let values = read_numbers(reader, values)?.into_iter().map(|value| value.unwrap_or(f64::NAN)).collect::<Vec<_>>();
+            let values = expand_block_values(values, expansion)?;
+            Ok(Some(BlockModelColumn {
+                name: attribute.name.clone(),
+                values: Arc::new(values),
+                categories: None,
+                category_colors: BTreeMap::new(),
+            }))
+        }
+        omf_crate::AttributeData::Category {
+            values,
+            names,
+            gradient,
+            attributes,
+        } => {
+            let names = collect_results(reader.array_names(names)?)?;
+            let original_codes = attributes
+                .iter()
+                .find(|attribute| attribute.name == "Incline category code" && attribute.location == omf_crate::Location::Categories)
+                .and_then(|attribute| match &attribute.data {
+                    omf_crate::AttributeData::Number { values, .. } => Some(values),
+                    _ => None,
+                })
+                .map(|values| read_numbers(reader, values))
+                .transpose()?
+                .and_then(|values| {
+                    (values.len() == names.len())
+                        .then(|| {
+                            values
+                                .into_iter()
+                                .map(|value| {
+                                    value
+                                        .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(value))
+                                        .map(|value| value as u32)
+                                })
+                                .collect::<Option<Vec<_>>>()
+                        })
+                        .flatten()
+                });
+            let codes = original_codes.unwrap_or_else(|| (0..names.len() as u32).collect());
+            // The file's own palette, when it ships one, beats Incline Design's
+            // generic categorical colours.
+            let category_colors = gradient
+                .as_ref()
+                .map(|gradient| collect_results(reader.array_gradient(gradient)?))
+                .transpose()?
+                .map(|colors| codes.iter().copied().zip(colors).map(|(code, color)| (code, linear_rgba(color))).collect())
+                .unwrap_or_default();
+            let categories = names.into_iter().zip(codes.iter().copied()).map(|(name, code)| (code, name)).collect();
+            let values = collect_results(reader.array_indices(values)?)?
+                .into_iter()
+                .map(|value| value.and_then(|index| codes.get(index as usize).copied()).map_or(f64::NAN, f64::from))
+                .collect::<Vec<_>>();
+            let values = expand_block_values(values, expansion)?;
+            Ok(Some(BlockModelColumn {
+                name: attribute.name.clone(),
+                values: Arc::new(values),
+                categories: Some(categories),
+                category_colors,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn ensure_items(count: u64, description: &str) -> Result<usize> {
@@ -3050,24 +3525,6 @@ fn subblock_bounds(parent: [u32; 3], corners: [f64; 6], edges: &[Vec<f64>; 3]) -
     })
 }
 
-fn block_world_bounds(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices) -> Option<(DVec3, DVec3)> {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for index in renderable.iter() {
-        let block = blocks.get(index)?;
-        for x in [block.lower.x, block.upper.x] {
-            for y in [block.lower.y, block.upper.y] {
-                for z in [block.lower.z, block.upper.z] {
-                    let point = model.local_to_world(DVec3::new(x, y, z));
-                    min = min.min(point);
-                    max = max.max(point);
-                }
-            }
-        }
-    }
-    (min.is_finite() && max.is_finite()).then_some((min, max))
-}
-
 fn line_strings(vertices: &[DVec3], segments: &[[u32; 2]]) -> Vec<(Vec<DVec3>, bool)> {
     if vertices.len() >= 2 {
         let open = segments.len() == vertices.len() - 1 && segments.iter().enumerate().all(|(index, segment)| *segment == [index as u32, index as u32 + 1]);
@@ -3096,7 +3553,7 @@ fn style_f32(style: Option<&Value>, key: &str) -> Option<f32> {
 }
 
 fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str) -> Option<T> {
-    serde_json::from_value(style?.get(key)?.clone()).ok()
+    T::deserialize(style?.get(key)?).ok()
 }
 
 /// A drill-hole dataset's geophysics link; a project saved before links has

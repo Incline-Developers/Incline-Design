@@ -94,8 +94,8 @@ tri-create-run = Triangulacja
 
 tri-selection-selected = Wybrano: { $summary }
 
-tri-type-open-surface = Powierzchnia otwarta
-tri-type-solid-closed = Bryła – w pełni zamknięta
+tri-type-open-surface = Powierzchnia
+tri-type-solid-closed = Bryła
 
 tri-count-polylines =
     { $count ->
@@ -1222,7 +1222,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Przebud
 literal-restore-the-full-model-range-23c0898e378be1df = Przywróć pełny zakres modelu
 literal-axis-minimum-8a51a7bda9747700 = Minimum %axis%
 literal-axis-maximum-fa149d72f9564fca = Maksimum %axis%
-literal-name-no-range-4f328990327afd0b = %name% (brak zakresu)
 literal-choose-a-variable-62b267fd35bdce31 = Wybierz zmienną
 literal-no-usable-range-6bd2da592be04b0c = (brak użytecznego zakresu)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Edytuj kolor używany dla pustych wartości

@@ -69,3 +69,17 @@ pub(crate) fn bar_strip(ui: &mut egui::Ui, id_salt: &str, height: f32, add_conte
     }
     ui.data_mut(|data| data.insert_temp(width_id, measured));
 }
+
+/// Lay one of a bar's clusters out over `rect`, and report what it drew into.
+///
+/// A bar's clusters are placed against the same strip rather than in
+/// sequence, so each is given the rect it should align itself in and none of
+/// them consumes space the next one wanted.
+pub(crate) fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        add_contents(ui);
+    })
+    .response
+    .rect
+}

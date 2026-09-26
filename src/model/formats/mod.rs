@@ -8,6 +8,7 @@ pub(crate) mod block_model_data;
 pub(crate) mod csv_block_model;
 pub(crate) mod csv_drill_hole;
 pub(crate) mod csv_geophysics;
+pub(crate) mod csv_records;
 pub(crate) mod dxf;
 pub(crate) mod mesh_data;
 pub(crate) mod omf;

@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
+    app::App,
     i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
@@ -44,11 +44,7 @@ impl<'a> App<'a> {
 
     /// Pick an element to offset when the tool is active but no target yet.
     pub(crate) fn pick_offset_target(&mut self) {
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         if let Some((SceneEntityId::Object(id), _)) = picked
             && self.activate_project_for_object(id)
             && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. } | Object::Circle { .. }))

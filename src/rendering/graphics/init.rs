@@ -593,12 +593,14 @@ impl<'a> Graphics<'a> {
         })];
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
+        let document_style = DocumentStyleGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
         #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
         let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
             &device,
             &scene_pipelines::ScenePipelineLayouts {
                 camera: &camera_bind_group_layout,
+                document_style: &document_style.layout,
                 grid: &grid_bind_group_layout,
                 surface_style: &surface_style_bind_group_layout,
                 surface_chunk: &surface_chunk_bind_group_layout,
@@ -753,12 +755,9 @@ impl<'a> Graphics<'a> {
         let lyon_buffer: VertexBuffers<Vertex, u32> = VertexBuffers::new();
         let lyon_vertex_gpu = Self::create_stream_buffer(&device, "Lyon Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let lyon_index_gpu = Self::create_stream_buffer(&device, "Lyon Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let stroke_vertex_gpu = Self::create_stream_buffer(&device, "Stroke Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let stroke_index_gpu = Self::create_stream_buffer(&device, "Stroke Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let overlay_vertex_gpu = Self::create_stream_buffer(&device, "Editor Overlay Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let overlay_index_gpu = Self::create_stream_buffer(&device, "Editor Overlay Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let dynamic_vertex_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let dynamic_index_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
+        let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
 
@@ -790,12 +789,9 @@ impl<'a> Graphics<'a> {
             point_cloud_style_bind_group_layout,
             lyon_vertex_gpu,
             lyon_index_gpu,
-            stroke_vertex_gpu,
-            stroke_index_gpu,
-            overlay_vertex_gpu,
-            overlay_index_gpu,
-            dynamic_vertex_gpu,
-            dynamic_index_gpu,
+            stroke_gpu,
+            overlay_stroke_gpu,
+            dynamic_stroke_gpu,
             text_vertex_gpu,
             text_index_gpu,
             camera_buffer,
@@ -841,18 +837,13 @@ impl<'a> Graphics<'a> {
             touch_gesture: Default::default(),
             fly_mode_enabled: false,
             slice_view: None,
-            stroke_index_buf: Vec::new(),
-            stroke_vertex_buf: Vec::new(),
-            stroke_vertex_capacity: 1,
-            stroke_index_capacity: 1,
-            overlay_vertex_buf: Vec::new(),
-            overlay_index_buf: Vec::new(),
-            overlay_vertex_capacity: 1,
-            overlay_index_capacity: 1,
-            dynamic_vertex_buf: Vec::new(),
-            dynamic_index_buf: Vec::new(),
-            dynamic_vertex_capacity: 1,
-            dynamic_index_capacity: 1,
+            strokes: Vec::new(),
+            stroke_blocks: StrokeBlocks::default(),
+            stroke_capacity: 1,
+            overlay_strokes: Vec::new(),
+            overlay_stroke_capacity: 1,
+            dynamic_strokes: Vec::new(),
+            dynamic_stroke_capacity: 1,
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,
@@ -866,6 +857,11 @@ impl<'a> Graphics<'a> {
             polyline_fill_cache: Default::default(),
             cached_document_revision: u64::MAX,
             cached_render_style_key: None,
+            cached_document_scene_key: None,
+            document_style_dirty: true,
+            document_style_slots: DocumentStyleSlots::default(),
+            document_style,
+            document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),

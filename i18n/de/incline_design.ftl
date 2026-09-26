@@ -98,8 +98,8 @@ tri-create-run = Triangulieren
 
 tri-selection-selected = { $summary } ausgewählt
 
-tri-type-open-surface = Offene Oberfläche
-tri-type-solid-closed = Volumenkörper – vollständig geschlossen
+tri-type-open-surface = Oberfläche
+tri-type-solid-closed = Volumenkörper
 
 # Bestandteile der Auswahlübersicht, z. B. „3 Polylinien, 1 Punkt“. Jedes
 # Substantiv wird nach seiner eigenen Anzahl flektiert, damit Sprachen mit
@@ -1219,7 +1219,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Farben 
 literal-restore-the-full-model-range-23c0898e378be1df = Vollständigen Modellbereich wiederherstellen
 literal-axis-minimum-8a51a7bda9747700 = %axis%-Minimum
 literal-axis-maximum-fa149d72f9564fca = %axis%-Maximum
-literal-name-no-range-4f328990327afd0b = %name% (kein Bereich)
 literal-choose-a-variable-62b267fd35bdce31 = Wählen Sie eine Variable
 literal-no-usable-range-6bd2da592be04b0c = (kein nutzbarer Bereich)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Bearbeiten Sie die Farbe für leere Werte

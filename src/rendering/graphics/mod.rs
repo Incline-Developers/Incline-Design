@@ -21,15 +21,16 @@ use crate::{
         triangulation::OpenTriangulation,
     },
     rendering::{
-        BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
+        BlockInstance, StrokeInstance, SurfaceVertex, Vertex,
         camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, SectionSlab, screen_to_world_on_plane, screen_to_world_on_section_plane},
-        pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
+        pick::{PickGeometry, PickRecord, StrokeBlocks, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCell, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance,
             PointPosition, RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
-            build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            document_style::{DocumentStyleGpu, DocumentStyleSlots},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -50,6 +51,7 @@ pub(crate) mod init;
 pub(crate) mod passes;
 pub(crate) mod plot;
 pub(crate) mod projections;
+mod readback;
 pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
@@ -61,7 +63,7 @@ pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
 pub(super) const CAMERA_ROTATE_SENSITIVITY: f64 = 0.003;
 /// Below this per-buffer limit, large tessellated scenes may be truncated.
 pub(super) const COMFORTABLE_MAX_BUFFER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-pub(super) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
+pub(crate) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
 /// Sizing for editable document geometry.
 pub(super) const DOC_LINE_WIDTH: f32 = 1.0;
 /// Colour for the in-progress stroke preview (committed segments + rubber band).
@@ -338,12 +340,9 @@ pub(crate) struct Graphics<'a> {
     pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
-    pub(super) stroke_vertex_gpu: wgpu::Buffer,
-    pub(super) stroke_index_gpu: wgpu::Buffer,
-    pub(super) overlay_vertex_gpu: wgpu::Buffer,
-    pub(super) overlay_index_gpu: wgpu::Buffer,
-    pub(super) dynamic_vertex_gpu: wgpu::Buffer,
-    pub(super) dynamic_index_gpu: wgpu::Buffer,
+    pub(super) stroke_gpu: wgpu::Buffer,
+    pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
@@ -398,20 +397,16 @@ pub(crate) struct Graphics<'a> {
     pub(super) polyline_fill_cache: PolylineFillCache,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
-    pub(super) stroke_vertex_buf: Vec<StrokeVertex>,
-    pub(super) stroke_index_buf: Vec<u32>,
-    pub(super) stroke_vertex_capacity: usize,
-    pub(super) stroke_index_capacity: usize,
-    pub(super) overlay_vertex_buf: Vec<StrokeVertex>,
-    pub(super) overlay_index_buf: Vec<u32>,
-    pub(super) overlay_vertex_capacity: usize,
-    pub(super) overlay_index_capacity: usize,
+    /// Document stroke instances outside the static chunks.
+    pub(super) strokes: Vec<StrokeInstance>,
+    pub(super) stroke_blocks: StrokeBlocks,
+    pub(super) stroke_capacity: usize,
+    pub(super) overlay_strokes: Vec<StrokeInstance>,
+    pub(super) overlay_stroke_capacity: usize,
     /// Per-frame stroke geometry for live drawing tools (batter/berm
     /// preview); see `rebuild_dynamic_scene`.
-    pub(super) dynamic_vertex_buf: Vec<StrokeVertex>,
-    pub(super) dynamic_index_buf: Vec<u32>,
-    pub(super) dynamic_vertex_capacity: usize,
-    pub(super) dynamic_index_capacity: usize,
+    pub(super) dynamic_strokes: Vec<StrokeInstance>,
+    pub(super) dynamic_stroke_capacity: usize,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,
@@ -438,10 +433,20 @@ pub(crate) struct Graphics<'a> {
     pub(super) last_interaction: Option<Instant>,
     pub(super) geometry_dirty: bool,
     pub(super) cached_document_revision: u64,
-    /// `EditorState::render_style_key` of the last static-scene build. The
-    /// renderer compares this itself so selection/style mutations cannot
-    /// leave stale baked geometry when a caller skipped invalidation.
+    /// `EditorState::render_style_key` of the last restyle. The renderer
+    /// compares this itself so a selection or style change always reaches
+    /// the style buffer and batches, even when a caller skipped invalidation.
     pub(super) cached_render_style_key: Option<u64>,
+    /// `build::document_scene_key` of the last stream tessellation; a
+    /// geometry pass that matches it only restyles.
+    pub(super) cached_document_scene_key: Option<u64>,
+    /// The batches and style buffer need rebuilding for the current editor
+    /// state.
+    pub(super) document_style_dirty: bool,
+    pub(super) document_style_slots: DocumentStyleSlots,
+    pub(super) document_style: DocumentStyleGpu,
+    /// Each stream object's ranges, restaged by `restyle_document_scene`.
+    pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
@@ -872,7 +877,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
         self.touch_gesture = Default::default();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
@@ -1002,7 +1007,7 @@ impl<'a> Graphics<'a> {
         let saved_camera = self.camera.clone();
         let saved_zoom = self.projection.zoom;
         self.camera_controller.cancel_view_transition();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
 
         // Frame the drawn line: it spans the view horizontally with padding.

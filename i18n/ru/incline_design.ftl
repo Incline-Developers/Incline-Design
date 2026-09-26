@@ -94,8 +94,8 @@ tri-create-run = Триангулировать
 
 tri-selection-selected = Выбрано: { $summary }
 
-tri-type-open-surface = Открытая поверхность
-tri-type-solid-closed = Тело — полностью замкнутое
+tri-type-open-surface = Поверхность
+tri-type-solid-closed = Тело
 
 tri-count-polylines =
     { $count ->
@@ -1220,7 +1220,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Пер�
 literal-restore-the-full-model-range-23c0898e378be1df = Восстановить полный диапазон модели
 literal-axis-minimum-8a51a7bda9747700 = Минимум %axis%
 literal-axis-maximum-fa149d72f9564fca = Максимум %axis%
-literal-name-no-range-4f328990327afd0b = %name% (без диапазона)
 literal-choose-a-variable-62b267fd35bdce31 = Выберите переменную
 literal-no-usable-range-6bd2da592be04b0c = (нет пригодного диапазона)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Изменить цвет пустых значений

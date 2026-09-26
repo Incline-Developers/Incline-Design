@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io::{Read, Seek, Write},
+    sync::{Mutex, OnceLock},
 };
 
 use zip::{
@@ -122,34 +123,47 @@ impl<'a, R: Read> TryFrom<ZipFile<'a, R>> for FileSpan {
 
 pub(crate) struct Archive<R> {
     file: SubFile<R>,
-    members: HashMap<String, FileSpan>,
+    /// The central directory, consulted again as members are first opened.
+    zip: Mutex<ZipArchive<SubFile<R>>>,
+    /// Each member's index in `zip`, and its span once something has opened it.
+    ///
+    /// Locating a member's data means reading its local header, one small read per
+    /// member. Deferring that to the first open keeps opening an archive with many
+    /// thousands of members - one per small element array - from reading them all when
+    /// only a few will be loaded.
+    members: HashMap<String, (usize, OnceLock<FileSpan>)>,
     version: [u32; 2],
     pre_release: Option<String>,
 }
 
 impl<R: ReadAt> Archive<R> {
     pub fn new(file: SubFile<R>) -> Result<Self, Error> {
-        let mut zip_archive = ZipArchive::new(file)?;
-        let mut members = HashMap::new();
-        let mut index_found = false;
-        for i in 0..zip_archive.len() {
-            let f = zip_archive.by_index_raw(i)?;
-            if f.compression() != zip::CompressionMethod::Stored {
-                return Err(Error::ZipError("members may not be compressed".into()));
-            }
-            index_found = index_found || f.name() == INDEX_NAME;
-            members.insert(f.name().into(), FileSpan::try_from(f)?);
-        }
-        if !index_found {
+        let mut zip_archive = ZipArchive::new(file.sub_file(0, file.len())?)?;
+        let members: HashMap<_, _> = zip_archive
+            .file_names()
+            .map(|name| {
+                let index = zip_archive.index_for_name(name).expect("listed member");
+                (name.to_owned(), (index, OnceLock::new()))
+            })
+            .collect();
+        let Some((index, _)) = members.get(INDEX_NAME) else {
             return Err(Error::ZipMemberMissing(INDEX_NAME.to_owned()));
-        }
+        };
+        // The index is always read, so check it up front as before.
+        let index_span = OnceLock::new();
+        _ = index_span.set(member_span(&mut zip_archive, *index)?);
         let Some((version, pre_release)) = get_version(zip_archive.comment()) else {
             return Err(Error::NotOmf(
                 String::from_utf8_lossy(zip_archive.comment()).into_owned(),
             ));
         };
+        let mut members = members;
+        if let Some(entry) = members.get_mut(INDEX_NAME) {
+            entry.1 = index_span;
+        }
         Ok(Self {
-            file: zip_archive.into_inner(),
+            file,
+            zip: Mutex::new(zip_archive),
             members,
             version,
             pre_release,
@@ -165,19 +179,34 @@ impl<R: ReadAt> Archive<R> {
     }
 
     pub fn span(&self, name: &str) -> Result<FileSpan, Error> {
-        self.members
-            .get(name)
-            .ok_or_else(|| Error::ZipMemberMissing(name.to_owned()))
-            .copied()
-    }
-
-    pub fn open(&self, name: &str) -> Result<SubFile<R>, Error> {
-        let span = self
+        let (index, span) = self
             .members
             .get(name)
             .ok_or_else(|| Error::ZipMemberMissing(name.to_owned()))?;
+        if let Some(span) = span.get() {
+            return Ok(*span);
+        }
+        let mut zip = self
+            .zip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let found = member_span(&mut zip, *index)?;
+        Ok(*span.get_or_init(|| found))
+    }
+
+    pub fn open(&self, name: &str) -> Result<SubFile<R>, Error> {
+        let span = self.span(name)?;
         Ok(self.file.sub_file(span.offset, span.size)?)
     }
+}
+
+/// Where a member's data lies, checking that it is stored uncompressed.
+fn member_span<R: Read + Seek>(zip: &mut ZipArchive<R>, index: usize) -> Result<FileSpan, Error> {
+    let f = zip.by_index_raw(index)?;
+    if f.compression() != zip::CompressionMethod::Stored {
+        return Err(Error::ZipError("members may not be compressed".into()));
+    }
+    FileSpan::try_from(f)
 }
 
 fn get_version(comment_bytes: &[u8]) -> Option<([u32; 2], Option<String>)> {

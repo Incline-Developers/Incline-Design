@@ -4,7 +4,14 @@ use crate::model::geometry::{clip_polyline_by_xy_edge, signed_area_xy, triangle_
 impl<'a> App<'a> {
     /// Cut the triangulation, clipping each triangle against the XY polyline boundary
     /// using Sutherland-Hodgman. Produces smooth edges instead of centroid-based jagged cuts.
-    pub(crate) fn cut_triangulation_by_polyline(&mut self, tri_id: TriangulationId, polyline_id: ObjectId, mode: TriPolylineClipMode, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_polyline(
+        &mut self,
+        tri_id: TriangulationId,
+        polyline_id: ObjectId,
+        mode: TriPolylineClipMode,
+        name: String,
+        unload_source: bool,
+    ) -> Result<()> {
         let (mesh, tri_name) = {
             let tri = self
                 .triangulations
@@ -45,7 +52,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Clipping surface by polyline…"),
@@ -61,7 +68,7 @@ impl<'a> App<'a> {
     /// not a fixed design polyline. Topology under parts of the shell that float above the
     /// ground is kept. The pit shell mesh may be multi-valued in XY (walls, benches) or a
     /// watertight closed solid; its flat crest cap never forces removal on its own.
-    pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String) -> Result<()> {
+    pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String, unload_source: bool) -> Result<()> {
         if topology_id == pit_shell_id {
             anyhow::bail!("Topology and pit shell must be different triangulations");
         }
@@ -107,7 +114,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(topology_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Cutting topology by pit shell…"),
@@ -120,7 +127,7 @@ impl<'a> App<'a> {
 
     /// Cut the triangulation to the Z band [z_min, z_max], clipping triangles
     /// that straddle the boundary planes.
-    pub(crate) fn cut_triangulation_by_z(&mut self, tri_id: TriangulationId, z_min: f64, z_max: f64, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_z(&mut self, tri_id: TriangulationId, z_min: f64, z_max: f64, name: String, unload_source: bool) -> Result<()> {
         if z_min >= z_max {
             anyhow::bail!("Z min must be less than Z max");
         }
@@ -173,7 +180,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Cutting triangulation by Z…"),
@@ -186,7 +193,14 @@ impl<'a> App<'a> {
 
     /// Vertically clip one triangulation against another topology. Only the XY
     /// overlap with the reference topology is emitted.
-    pub(crate) fn cut_triangulation_by_surface(&mut self, target_id: TriangulationId, reference_id: TriangulationId, side: TriSurfaceCutSide, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_surface(
+        &mut self,
+        target_id: TriangulationId,
+        reference_id: TriangulationId,
+        side: TriSurfaceCutSide,
+        name: String,
+        unload_source: bool,
+    ) -> Result<()> {
         if target_id == reference_id {
             anyhow::bail!("Surface to trim and topology must be different triangulations");
         }
@@ -229,7 +243,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, unload_source.then_some(target_id).as_slice());
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Trimming surface to topology…"),
@@ -289,7 +303,7 @@ pub(super) fn clip_mesh_by_polyline_xy(
                 if !prepared.xy_bounds_overlap(tri_min, tri_max) {
                     if mode == TriPolylineClipMode::KeepOutside {
                         let polyline: Vec<glam::DVec3> = target.iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
-                        emit_convex_polyline_as_fan(&polyline, &mut chunk_vertices, &mut chunk_faces);
+                        append_polyline_fan(polyline.iter().copied(), &mut chunk_vertices, &mut chunk_faces);
                     }
                     continue;
                 }
@@ -309,7 +323,7 @@ pub(super) fn clip_mesh_by_polyline_xy(
                                 // clipped by 3 half-planes), so a fan triangulates it
                                 // exactly without earcut. Z is preserved from the mesh
                                 // triangle by the clip, so no per-vertex bary_z either.
-                                emit_convex_polyline_as_fan(&overlap_polyline, &mut chunk_vertices, &mut chunk_faces);
+                                append_polyline_fan(overlap_polyline.iter().copied(), &mut chunk_vertices, &mut chunk_faces);
                             });
                     }
                     TriPolylineClipMode::KeepOutside => {
@@ -330,7 +344,7 @@ pub(super) fn clip_mesh_by_polyline_xy(
                             }
                         }
                         for piece in pieces {
-                            emit_convex_polyline_as_fan(&piece, &mut chunk_vertices, &mut chunk_faces);
+                            append_polyline_fan(piece.iter().copied(), &mut chunk_vertices, &mut chunk_faces);
                         }
                     }
                 }
@@ -433,15 +447,16 @@ fn clip_target_triangle_to_reference_xy_exact_into(target: [mesh_data::Vertex; 3
     output.extend(polyline);
 }
 
-/// Push a convex polyline into the mesh buffers as a triangle fan. Degenerate
-/// (zero-area) triangles are dropped, matching `append_surface_clip_polyline`.
-fn emit_convex_polyline_as_fan(polyline: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polyline.len() < 3 {
+/// Push a convex polyline into the mesh buffers as a triangle fan, dropping
+/// degenerate (zero-area) triangles.
+pub(super) fn append_polyline_fan(points: impl ExactSizeIterator<Item = glam::DVec3>, vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+    let count = points.len();
+    if count < 3 {
         return;
     }
     let base = vertices.len() as u32;
-    vertices.extend(polyline.iter().map(|p| mesh_data::Vertex::new(p.x, p.y, p.z)));
-    for i in 1..(polyline.len() - 1) as u32 {
+    vertices.extend(points.map(|p| mesh_data::Vertex::new(p.x, p.y, p.z)));
+    for i in 1..(count - 1) as u32 {
         let face = [base, base + i, base + i + 1];
         let a = vertices[face[0] as usize];
         let b = vertices[face[1] as usize];
@@ -934,6 +949,37 @@ pub(super) fn add_split_constraints(cdt: &mut spade::ConstrainedDelaunayTriangul
     }
 }
 
+/// Constrained Delaunay cells over `points` with `edges` enforced, in world XY.
+/// `points` must already be deduplicated, so the indices spade reports for
+/// conflicting constraints are ours; those are split rather than dropped.
+/// `name` labels errors and `site` the split warnings.
+pub(super) fn constrained_cells(points: Vec<spade::Point2<f64>>, edges: HashSet<(usize, usize)>, name: &str, site: &str, origin: glam::DVec2) -> Result<Vec<[glam::DVec2; 3]>> {
+    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+
+    let mut edge_list: Vec<[usize; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
+    edge_list.sort_unstable();
+
+    let point_count = points.len();
+    let mut conflicting_edges: Vec<[usize; 2]> = Vec::new();
+    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(points, edge_list, |edge| conflicting_edges.push(edge))
+        .map_err(|error| anyhow::anyhow!("{name} CDT bulk load failed: {error:?}"))?;
+    if cdt.num_vertices() != point_count {
+        anyhow::bail!("{name} CDT dropped vertices unexpectedly during bulk load");
+    }
+    add_split_constraints(&mut cdt, conflicting_edges, site, origin);
+
+    let cells: Vec<[glam::DVec2; 3]> = cdt
+        .inner_faces()
+        .map(|face| {
+            face.vertices().map(|vertex| {
+                let position = vertex.position();
+                glam::DVec2::new(position.x + origin.x, position.y + origin.y)
+            })
+        })
+        .collect();
+    Ok(cells)
+}
+
 /// How far beyond the shell bounds the envelope's open padding cells extend (metres).
 /// Larger than any real survey extent, so every topology triangle lands inside the padded
 /// triangulation and is handled by the same per-cell path.
@@ -957,7 +1003,7 @@ pub(super) const ENVELOPE_PADDING: f64 = 1.0e7;
 /// kept as open cells so the envelope tiles the whole plane.
 pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurface) -> Result<PitShellLowerEnvelope> {
     use rayon::prelude::*;
-    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+    use spade::Point2;
 
     // Work in coordinates local to the shell's minimum corner: at real-world (UTM-scale)
     // magnitudes the absolute coordinates would erode the precision of the CDT's
@@ -1005,30 +1051,7 @@ pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurfac
             }
         }
     }
-    let mut edge_list: Vec<[usize; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
-    edge_list.sort_unstable();
-
-    let point_count = points.len();
-    let mut conflicting_edges: Vec<[usize; 2]> = Vec::new();
-    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(points, edge_list, |edge| conflicting_edges.push(edge))
-        .map_err(|error| anyhow::anyhow!("Pit shell CDT bulk load failed: {error:?}"))?;
-    // Our exact dedup means spade removed no duplicates, so bulk-load vertex indices
-    // (which the conflict callback reports) still match ours; anything else would make
-    // the splitting inserts below connect the wrong points.
-    if cdt.num_vertices() != point_count {
-        anyhow::bail!("Pit shell CDT dropped vertices unexpectedly during bulk load");
-    }
-    add_split_constraints(&mut cdt, conflicting_edges, "Pit shell envelope", origin);
-
-    let cells: Vec<[glam::DVec2; 3]> = cdt
-        .inner_faces()
-        .map(|face| {
-            face.vertices().map(|vertex| {
-                let position = vertex.position();
-                glam::DVec2::new(position.x + origin.x, position.y + origin.y)
-            })
-        })
-        .collect();
+    let cells = constrained_cells(points, edges, "Pit shell", "Pit shell envelope", origin)?;
     let classified: Vec<([mesh_data::Vertex; 3], bool)> = cells
         .par_iter()
         .fold(
@@ -1286,20 +1309,5 @@ pub(super) fn clip_surface_polyline(polyline: Vec<SurfaceClipVertex>, side: TriS
 }
 
 pub(super) fn append_surface_clip_polyline(polyline: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polyline.len() < 3 {
-        return;
-    }
-    let base = vertices.len() as u32;
-    vertices.extend(polyline.iter().map(|vertex| mesh_data::Vertex::new(vertex.point.x, vertex.point.y, vertex.point.z)));
-    for i in 1..polyline.len() - 1 {
-        let face = [base, base + i as u32, base + i as u32 + 1];
-        let a = vertices[face[0] as usize];
-        let b = vertices[face[1] as usize];
-        let c = vertices[face[2] as usize];
-        let ab = glam::DVec3::new(b.x - a.x, b.y - a.y, b.z - a.z);
-        let ac = glam::DVec3::new(c.x - a.x, c.y - a.y, c.z - a.z);
-        if ab.cross(ac).length_squared() > 1e-20 {
-            faces.push(face);
-        }
-    }
+    append_polyline_fan(polyline.iter().map(|vertex| vertex.point), vertices, faces);
 }

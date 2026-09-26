@@ -7,9 +7,13 @@
 //! technique the slice preview uses - then read back as RGBA pixels for
 //! [`crate::model::plot`] to compose the sheet around.
 
+#[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
 
-use super::*;
+use super::{
+    readback::{self, RgbaReadback},
+    *,
+};
 use crate::model::plot::MAX_SHEET_PIXELS;
 
 /// A plan-view framing for the map image.
@@ -26,13 +30,7 @@ pub(crate) struct PlotMapRequest {
 }
 
 /// GPU-side capture awaiting readback.
-pub(crate) struct PendingPlotMap {
-    buffer: Arc<wgpu::Buffer>,
-    padded_bytes_per_row: u32,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-}
+pub(crate) struct PendingPlotMap(RgbaReadback);
 
 impl<'a> Graphics<'a> {
     /// Render the scene into an offscreen image framed by `request` and record
@@ -62,22 +60,7 @@ impl<'a> Graphics<'a> {
             ));
         }
 
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Plot Map Target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.config.format.add_srgb_suffix(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let format = self.config.format.add_srgb_suffix();
+        let (texture, view) = readback::offscreen_target(&self.device, "Plot Map Target", self.config.format.add_srgb_suffix(), width, height);
         self.render_map_into(
             &view,
             width,
@@ -92,42 +75,12 @@ impl<'a> Graphics<'a> {
             rasters,
         );
 
-        let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let buffer = Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Plot Map Readback Buffer"),
-            size: u64::from(padded_bytes_per_row) * u64::from(height),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Plot Map Readback Encoder"),
         });
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        let capture = RgbaReadback::record(&self.device, &mut encoder, &texture, "Plot Map Readback Buffer");
         self.queue.submit([encoder.finish()]);
-
-        Ok(PendingPlotMap {
-            buffer,
-            padded_bytes_per_row,
-            width,
-            height,
-            format,
-        })
+        Ok(PendingPlotMap(capture))
     }
 
     /// Render the scene, framed by `request`, into `view`.
@@ -236,15 +189,9 @@ impl<'a> Graphics<'a> {
     /// Block until the captured map is readable and return it as RGBA8.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn resolve_plot_map(&self, capture: PendingPlotMap) -> Result<Vec<u8>> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        capture.buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-            let _ = tx.send(result);
-        });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|error| anyhow!("GPU poll failed: {error}"))?;
-        rx.recv()
-            .map_err(|_| anyhow!("Plot readback callback dropped"))?
-            .map_err(|error| anyhow!("Plot buffer map failed: {error}"))?;
-        let pixels = unpack_mapped_rgba(&capture)?;
+        let PendingPlotMap(capture) = capture;
+        capture.map_blocking(&self.device)?;
+        let pixels = capture.unpack()?;
         capture.buffer.unmap();
         Ok(pixels)
     }
@@ -252,43 +199,16 @@ impl<'a> Graphics<'a> {
     /// Hand the captured map to `deliver` once the browser has mapped it.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn resolve_plot_map_async(&self, capture: PendingPlotMap, deliver: impl FnOnce(Result<Vec<u8>>) + 'static) {
+        let PendingPlotMap(capture) = capture;
         let buffer = Arc::clone(&capture.buffer);
         let callback_buffer = Arc::clone(&buffer);
         buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-            let pixels = result
-                .map_err(|error| anyhow!("Plot buffer map failed: {error}"))
-                .and_then(|()| unpack_mapped_rgba(&capture));
+            let pixels = result.map_err(|error| anyhow!("Plot buffer map failed: {error}")).and_then(|()| capture.unpack());
             callback_buffer.unmap();
             deliver(pixels);
         });
         let _ = self.device.poll(wgpu::PollType::Poll);
     }
-}
-
-/// Strip the row padding wgpu required and normalise the surface format to
-/// opaque RGBA8.
-fn unpack_mapped_rgba(capture: &PendingPlotMap) -> Result<Vec<u8>> {
-    let swap_bgra = match capture.format.remove_srgb_suffix() {
-        wgpu::TextureFormat::Bgra8Unorm => true,
-        wgpu::TextureFormat::Rgba8Unorm => false,
-        other => return Err(anyhow!("Unsupported surface format for plot export: {other:?}")),
-    };
-    let padded = capture.buffer.get_mapped_range(..)?;
-    let row_bytes = capture.width as usize * 4;
-    let mut rgba = Vec::with_capacity(row_bytes * capture.height as usize);
-    for row in padded.chunks_exact(capture.padded_bytes_per_row as usize) {
-        rgba.extend_from_slice(&row[..row_bytes]);
-    }
-    drop(padded);
-    if swap_bgra {
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
-    }
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
-    Ok(rgba)
 }
 
 // ── Live dialog preview ────────────────────────────────────────────────────

@@ -45,6 +45,8 @@ const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_ar
 /// one (created by `cinematic::create_cinematic_pipelines`).
 pub(crate) struct ScenePipelineLayouts<'a> {
     pub(crate) camera: &'a wgpu::BindGroupLayout,
+    /// Group 1 of the document fill, text and stroke pipelines.
+    pub(crate) document_style: &'a wgpu::BindGroupLayout,
     pub(crate) grid: &'a wgpu::BindGroupLayout,
     pub(crate) surface_style: &'a wgpu::BindGroupLayout,
     pub(crate) surface_chunk: &'a wgpu::BindGroupLayout,
@@ -149,6 +151,20 @@ fn surface_shader_body(device: &wgpu::Device) -> String {
     format!("const barycentric = vec3<f32>(1.0);\n{}", body.replace(INPUT, ""))
 }
 
+/// [`make_shader`] plus the document style prelude, for the shaders that bind
+/// `scene::document_style` at group 1.
+fn make_document_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
+    let source = format!(
+        "{}{}{body}",
+        include_str!("../shaders/camera_common.wgsl"),
+        crate::rendering::scene::document_style::shader_prelude()
+    );
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+    })
+}
+
 /// Every pipeline that draws into the scene pass's colour attachment. The
 /// volume raycast, its beam pre-pass and the transparency fallback write
 /// intermediate targets of their own and stay on [`Graphics`].
@@ -187,16 +203,24 @@ pub(crate) fn create_scene_pipelines(
     sample_count: u32,
     shading: SceneShading,
 ) -> ScenePipelines {
-    let shader = make_shader(device, "../shaders/shader.wgsl", include_str!("../shaders/shader.wgsl"));
+    let shader = make_document_shader(device, "../shaders/shader.wgsl", include_str!("../shaders/shader.wgsl"));
     let surface_shader = shading.lit_shader(device, "../shaders/surface.wgsl", &surface_shader_body(device));
     let grid_shader = make_shader(device, "../shaders/grid.wgsl", include_str!("../shaders/grid.wgsl"));
     let section_grid_shader = make_shader(device, "../shaders/section_grid.wgsl", include_str!("../shaders/section_grid.wgsl"));
     let block_model_shader = shading.lit_shader(device, "../shaders/block_model.wgsl", include_str!("../shaders/block_model.wgsl"));
     let block_model_transparency_composite_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_transparency_composite.wgsl"));
     let block_model_volume_upscale_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume_upscale.wgsl"));
-    let stroke_shader = make_shader(device, "../shaders/stroke.wgsl", include_str!("../shaders/stroke.wgsl"));
+    let stroke_shader = make_document_shader(device, "../shaders/stroke.wgsl", include_str!("../shaders/stroke.wgsl"));
     let edge_shader = make_shader(device, "../shaders/edge.wgsl", include_str!("../shaders/edge.wgsl"));
-    let point_cloud_shader = shading.lit_shader(device, "../shaders/point_cloud.wgsl", include_str!("../shaders/point_cloud.wgsl"));
+    let point_cloud_shader = shading.lit_shader(
+        device,
+        "../shaders/point_cloud.wgsl",
+        &format!(
+            "{}{}",
+            crate::rendering::scene::point_cloud_cache::classification_palette_wgsl(),
+            include_str!("../shaders/point_cloud.wgsl")
+        ),
+    );
     // The selection block is one file both drill shaders take as a prelude,
     // the way `make_shader` hands every shader the camera one.
     let drill_selection = include_str!("../shaders/drill_selection_common.wgsl");
@@ -207,9 +231,9 @@ pub(crate) fn create_scene_pipelines(
     let design_point_shader = make_shader(device, "../shaders/design_point.wgsl", include_str!("../shaders/design_point.wgsl"));
     let raster_plane_shader = make_shader(device, "../shaders/raster_plane.wgsl", include_str!("../shaders/raster_plane.wgsl"));
 
-    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[Some(layouts.camera)],
+    let document_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Document Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera), Some(layouts.document_style)],
         immediate_size: 0,
     });
     let drill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -256,7 +280,7 @@ pub(crate) fn create_scene_pipelines(
     let vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Uint32],
     })];
     let surface_vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<SurfaceVertex>() as wgpu::BufferAddress,
@@ -271,10 +295,11 @@ pub(crate) fn create_scene_pipelines(
         attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
     })];
 
-    let stroke_vertex_buffers = [Some(wgpu::VertexBufferLayout {
-        array_stride: size_of::<StrokeVertex>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Float32x2, 4 => Float32],
+    // One instance per stroke primitive; the shader expands six vertices.
+    let stroke_instance_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: size_of::<StrokeInstance>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32, 4 => Float32x4],
     })];
     let edge_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<EdgeInstance>() as wgpu::BufferAddress,
@@ -306,11 +331,11 @@ pub(crate) fn create_scene_pipelines(
         let occludes = depth_stencil.as_ref().is_some_and(|depth| depth.depth_write_enabled == Some(true));
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&document_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &stroke_shader,
                 entry_point: Some("vs_main"),
-                buffers: &stroke_vertex_buffers,
+                buffers: &stroke_instance_buffers,
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -593,7 +618,7 @@ pub(crate) fn create_scene_pipelines(
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
-        layout: Some(&render_pipeline_layout),
+        layout: Some(&document_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -966,7 +991,7 @@ pub(crate) fn create_scene_pipelines(
         depth.depth_compare = Some(depth_compare);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&document_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader_module,
                 entry_point: Some("vs_main"),

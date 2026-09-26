@@ -416,7 +416,6 @@ impl OpenProject {
     /// Layers whose content differs from the last successful load/save.
     /// Recomputed only when the document revision changes.
     pub(crate) fn dirty_layer_ids(&self) -> HashSet<LayerId> {
-        const LOCAL_MASK: u64 = u32::MAX as u64;
         let revision = self.project.document.revision();
         if let Some((cached_revision, dirty)) = self.layer_dirty_cache.borrow().as_ref()
             && *cached_revision == revision
@@ -730,18 +729,7 @@ pub(crate) fn merge_document(target: &mut Document, imported: &Document, folders
         layer_map.insert(layer.id, target_layer);
     }
 
-    target.copy_deferred_layers(imported, &layer_map, false);
-    let mut added = 0;
-    for object in imported.objects() {
-        let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
-        let id = target.allocate_object_id();
-        target.insert_object(object.with_id_and_layer(id, layer));
-        if imported.is_object_hidden(object.id()) {
-            target.set_object_hidden(id, true);
-        }
-        added += 1;
-    }
-    added
+    copy_objects(target, imported, &layer_map, false)
 }
 
 /// Merge a foreign design while keeping every incoming layer distinct. Name
@@ -756,25 +744,16 @@ pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Doc
         layer_map.insert(layer.id, target_layer);
     }
 
-    target.copy_deferred_layers(imported, &layer_map, false);
-    let mut added = 0;
-    for object in imported.objects() {
-        let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
-        let id = target.allocate_object_id();
-        target.insert_object(object.with_id_and_layer(id, layer));
-        if imported.is_object_hidden(object.id()) {
-            target.set_object_hidden(id, true);
-        }
-        added += 1;
-    }
-    added
+    copy_objects(target, imported, &layer_map, false)
 }
+
+/// Largest id a native OMF assigns locally; anything above came from elsewhere.
+const LOCAL_MASK: u64 = u32::MAX as u64;
 
 /// Merge documents belonging to one native OMF while preserving stable local
 /// IDs whenever they are valid and unused. Legacy multi-composite files can
 /// contain collisions, which are remapped into the target document.
 pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>) -> usize {
-    const LOCAL_MASK: u64 = u32::MAX as u64;
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
         let target_layer = if layer.id.0 <= LOCAL_MASK && target.layer(layer.id).is_none() {
@@ -792,12 +771,20 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
         layer_map.insert(layer.id, target_layer);
     }
 
-    target.copy_deferred_layers(imported, &layer_map, true);
+    copy_objects(target, imported, &layer_map, true)
+}
+
+/// Copy `imported`'s objects, and its deferred layers, onto the target layers
+/// `layer_map` gives them, returning how many objects were added. With
+/// `preserve_ids`, an object keeps its id wherever that is a valid local id
+/// the target has not used; otherwise every object gets a fresh one.
+fn copy_objects(target: &mut Document, imported: &Document, layer_map: &HashMap<LayerId, LayerId>, preserve_ids: bool) -> usize {
+    target.copy_deferred_layers(imported, layer_map, preserve_ids);
     let mut added = 0;
     for object in imported.objects() {
         let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
         let source_id = object.id();
-        let id = if source_id.0 <= LOCAL_MASK && target.get_object(source_id).is_none() {
+        let id = if preserve_ids && source_id.0 <= LOCAL_MASK && target.get_object(source_id).is_none() {
             source_id
         } else {
             target.allocate_object_id()
