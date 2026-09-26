@@ -472,6 +472,33 @@ fn kind(element: &omf_crate::Element) -> Option<&str> {
     element.metadata.get(META_KIND).and_then(Value::as_str)
 }
 
+/// A drillhole dataset written before the shared collars, traces and
+/// intervals: its parts cannot be read, so it is skipped rather than failing
+/// the open.
+fn old_drill_layout(element: &omf_crate::Element) -> bool {
+    let omf_crate::Geometry::Composite(composite) = &element.geometry else {
+        return false;
+    };
+    kind(element) == Some("drillhole_dataset")
+        && !["drillhole_collars", "drillhole_traces", "drillhole_intervals"]
+            .iter()
+            .all(|part| composite.elements.iter().any(|child| kind(child) == Some(part)))
+}
+
+/// The names of the old-layout drillhole datasets among `elements`, nested
+/// ones included.
+fn old_drill_datasets(elements: &[omf_crate::Element]) -> Vec<String> {
+    let mut names = Vec::new();
+    for element in elements {
+        if old_drill_layout(element) {
+            names.push(element_name(element).to_owned());
+        } else if let omf_crate::Geometry::Composite(composite) = &element.geometry {
+            names.extend(old_drill_datasets(&composite.elements));
+        }
+    }
+    names
+}
+
 fn element_name(element: &omf_crate::Element) -> &str {
     element.metadata.get(META_NAME).and_then(Value::as_str).unwrap_or(&element.name)
 }
@@ -1762,6 +1789,15 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
             .warnings
             .push(tr_format!(literal = "OMF validation warnings: %warnings%", warnings = format!("{problems:?}")));
     }
+    // Drillhole datasets in the older per-hole layout are left out, not read,
+    // so the rest of the project still opens.
+    let old_drill = old_drill_datasets(&project.elements);
+    if !old_drill.is_empty() {
+        bundle.warnings.push(tr_format!(
+            literal = "Skipped drillhole data saved in an older layout (%names%); import it again from its source files",
+            names = old_drill.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ")
+        ));
+    }
     let mut decoder = Decoder {
         reader: &reader,
         project_origin: DVec3::from_array(project.origin),
@@ -1846,6 +1882,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn walk(&mut self, element: &omf_crate::Element) -> Result<()> {
+        if old_drill_layout(element) {
+            return Ok(());
+        }
         self.record_unsupported_content(element);
         if self.backing.is_some() && !style_loaded(element.metadata.get(META_STYLE)) && self.defer_element(element)? {
             return Ok(());
