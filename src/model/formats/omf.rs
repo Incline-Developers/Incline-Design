@@ -29,7 +29,7 @@ use crate::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, skipped_working_sections},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_working_sections},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
@@ -74,6 +74,9 @@ const META_ID: &str = "incline:id";
 /// Depth ranges each hole is drawn over, where not the whole trace, keyed by
 /// the hole's position in its dataset.
 const META_RENDER_RANGES: &str = "incline:render_ranges";
+/// Where each hole's orientation came from, keyed like the render ranges and
+/// written only for holes whose source is known.
+const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
@@ -1272,6 +1275,15 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !render_ranges.is_empty() {
         put(&mut element, META_RENDER_RANGES, Value::Object(render_ranges));
     }
+    let orientation_sources = holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| hole.orientation_source != OrientationSource::Unknown)
+        .map(|(index, hole)| Ok((index.to_string(), serde_json::to_value(hole.orientation_source)?)))
+        .collect::<Result<serde_json::Map<_, _>>>()?;
+    if !orientation_sources.is_empty() {
+        put(&mut element, META_ORIENTATION_SOURCES, Value::Object(orientation_sources));
+    }
     Ok(Some(element))
 }
 
@@ -2226,6 +2238,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_STYLE,
             META_ID,
             META_RENDER_RANGES,
+            META_ORIENTATION_SOURCES,
             META_TIE_INS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
@@ -3036,7 +3049,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Rebuild a dataset written by [`write_drill_holes`].
     fn read_drill_dataset(&mut self, element: &omf_crate::Element) -> Result<Option<ImportedDrillHoles>> {
-        use crate::model::drill_hole::{DrillInterval, OrientationSource, TraceStation};
+        use crate::model::drill_hole::{DrillInterval, TraceStation};
 
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
             return Ok(None);
@@ -3143,6 +3156,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             for (index, ranges) in ranges {
                 if let (Some(hole), Ok(ranges)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), Vec::<(f64, f64)>::deserialize(ranges)) {
                     hole.render_ranges = ranges;
+                }
+            }
+        }
+        if let Some(sources) = element.metadata.get(META_ORIENTATION_SOURCES).and_then(Value::as_object) {
+            for (index, source) in sources {
+                if let (Some(hole), Ok(source)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), OrientationSource::deserialize(source)) {
+                    hole.orientation_source = source;
                 }
             }
         }
