@@ -148,6 +148,13 @@ fn draw_body(
             });
         }
         BoreholeInspectorTab::Log => {
+            // Where the Data tab's summary starts, so the id stays put.
+            egui::Grid::new(("borehole_log_hole_id", dataset.id)).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                ui.label(tr!(literal = "Hole ID"));
+                ui.add(egui::Label::new(&hole.dhid).truncate());
+                ui.end_row();
+            });
+            ui.add_space(4.0);
             draw_log_field_pickers(ui, editor, dataset, commands);
             // Matched on the hole id exactly as the dataset spells it.
             let view = well_logs.view(dataset, &hole.dhid);
