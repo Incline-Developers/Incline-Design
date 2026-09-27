@@ -29,4 +29,4 @@ mod point_cloud_tin;
 pub(crate) mod session;
 
 use geometry::*;
-pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, terrain_budget_target};
+pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

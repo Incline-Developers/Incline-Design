@@ -13,10 +13,9 @@ use crate::{
 /// Height the cloud checklist is allowed before it starts scrolling. A survey
 /// delivery can be dozens of tiles; the dialog stays a dialog regardless.
 const JOIN_LIST_MAX_HEIGHT: f32 = 220.0;
-/// Estimated classify memory above which the dialog warns, and above which it
-/// refuses to run - the same limits as terrain TIN generation.
+/// Estimated classify memory above which the dialog warns - the same threshold
+/// as terrain TIN generation.
 const CLASSIFY_WARN_BYTES: u64 = 6 * 1024 * 1024 * 1024;
-const CLASSIFY_HARD_BYTES: u64 = 48 * 1024 * 1024 * 1024;
 
 /// Join several loaded point clouds into one.
 ///
@@ -211,21 +210,14 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                 })
                 .max()
                 .unwrap_or(0);
-            let mut memory_ok = true;
             if estimate >= CLASSIFY_WARN_BYTES {
-                memory_ok = estimate < CLASSIFY_HARD_BYTES;
-                let color = if memory_ok { ui.visuals().warn_fg_color } else { ui.visuals().error_fg_color };
-                let tail = if memory_ok {
-                    tr!(literal = "Raise the cloth resolution if your machine has less RAM.")
-                } else {
-                    tr!(literal = "This exceeds a safe limit; raise the cloth resolution to continue.")
-                };
+                let tail = tr!(literal = "Raise the cloth resolution if your machine has less RAM.");
                 egui::Frame::new()
                     .fill(ui.visuals().faint_bg_color)
                     .corner_radius(3.0)
                     .inner_margin(egui::Margin::symmetric(6, 4))
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new(tr!("tri-estimated-memory", estimate = format_bytes(estimate), detail = tail)).color(color));
+                        ui.label(egui::RichText::new(tr!("tri-estimated-memory", estimate = format_bytes(estimate), detail = tail)).color(ui.visuals().warn_fg_color));
                     });
             }
             MenuFieldF64::new(tr!(literal = "Ground threshold"), &mut params.class_threshold, 0.01..=10.0)
@@ -270,7 +262,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
             });
 
             menu::menu_actions(ui, |ui| {
-                let can_run = !selected.is_empty() && memory_ok;
+                let can_run = !selected.is_empty();
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if ui.add(MenuButton::new(tr!(literal = "Classify")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
                     commands.push(UiCommand::ExecutePointCloudClassify {

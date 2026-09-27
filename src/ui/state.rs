@@ -1677,6 +1677,9 @@ pub(crate) struct EditorState {
     /// default, and honoured only by a classified cloud: a delivery that has
     /// been through a ground filter is meant to be used through it.
     pub(crate) point_cloud_tin_ground_only: bool,
+    /// Ground points in the cloud the dialog opened on, counted then, so the
+    /// budget and memory estimate describe what a ground-only build surfaces.
+    pub(crate) point_cloud_tin_ground_count: Option<(PointCloudId, usize)>,
     pub(crate) point_cloud_join_open: bool,
     /// Clouds ticked for joining, in the order the explorer lists them.
     pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
@@ -2622,10 +2625,11 @@ impl EditorState {
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
             point_cloud_tin_ground_only: true,
+            point_cloud_tin_ground_count: None,
             point_cloud_join_open: false,
             point_cloud_join_sources: Vec::new(),
             point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
-            point_cloud_join_remove_sources: false,
+            point_cloud_join_remove_sources: true,
             point_cloud_classify_open: false,
             point_cloud_classify_sources: Vec::new(),
             point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams::default(),

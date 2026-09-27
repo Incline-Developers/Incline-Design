@@ -109,21 +109,6 @@ fn tool_help_panel(ui: &mut egui::Ui, text: impl Into<String>) {
     menu::menu_note(ui, text);
 }
 
-/// Rough transient peak memory (bytes) for a terrain TIN build, dominated by the
-/// candidate grid and, for the adaptive sampler, the quadtree over it. Deliberately
-/// conservative so the dialog can warn before a configuration risks the process.
-fn estimate_tin_memory_bytes(target_vertices: usize, sampler: crate::app::commands::triangulation::TerrainSampler, candidate_multiplier: u32) -> u64 {
-    use crate::app::commands::triangulation::TerrainSampler;
-    let target = target_vertices as u64;
-    let (candidate_cells, bytes_per_cell) = match sampler {
-        // Cell map only.
-        TerrainSampler::Grid => (target, 100u64),
-        // Cell map + occupancy set + ~2 quadtree nodes per candidate cell.
-        TerrainSampler::Adaptive => (target * u64::from(candidate_multiplier.max(1)), 340u64),
-    };
-    candidate_cells.saturating_mul(bytes_per_cell) + target.saturating_mul(48)
-}
-
 pub(crate) fn format_bytes(bytes: u64) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
@@ -1254,7 +1239,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
     if !editor.point_cloud_tin_open {
         return;
     }
-    use crate::app::commands::triangulation::{TerrainBudget, TerrainSampler, TerrainTinParams, terrain_budget_target};
+    use crate::app::commands::triangulation::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};
 
     let mut open = true;
     DragableMenu::new("point_cloud_create_triangulation_dialog", tr!(literal = "Create Triangulation"))
@@ -1368,7 +1353,13 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             } else {
                 TerrainBudget::Count(editor.point_cloud_tin_limit as usize)
             };
-            if let Some((_, _, point_count, _)) = selected {
+            // The job applies the budget to the points it surfaces, so with the
+            // ground filter on, the share and the estimate are of ground alone.
+            let surfaced_count = selected.map(|(id, _, point_count, _)| match editor.point_cloud_tin_ground_count {
+                Some((ground_id, ground_count)) if ground_only && ground_id == id => ground_count,
+                _ => point_count,
+            });
+            if let Some(point_count) = surfaced_count {
                 let target = terrain_budget_target(point_count, budget);
                 let percent = if point_count > 0 { target as f64 * 100.0 / point_count as f64 } else { 0.0 };
                 tool_help_panel(
@@ -1392,28 +1383,19 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                     .show(ui);
             }
 
-            // Estimated transient memory, so an over-ambitious budget can be
-            // caught before it risks the process rather than after.
-            let mut memory_ok = true;
-            if let Some((_, _, point_count, _)) = selected {
+            // Estimated transient memory, so an over-ambitious budget is
+            // flagged before it risks the process rather than after.
+            if let Some(point_count) = surfaced_count {
                 const WARN_BYTES: u64 = 6 * 1024 * 1024 * 1024;
-                const HARD_BYTES: u64 = 48 * 1024 * 1024 * 1024;
-                let target = terrain_budget_target(point_count, budget);
-                let estimate = estimate_tin_memory_bytes(target, editor.point_cloud_tin_sampler, editor.point_cloud_tin_candidate_mult);
+                let estimate = estimate_terrain_tin_memory_bytes(point_count, ground_only, budget, editor.point_cloud_tin_sampler, editor.point_cloud_tin_candidate_mult);
                 if estimate >= WARN_BYTES {
-                    memory_ok = estimate < HARD_BYTES;
-                    let color = if memory_ok { ui.visuals().warn_fg_color } else { ui.visuals().error_fg_color };
-                    let tail = if memory_ok {
-                        tr!(literal = "Reduce the budget or candidate detail if your machine has less RAM.")
-                    } else {
-                        tr!(literal = "This exceeds a safe limit; reduce the budget or candidate detail to continue.")
-                    };
+                    let tail = tr!(literal = "Reduce the budget or candidate detail if your machine has less RAM.");
                     egui::Frame::new()
                         .fill(ui.visuals().faint_bg_color)
                         .corner_radius(3.0)
                         .inner_margin(egui::Margin::symmetric(6, 4))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new(tr!("tri-estimated-memory", estimate = format_bytes(estimate), detail = tail)).color(color));
+                            ui.label(egui::RichText::new(tr!("tri-estimated-memory", estimate = format_bytes(estimate), detail = tail)).color(ui.visuals().warn_fg_color));
                         });
                 }
             }
@@ -1448,7 +1430,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 .hint_text(tr!(literal = "Surface"))
                 .show(ui);
             menu::menu_actions(ui, |ui| {
-                let can_run = selected.is_some() && !editor.point_cloud_tin_name_input.trim().is_empty() && memory_ok;
+                let can_run = selected.is_some() && !editor.point_cloud_tin_name_input.trim().is_empty();
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!(literal = "Generate")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some((cloud_id, ..)) = selected
