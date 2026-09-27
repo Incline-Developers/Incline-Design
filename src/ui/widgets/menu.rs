@@ -704,6 +704,68 @@ pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
     ui.add_space(2.0);
 }
 
+/// Whether the [`menu_section_folding`] section `id` is open; folded until
+/// the user first opens it.
+pub(crate) fn menu_section_open(ui: &egui::Ui, id: impl std::hash::Hash + std::fmt::Debug) -> bool {
+    ui.data_mut(|data| data.get_persisted::<bool>(egui::Id::new(id))).unwrap_or(false)
+}
+
+/// The height one [`menu_section_folding`] heading takes, spacing included.
+pub(crate) fn menu_section_folding_height(ui: &egui::Ui) -> f32 {
+    let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(11.0))).max(14.0);
+    4.0 + row + ui.spacing().item_spacing.y + 2.0
+}
+
+/// A [`menu_section`] heading with an arrow that folds the section away: a
+/// click hides or shows what follows, remembered between sessions. Returns
+/// whether the section is open, so the caller draws its body only then.
+pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, heading: impl Into<String>) -> bool {
+    const ARROW: f32 = 8.0;
+    const ARROW_GAP: f32 = 5.0;
+    let id = egui::Id::new(id);
+    let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(false);
+    ui.add_space(4.0);
+    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER);
+    record_intrinsic_content_width(ui, ARROW + ARROW_GAP + galley.size().x);
+    let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(11.0))).max(14.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|data| data.insert_persisted(id, open));
+    }
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let center = egui::pos2(rect.left() + ARROW / 2.0, rect.center().y);
+    let half = ARROW / 2.0;
+    let points = if open {
+        vec![
+            center + egui::vec2(-half, -half / 2.0),
+            center + egui::vec2(half, -half / 2.0),
+            center + egui::vec2(0.0, half / 2.0 + 1.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-half / 2.0, -half),
+            center + egui::vec2(half / 2.0 + 1.0, 0.0),
+            center + egui::vec2(-half / 2.0, half),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+    let text_left = rect.left() + ARROW + ARROW_GAP;
+    let text_end = text_left + galley.size().x;
+    ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, color);
+    ui.painter().line_segment(
+        [egui::pos2(text_end + 8.0, rect.center().y), rect.right_center()],
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    );
+    ui.add_space(2.0);
+    open
+}
+
 /// A quiet block of explanatory text inside a menu.
 ///
 /// For the sentence that says what the dialog is about to do, or what the
