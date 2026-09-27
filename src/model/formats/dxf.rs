@@ -181,6 +181,16 @@ fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Dra
             apply_object_color(&mut entity.common, object_color);
             drawing.add_entity(entity);
         }
+        Object::Circle { center, radius, .. } => {
+            let mut entity = Entity::new(EntityType::Circle(dxf::entities::Circle {
+                center: point_from_vec3(*center),
+                radius: *radius,
+                ..Default::default()
+            }));
+            entity.common.layer = layer_name;
+            apply_object_color(&mut entity.common, object_color);
+            drawing.add_entity(entity);
+        }
         Object::Polyline { verts, closed, .. } => {
             if verts.len() < 2 {
                 return;
@@ -652,14 +662,19 @@ fn push_polyline(ctx: &mut ImportCtx<'_>, layer: LayerId, verts: Vec<PolyVertex>
     if !ctx.reserve_vertices(verts.len()) {
         return;
     }
-    ctx.doc.add_object(|id| Object::Polyline {
-        id,
-        layer,
-        verts,
-        closed,
-        color,
-        fill: crate::model::FillStyle::Clear,
-        line_weight: 1.0,
+    ctx.doc.add_object(|id| {
+        let polyline = Object::Polyline {
+            id,
+            layer,
+            verts,
+            closed,
+            color,
+            fill: crate::model::FillStyle::Clear,
+            line_weight: 1.0,
+        };
+        // DXF spells a circle both as a CIRCLE entity and as a closed
+        // two-vertex bulged LWPOLYLINE. Promoting here catches every caller.
+        crate::model::promote_compact_circle(&polyline).unwrap_or(polyline)
     });
 }
 

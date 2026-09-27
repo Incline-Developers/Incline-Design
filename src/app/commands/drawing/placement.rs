@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     logging::CommandReportSpec,
-    model::{Command, LayerId, Object, PolyVertex, geometry::circle_polyline_vertices},
+    model::{Command, LayerId, Object, PolyVertex},
     ui::state::{ActiveTool, CircleDraft},
 };
 
@@ -173,14 +173,13 @@ impl<'a> App<'a> {
         let Some(center) = self.editor.circle_draft.as_ref().map(|draft| draft.center) else {
             return;
         };
-        let bearing = self.editor.cursor_world.map_or(glam::DVec2::X, |cursor| cursor.truncate() - center.truncate());
-        let Some(verts) = circle_polyline_vertices(center, radius, bearing) else {
+        if !radius.is_finite() || radius <= 0.0 || !center.is_finite() {
             return;
-        };
+        }
         let Some(layer) = self.active_layer() else {
             return;
         };
-        if !self.commit_polyline(verts.to_vec(), true, layer) {
+        if !self.commit_circle_object(center, radius, layer) {
             return;
         }
         self.editor.circle_draft = None;
@@ -322,6 +321,29 @@ impl<'a> App<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Add a circle on `layer` with the active tool styling.
+    fn commit_circle_object(&mut self, center: glam::DVec3, radius: f64, layer: LayerId) -> bool {
+        let color = crate::model::ObjectColor::Fixed(self.editor.tool_line_color);
+        let line_weight = self.editor.tool_line_weight;
+        let fill = self.editor.tool_hatch.to_fill_style();
+        if let Some(project) = self.workspace.active_project_mut() {
+            let doc = &mut project.project.document;
+            let id = doc.allocate_object_id();
+            self.execute_edit(Command::AddObject(Object::Circle {
+                id,
+                layer,
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+            }));
+            true
+        } else {
+            false
         }
     }
 

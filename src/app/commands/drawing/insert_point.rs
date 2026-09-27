@@ -110,7 +110,7 @@ impl<'a> App<'a> {
         self.commit_inserted_vertices(&source, updated, &tr!(literal = "Intersection"));
     }
 
-    /// Refresh the menu hint for Insert Point > At intersection.
+    /// Refresh Insert Point availability for the selected polylines.
     ///
     /// Menus need the answer every frame, so the scan result is cached against
     /// the selection and the workspace composite key. Selections whose pairwise
@@ -139,6 +139,7 @@ impl<'a> App<'a> {
         self.intersection_availability_key = Some(key);
 
         let selected = self.selected_polylines();
+        self.editor.selection_has_polylines = !selected.is_empty();
         let shapes: Vec<(&[PolyVertex], bool)> = selected
             .iter()
             .filter_map(|id| match self.scene_document.get_object(*id) {

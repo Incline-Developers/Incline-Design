@@ -68,7 +68,3 @@ pub(crate) fn volume_optical_depth_for_alpha(alpha: f32) -> f32 {
     }
     -(1.0 - alpha).max(0.001).ln()
 }
-
-pub(crate) fn make_translucent(color: &mut [f32; 4]) {
-    color[3] *= 0.3;
-}

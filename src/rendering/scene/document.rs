@@ -147,7 +147,7 @@ pub(crate) fn fill_polyline_hatch(draw_ctx: &mut DrawContext<'_>, mesh: &Polylin
 /// Tessellate a closed polyline and push its 3D triangle surface into the fill
 /// buffers. Projection determines triangle connectivity but never replaces the
 /// original boundary elevations.
-pub(crate) fn fill_polyline_solid(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, mesh: &PolylineFillMesh, color: [f32; 4], scene_origin: DVec3) {
+pub(crate) fn fill_polyline_solid(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, mesh: &PolylineFillMesh, color: [f32; 4], scene_origin: DVec3, style: u32) {
     let Ok(base) = u32::try_from(vertices.len()) else {
         return;
     };
@@ -159,6 +159,7 @@ pub(crate) fn fill_polyline_solid(vertices: &mut Vec<Vertex>, indices: &mut Vec<
         vertices.push(Vertex {
             pos: [pos.x as f32, pos.y as f32, pos.z as f32],
             color,
+            style,
         });
     }
     indices.extend(mesh.indices.iter().map(|index| base + *index));

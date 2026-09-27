@@ -107,6 +107,16 @@ impl MineGridTransform {
 pub(crate) fn transform_object(transform: &crate::model::crs::SurveyTransform, object: &mut Object, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<()> {
     match object {
         Object::Point { pos, .. } => *pos = transform.point(*pos)?,
+        // A reprojection does not preserve circles - the radius is direction
+        // dependent once the sheet distorts - but restating the centre and
+        // keeping the radius is the same compromise text rotation makes, and
+        // far better than silently shredding the shape into a polygon.
+        Object::Circle { center, radius, .. } => {
+            *center = transform.point(*center)?;
+            if let Some(grid) = transform.grid() {
+                *radius *= grid.scale;
+            }
+        }
         Object::Polyline { verts, .. } => {
             for (index, vertex) in verts.iter_mut().enumerate() {
                 if index % 4096 == 0 {

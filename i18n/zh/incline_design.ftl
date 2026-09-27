@@ -54,17 +54,15 @@ ws-menubar-design-insert-point-at-elevation = 在指定高程
 ws-menubar-design-move-to = 移动到
 ws-menubar-design-create-triangulation = 创建三角网
 tri-create-title = 创建三角网
-tri-create-help = 在视口中单击对象以选择/取消选择。拖动以进行框选。
 tri-create-type-label = 三角网类型
 tri-create-type-help = 开放曲面用于生成类似地形的表面；实体则生成完全封闭的网格，需要能够构成水密边界的输入。
 tri-create-output-name = 输出名称
 tri-create-output-name-help = 为生成的三角网指定的名称。
 tri-create-output-name-hint = 三角网名称
 tri-create-run = 生成三角网
-tri-selection-none = 目前尚未选择任何对象。
 tri-selection-selected = 已选择{ $summary }
-tri-type-open-surface = 开放曲面
-tri-type-solid-closed = 实体 — 完全封闭
+tri-type-open-surface = 曲面
+tri-type-solid-closed = 实体
 about-title = 关于{ $app }
 drill-hole-colour-title = 钻孔颜色：{ $name }
 drill-hole-colour-stop = 色标{ $index }
@@ -81,7 +79,6 @@ tri-estimated-memory = 估计峰值内存约为{ $estimate }。{ $detail }
 block-grid-summary = 网格：{ $x } × { $y } × { $z } = { $count }个块
 status-selected = 已选中：{ $count }
 status-fps = FPS：{ $fps }
-status-chunks = 区块：{ $rendered }/{ $total }（剔除{ $culled }）
 status-clip = 裁剪近/远/Δ：{ $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -172,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = 选择要导入的一个或多个源文件。
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = 通过在视口中点击已加载的曲面来选择此输入
 literal-choose-9e53070883acbe06 = 选择...
-literal-chunks-d8bf831735fec9eb = 区块：--
 literal-clear-b4f1dffbb6be6302 = 清除
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = 清除当前活动三角网纹理
 literal-clear-raster-ef94c7849961e88f = 清除栅格
@@ -885,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %kind%%properties%
 literal-choose-a-layer-b780e9cd371a31d2 = 选择图层
 literal-set-axis-e3f98268c98bcfa0 = 设置 %axis%
 literal-axis-value-d5e196b32161897d = %axis% 值
-literal-app-release-22a5f58485e368d3 = %app%：%release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = 在我们的网站下载免费的原生版本 ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = 已保存在浏览器存储中
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = 未保存在浏览器存储中
 literal-distance-along-slope-9f62268eebab148c = 沿坡距离
 literal-horizontal-distance-643bfda0222c6424 = 水平距离
 literal-height-change-2cc1b51980081e52 = 高度变化
@@ -1180,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = 根据�
 literal-restore-the-full-model-range-23c0898e378be1df = 恢复完整模型范围
 literal-axis-minimum-8a51a7bda9747700 = %axis% 最小值
 literal-axis-maximum-fa149d72f9564fca = %axis% 最大值
-literal-name-no-range-4f328990327afd0b = %name%（无范围）
 literal-choose-a-variable-62b267fd35bdce31 = 选择变量
 literal-no-usable-range-6bd2da592be04b0c = （无可用范围）
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 编辑空值使用的颜色
@@ -1487,8 +1479,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = 请先�
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = 单击闭合多段线作为爆区轮廓
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc 取消
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = 单击孔口以添加或编辑起爆点
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% 个连接
 literal-count-hole-s-d9bc7e624fadff18 = %count% 个炮孔

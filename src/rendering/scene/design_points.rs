@@ -14,7 +14,7 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    model::{Document, Object, SceneEntityId, geometry::compact_circle_center},
+    model::{Document, Object, SceneEntityId},
     rendering::scene::PointPosition,
 };
 
@@ -226,13 +226,10 @@ fn collect_design_point_positions(document: &Document, hidden: &HashSet<SceneEnt
         };
         match object {
             Object::Point { pos, .. } => push(*pos),
-            Object::Polyline { verts, closed, .. } => {
-                if let Some(center) = compact_circle_center(verts, *closed) {
-                    push(center);
-                } else {
-                    verts.iter().for_each(|vertex| push(vertex.pos));
-                }
-            }
+            // A circle's one editable point is its centre; the two
+            // semicircle endpoints of its geometry view are not handles.
+            Object::Circle { center, .. } => push(*center),
+            Object::Polyline { verts, .. } => verts.iter().for_each(|vertex| push(vertex.pos)),
             Object::Text { .. } => {}
         }
     }

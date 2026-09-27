@@ -36,11 +36,7 @@ impl<'a> App<'a> {
     }
 
     fn pick_split_polyline(&mut self) {
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
 
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
             return;

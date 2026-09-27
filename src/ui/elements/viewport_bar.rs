@@ -35,8 +35,6 @@ use crate::{
     },
 };
 
-/// Gap between buttons in the same cluster.
-const BUTTON_GAP: f32 = 0.0;
 /// How much shorter than a button a menu label's hover fill is drawn, so the
 /// dropdowns read as labels in the bar rather than as more buttons.
 const MENU_ROW_INSET: f32 = 6.0;
@@ -97,11 +95,11 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // them. The layout centres everything on the row, so the three
                     // clusters can be three different heights and still line up.
 
-                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                     });
-                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         draw_view_tools(ui, editor, project, commands, side);
                     });
 
@@ -122,7 +120,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // sized to it, so a stale width slides the run along
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
-                        let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let drawn = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             draw_centre_settings(ui, editor, project);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
@@ -139,20 +137,6 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
         .rect
 }
 
-/// Lay one cluster out over `rect`, and report what it drew into.
-///
-/// The three clusters are placed against the same strip rather than in
-/// sequence, so each is given the rect it should align itself in and none of
-/// them consumes space the next one wanted.
-fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
-        ui.spacing_mut().item_spacing.x = BUTTON_GAP;
-        add_contents(ui);
-    })
-    .response
-    .rect
-}
-
 /// The clear space between the two clusters the centre run has to stay inside.
 ///
 /// `None` once they meet, which is a window too narrow to show the centre at
@@ -167,6 +151,18 @@ fn centre_band(strip: egui::Rect, left: egui::Rect, right: egui::Rect) -> Option
 
 /// The project actions, which every workspace carries.
 fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
+    // A toggle, unlike File > Preferences: it reads as pressed while the
+    // panel is up, and a second click puts it away.
+    let preferences = ui.add(
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("preferences-title"))
+            .id_salt("preferences")
+            .selected(editor.show_preferences)
+            .button_side(side),
+    );
+    if preferences.clicked() {
+        editor.show_preferences = !editor.show_preferences;
+    }
+
     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
     let save = ui.add_enabled(
         has_unsaved,
@@ -384,16 +380,51 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern are the only such run so far - see
-/// [`draw_blast_view_tools`]; production adds nothing here, its own tools being
-/// the toolbar and the design menus.
+/// Blast's reviews of the fired pattern and Survey's reading of a classified
+/// cloud are the only such runs so far - see [`draw_blast_view_tools`] and
+/// [`draw_survey_view_tools`]; production adds nothing here, its own tools
+/// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     draw_scene_modes(ui, editor, commands, side);
     draw_camera_tools(ui, editor, commands, side);
 
-    if editor.active_workspace == Workspace::DrillAndBlast {
-        divider(ui, side);
-        draw_blast_view_tools(ui, editor, project, side);
+    match editor.active_workspace {
+        Workspace::DrillAndBlast => {
+            divider(ui, side);
+            draw_blast_view_tools(ui, editor, project, side);
+        }
+        Workspace::Survey => {
+            divider(ui, side);
+            draw_survey_view_tools(ui, editor, commands, side);
+        }
+        _ => {}
+    }
+}
+
+/// What Survey asks of a point cloud that has been through a ground filter:
+/// whether to read it by class. Off in every other workspace.
+///
+/// Always available, like the switches in the run beside it: it is a standing
+/// preference for how Survey draws clouds, and greying it out whenever no
+/// classified cloud happens to be loaded would make it flicker in and out as
+/// the explorer changes.
+fn draw_survey_view_tools(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    let enabled = editor.point_cloud_classification_colors;
+    let classification = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("classification_colors.svg")),
+            if enabled {
+                tr!(literal = "Hide Classification")
+            } else {
+                tr!(literal = "Show Classification")
+            },
+        )
+        .id_salt("point_cloud_classification_colors")
+        .button_side(side)
+        .selected(enabled),
+    );
+    if classification.clicked() {
+        commands.push(UiCommand::SetPointCloudClassificationColors(!enabled));
     }
 }
 
@@ -470,13 +501,37 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
-/// The three switches saying how the scene's geometry is drawn: the vertices of
-/// its lines, the wireframes on its meshes, the grid it is drawn over. None of
-/// them is a tool, and none of them is saved.
+/// The switches saying how the scene's geometry is drawn: the vertices of its
+/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// presentation shading laid over the lot. None of them is a tool, and none of
+/// them is saved.
 ///
-/// Added grid first because the layout runs right to left - see
+/// Added cinematic first because the layout runs right to left - see
 /// [`draw_scene_modes`], which they follow along the bar.
 fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    // Sits against the grid button, on its right: both say how the scene is
+    // presented rather than what is in it. Native only - the post chain's extra
+    // screen-sized targets are more GPU memory than the browser build can spare.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let cinematic = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(themed_icon!(ui, "cinematic.svg")),
+                if editor.cinematic_enabled {
+                    tr!(literal = "Disable Cinematic View")
+                } else {
+                    tr!(literal = "Cinematic View")
+                },
+            )
+            .id_salt("cinematic")
+            .button_side(side)
+            .selected(editor.cinematic_enabled),
+        );
+        if cinematic.clicked() {
+            commands.push(UiCommand::SetCinematicEnabled(!editor.cinematic_enabled));
+        }
+    }
+
     // One grid button: the RL grid in a section, the XY grid in plan; which one
     // is the app's call (`set_grid_shown`).
     let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };

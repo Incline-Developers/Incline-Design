@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::{tr, tr_format},
-    model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout, geometry::tessellate_polyline_bulges},
+    model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout},
     ui::{
         state::{EditorState, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldF64, MenuFieldText},
@@ -29,13 +29,7 @@ pub(crate) struct PatternPreviewKey {
 
 fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
     if let Some(id) = editor.drill_pattern_boundary_id
-        && document.get_object(id).is_none_or(|object| {
-            !matches!(
-                object,
-                Object::Polyline { verts, closed: true, .. }
-                    if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
-            )
-        })
+        && document.get_object(id).is_none_or(|object| !object.encloses_area())
     {
         editor.drill_pattern_boundary_id = None;
         editor.drill_pattern_boundary_name.clear();
@@ -57,11 +51,8 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
         let result = editor
             .drill_pattern_boundary_id
             .and_then(|id| document.get_object(id))
-            .and_then(|object| match object {
-                Object::Polyline { verts, closed: true, .. } if verts.len() >= 2 => Some(tessellate_polyline_bulges(verts, true)),
-                _ => None,
-            })
-            .ok_or_else(|| "Pick a closed polyline to define the blast shape".to_owned())
+            .and_then(Object::closed_boundary)
+            .ok_or_else(|| "Pick a closed polyline or circle to define the blast shape".to_owned())
             .and_then(|boundary| {
                 crate::model::drill_hole::generate_pattern_collars(
                     &boundary,

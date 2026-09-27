@@ -9,7 +9,7 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
-        ItemRef, Layer, Object, ObjectId, SceneEntityId, formats,
+        ItemRef, Layer, MemberKind, Object, ObjectId, SceneEntityId, SectionKind, formats,
         formats::mesh_data,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
@@ -17,8 +17,8 @@ use crate::{
     userspace_log, userspace_warn,
 };
 
-// Linear-space value; displays as sRGB 0.8 (204) grey.
-const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [0.6038, 0.6038, 0.6038, 1.0];
+// Linear-space value; displays as sRGB 1.0 (255) white.
+const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 mod contours;
 mod creation;

@@ -54,17 +54,15 @@ ws-menubar-design-insert-point-at-elevation = در ارتفاع
 ws-menubar-design-move-to = حرکت کن
 ws-menubar-design-create-triangulation = ایجاد مثلث‌بندی
 tri-create-title = ایجاد مثلث‌بندی
-tri-create-help = برای انتخاب/لغو انتخاب، روی اشیاء در نمای دید کلیک کنید. برای انتخاب با جعبه بکشید.
 tri-create-type-label = نوع مثلث‌بندی
 tri-create-type-help = سطح باز صفحه‌ای شبیه زمین ایجاد می‌کند. جسم صلب مشی کاملاً بسته ایجاد می‌کند و به ورودی‌ای نیاز دارد که بتواند مرزی آب‌بند تشکیل دهد.
 tri-create-output-name = نام خروجی
 tri-create-output-name-help = نامی که به مثلث‌بندی تولیدشده اختصاص داده می‌شود.
 tri-create-output-name-hint = نام مثلث‌بندی
 tri-create-run = مثلث سازی
-tri-selection-none = هنوز هیچ شیئی انتخاب نشده است.
 tri-selection-selected = { $summary } انتخاب شد
-tri-type-open-surface = سطح باز
-tri-type-solid-closed = جامد — کاملاً بسته شده
+tri-type-open-surface = سطح
+tri-type-solid-closed = جامد
 about-title = در مورد { $app }
 drill-hole-colour-title = رنگ گمانه‌ها: { $name }
 drill-hole-colour-stop = توقف { $index }
@@ -81,7 +79,6 @@ tri-estimated-memory = حداکثر حافظه تخمین زده شده ~{ $esti
 block-grid-summary = شبکه: { $x } × { $y } × { $z } = { $count } بلوک
 status-selected = انتخاب شده: { $count }
 status-fps = FPS: { $fps }
-status-chunks = قطعات: { $rendered }/{ $total } ({ $culled } قطع شده)
 status-clip = کلیپ نزدیک / دور / Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -172,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = فایل منبع یا فایل های وارداتی را انتخاب کنید.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = این ورودی را با کلیک روی سطح بارگذاری‌شده در نمای دید انتخاب کنید
 literal-choose-9e53070883acbe06 = انتخاب کن...
-literal-chunks-d8bf831735fec9eb = چانکس:
 literal-clear-b4f1dffbb6be6302 = پاک کردن
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = بافت شفاف فعال مثلث‌بندی
 literal-clear-raster-ef94c7849961e88f = شفاف رستر
@@ -885,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = یک لایه انتخاب کنید
 literal-set-axis-e3f98268c98bcfa0 = تنظیم %axis%
 literal-axis-value-d5e196b32161897d = مقدار %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = نسخه بومی رایگان را از وب‌سایت ما دانلود کنید ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = در فضای ذخیره‌سازی مرورگر ذخیره شده است
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = در فضای ذخیره‌سازی مرورگر ذخیره نشده است
 literal-distance-along-slope-9f62268eebab148c = فاصله در امتداد شیب
 literal-horizontal-distance-643bfda0222c6424 = فاصله افقی
 literal-height-change-2cc1b51980081e52 = تغییر ارتفاع
@@ -1180,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = باز�
 literal-restore-the-full-model-range-23c0898e378be1df = بازیابی دامنه کامل مدل
 literal-axis-minimum-8a51a7bda9747700 = کمینه %axis%
 literal-axis-maximum-fa149d72f9564fca = بیشینه %axis%
-literal-name-no-range-4f328990327afd0b = %name% (بدون دامنه)
 literal-choose-a-variable-62b267fd35bdce31 = یک متغیر انتخاب کنید
 literal-no-usable-range-6bd2da592be04b0c = (دامنه قابل استفاده‌ای وجود ندارد)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = ویرایش رنگ مورد استفاده برای مقادیر خالی
@@ -1489,8 +1481,9 @@ literal-esc-cancels-baa1fbafa2ec28c1 = Esc لغو می‌کند
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = برای افزودن یا ویرایش نقطهٔ آغازش روی یقه کلیک کنید
 literal-drag-a-ring-or-type-an-azimuth-and-dip-2cb078a11f62463c = یک حلقه را بکشید یا آزیموت و شیب را وارد کنید
 literal-each-hole-turns-about-its-own-collar-73a2499ee7279efe = هر چال حول یقهٔ خود می‌چرخد
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% رابط
 literal-count-hole-s-d9bc7e624fadff18 = %count% چال

@@ -51,14 +51,34 @@ impl OpenItem {
             Self::PointCloud(item) => snapshot.point_clouds.push((**item).clone()),
             Self::Raster(item) => snapshot.rasters.push((**item).clone()),
         }
-        let bytes = omf::to_bytes(snapshot, progress)?;
+        let bytes = omf::to_bytes(snapshot, omf::Compression::Scratch, progress)?;
         let backing = Backing::write(&bytes)?;
-        self.state_mut().deferred = Some(DeferredAsset { backing, element_path: vec![0] });
+        self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
         self.release_payload();
         Ok(self)
     }
 
+    /// The payload allocations a [`omf::PayloadSource`] tracks, for the kinds
+    /// a save can copy.
+    fn payload_identity(&self) -> Option<omf::PayloadIdentity> {
+        match self {
+            Self::Triangulation(item) => Some(omf::PayloadIdentity::triangulation(item)),
+            Self::PointCloud(item) => Some(omf::PayloadIdentity::point_cloud(item)),
+            Self::Raster(item) => Some(omf::PayloadIdentity::raster(item)),
+            Self::BlockModel(_) | Self::DrillHole(_) => None,
+        }
+    }
+
     pub(crate) fn release_payload(&mut self) {
+        // Decided before the payload goes: once it has, nothing can tell
+        // whether it was still the one read from the source archive.
+        let payload_source = self
+            .state_mut()
+            .payload_source
+            .take()
+            .zip(self.payload_identity())
+            .and_then(|(source, current)| source.released(&current));
+        self.state_mut().payload_source = payload_source;
         let summary = match self {
             Self::Triangulation(item) => {
                 let summary = AssetSummary {
@@ -97,7 +117,8 @@ impl OpenItem {
                 };
                 item.points = Arc::new(Vec::new());
                 item.colors = None;
-                item.prepared = Arc::new(super::point_cloud::prepare_for_render(&[], None, item.bounds));
+                item.classifications = None;
+                item.prepared = Arc::new(super::point_cloud::prepare_for_render(&[], None, None, item.bounds));
                 summary
             }
             Self::Raster(item) => {
@@ -146,6 +167,7 @@ impl OpenItem {
                 let data = bundle.point_clouds.pop().context("backing contains no point cloud")?.loaded;
                 item.points = data.points;
                 item.colors = data.colors;
+                item.classifications = data.classifications;
                 item.prepared = data.prepared;
                 item.bounds = data.bounds;
             }
@@ -161,6 +183,13 @@ impl OpenItem {
         }
         self.state_mut().deferred = None;
         self.state_mut().summary = None;
+        let payload_source = self
+            .state_mut()
+            .payload_source
+            .take()
+            .zip(self.payload_identity())
+            .and_then(|(source, current)| source.restored(current));
+        self.state_mut().payload_source = payload_source;
         Ok(self)
     }
 }

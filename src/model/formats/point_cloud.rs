@@ -1,8 +1,9 @@
 //! Point cloud readers: LAS/LAZ (ASPRS LiDAR), ASCII XYZ/PTS, and PCD.
 //!
 //! Every reader produces world-space `f64` positions plus optional packed
-//! RGBA8 colours (r in the low byte). Attributes other than position and
-//! colour (intensity, classification, GPS time, …) are intentionally ignored.
+//! RGBA8 colours (r in the low byte) and, for LAS/LAZ, the ASPRS
+//! classification byte. Attributes other than those (intensity, GPS time, …)
+//! are intentionally ignored.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
@@ -47,6 +48,10 @@ pub(crate) struct PointCloudData {
     /// Packed RGBA8 per point, parallel to `points`; `None` when the file
     /// has no colour data.
     pub(crate) colors: Option<Vec<u32>>,
+    /// ASPRS classification code per point, parallel to `points`. Only LAS and
+    /// LAZ carry one, and only a file that classifies something beyond
+    /// "created" and "unclassified" keeps it - see [`meaningful_classifications`].
+    pub(crate) classifications: Option<Vec<u8>>,
     /// Validated file metadata bounds when the format supplies them. Callers
     /// retain a decoded-point scan fallback for formats without bounds and
     /// malformed metadata.
@@ -167,6 +172,21 @@ fn parse_las_header(bytes: &[u8]) -> Result<LasHeader> {
     })
 }
 
+/// Byte offset of the classification byte within a point record, with the mask
+/// that isolates the code, per format.
+///
+/// Legacy formats 0-5 pack the code into the low five bits of byte 15 and
+/// spend the top three on the synthetic/key-point/withheld flags. Formats 6-10
+/// moved those flags into byte 15 and gave classification a whole byte of its
+/// own at 16, which is what lets them carry the codes above 31.
+fn las_classification_offset(point_format: u8) -> Option<(usize, u8)> {
+    match point_format {
+        0..=5 => Some((15, 0x1f)),
+        6..=10 => Some((16, 0xff)),
+        _ => None,
+    }
+}
+
 /// Byte offset of the 16-bit RGB triplet within a point record, per format.
 fn las_rgb_offset(point_format: u8) -> Option<usize> {
     match point_format {
@@ -216,6 +236,7 @@ fn read_las_bytes(bytes: &[u8], progress: &crate::model::progress::Phase) -> Res
         .checked_mul(header.record_length)
         .context("LAS expanded point-data size overflows addressable memory")?;
     let rgb_offset = las_rgb_offset(header.point_format).filter(|rgb_at| rgb_at.checked_add(6).is_some_and(|end| end <= header.record_length));
+    let class_offset = las_classification_offset(header.point_format).filter(|(class_at, _)| *class_at < header.record_length);
 
     let laz_vlr = if header.compressed {
         let record_data = find_laszip_vlr(bytes, &header)?;
@@ -241,12 +262,21 @@ fn read_las_bytes(bytes: &[u8], progress: &crate::model::progress::Phase) -> Res
     };
 
     let mut points = try_vec_with_capacity(count, "LAS points")?;
-    // 16-bit source triplets; scaled to 8-bit once the file-wide maximum is
-    // known (files written with 8-bit colours in the u16 fields are common).
-    let mut raw_colors: Vec<[u16; 3]> = if rgb_offset.is_some() {
-        try_vec_with_capacity(count, "LAS colours")?
-    } else {
-        Vec::new()
+    let mut attributes = LasAttributes {
+        rgb_offset,
+        class_offset,
+        // 16-bit source triplets; scaled to 8-bit once the file-wide maximum is
+        // known (files written with 8-bit colours in the u16 fields are common).
+        raw_colors: if rgb_offset.is_some() {
+            try_vec_with_capacity(count, "LAS colours")?
+        } else {
+            Vec::new()
+        },
+        classifications: if class_offset.is_some() {
+            try_vec_with_capacity(count, "LAS classifications")?
+        } else {
+            Vec::new()
+        },
     };
 
     if header.compressed {
@@ -255,13 +285,13 @@ fn read_las_bytes(bytes: &[u8], progress: &crate::model::progress::Phase) -> Res
             source.set_position(u64::try_from(header.offset_to_points).context("LAZ point-data offset does not fit in u64")?);
             let vlr = laz_vlr.expect("compressed LAS validated a laszip VLR");
             match laz::ParLasZipDecompressor::new(source.clone(), vlr.clone()) {
-                Ok(mut decompressor) => decode_laz_batches(&mut decompressor, &header, count, rgb_offset, &mut points, &mut raw_colors, progress)?,
+                Ok(mut decompressor) => decode_laz_batches(&mut decompressor, &header, count, &mut points, &mut attributes, progress)?,
                 Err(_) => {
                     // Old point-wise LAZ files and files without a usable
                     // chunk table cannot be split safely; retain compatibility
                     // through the sequential decoder.
                     let mut decompressor = laz::LasZipDecompressor::new(source, vlr).context("Failed to initialise LAZ decompressor")?;
-                    decode_laz_batches(&mut decompressor, &header, count, rgb_offset, &mut points, &mut raw_colors, progress)?;
+                    decode_laz_batches(&mut decompressor, &header, count, &mut points, &mut attributes, progress)?;
                 }
             }
         }
@@ -272,25 +302,47 @@ fn read_las_bytes(bytes: &[u8], progress: &crate::model::progress::Phase) -> Res
             .filter(|end| *end <= bytes.len())
             .context("LAS point data is truncated")?;
         // One parallel pass over every record: nothing to report part-way.
-        append_las_records_parallel(&bytes[header.offset_to_points..end], &header, rgb_offset, &mut points, &mut raw_colors);
+        append_las_records_parallel(&bytes[header.offset_to_points..end], &header, &mut points, &mut attributes);
         progress.set_items(count as u64, count as u64);
     }
 
-    let colors = rgb_offset.map(|_| pack_las_colors(&raw_colors)).transpose()?;
+    let colors = rgb_offset.map(|_| pack_las_colors(&attributes.raw_colors)).transpose()?;
+    let classifications = meaningful_classifications(attributes.classifications);
     Ok(PointCloudData {
         points,
         colors,
+        classifications,
         bounds: header.bounds,
     })
+}
+
+/// Drop a classification column that says nothing.
+///
+/// A file whose every point is "created, never classified" (0) or
+/// "unclassified" (1) has been through no ground filter, so keeping the column
+/// would offer a bare-earth filter that discards the whole cloud and a
+/// classification view that paints it one flat colour. Treating that as absent
+/// is what makes "ground only" safe to default on.
+fn meaningful_classifications(classifications: Vec<u8>) -> Option<Vec<u8>> {
+    classifications.par_iter().any(|code| *code > 1).then_some(classifications)
+}
+
+/// Where each optional per-point attribute lives in a point record, and what
+/// has been decoded of it so far. One value rather than loose parameters
+/// because the compressed and uncompressed paths both fill it record by record.
+struct LasAttributes {
+    rgb_offset: Option<usize>,
+    class_offset: Option<(usize, u8)>,
+    raw_colors: Vec<[u16; 3]>,
+    classifications: Vec<u8>,
 }
 
 fn decode_laz_batches(
     decompressor: &mut impl laz::LazDecompressor,
     header: &LasHeader,
     count: usize,
-    rgb_offset: Option<usize>,
     points: &mut Vec<DVec3>,
-    raw_colors: &mut Vec<[u16; 3]>,
+    attributes: &mut LasAttributes,
     progress: &crate::model::progress::Phase,
 ) -> Result<()> {
     let batch_capacity = (MAX_LAZ_BATCH_BYTES / header.record_length).max(1).min(count);
@@ -302,7 +354,7 @@ fn decode_laz_batches(
         let out_len = header.record_length.checked_mul(batch).context("LAZ batch range overflows addressable memory")?;
         let out = &mut buffer[..out_len];
         decompressor.decompress_many(out).context("Failed to decompress LAZ point records")?;
-        append_las_records_parallel(out, header, rgb_offset, points, raw_colors);
+        append_las_records_parallel(out, header, points, attributes);
         remaining -= batch;
         // The header's point count makes this exact.
         progress.set_items((count - remaining) as u64, count as u64);
@@ -310,14 +362,21 @@ fn decode_laz_batches(
     Ok(())
 }
 
-fn append_las_records_parallel(records: &[u8], header: &LasHeader, rgb_offset: Option<usize>, points: &mut Vec<DVec3>, raw_colors: &mut Vec<[u16; 3]>) {
+fn append_las_records_parallel(records: &[u8], header: &LasHeader, points: &mut Vec<DVec3>, attributes: &mut LasAttributes) {
     points.par_extend(
         records
             .par_chunks_exact(header.record_length)
             .map(|record| las_record_position(record, header.scale, header.offset)),
     );
-    if let Some(rgb_at) = rgb_offset {
-        raw_colors.par_extend(records.par_chunks_exact(header.record_length).map(|record| las_record_color(record, rgb_at)));
+    if let Some(rgb_at) = attributes.rgb_offset {
+        attributes
+            .raw_colors
+            .par_extend(records.par_chunks_exact(header.record_length).map(|record| las_record_color(record, rgb_at)));
+    }
+    if let Some((class_at, mask)) = attributes.class_offset {
+        attributes
+            .classifications
+            .par_extend(records.par_chunks_exact(header.record_length).map(|record| record[class_at] & mask));
     }
 }
 
@@ -336,7 +395,7 @@ fn las_record_color(record: &[u8], rgb_at: usize) -> [u16; 3] {
     ]
 }
 
-fn try_vec_with_capacity<T>(count: usize, label: &'static str) -> Result<Vec<T>> {
+pub(crate) fn try_vec_with_capacity<T>(count: usize, label: &'static str) -> Result<Vec<T>> {
     let allocation_bytes = count
         .checked_mul(size_of::<T>())
         .with_context(|| format!("{label} allocation size overflows addressable memory"))?;
@@ -401,7 +460,12 @@ fn read_xyz_bytes(bytes: &[u8], progress: &crate::model::progress::Phase) -> Res
     } else {
         None
     };
-    Ok(PointCloudData { points, colors, bounds: None })
+    Ok(PointCloudData {
+        points,
+        colors,
+        classifications: None,
+        bounds: None,
+    })
 }
 
 fn parse_xyz_line(line: &str, line_number: usize) -> Result<Option<(DVec3, Option<u32>)>> {
@@ -607,7 +671,12 @@ fn read_pcd_ascii(bytes: &[u8], fields: &[PcdField], point_count: usize, xyz: [u
     if points.len() < point_count {
         bail!("PCD data is truncated");
     }
-    Ok(PointCloudData { points, colors, bounds: None })
+    Ok(PointCloudData {
+        points,
+        colors,
+        classifications: None,
+        bounds: None,
+    })
 }
 
 fn read_pcd_binary(bytes: &[u8], fields: &[PcdField], point_count: usize, xyz: [usize; 3], rgb: Option<usize>, progress: &crate::model::progress::Phase) -> Result<PointCloudData> {
@@ -649,5 +718,10 @@ fn read_pcd_binary(bytes: &[u8], fields: &[PcdField], point_count: usize, xyz: [
             colors.push(pcd_color_from_packed(packed));
         }
     }
-    Ok(PointCloudData { points, colors, bounds: None })
+    Ok(PointCloudData {
+        points,
+        colors,
+        classifications: None,
+        bounds: None,
+    })
 }

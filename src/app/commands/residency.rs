@@ -7,6 +7,19 @@ use crate::{
     userspace_error,
 };
 
+/// A save, or a residency swap, may finish while backing I/O is running
+/// without changing the content revision. Preserve the live row's saved
+/// epoch and current metadata - `deferred` and `summary` are the only fields
+/// that come from the freshly materialized/evicted replacement; everything
+/// else, `folder` included, stays exactly what the live row already had, so
+/// a rehydrated item cannot fall out of its folder.
+fn preserve_state(current: &ProjectItemState, replacement: &mut ProjectItemState) {
+    let mut state = current.clone();
+    state.deferred = replacement.deferred.take();
+    state.summary = replacement.summary.take();
+    *replacement = state;
+}
+
 impl<'a> App<'a> {
     pub(crate) fn project_item_state(&self, item: ItemRef) -> Option<&ProjectItemState> {
         match item {
@@ -33,14 +46,6 @@ impl<'a> App<'a> {
     }
 
     fn replace_residency(&mut self, item: OpenItem) {
-        // A save may finish while backing I/O is running without changing
-        // the content revision. Preserve its saved epoch and current metadata.
-        fn preserve_state(current: &ProjectItemState, replacement: &mut ProjectItemState) {
-            let mut state = current.clone();
-            state.deferred = replacement.deferred.take();
-            state.summary = replacement.summary.take();
-            *replacement = state;
-        }
         match item {
             OpenItem::Triangulation(mut item) => {
                 if let Some(target) = self.triangulations.iter_mut().find(|target| target.id == item.id) {

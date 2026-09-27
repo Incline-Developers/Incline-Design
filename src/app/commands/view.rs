@@ -94,6 +94,18 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Turn the presentation shading on or off. Like the other view switches
+    /// this is per-session and unsaved; unlike them it changes what the scene
+    /// pass itself draws, so the cached scene image has to be thrown away.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_cinematic_enabled(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.editor.cinematic_enabled = enabled;
+        self.invalidate_geometry();
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set cinematic view = %enabled%", enabled = enabled));
+        Ok(())
+    }
+
     /// Show or hide the construction grid on the world XY plane.
     ///
     /// Deliberately not persisted: this is a per-session view toggle, shown
@@ -173,13 +185,14 @@ impl<'a> App<'a> {
         self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
         if !preferences.frame_counter_enabled {
             self.editor.measured_fps = None;
-            self.editor.smoothed_frame_interval = None;
+            self.editor.frame_rate_window = (0, 0.0);
         }
-        self.editor.debug_chunk_coloring = preferences.debug_chunk_coloring;
-        if !preferences.debug_chunk_coloring {
-            self.editor.debug_chunk_stats = None;
+        self.editor.debug_surface_chunks = preferences.debug_surface_chunks;
+        if !preferences.debug_surface_chunks {
+            self.editor.debug_surface_stats = None;
         }
         self.editor.debug_clip_planes = preferences.debug_clip_planes;
+        self.editor.debug_point_cloud_chunks = preferences.debug_point_cloud_chunks;
         self.editor.plan_orbit_sensitivity = preferences.plan_orbit_sensitivity;
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
@@ -214,7 +227,7 @@ impl<'a> App<'a> {
             preferences.snap_poll_rate,
             preferences.frame_rate_cap,
             preferences.frame_counter_enabled,
-            preferences.debug_chunk_coloring
+            preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
         Ok(())
@@ -325,8 +338,9 @@ pub(crate) fn config_from(
         show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
         downscale_raster_previews: preferences.downscale_raster_previews,
         frame_counter_enabled: preferences.frame_counter_enabled,
-        debug_chunk_coloring: preferences.debug_chunk_coloring,
+        debug_surface_chunks: preferences.debug_surface_chunks,
         debug_clip_planes: preferences.debug_clip_planes,
+        debug_point_cloud_chunks: preferences.debug_point_cloud_chunks,
         plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,

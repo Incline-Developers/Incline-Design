@@ -3,23 +3,27 @@ use anyhow::{Context, Result};
 use crate::{
     app::App,
     i18n::{tr, tr_format},
-    model::{Command, Document, Layer, LayerId, Object, SceneEntityId},
+    model::{Command, Document, Layer, LayerId, Object, SceneEntityId, SectionKind},
     userspace_log,
 };
 
-fn unique_layer_name(document: &Document, preferred: &str) -> String {
-    if document.layer_id_by_name(preferred).is_none() {
+/// `preferred`, or `preferred` with the lowest ` N` (N >= 2) suffix not
+/// already taken. Shared by layer duplication (here) and folder creation
+/// (`app::commands::folder`), which sit side by side in the same menu and
+/// must agree on the scheme.
+pub(super) fn unique_name(preferred: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(preferred) {
         return preferred.to_string();
     }
 
     for index in 2.. {
         let candidate = format!("{preferred} {index}");
-        if document.layer_id_by_name(&candidate).is_none() {
+        if !taken(&candidate) {
             return candidate;
         }
     }
 
-    unreachable!("unbounded iterator should always find a unique layer name")
+    unreachable!("unbounded iterator should always find a unique name")
 }
 
 fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
@@ -49,6 +53,8 @@ impl<'a> App<'a> {
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
             elevation: 0.0,
+            folder: None,
+            section: SectionKind::natural_layer(),
         };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects: Vec::new() });
 
@@ -111,7 +117,9 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_layer_name(&project.project.document, &tr_format!(literal = "%name% copy", name = &source_layer.name));
+        let duplicate_name = unique_name(&tr_format!(literal = "%name% copy", name = &source_layer.name), |candidate| {
+            project.project.document.layer_id_by_name(candidate).is_some()
+        });
 
         let doc = &mut project.project.document;
         let new_layer_id = doc.allocate_layer_id();
@@ -122,6 +130,8 @@ impl<'a> App<'a> {
             color: source_layer.color,
             loaded: source_layer.loaded,
             elevation: source_layer.elevation,
+            folder: source_layer.folder,
+            section: source_layer.section,
         };
         let duplicate_objects: Vec<Object> = source_objects
             .into_iter()

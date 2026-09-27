@@ -71,6 +71,16 @@ impl ScreenRect {
     }
 }
 
+/// Whether `point` lies inside a *convex* projected polygon: every edge has to
+/// leave it on the same side, and at least one has to place it definitively.
+///
+/// That last clause is what keeps a stroke out of this test. A stroke quad's
+/// CPU positions are the centre line - the width lives in `offset_px` and is
+/// applied by the shader - so its triangles project to zero-area slivers, as do
+/// the round joins and screen-space markers whose vertices all share one
+/// position. Accepting "no edge disagrees" would make every such polygon
+/// contain every point on the screen, and a marquee would take any entity its
+/// bounds prefilter let through rather than the ones it actually covers.
 fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
     let mut left = false;
     let mut right = false;
@@ -80,7 +90,7 @@ fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
         left |= side > 0.0;
         right |= side < 0.0;
     }
-    !(left && right)
+    left != right
 }
 
 fn polygon_touches_rect(polygon: &[DVec2], rect: ScreenRect) -> bool {
@@ -140,13 +150,13 @@ fn project_polygon(view_proj: &DMat4, screen: Size, polygon: &[DVec3]) -> Option
 /// Every rendered triangle of one pick record, cut to the part the section shows and projected to the screen; a stroke quad can span the slab with both ends beyond the walls, so only the cut piece is judged.
 fn visible_screen_polygons(group: &PickGeometry<'_>, record: &PickRecord, scene_origin: DVec3, slab: Option<SectionSlab>, view_proj: &DMat4, screen: Size) -> Vec<Vec<DVec2>> {
     let mut polygons = Vec::new();
-    let stroke_indices = &group.stroke_indices[clamped_range(record.stroke_index_range, group.stroke_indices.len())];
+    let strokes = &group.strokes[clamped_range(record.stroke_range, group.strokes.len())];
     let fill_indices = &group.fill_indices[clamped_range(record.fill_index_range, group.fill_indices.len())];
-    for indices in stroke_indices.as_chunks::<3>().0 {
-        let [Some(a), Some(b), Some(c)] = indices.map(|index| group.stroke_verts.get(index as usize)) else {
-            continue;
-        };
-        let corners = [a, b, c].map(|vertex| local_vertex_world(vertex.pos, scene_origin));
+    for stroke in strokes.iter().filter(|stroke| !stroke.selection_only()) {
+        // A line is judged by its centreline, as the degenerate triangle
+        // (start, start, end) its widened quad collapses to in world space.
+        let (start, end) = stroke.world_ends();
+        let corners = [start, start, end].map(|position| local_vertex_world(position, scene_origin));
         if let Some(shown) = slab_clipped_polygon(slab, &corners)
             && let Some(projected) = project_polygon(view_proj, screen, &shown)
         {
@@ -175,11 +185,15 @@ fn visible_screen_vertices<'group>(
     view_proj: &'group DMat4,
     screen: Size,
 ) -> impl Iterator<Item = DVec2> + 'group {
-    let stroke = clamped_range(record.stroke_range, group.stroke_verts.len());
+    let stroke = clamped_range(record.stroke_range, group.strokes.len());
     let fill = clamped_range(record.fill_range, group.fill_verts.len());
-    group.stroke_verts[stroke]
+    group.strokes[stroke]
         .iter()
-        .map(|vertex| vertex.pos)
+        .filter(|stroke| !stroke.selection_only())
+        .flat_map(|stroke| {
+            let (start, end) = stroke.world_ends();
+            [start, end]
+        })
         .chain(group.fill_verts[fill].iter().map(|vertex| vertex.pos))
         .filter_map(move |position| slab_screen_point(slab, view_proj, screen, local_vertex_world(position, scene_origin)))
 }
@@ -532,8 +546,8 @@ impl<'a> Graphics<'a> {
         let mut groups = vec![PickGeometry {
             world_bounds: None,
             records: &self.pick_records,
-            stroke_verts: &self.stroke_vertex_buf,
-            stroke_indices: &self.stroke_index_buf,
+            strokes: &self.strokes,
+            stroke_blocks: &self.stroke_blocks,
             fill_verts: &self.lyon_buffer.vertices,
             fill_indices: &self.lyon_buffer.indices,
         }];
@@ -544,8 +558,8 @@ impl<'a> Graphics<'a> {
             groups.push(PickGeometry {
                 world_bounds: chunk.world_bounds,
                 records: &chunk.records,
-                stroke_verts: &chunk.vertices,
-                stroke_indices: &chunk.indices,
+                strokes: &chunk.strokes,
+                stroke_blocks: &chunk.stroke_blocks,
                 fill_verts: &[],
                 fill_indices: &[],
             });
@@ -790,6 +804,23 @@ impl<'a> Graphics<'a> {
         }
 
         hits
+    }
+
+    /// The point clouds a selection rectangle takes, on the same
+    /// left-to-right cross / right-to-left window convention as the design
+    /// box selection.
+    pub(crate) fn point_clouds_in_screen_rect(
+        &self,
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<SceneEntityId> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let rect = (DVec2::new(rect.min_x, rect.min_y), DVec2::new(rect.max_x, rect.max_y));
+        self.point_cloud_gpu
+            .entities_in_screen_rect(&self.view_proj(), self.screen_size(), rect, cross_select, hidden, frozen, self.section_slab())
     }
 
     /// The individual drill holes a selection rectangle takes.
@@ -1245,7 +1276,11 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
 
-        let bounds = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        // One fresh bounds pass, shared with the depth fit below: a fit is the
+        // user asking for everything visible now, so no cached bounds.
+        self.invalidate_scene_bounds();
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let bounds = self.cached_scene_bounds;
         let (center, zoom) = match bounds {
             Some((min, max)) => {
                 let center = (min + max) * 0.5;
@@ -1278,13 +1313,23 @@ impl<'a> Graphics<'a> {
         if bounds.is_none() {
             self.translate_view_by_pixels(self.window_centring_offset_px());
         }
-        self.scene_origin = center;
-        self.triangulation_gpu.clear();
-        self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
-        self.geometry_dirty = true;
+        self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Move the floating origin to the framed centre. Vertical exaggeration
+    /// pivots on it, so the fit needs it exactly there - but refitting an
+    /// unchanged scene lands on the same centre, and then nothing is marked
+    /// dirty. When it does move, the per-item GPU caches notice the new origin
+    /// themselves and rewrite only what depends on it; clearing them here
+    /// would re-upload every dense surface and block model on each fit.
+    fn rebase_scene_origin(&mut self, center: DVec3) {
+        if self.scene_origin != center {
+            self.scene_origin = center;
+            self.geometry_dirty = true;
+            self.overlay_dirty = true;
+        }
     }
 
     /// World-space bounds of everything currently visible, for callers that
@@ -1319,7 +1364,9 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) {
-        let Some((min, max)) = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) else {
+        self.invalidate_scene_bounds();
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let Some((min, max)) = self.cached_scene_bounds else {
             return;
         };
         if self.slice_view.is_some() {
@@ -1363,11 +1410,7 @@ impl<'a> Graphics<'a> {
             zoom
         };
         self.camera.frame_keep_orientation(center, camera_distance);
-        self.scene_origin = center;
-        self.triangulation_gpu.clear();
-        self.block_model_gpu.clear();
-        self.drill_hole_gpu = Default::default();
-        self.geometry_dirty = true;
+        self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
     }
@@ -1420,7 +1463,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
         let (forward, up) = standard_view_basis(view);
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
     }
 

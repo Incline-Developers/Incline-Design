@@ -4,7 +4,7 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
-        Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
+        Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
             DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
             OpenDrillHoleDataset, TraceStation, default_category_colors,
@@ -32,7 +32,7 @@ fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterat
             if files.len() != bytes.len() {
                 anyhow::bail!("Stored CSV manifest contains {} mappings but {} files", files.len(), bytes.len());
             }
-            csv_drill_hole::parse_bundle(files.iter().zip(bytes).map(|(mapping, bytes)| (mapping, bytes))).map_err(anyhow::Error::new)
+            csv_drill_hole::parse_bundle(files.iter().zip(bytes)).map_err(anyhow::Error::new)
         }
         DrillHoleSource::Omf { .. } => anyhow::bail!("OMF drillhole data is loaded through the project importer"),
     }
@@ -85,7 +85,7 @@ impl<'a> App<'a> {
         let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
         let item = OpenDrillHoleDataset {
             id,
-            state: crate::model::project::ProjectItemState::dirty(None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, None),
             name,
             dataset,
             color: DrillColorState::default(),
@@ -203,7 +203,7 @@ impl<'a> App<'a> {
         );
         self.drill_holes.push(OpenDrillHoleDataset {
             id,
-            state: crate::model::project::ProjectItemState::dirty(Some(loaded.source.display_name())),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::DrillHole, Some(loaded.source.display_name())),
             name,
             dataset: loaded.dataset,
             color: DrillColorState::default(),
@@ -289,6 +289,27 @@ impl<'a> App<'a> {
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
+        self.clear_drill_hole_editor_refs(id);
+        self.invalidate_topology_bounds_and_redraw();
+    }
+
+    pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
+        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
+        let entity = SceneEntityId::DrillHole(id);
+        self.editor.selected_handles.remove(&entity);
+        self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
+        self.editor.frozen_handles.remove(&entity);
+        self.editor.translucent_handles.remove(&entity);
+        self.clear_drill_hole_editor_refs(id);
+        self.delete_project_item(ItemRef::DrillHole(id));
+        self.request_topology_redraw();
+    }
+
+    /// Drop every editor reference into dataset `id`: its dialogs, the active
+    /// and selected holes, and any tie-in chain anchored on it.
+    fn clear_drill_hole_editor_refs(&mut self, id: DrillHoleId) {
         if self.editor.drill_hole_color_dialog == Some(id) {
             self.editor.drill_hole_color_dialog = None;
         }
@@ -303,30 +324,5 @@ impl<'a> App<'a> {
         if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
             self.editor.initiation_dialog = None;
         }
-        self.invalidate_topology_bounds_and_redraw();
-    }
-
-    pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
-        self.cancel_collar_move_touching(id);
-        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
-        let entity = SceneEntityId::DrillHole(id);
-        self.editor.selected_handles.remove(&entity);
-        self.editor.hidden_handles.remove(&entity);
-        self.editor.explicitly_frozen.remove(&entity);
-        self.editor.frozen_handles.remove(&entity);
-        self.editor.translucent_handles.remove(&entity);
-        if self.editor.active_drill_hole == Some(id) {
-            self.editor.active_drill_hole = None;
-        }
-        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
-            self.editor.end_tie_chain();
-        }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
-        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
-            self.editor.initiation_dialog = None;
-        }
-        self.delete_project_item(ItemRef::DrillHole(id));
-        self.request_topology_redraw();
     }
 }

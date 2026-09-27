@@ -88,7 +88,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Crea triangolazione
-tri-create-help = Fai clic sugli oggetti nella vista per selezionarli o deselezionarli. Trascina per selezionare con un riquadro.
 tri-create-type-label = Tipo di triangolazione
 tri-create-type-help =
     La superficie aperta crea una maglia in stile terreno. Il solido crea una
@@ -98,11 +97,10 @@ tri-create-output-name-help = Nome assegnato alla triangolazione generata.
 tri-create-output-name-hint = nome della triangolazione
 tri-create-run = Triangola
 
-tri-selection-none = Nessun oggetto ancora selezionato.
 tri-selection-selected = { $summary } selezionati
 
-tri-type-open-surface = Superficie aperta
-tri-type-solid-closed = Solido – completamente chiuso
+tri-type-open-surface = Superficie
+tri-type-solid-closed = Solido
 
 # Elementi del riepilogo della selezione, ad es. "3 polilinee, 1 punto". Ogni
 # sostantivo viene messo al plurale in base al proprio conteggio, così le
@@ -156,7 +154,6 @@ tri-estimated-memory = Memoria di picco stimata ~{ $estimate }. { $detail }
 block-grid-summary = Griglia: { $x } × { $y } × { $z } = { $count } blocchi
 status-selected = Selezionati: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunk: { $rendered }/{ $total } ({ $culled } esclusi)
 status-clip = Clip vicino/lontano/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -222,7 +219,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Scegli il file o i file sorgente da importare.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Scegli questo input facendo clic su una superficie caricata nella vista
 literal-choose-9e53070883acbe06 = Scegli...
-literal-chunks-d8bf831735fec9eb = Chunk: --
 literal-clear-b4f1dffbb6be6302 = Cancella
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Cancella texture della triangolazione attiva
 literal-clear-raster-ef94c7849961e88f = Cancella raster
@@ -909,10 +905,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = Scegli un livello
 literal-set-axis-e3f98268c98bcfa0 = Imposta %axis%
 literal-axis-value-d5e196b32161897d = valore %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Scarica la versione nativa gratuita sul nostro sito web ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Salvato nella memoria del browser
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Non salvato nella memoria del browser
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Distanza lungo il pendio
 literal-horizontal-distance-643bfda0222c6424 = Distanza orizzontale
@@ -1227,7 +1220,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Ricostr
 literal-restore-the-full-model-range-23c0898e378be1df = Ripristina l'intero intervallo del modello
 literal-axis-minimum-8a51a7bda9747700 = minimo %axis%
 literal-axis-maximum-fa149d72f9564fca = massimo %axis%
-literal-name-no-range-4f328990327afd0b = %name% (nessun intervallo)
 literal-choose-a-variable-62b267fd35bdce31 = Scegli una variabile
 literal-no-usable-range-6bd2da592be04b0c = (nessun intervallo utilizzabile)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Modifica il colore usato per i valori vuoti
@@ -1534,8 +1526,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Scegli p
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Fai clic su una polilinea chiusa da usare come forma della volata
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc annulla
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Fai clic su una bocca foro per aggiungere o modificare un punto di innesco
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Copyright (c) 2026 Leo Timmins, Lucas Timmins e i contributori di Incline Design. Con la presente si concede, gratuitamente, a chiunque ottenga una copia di questo software, il permesso di utilizzarlo senza restrizioni, alle condizioni della Licenza MIT.
+
     Incline Design è fornito "COSÌ COM'È", SENZA GARANZIA DI ALCUN TIPO, ESPRESSA O IMPLICITA, incluse a titolo esemplificativo le garanzie di COMMERCIABILITÀ, IDONEITÀ A UNO SCOPO PARTICOLARE e NON VIOLAZIONE.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% connettore/i
 literal-count-hole-s-d9bc7e624fadff18 = %count% foro/i

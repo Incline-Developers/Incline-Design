@@ -82,7 +82,6 @@ confirm-delete-product =
 ## Диалог «Создать триангуляцию»
 
 tri-create-title = Создать триангуляцию
-tri-create-help = Щёлкайте по объектам в области просмотра, чтобы выбрать или снять выбор. Для рамочного выбора протяните курсор.
 tri-create-type-label = Тип триангуляции
 tri-create-type-help =
     «Открытая поверхность» создаёт полотно рельефного типа. «Тело» создаёт
@@ -93,11 +92,10 @@ tri-create-output-name-help = Имя, присваиваемое созданн�
 tri-create-output-name-hint = имя триангуляции
 tri-create-run = Триангулировать
 
-tri-selection-none = Объекты ещё не выбраны.
 tri-selection-selected = Выбрано: { $summary }
 
-tri-type-open-surface = Открытая поверхность
-tri-type-solid-closed = Тело — полностью замкнутое
+tri-type-open-surface = Поверхность
+tri-type-solid-closed = Тело
 
 tri-count-polylines =
     { $count ->
@@ -152,7 +150,6 @@ tri-estimated-memory = Пиковое потребление памяти: ок�
 block-grid-summary = Сетка: { $x } × { $y } × { $z } = { $count } блоков
 status-selected = Выбрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменты: { $rendered }/{ $total } (скрыто: { $culled })
 status-clip = Ближняя/дальняя плоскость/Δ: { $near } / { $far } / { $delta } м
 
 
@@ -219,7 +216,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Выберите исходный файл или файлы для импорта.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Выберите этот вход, щёлкнув по загруженной поверхности в области просмотра
 literal-choose-9e53070883acbe06 = Выберите...
-literal-chunks-d8bf831735fec9eb = Фрагменты: --
 literal-clear-b4f1dffbb6be6302 = Очистить
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистить текстуру активной триангуляции
 literal-clear-raster-ef94c7849961e88f = Очистить растр
@@ -932,10 +928,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% объекта «%kind%�
 literal-choose-a-layer-b780e9cd371a31d2 = Выберите слой
 literal-set-axis-e3f98268c98bcfa0 = Задать %axis%
 literal-axis-value-d5e196b32161897d = Значение %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Скачайте бесплатную нативную версию на нашем сайте ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Сохранено в хранилище браузера
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Не сохранено в хранилище браузера
 literal-distance-along-slope-9f62268eebab148c = Расстояние по склону
 literal-horizontal-distance-643bfda0222c6424 = Горизонтальное расстояние
 literal-height-change-2cc1b51980081e52 = Перепад высоты
@@ -1227,7 +1220,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Пер�
 literal-restore-the-full-model-range-23c0898e378be1df = Восстановить полный диапазон модели
 literal-axis-minimum-8a51a7bda9747700 = Минимум %axis%
 literal-axis-maximum-fa149d72f9564fca = Максимум %axis%
-literal-name-no-range-4f328990327afd0b = %name% (без диапазона)
 literal-choose-a-variable-62b267fd35bdce31 = Выберите переменную
 literal-no-usable-range-6bd2da592be04b0c = (нет пригодного диапазона)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Изменить цвет пустых значений
@@ -1534,8 +1526,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Снач
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Щёлкните замкнутую полилинию, чтобы использовать её как контур блока
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc — отмена
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Щёлкните устье, чтобы добавить или изменить точку инициирования
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = Соединений: %count%
 literal-count-hole-s-d9bc7e624fadff18 = Скважин: %count%

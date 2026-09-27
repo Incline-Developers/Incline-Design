@@ -20,7 +20,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     block_model::{BlockBounds, BlockBoundsSource, RenderableBlockIndices, color_variable_default, is_no_data_sentinel},
-    formats::block_model_data::{BlockModelColumn, BlockModelData},
+    formats::{
+        block_model_data::{BlockModelColumn, BlockModelData},
+        csv_records::{for_each_record, owned_fields},
+    },
 };
 
 pub(crate) const PREVIEW_ROW_COUNT: usize = 5;
@@ -94,6 +97,12 @@ impl From<io::Error> for CsvBlockModelError {
     }
 }
 
+impl From<csv::Error> for CsvBlockModelError {
+    fn from(value: csv::Error) -> Self {
+        Self::Invalid(value.to_string())
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ParsedCsvBlockModel {
     pub(crate) model: BlockModelData,
@@ -102,8 +111,8 @@ pub(crate) struct ParsedCsvBlockModel {
 
 pub(crate) fn preview(bytes: &[u8]) -> Result<CsvPreview, CsvBlockModelError> {
     let mut records = Vec::new();
-    for_each_record(bytes, Some(PREVIEW_ROW_COUNT + 1), |_, record| {
-        records.push(record);
+    for_each_record::<CsvBlockModelError>(bytes, Some(PREVIEW_ROW_COUNT + 1), |_, record| {
+        records.push(owned_fields(record));
         Ok(())
     })?;
     let headers = records.first().cloned().ok_or_else(|| CsvBlockModelError::Invalid("CSV file is empty".to_owned()))?;
@@ -211,8 +220,9 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
     let mut overall_upper = DVec3::splat(f64::NEG_INFINITY);
 
     for_each_record(bytes, None, |record_number, record| {
-        if record_number == 1 {
+        if headers.is_none() {
             validate_mapping(mapping, record.len())?;
+            let record = owned_fields(record);
             let names = unique_resource_names(&record, mapping);
             for (index, role) in mapping.roles.iter().copied().enumerate() {
                 if matches!(role, CsvColumnRole::Value | CsvColumnRole::Category | CsvColumnRole::Id) {
@@ -242,7 +252,7 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
         }
         let value = |role| {
             let index = role_indices[&role];
-            parse_required_number(record.get(index).map(String::as_str).unwrap_or(""), record_number, &headers[index])
+            parse_required_number(record.get(index).unwrap_or(""), record_number, &headers[index])
         };
         let center = DVec3::new(value(CsvColumnRole::X)?, value(CsvColumnRole::Y)?, value(CsvColumnRole::Z)?);
         let size = DVec3::new(value(CsvColumnRole::Dx)?, value(CsvColumnRole::Dy)?, value(CsvColumnRole::Dz)?);
@@ -264,7 +274,7 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
         blocks.push(block);
 
         for (resource, (values, &index)) in resource_values.iter_mut().zip(&resource_indices).enumerate() {
-            let field = record.get(index).map(String::as_str).unwrap_or("").trim();
+            let field = record.get(index).unwrap_or("").trim();
             let role = resource_roles[resource];
             if role == CsvColumnRole::Category {
                 if field.is_empty() {
@@ -336,7 +346,7 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
     })
 }
 
-pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices, mut output: W) -> Result<(), CsvBlockModelError> {
+pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices, output: W) -> Result<(), CsvBlockModelError> {
     if blocks.len() != model.metadata.n_blocks {
         return Err(CsvBlockModelError::Invalid(format!(
             "block model has {} geometry rows but {} data rows",
@@ -346,17 +356,8 @@ pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource
     }
     let variables: Vec<_> = model.color_variables().into_iter().filter(|variable| !variable.special).collect();
     let empty_values: Vec<_> = variables.iter().map(|variable| color_variable_default(variable)).collect();
-    for (index, header) in ["x", "y", "z", "dx", "dy", "dz"]
-        .into_iter()
-        .chain(variables.iter().map(|variable| variable.name.as_str()))
-        .enumerate()
-    {
-        if index > 0 {
-            output.write_all(b",")?;
-        }
-        write_field(&mut output, header)?;
-    }
-    output.write_all(b"\n")?;
+    let mut output = csv::Writer::from_writer(output);
+    output.write_record(["x", "y", "z", "dx", "dy", "dz"].into_iter().chain(variables.iter().map(|variable| variable.name.as_str())))?;
 
     const ROW_CHUNK: usize = 16_384;
     let mut renderable_rows = renderable.iter().peekable();
@@ -380,36 +381,33 @@ pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource
             let center = model.local_to_world((block.lower + block.upper) * 0.5);
             let size = block.upper - block.lower;
             let geometry = [center.x, center.y, center.z, size.x, size.y, size.z];
-            for (index, value) in geometry.into_iter().enumerate() {
-                if index > 0 {
-                    output.write_all(b",")?;
-                }
-                output.write_all(value.to_string().as_bytes())?;
+            for value in geometry {
+                output.write_field(value.to_string())?;
             }
             for ((column, variable), empty_value) in columns.iter().zip(&variables).zip(&empty_values) {
-                output.write_all(b",")?;
                 let value = column[row - start];
                 let categorical = matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort");
                 let is_empty = !value.is_finite() || empty_value.is_some_and(|empty| (value - empty).abs() < 1e-8) || (!categorical && is_no_data_sentinel(value));
-                if !is_empty {
-                    if categorical
-                        && value.fract() == 0.0
-                        && (0.0..=u32::MAX as f64).contains(&value)
-                        && let Some(label) = variable.strings.get(&(value as u32))
-                    {
-                        write_field(&mut output, label)?;
-                        continue;
-                    }
-                    output.write_all(value.to_string().as_bytes())?;
+                if is_empty {
+                    output.write_field("")?;
+                } else if categorical
+                    && value.fract() == 0.0
+                    && (0.0..=u32::MAX as f64).contains(&value)
+                    && let Some(label) = variable.strings.get(&(value as u32))
+                {
+                    output.write_field(label)?;
+                } else {
+                    output.write_field(value.to_string())?;
                 }
             }
-            output.write_all(b"\n")?;
+            output.write_record(None::<&[u8]>)?;
         }
         start = end;
     }
     if let Some(row) = renderable_rows.next() {
         return Err(CsvBlockModelError::Invalid(format!("renderable block index {row} is outside the model")));
     }
+    output.flush()?;
     Ok(())
 }
 
@@ -448,92 +446,4 @@ fn parse_required_number(field: &str, row: usize, header: &str) -> Result<f64, C
         .trim()
         .parse::<f64>()
         .map_err(|_| CsvBlockModelError::Invalid(format!("CSV row {row}, column '{header}': expected a number, found '{}'", field.trim())))
-}
-
-fn write_field(output: &mut impl Write, field: &str) -> io::Result<()> {
-    if field.contains([',', '"', '\r', '\n']) {
-        output.write_all(b"\"")?;
-        for byte in field.bytes() {
-            if byte == b'"' {
-                output.write_all(b"\"\"")?;
-            } else {
-                output.write_all(&[byte])?;
-            }
-        }
-        output.write_all(b"\"")
-    } else {
-        output.write_all(field.as_bytes())
-    }
-}
-
-fn for_each_record(bytes: &[u8], limit: Option<usize>, mut visit: impl FnMut(usize, Vec<String>) -> Result<(), CsvBlockModelError>) -> Result<(), CsvBlockModelError> {
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    std::str::from_utf8(bytes).map_err(|_| CsvBlockModelError::Invalid("CSV file must be UTF-8 text".to_owned()))?;
-    let mut record = Vec::new();
-    let mut field = Vec::new();
-    let mut in_quotes = false;
-    let mut index = 0;
-    let mut record_number = 1;
-    let mut emitted = 0;
-
-    let finish_field = |field: &mut Vec<u8>, record: &mut Vec<String>| -> Result<(), CsvBlockModelError> {
-        let bytes = std::mem::take(field);
-        let value = String::from_utf8(bytes).map_err(|_| CsvBlockModelError::Invalid("CSV field is not valid UTF-8".to_owned()))?;
-        record.push(value);
-        Ok(())
-    };
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if in_quotes {
-            if byte == b'"' {
-                if bytes.get(index + 1) == Some(&b'"') {
-                    field.push(b'"');
-                    index += 2;
-                    continue;
-                }
-                in_quotes = false;
-            } else {
-                field.push(byte);
-            }
-            index += 1;
-            continue;
-        }
-        match byte {
-            b'"' if field.is_empty() => {
-                in_quotes = true;
-                index += 1;
-            }
-            b',' => {
-                finish_field(&mut field, &mut record)?;
-                index += 1;
-            }
-            b'\r' | b'\n' => {
-                finish_field(&mut field, &mut record)?;
-                visit(record_number, std::mem::take(&mut record))?;
-                emitted += 1;
-                if limit.is_some_and(|limit| emitted >= limit) {
-                    return Ok(());
-                }
-                record_number += 1;
-                if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            _ => {
-                field.push(byte);
-                index += 1;
-            }
-        }
-    }
-    if in_quotes {
-        return Err(CsvBlockModelError::Invalid(format!("CSV row {record_number} has an unterminated quoted field")));
-    }
-    if !field.is_empty() || !record.is_empty() {
-        finish_field(&mut field, &mut record)?;
-        visit(record_number, record)?;
-    }
-    Ok(())
 }

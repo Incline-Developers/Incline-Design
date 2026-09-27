@@ -87,7 +87,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Tạo lưới tam giác
-tri-create-help = Nhấp vào các đối tượng trong khung nhìn để chọn/bỏ chọn. Kéo để chọn theo khung.
 tri-create-type-label = Loại lưới tam giác
 tri-create-type-help =
     Mặt hở tạo ra một tấm bề mặt kiểu địa hình. Khối đặc tạo ra một lưới
@@ -97,11 +96,10 @@ tri-create-output-name-help = Tên gán cho lưới tam giác được tạo ra.
 tri-create-output-name-hint = tên lưới tam giác
 tri-create-run = Tạo lưới tam giác
 
-tri-selection-none = Chưa chọn đối tượng nào.
 tri-selection-selected = Đã chọn { $summary }
 
-tri-type-open-surface = Mặt hở
-tri-type-solid-closed = Khối đặc – khép kín hoàn toàn
+tri-type-open-surface = Mặt
+tri-type-solid-closed = Khối đặc
 
 # Các thành phần tóm tắt lựa chọn, ví dụ: "3 đường đa tuyến, 1 điểm".
 tri-count-polylines =
@@ -148,7 +146,6 @@ tri-estimated-memory = Bộ nhớ đỉnh ước tính ~{ $estimate }. { $detail
 block-grid-summary = Lưới: { $x } × { $y } × { $z } = { $count } khối
 status-selected = Đã chọn: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunk: { $rendered }/{ $total } (đã loại { $culled })
 status-clip = Cắt gần/xa/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -214,7 +211,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chọn (các) tệp nguồn cần nhập.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chọn dữ liệu đầu vào này bằng cách nhấp vào một bề mặt đã tải trong khung nhìn
 literal-choose-9e53070883acbe06 = Chọn...
-literal-chunks-d8bf831735fec9eb = Chunk: --
 literal-clear-b4f1dffbb6be6302 = Xóa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Xóa kết cấu lưới tam giác đang hoạt động
 literal-clear-raster-ef94c7849961e88f = Xóa ảnh raster
@@ -901,10 +897,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Chọn một lớp
 literal-set-axis-e3f98268c98bcfa0 = Đặt %axis%
 literal-axis-value-d5e196b32161897d = Giá trị %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Tải phiên bản native miễn phí tại trang web của chúng tôi ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Đã lưu vào bộ nhớ trình duyệt
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Chưa lưu vào bộ nhớ trình duyệt
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Khoảng cách dọc theo mái dốc
 literal-horizontal-distance-643bfda0222c6424 = Khoảng cách ngang
@@ -1219,7 +1212,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Xây d�
 literal-restore-the-full-model-range-23c0898e378be1df = Khôi phục toàn bộ khoảng mô hình
 literal-axis-minimum-8a51a7bda9747700 = %axis% tối thiểu
 literal-axis-maximum-fa149d72f9564fca = %axis% tối đa
-literal-name-no-range-4f328990327afd0b = %name% (không có khoảng)
 literal-choose-a-variable-62b267fd35bdce31 = Chọn một biến
 literal-no-usable-range-6bd2da592be04b0c = (không có khoảng sử dụng được)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Sửa màu dùng cho giá trị trống
@@ -1526,8 +1518,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Chọn b
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Nhấp vào một đường đa tuyến khép kín để dùng làm hình dạng bãi nổ
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc để hủy
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Nhấp vào một miệng lỗ để thêm hoặc sửa điểm kích nổ
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Bản quyền (c) 2026 Leo Timmins, Lucas Timmins và những người đóng góp cho Incline Design. Theo đây, quyền được cấp miễn phí cho bất kỳ ai có được bản sao của phần mềm này để sử dụng nó mà không bị hạn chế, tuân theo các điều kiện của Giấy phép MIT.
+
     Incline Design được cung cấp "NGUYÊN TRẠNG", KHÔNG CÓ BẤT KỲ BẢO ĐẢM NÀO, RÕ RÀNG HAY NGỤ Ý, bao gồm nhưng không giới hạn ở các bảo đảm về KHẢ NĂNG THƯƠNG MẠI, SỰ PHÙ HỢP CHO MỘT MỤC ĐÍCH CỤ THỂ và KHÔNG VI PHẠM.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% đầu nối
 literal-count-hole-s-d9bc7e624fadff18 = %count% lỗ khoan

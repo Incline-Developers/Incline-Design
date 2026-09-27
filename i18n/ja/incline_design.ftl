@@ -88,7 +88,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 三角網を作成
-tri-create-help = ビューポート内のオブジェクトをクリックして選択・選択解除します。ドラッグで矩形選択できます。
 tri-create-type-label = 三角網の種類
 tri-create-type-help =
     開いた曲面は地形状のシートを作成します。ソリッドは完全に閉じた
@@ -98,11 +97,10 @@ tri-create-output-name-help = 生成される三角網に割り当てる名前�
 tri-create-output-name-hint = 三角網の名前
 tri-create-run = 三角網化
 
-tri-selection-none = まだオブジェクトが選択されていません。
 tri-selection-selected = { $summary }を選択中
 
-tri-type-open-surface = 開いた曲面
-tri-type-solid-closed = ソリッド（完全閉合）
+tri-type-open-surface = 曲面
+tri-type-solid-closed = ソリッド
 
 # 選択サマリーの各要素、例:「ポリライン3本、点1個」。日本語には文法的な
 # 複数形がないため、count に関わらず単一の表現を使用します。
@@ -150,7 +148,6 @@ tri-estimated-memory = 推定ピークメモリ使用量 ~{ $estimate }。{ $det
 block-grid-summary = グリッド: { $x } × { $y } × { $z } = { $count } ブロック
 status-selected = 選択中: { $count }
 status-fps = FPS: { $fps }
-status-chunks = チャンク: { $rendered }/{ $total }（{ $culled } 個をカリング）
 status-clip = クリップ near/far/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -216,7 +213,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = インポートする元ファイルを選択してください。
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = ビューポート内の読み込み済み曲面をクリックしてこの入力を選択します
 literal-choose-9e53070883acbe06 = 選択...
-literal-chunks-d8bf831735fec9eb = チャンク: --
 literal-clear-b4f1dffbb6be6302 = クリア
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = アクティブな三角網のテクスチャをクリア
 literal-clear-raster-ef94c7849961e88f = ラスターをクリア
@@ -903,10 +899,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = レイヤーを選択
 literal-set-axis-e3f98268c98bcfa0 = %axis% を設定
 literal-axis-value-d5e196b32161897d = %axis% の値
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = 無料のネイティブ版を弊社ウェブサイトからダウンロード ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = ブラウザーストレージに保存済み
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = ブラウザーストレージに未保存
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = 斜面に沿った距離
 literal-horizontal-distance-643bfda0222c6424 = 水平距離
@@ -1221,7 +1214,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = この�
 literal-restore-the-full-model-range-23c0898e378be1df = モデルの全範囲を復元
 literal-axis-minimum-8a51a7bda9747700 = %axis% の最小値
 literal-axis-maximum-fa149d72f9564fca = %axis% の最大値
-literal-name-no-range-4f328990327afd0b = %name%（範囲なし）
 literal-choose-a-variable-62b267fd35bdce31 = 変数を選択
 literal-no-usable-range-6bd2da592be04b0c = （使用可能な範囲なし）
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 空値に使用する色を編集
@@ -1528,8 +1520,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = 最初�
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = 発破形状として使用する閉じたポリラインをクリックしてください
 literal-esc-cancels-baa1fbafa2ec28c1 = Escでキャンセル
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = 孔口をクリックして起爆点を追加または編集してください
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. 本ソフトウェアの複製を取得したすべての者に対し、MIT Licenseの条件に従うことを前提として、これを制限なく扱うことを無償で許可します。
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. 本ソフトウェアの複製を取得したすべての者に対し、MIT Licenseの条件に従うことを前提として、これを制限なく扱うことを無償で許可します。
+
     Incline Design は「現状のまま」提供され、明示または黙示を問わず、商品性、特定目的への適合性、権利非侵害の保証を含め、いかなる種類の保証もありません。
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% 個のコネクター
 literal-count-hole-s-d9bc7e624fadff18 = %count% 孔

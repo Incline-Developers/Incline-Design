@@ -45,8 +45,8 @@ use crate::userspace_error;
 use crate::{
     app::commands::file::PendingFileDialog,
     model::{
-        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
-        block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
+        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
+        block_model::{BlockModelSource, OpenBlockModel},
         drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
@@ -324,6 +324,10 @@ pub(crate) struct App<'a> {
     /// still moving. See `take_resize_to_apply`.
     last_resize_event: Option<Instant>,
     last_render_time: Option<Instant>,
+    /// When the last rendered frame finished, and when a redraw was first
+    /// wanted after it: the frame counter's clock. See `record_frame_time`.
+    last_frame_end: Option<Instant>,
+    frame_demanded_at: Option<Instant>,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -338,7 +342,6 @@ pub(crate) struct App<'a> {
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
     block_models: Vec<OpenBlockModel>,
-    active_block_model: Option<BlockModelId>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
     next_drill_hole_id: u64,
@@ -464,6 +467,8 @@ impl<'a> Default for App<'a> {
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
+            last_frame_end: None,
+            frame_demanded_at: None,
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -476,7 +481,6 @@ impl<'a> Default for App<'a> {
             active_triangulation: None,
             next_triangulation_id: 0,
             block_models: Vec::new(),
-            active_block_model: None,
             next_block_model_id: 0,
             drill_holes: Vec::new(),
             next_drill_hole_id: 0,
@@ -576,7 +580,9 @@ impl<'a> App<'a> {
             MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
-            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
+            MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
+            MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
+            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -664,8 +670,9 @@ impl<'a> App<'a> {
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
         self.editor.frame_counter_enabled = config.frame_counter_enabled;
-        self.editor.debug_chunk_coloring = config.debug_chunk_coloring;
+        self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
+        self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;
         self.editor.plan_orbit_sensitivity = io::finite_clamped(config.plan_orbit_sensitivity, 0.0001, 0.02, io::default_plan_orbit_sensitivity());
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());
         self.editor.plan_invert_vertical_look = config.plan_invert_vertical_look;
@@ -739,6 +746,18 @@ impl<'a> App<'a> {
 
     fn active_document(&self) -> &Document {
         self.workspace.active_document().unwrap_or(&self.empty_document)
+    }
+
+    /// What the cursor is over at the standard pick threshold, honouring the
+    /// editor's hidden and frozen sets and x-ray.
+    pub(crate) fn pick_under_cursor(&self) -> Option<(SceneEntityId, DVec3)> {
+        self.graphics.as_ref()?.pick_at_cursor(
+            PICK_THRESHOLD_PX,
+            &self.triangulations,
+            &self.editor.hidden_handles,
+            &self.editor.frozen_handles,
+            self.editor.xray_enabled,
+        )
     }
 
     pub(crate) fn activate_project_for_object(&mut self, object_id: ObjectId) -> bool {
@@ -914,6 +933,7 @@ impl<'a> App<'a> {
         let project = self.workspace.projects.get_mut(index)?;
         let mut target = EditTarget {
             document: &mut project.project.document,
+            folders: &mut project.project.folders,
             content: &mut project.content,
             triangulations: &mut self.triangulations,
             block_models: &mut self.block_models,
@@ -1017,9 +1037,6 @@ impl<'a> App<'a> {
         if self.active_triangulation.is_some_and(|id| !self.triangulations.iter().any(|item| item.id == id)) {
             self.active_triangulation = None;
         }
-        if self.active_block_model.is_some_and(|id| !self.block_models.iter().any(|item| item.id == id)) {
-            self.active_block_model = None;
-        }
         if self.editor.active_drill_hole.is_some_and(|id| !self.drill_holes.iter().any(|item| item.id == id)) {
             self.editor.active_drill_hole = None;
         }
@@ -1102,6 +1119,7 @@ impl<'a> App<'a> {
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
         SaveToken {
+            folders: Box::new(self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default()),
             triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             block_models: self.block_models.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
@@ -1214,7 +1232,6 @@ impl<'a> App<'a> {
         self.active_triangulation = None;
         self.block_models.clear();
         self.next_block_model_id = 0;
-        self.active_block_model = None;
         self.drill_holes.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
@@ -1325,6 +1342,34 @@ impl<'a> App<'a> {
     /// a cap the refresh rate does not divide evenly just makes every frame
     /// miss its slot and wait for the next one (144 on a 165 Hz display
     /// presents 82.5 times a second, not 144).
+    /// Count one frame, begun at `frame_start`, toward the frame counter.
+    ///
+    /// Rendering is on demand, so the time between two frames is often the app
+    /// waiting for input, not drawing. Only time from when a redraw was first
+    /// wanted to when its frame finished counts: back-to-back frames still add
+    /// up to the full display interval (the vsync wait and the frame limiter
+    /// included), while a pause of any length adds nothing. A redraw asked for
+    /// outside `about_to_wait` (winit, the compositor, a direct request) is
+    /// timed from the frame's own start.
+    ///
+    /// Published once per window of busy time so the readout is legible;
+    /// averaging instantaneous rates instead would be dominated by the short
+    /// frame of each vsync pair (16 ms + 0.8 ms reads as 600+ fps).
+    fn record_frame_time(&mut self, frame_start: Instant) {
+        const WINDOW_SECONDS: f32 = 0.2;
+        let end = Instant::now();
+        let demanded = self.frame_demanded_at.take().unwrap_or(frame_start).min(frame_start);
+        let busy_from = self.last_frame_end.map_or(demanded, |last_end| last_end.max(demanded));
+        self.last_frame_end = Some(end);
+        let (frames, elapsed) = &mut self.editor.frame_rate_window;
+        *frames += 1;
+        *elapsed += end.saturating_duration_since(busy_from).as_secs_f32();
+        if *elapsed >= WINDOW_SECONDS {
+            self.editor.measured_fps = Some(*frames as f32 / *elapsed);
+            self.editor.frame_rate_window = (0, 0.0);
+        }
+    }
+
     fn frame_interval(&self) -> Duration {
         if self.surface_retry_pending {
             // Failed acquisition never reaches present, so vsync cannot pace it.
@@ -1607,10 +1652,11 @@ impl<'a> App<'a> {
             project.project.document.revision().hash(&mut hasher);
             project.savepoint_revision().hash(&mut hasher);
             for layer in project.project.document.layers() {
-                layer.id.hash(&mut hasher);
-                layer.name.hash(&mut hasher);
-                layer.loaded.hash(&mut hasher);
+                layer.hash_row(&mut hasher);
             }
+            // All six sections at once: the registry is shared project
+            // content, not just the Designs tree's.
+            project.project.folders.hash_into(&mut hasher);
         }
 
         self.active_triangulation.hash(&mut hasher);
@@ -1620,45 +1666,40 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
-            triangulation.state.loaded.hash(&mut hasher);
-            triangulation.state.revision().hash(&mut hasher);
+            triangulation.state.hash_row(&mut hasher);
         }
 
-        self.active_block_model.hash(&mut hasher);
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);
-            model.state.loaded.hash(&mut hasher);
             model.renderable_block_indices.len().hash(&mut hasher);
             model.model.color_variables().into_iter().filter(|variable| !variable.special).count().hash(&mut hasher);
-            model.state.revision().hash(&mut hasher);
+            model.state.hash_row(&mut hasher);
         }
 
         for dataset in &self.drill_holes {
             dataset.id.hash(&mut hasher);
             dataset.name.hash(&mut hasher);
-            dataset.state.loaded.hash(&mut hasher);
             dataset.dataset.holes.len().hash(&mut hasher);
             dataset.dataset.fields.len().hash(&mut hasher);
-            dataset.state.revision().hash(&mut hasher);
+            dataset.state.hash_row(&mut hasher);
         }
 
         for cloud in &self.point_clouds {
             cloud.id.hash(&mut hasher);
             cloud.name.hash(&mut hasher);
-            cloud.state.loaded.hash(&mut hasher);
             cloud.points.len().hash(&mut hasher);
-            cloud.state.revision().hash(&mut hasher);
+            cloud.is_classified().hash(&mut hasher);
+            cloud.state.hash_row(&mut hasher);
         }
 
         for raster in &self.raster_textures {
             raster.id.hash(&mut hasher);
             raster.name.hash(&mut hasher);
-            raster.state.loaded.hash(&mut hasher);
             raster.source_size.hash(&mut hasher);
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
-            raster.state.revision().hash(&mut hasher);
+            raster.state.hash_row(&mut hasher);
         }
         hasher.finish()
     }
@@ -1682,7 +1723,7 @@ impl<'a> App<'a> {
                     runtime_id: project.runtime_id,
                     name: project.project.metadata.name.clone(),
                     dirty: project_dirty,
-                    designs_dirty: project.designs_dirty(),
+                    designs_dirty: project.designs_dirty(&self.project_asset_baseline.folders),
                     lossy_save_warnings: project.lossy_save_warnings.clone(),
                     is_active: self.workspace.active_index == Some(index),
                     #[cfg(target_arch = "wasm32")]
@@ -1698,6 +1739,8 @@ impl<'a> App<'a> {
                             name: layer.name.clone(),
                             is_loaded: layer.loaded,
                             dirty: dirty_layers.contains(&layer.id),
+                            folder: layer.folder,
+                            section: layer.section,
                         })
                         .collect(),
                 }
@@ -1738,7 +1781,6 @@ impl<'a> App<'a> {
                     is_active: active.is_some_and(|project| project.id == stored.id),
                     dirty: active.is_some_and(|project| project.id == stored.id) && project_dirty,
                     id: stored.id,
-                    stored_in_browser: true,
                 })
                 .collect::<Vec<_>>();
             if let Some(active) = active
@@ -1749,7 +1791,6 @@ impl<'a> App<'a> {
                     is_active: true,
                     dirty: project_dirty,
                     id: active.id,
-                    stored_in_browser: false,
                 });
             }
             entries
@@ -1765,6 +1806,8 @@ impl<'a> App<'a> {
                 is_loaded: tri.state.loaded,
                 dirty: tri.state.is_dirty(),
                 color: tri.color,
+                folder: tri.state.folder,
+                section: tri.state.section,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1782,6 +1825,8 @@ impl<'a> App<'a> {
                     .as_ref()
                     .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                folder: model.state.folder,
+                section: model.state.section,
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1799,6 +1844,8 @@ impl<'a> App<'a> {
                     .summary
                     .as_ref()
                     .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
+                folder: dataset.state.folder,
+                section: dataset.state.section,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1811,6 +1858,9 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
+                folder: cloud.state.folder,
+                section: cloud.state.section,
+                is_classified: cloud.is_classified(),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
@@ -1827,6 +1877,8 @@ impl<'a> App<'a> {
                 source_size: raster.source_size,
                 driver_name: raster.driver_name.clone(),
                 projection: raster.projection.clone(),
+                folder: raster.state.folder,
+                section: raster.state.section,
             })
             .collect::<Vec<_>>();
 
@@ -1852,20 +1904,32 @@ impl<'a> App<'a> {
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
+        // A section's item membership can stay byte-identical while its
+        // folder list changes - a folder created and left empty, say - so
+        // the heading needs this on top of `same_membership`: an empty
+        // folder touches no item's epoch, and would otherwise never read as
+        // unsaved work.
+        let section_folders_dirty = |section: SectionKind| {
+            self.workspace
+                .active_project()
+                .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
+        };
         let triangulations_membership_dirty = !same_membership(
             &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.triangulations,
-        );
+        ) || section_folders_dirty(SectionKind::Triangulations);
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
-        );
-        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes);
+        ) || section_folders_dirty(SectionKind::BlockModels);
+        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
+            || section_folders_dirty(SectionKind::DrillHoles);
         let point_clouds_membership_dirty = !same_membership(
             &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.point_clouds,
-        );
-        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters);
+        ) || section_folders_dirty(SectionKind::PointClouds);
+        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+            || section_folders_dirty(SectionKind::Rasters);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
@@ -1886,6 +1950,7 @@ impl<'a> App<'a> {
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
+            folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
         view
@@ -2053,6 +2118,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             }
         }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
+        if self.redraw_requested || continuous_redraw {
+            self.frame_demanded_at.get_or_insert(now);
+        }
 
         if (self.redraw_requested || continuous_redraw)
             && let Some(window) = self.window.as_ref()

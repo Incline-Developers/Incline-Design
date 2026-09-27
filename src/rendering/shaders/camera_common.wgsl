@@ -3,7 +3,9 @@
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    // xyz: world-space forward; w: vertical exaggeration.
     cam_forward: vec4<f32>,
+    // xyz: rebased world-space eye; w: 1 for perspective, 0 for orthographic.
     cam_position: vec4<f32>,
     viewport: vec4<f32>,
     inv_view_proj: mat4x4<f32>,

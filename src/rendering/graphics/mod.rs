@@ -21,15 +21,16 @@ use crate::{
         triangulation::OpenTriangulation,
     },
     rendering::{
-        BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
+        BlockInstance, StrokeInstance, SurfaceVertex, Vertex,
         camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, SectionSlab, screen_to_world_on_plane, screen_to_world_on_section_plane},
-        pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
+        pick::{PickGeometry, PickRecord, StrokeBlocks, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
             RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
-            build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            document_style::{DocumentStyleGpu, DocumentStyleSlots},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -42,12 +43,16 @@ use crate::{
 
 pub(crate) mod buffers;
 pub(crate) mod camera;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cinematic;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
 pub(crate) mod passes;
 pub(crate) mod plot;
 pub(crate) mod projections;
+mod readback;
+pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
 pub(crate) mod targets;
@@ -58,7 +63,7 @@ pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
 pub(super) const CAMERA_ROTATE_SENSITIVITY: f64 = 0.003;
 /// Below this per-buffer limit, large tessellated scenes may be truncated.
 pub(super) const COMFORTABLE_MAX_BUFFER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-pub(super) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
+pub(crate) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
 /// Sizing for editable document geometry.
 pub(super) const DOC_LINE_WIDTH: f32 = 1.0;
 /// Colour for the in-progress stroke preview (committed segments + rubber band).
@@ -290,57 +295,63 @@ impl GridUniform {
     }
 }
 
+/// The scene pass's inputs while it draws the cinematic view: the lit
+/// pipelines, the camera-plus-lighting bind group they take at group 0, the
+/// half-float multisample target they draw into.
+pub(crate) struct ActiveScene {
+    pub(crate) pipelines: Arc<scene_pipelines::ScenePipelines>,
+    pub(crate) camera_bind_group: wgpu::BindGroup,
+    pub(crate) msaa_view: wgpu::TextureView,
+}
+
 pub(crate) struct Graphics<'a> {
     // GPU resource owners are declared before device/surface/window so they
     // are dropped first during shutdown.
     pub(super) gui: Gui,
     pub(super) text_system: TextSystem,
-    pub(super) surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) grid_render_pipeline: wgpu::RenderPipeline,
-    pub(super) section_grid_render_pipeline: wgpu::RenderPipeline,
-    pub(super) raster_plane_render_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_render_pipeline: wgpu::RenderPipeline,
+    /// The pipelines the ordinary scene pass and the editor overlay draw with.
+    pub(super) scene_pipelines: Arc<scene_pipelines::ScenePipelines>,
+    /// What the scene pass draws with and into while `frame::render` diverts
+    /// it into the cinematic view's lit target. `None` everywhere else, so
+    /// every other pass - the overlay, the previews, the plot - draws with the
+    /// ordinary view's pipelines; see [`Self::pipes`].
+    pub(super) active_scene: Option<ActiveScene>,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_transparency_composite_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_volume_upscale_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_volume_upscale_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_composite_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_volume_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_chunk_bind_group_layout: wgpu::BindGroupLayout,
+    /// Cinematic view's pipelines and shadow map, built the first time the
+    /// view is turned on and kept for the session. `None` until then, so a
+    /// session that never uses it pays nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic: Option<cinematic::CinematicPipelines>,
+    /// Its screen-sized attachments, retired and rebuilt on resize like the
+    /// block-model ones.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_document_fill_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_render_pipeline: wgpu::RenderPipeline,
-    pub(super) opaque_stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) edge_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_colored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_uncolored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) design_point_render_pipeline: wgpu::RenderPipeline,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) overlay_render_pipeline: wgpu::RenderPipeline,
+    pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
-    pub(super) stroke_vertex_gpu: wgpu::Buffer,
-    pub(super) stroke_index_gpu: wgpu::Buffer,
-    pub(super) overlay_vertex_gpu: wgpu::Buffer,
-    pub(super) overlay_index_gpu: wgpu::Buffer,
-    pub(super) dynamic_vertex_gpu: wgpu::Buffer,
-    pub(super) dynamic_index_gpu: wgpu::Buffer,
+    pub(super) stroke_gpu: wgpu::Buffer,
+    pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
     pub(super) camera_bind_group: wgpu::BindGroup,
+    /// Kept so passes built after startup - the cinematic chain - can lay out
+    /// their pipelines against the very same layout the scene's use. That
+    /// chain is native-only, so nothing reads this in the browser build.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) camera_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) grid_buffer: wgpu::Buffer,
     pub(super) grid_bind_group: wgpu::BindGroup,
     pub(super) section_grid_buffer: wgpu::Buffer,
@@ -386,20 +397,16 @@ pub(crate) struct Graphics<'a> {
     pub(super) polyline_fill_cache: PolylineFillCache,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
-    pub(super) stroke_vertex_buf: Vec<StrokeVertex>,
-    pub(super) stroke_index_buf: Vec<u32>,
-    pub(super) stroke_vertex_capacity: usize,
-    pub(super) stroke_index_capacity: usize,
-    pub(super) overlay_vertex_buf: Vec<StrokeVertex>,
-    pub(super) overlay_index_buf: Vec<u32>,
-    pub(super) overlay_vertex_capacity: usize,
-    pub(super) overlay_index_capacity: usize,
+    /// Document stroke instances outside the static chunks.
+    pub(super) strokes: Vec<StrokeInstance>,
+    pub(super) stroke_blocks: StrokeBlocks,
+    pub(super) stroke_capacity: usize,
+    pub(super) overlay_strokes: Vec<StrokeInstance>,
+    pub(super) overlay_stroke_capacity: usize,
     /// Per-frame stroke geometry for live drawing tools (batter/berm
     /// preview); see `rebuild_dynamic_scene`.
-    pub(super) dynamic_vertex_buf: Vec<StrokeVertex>,
-    pub(super) dynamic_index_buf: Vec<u32>,
-    pub(super) dynamic_vertex_capacity: usize,
-    pub(super) dynamic_index_capacity: usize,
+    pub(super) dynamic_strokes: Vec<StrokeInstance>,
+    pub(super) dynamic_stroke_capacity: usize,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,
@@ -426,10 +433,20 @@ pub(crate) struct Graphics<'a> {
     pub(super) last_interaction: Option<Instant>,
     pub(super) geometry_dirty: bool,
     pub(super) cached_document_revision: u64,
-    /// `EditorState::render_style_key` of the last static-scene build. The
-    /// renderer compares this itself so selection/style mutations cannot
-    /// leave stale baked geometry when a caller skipped invalidation.
+    /// `EditorState::render_style_key` of the last restyle. The renderer
+    /// compares this itself so a selection or style change always reaches
+    /// the style buffer and batches, even when a caller skipped invalidation.
     pub(super) cached_render_style_key: Option<u64>,
+    /// `build::document_scene_key` of the last stream tessellation; a
+    /// geometry pass that matches it only restyles.
+    pub(super) cached_document_scene_key: Option<u64>,
+    /// The batches and style buffer need rebuilding for the current editor
+    /// state.
+    pub(super) document_style_dirty: bool,
+    pub(super) document_style_slots: DocumentStyleSlots,
+    pub(super) document_style: DocumentStyleGpu,
+    /// Each stream object's ranges, restaged by `restyle_document_scene`.
+    pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
@@ -458,10 +475,17 @@ pub(crate) struct Graphics<'a> {
     /// screen-space markers without a display LOD.
     pub(super) design_point_gpu: DesignPointGpuCache,
     pub(super) raster_gpu: RasterGpuCache,
-    /// `(rendered, total)` surface-chunk counts from the last scene pass, for
-    /// the developer chunk-debug readout. One frame stale by the time the UI
+    /// Surface face and chunk counts from the last main scene pass, for the
+    /// developer chunk-debug readout. One frame stale by the time the UI
     /// reads it, which is fine for a debug counter.
-    pub(crate) chunk_render_stats: (u32, u32),
+    pub(crate) surface_render_stats: crate::rendering::scene::gpu_cache::SurfaceRenderStats,
+    /// Point-cloud counts from the last main scene pass, for the developer
+    /// point readout. One frame stale, like `surface_render_stats`.
+    pub(crate) point_render_stats: crate::rendering::scene::point_cloud_cache::PointRenderStats,
+    /// Line geometry outlining each surface chunk's AABB, rebuilt by the main
+    /// scene pass while the developer chunk-bounds view is on and drawn,
+    /// depth-tested, by the editor overlay pass.
+    pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,
@@ -853,7 +877,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
         self.touch_gesture = Default::default();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
@@ -983,7 +1007,7 @@ impl<'a> Graphics<'a> {
         let saved_camera = self.camera.clone();
         let saved_zoom = self.projection.zoom;
         self.camera_controller.cancel_view_transition();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
 
         // Frame the drawn line: it spans the view horizontally with padding.

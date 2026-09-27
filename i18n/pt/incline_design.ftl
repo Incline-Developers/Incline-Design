@@ -53,17 +53,15 @@ ws-menubar-design-insert-point-at-elevation = Na altura
 ws-menubar-design-move-to = Mover para
 ws-menubar-design-create-triangulation = Criar triangulação
 tri-create-title = Criar triangulação
-tri-create-help = Clique em objetos na janela de visualização para selecionar ou desselecionar. Arraste para selecionar por caixa.
 tri-create-type-label = Tipo de triangulação
 tri-create-type-help = A superfície aberta cria uma folha de estilo de terreno. O sólido cria uma malha totalmente fechada e requer entrada que pode formar um limite impermeável.
 tri-create-output-name = Nome de saída
 tri-create-output-name-help = Nome atribuído à triangulação gerada.
 tri-create-output-name-hint = Nome da triangulação
 tri-create-run = Triangular
-tri-selection-none = Ainda não há objetos selecionados.
 tri-selection-selected = Selecionado { $summary }
-tri-type-open-surface = Superfície aberta
-tri-type-solid-closed = Sólido  —  totalmente fechado
+tri-type-open-surface = Superfície
+tri-type-solid-closed = Sólido
 about-title = Sobre o { $app }
 drill-hole-colour-title = Cor dos furos de sondagem: { $name }
 drill-hole-colour-stop = Parada { $index }
@@ -80,7 +78,6 @@ tri-estimated-memory = Memória máxima estimada ~ { $estimate }. { $detail }
 block-grid-summary = Grade: { $x } × { $y } × { $z } = { $count } blocos
 status-selected = Selecionado: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Fragmentos: { $rendered }/{ $total } ({ $culled } abatido)
 status-clip = Recorte próximo/distante/Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -171,7 +168,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Escolha o ficheiro ou ficheiros de origem para importar.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Escolha esta entrada clicando numa superfície carregada na janela de visualização
 literal-choose-9e53070883acbe06 = Escolha...
-literal-chunks-d8bf831735fec9eb = Fragmentos: --
 literal-clear-b4f1dffbb6be6302 = Limpar
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Limpar textura da triangulação ativa
 literal-clear-raster-ef94c7849961e88f = Limpar raster
@@ -884,10 +880,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% de %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = Escolher uma camada
 literal-set-axis-e3f98268c98bcfa0 = Definir %axis%
 literal-axis-value-d5e196b32161897d = Valor de %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Transfira a versão nativa gratuita no nosso site ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Guardado no armazenamento do navegador
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Não guardado no armazenamento do navegador
 literal-distance-along-slope-9f62268eebab148c = Distância ao longo do talude
 literal-horizontal-distance-643bfda0222c6424 = Distância horizontal
 literal-height-change-2cc1b51980081e52 = Variação de altura
@@ -1179,7 +1172,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Recriar
 literal-restore-the-full-model-range-23c0898e378be1df = Restaurar o intervalo completo do modelo
 literal-axis-minimum-8a51a7bda9747700 = Mínimo de %axis%
 literal-axis-maximum-fa149d72f9564fca = Máximo de %axis%
-literal-name-no-range-4f328990327afd0b = %name% (sem intervalo)
 literal-choose-a-variable-62b267fd35bdce31 = Escolher uma variável
 literal-no-usable-range-6bd2da592be04b0c = (sem intervalo utilizável)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Editar a cor usada para valores vazios
@@ -1486,8 +1478,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Escolha 
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Clique numa polilinha fechada para a usar como contorno de desmonte
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc cancela
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Clique numa boca de furo para adicionar ou editar um ponto de iniciação
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% conector(es)
 literal-count-hole-s-d9bc7e624fadff18 = %count% furo(s)

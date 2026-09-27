@@ -86,7 +86,6 @@ confirm-delete-product =
 ## Dialog „Triangulation erstellen“
 
 tri-create-title = Triangulation erstellen
-tri-create-help = Klicken Sie Objekte im Ansichtsfenster an, um sie aus-/abzuwählen. Ziehen Sie für eine Rahmenauswahl.
 tri-create-type-label = Triangulationstyp
 tri-create-type-help =
     Eine offene Oberfläche erzeugt ein geländeartiges Blatt. Ein Volumenkörper
@@ -97,11 +96,10 @@ tri-create-output-name-help = Name, der der erzeugten Triangulation zugewiesen w
 tri-create-output-name-hint = Triangulationsname
 tri-create-run = Triangulieren
 
-tri-selection-none = Noch keine Objekte ausgewählt.
 tri-selection-selected = { $summary } ausgewählt
 
-tri-type-open-surface = Offene Oberfläche
-tri-type-solid-closed = Volumenkörper – vollständig geschlossen
+tri-type-open-surface = Oberfläche
+tri-type-solid-closed = Volumenkörper
 
 # Bestandteile der Auswahlübersicht, z. B. „3 Polylinien, 1 Punkt“. Jedes
 # Substantiv wird nach seiner eigenen Anzahl flektiert, damit Sprachen mit
@@ -155,7 +153,6 @@ tri-estimated-memory = Geschätzter Spitzenspeicherbedarf ~{ $estimate }. { $det
 block-grid-summary = Raster: { $x } × { $y } × { $z } = { $count } Blöcke
 status-selected = Ausgewählt: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunks: { $rendered }/{ $total } ({ $culled } aussortiert)
 status-clip = Clip nah/fern/Δ: { $near } / { $far } / { $delta } m
 
 ## Häufig verwendete Quellliterale
@@ -221,7 +218,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Wählen Sie die zu importierende(n) Quelldatei(en).
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Wählen Sie diese Eingabe, indem Sie eine geladene Oberfläche im Ansichtsfenster anklicken
 literal-choose-9e53070883acbe06 = Wählen...
-literal-chunks-d8bf831735fec9eb = Chunks: --
 literal-clear-b4f1dffbb6be6302 = Löschen
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Textur der aktiven Triangulation entfernen
 literal-clear-raster-ef94c7849961e88f = Raster entfernen
@@ -908,10 +904,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Wählen Sie eine Ebene
 literal-set-axis-e3f98268c98bcfa0 = %axis% festlegen
 literal-axis-value-d5e196b32161897d = %axis%-Wert
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Laden Sie die kostenlose native Version auf unserer Website herunter ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Im Browser-Speicher gesichert
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Nicht im Browser-Speicher gesichert
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Abstand entlang der Böschung
 literal-horizontal-distance-643bfda0222c6424 = Horizontaler Abstand
@@ -1226,7 +1219,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Farben 
 literal-restore-the-full-model-range-23c0898e378be1df = Vollständigen Modellbereich wiederherstellen
 literal-axis-minimum-8a51a7bda9747700 = %axis%-Minimum
 literal-axis-maximum-fa149d72f9564fca = %axis%-Maximum
-literal-name-no-range-4f328990327afd0b = %name% (kein Bereich)
 literal-choose-a-variable-62b267fd35bdce31 = Wählen Sie eine Variable
 literal-no-usable-range-6bd2da592be04b0c = (kein nutzbarer Bereich)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Bearbeiten Sie die Farbe für leere Werte
@@ -1533,8 +1525,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Wählen 
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Klicken Sie eine geschlossene Polylinie als Sprengform an
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc bricht ab
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Klicken Sie einen Ansatzpunkt an, um einen Zündpunkt hinzuzufügen oder zu bearbeiten
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Copyright (c) 2026 Leo Timmins, Lucas Timmins und die Incline-Design-Mitwirkenden. Hiermit wird jeder Person, die eine Kopie dieser Software erhält, kostenlos die Erlaubnis erteilt, uneingeschränkt damit zu verfahren, vorbehaltlich der Bedingungen der MIT-Lizenz.
+
     Incline Design wird „WIE BESEHEN“ bereitgestellt, OHNE JEGLICHE GEWÄHRLEISTUNG, AUSDRÜCKLICH ODER STILLSCHWEIGEND, EINSCHLIESSLICH, ABER NICHT BESCHRÄNKT AUF DIE GEWÄHRLEISTUNG DER MARKTGÄNGIGKEIT, DER EIGNUNG FÜR EINEN BESTIMMTEN ZWECK UND DER NICHTVERLETZUNG VON RECHTEN DRITTER.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% Verbinder
 literal-count-hole-s-d9bc7e624fadff18 = %count% Loch/Löcher

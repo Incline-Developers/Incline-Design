@@ -37,7 +37,7 @@ pub(super) fn slice_preview_scene_key(
     editor.topology_wireframes_enabled.hash(&mut hasher);
     editor.show_points.hash(&mut hasher);
     editor.xray_enabled.hash(&mut hasher);
-    editor.debug_chunk_coloring.hash(&mut hasher);
+    editor.debug_surface_chunks.hash(&mut hasher);
     editor.vertical_exaggeration.to_bits().hash(&mut hasher);
     for value in editor.slice_center {
         value.to_bits().hash(&mut hasher);
@@ -260,7 +260,7 @@ impl DetachedSlicePreview {
             contents: bytemuck::bytes_of(&camera_uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let camera_layout = graphics.render_pipeline.get_bind_group_layout(0);
+        let camera_layout = graphics.scene_pipelines.render_pipeline.get_bind_group_layout(0);
         let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Top-down preview camera bind group"),
             layout: &camera_layout,
@@ -437,7 +437,7 @@ impl EmbeddedSlicePreview {
             contents: bytemuck::bytes_of(&camera_uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let camera_layout = graphics.render_pipeline.get_bind_group_layout(0);
+        let camera_layout = graphics.scene_pipelines.render_pipeline.get_bind_group_layout(0);
         let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Embedded top-down preview camera bind group"),
             layout: &camera_layout,

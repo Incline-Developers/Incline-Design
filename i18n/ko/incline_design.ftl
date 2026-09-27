@@ -85,7 +85,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 삼각망 생성
-tri-create-help = 뷰포트에서 객체를 클릭하여 선택/선택 해제하세요. 드래그하면 상자 선택이 됩니다.
 tri-create-type-label = 삼각망 유형
 tri-create-type-help =
     개방형 표면은 지형 형태의 표면을 생성합니다. 솔리드는 완전히 밀폐된
@@ -95,11 +94,10 @@ tri-create-output-name-help = 생성된 삼각망에 지정할 이름입니다.
 tri-create-output-name-hint = 삼각망 이름
 tri-create-run = 삼각망 생성
 
-tri-selection-none = 아직 선택된 객체가 없습니다.
 tri-selection-selected = { $summary } 선택됨
 
-tri-type-open-surface = 개방형 표면
-tri-type-solid-closed = 솔리드 – 완전히 밀폐됨
+tri-type-open-surface = 표면
+tri-type-solid-closed = 솔리드
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". 한국어는 CLDR 복수
 # 카테고리가 하나뿐이므로 *[other] 분기만 사용합니다.
@@ -148,7 +146,6 @@ tri-estimated-memory = 예상 최대 메모리 사용량 ~{ $estimate }. { $deta
 block-grid-summary = 그리드: { $x } × { $y } × { $z } = 블록 { $count }개
 status-selected = 선택됨: { $count }
 status-fps = FPS: { $fps }
-status-chunks = 청크: { $rendered }/{ $total } ({ $culled }개 컬링됨)
 status-clip = 클립 근/원/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -214,7 +211,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = 가져올 원본 파일을 선택하세요.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = 뷰포트에서 로드된 표면을 클릭하여 이 입력을 선택하세요
 literal-choose-9e53070883acbe06 = 선택...
-literal-chunks-d8bf831735fec9eb = 청크: --
 literal-clear-b4f1dffbb6be6302 = 지우기
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = 활성 삼각망 텍스처 지우기
 literal-clear-raster-ef94c7849961e88f = 래스터 지우기
@@ -901,10 +897,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = 레이어 선택
 literal-set-axis-e3f98268c98bcfa0 = %axis% 설정
 literal-axis-value-d5e196b32161897d = %axis% 값
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = 저희 웹사이트에서 무료 네이티브 버전을 다운로드하세요 ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = 브라우저 저장소에 저장됨
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = 브라우저 저장소에 저장되지 않음
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = 사면을 따른 거리
 literal-horizontal-distance-643bfda0222c6424 = 수평 거리
@@ -1219,7 +1212,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = 데이�
 literal-restore-the-full-model-range-23c0898e378be1df = 전체 모델 범위 복원
 literal-axis-minimum-8a51a7bda9747700 = %axis% 최소값
 literal-axis-maximum-fa149d72f9564fca = %axis% 최대값
-literal-name-no-range-4f328990327afd0b = %name%(범위 없음)
 literal-choose-a-variable-62b267fd35bdce31 = 변수 선택
 literal-no-usable-range-6bd2da592be04b0c = (사용 가능한 범위 없음)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = 빈 값에 사용되는 색상 편집
@@ -1528,8 +1520,9 @@ literal-esc-cancels-baa1fbafa2ec28c1 = Esc로 취소
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = 공구를 클릭하여 기폭점을 추가하거나 편집하세요
 literal-drag-a-ring-or-type-an-azimuth-and-dip-2cb078a11f62463c = 링을 드래그하거나 방위각과 경사각을 입력하세요
 literal-each-hole-turns-about-its-own-collar-73a2499ee7279efe = 각 발파공은 자신의 공구를 중심으로 회전합니다
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. 이 소프트웨어의 사본을 취득한 모든 사람은 MIT 라이선스 조건에 따라 제한 없이 이를 다룰 수 있는 권한을 무료로 부여받습니다.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. 이 소프트웨어의 사본을 취득한 모든 사람은 MIT 라이선스 조건에 따라 제한 없이 이를 다룰 수 있는 권한을 무료로 부여받습니다.
+
     Incline Design은 상품성, 특정 목적 적합성, 비침해에 대한 보증을 포함하되 이에 국한되지 않는 어떠한 종류의 명시적 또는 묵시적 보증 없이 "있는 그대로" 제공됩니다.
 literal-count-connector-s-b0f5c43e0c1c25ff = 커넥터 %count%개
 literal-count-hole-s-d9bc7e624fadff18 = 발파공 %count%개

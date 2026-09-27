@@ -1,9 +1,12 @@
 use std::{cmp::Ordering, collections::BinaryHeap, path::PathBuf, sync::Arc};
 
-use glam::DVec3;
+use glam::{DVec3, Vec3};
 use rayon::prelude::*;
 
-use crate::model::project::ProjectItemState;
+use crate::{
+    model::project::ProjectItemState,
+    rendering::{graphics::frustum::OrientedBox, scene::bounds::fit_chunk_box},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PointCloudId(pub(crate) u64);
@@ -16,6 +19,8 @@ pub(crate) struct LoadedPointCloud {
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, when the input provides them.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
+    /// Source-order ASPRS classification codes, when the input provides them.
+    pub(crate) classifications: Option<Arc<Vec<u8>>>,
     /// Spatially ordered, cloud-local render data prepared by the loader.
     pub(crate) prepared: Arc<PreparedPointCloud>,
     pub(crate) bounds: (DVec3, DVec3),
@@ -29,6 +34,10 @@ pub(crate) struct OpenPointCloud {
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, retained for lossless interchange.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
+    /// Source-order ASPRS classification codes. Their presence is what offers
+    /// the bare-earth filter and the Survey classification view; a cloud whose
+    /// file never classified anything carries `None`.
+    pub(crate) classifications: Option<Arc<Vec<u8>>>,
     pub(crate) prepared: Arc<PreparedPointCloud>,
     pub(crate) bounds: (DVec3, DVec3),
     /// Uniform colour used when the file carries no per-point colours.
@@ -41,6 +50,84 @@ impl OpenPointCloud {
     pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
         crate::model::SceneEntityId::PointCloud(self.id)
     }
+
+    /// Whether the cloud has been through a ground filter, and so can be drawn
+    /// by class or reduced to bare earth.
+    pub(crate) fn is_classified(&self) -> bool {
+        self.classifications.is_some()
+    }
+}
+
+/// ASPRS LAS classification codes Incline names. Everything outside this range
+/// is reserved or user-definable and draws in the fallback colour.
+pub(crate) const CLASS_NEVER_CLASSIFIED: u8 = 0;
+pub(crate) const CLASS_UNCLASSIFIED: u8 = 1;
+pub(crate) const CLASS_GROUND: u8 = 2;
+
+/// Display name for an ASPRS classification code, or `None` where the standard
+/// reserves the code or leaves it to the producer.
+pub(crate) fn classification_name(code: u8) -> Option<&'static str> {
+    Some(match code {
+        CLASS_NEVER_CLASSIFIED => "Created, never classified",
+        CLASS_UNCLASSIFIED => "Unclassified",
+        CLASS_GROUND => "Ground",
+        3 => "Low vegetation",
+        4 => "Medium vegetation",
+        5 => "High vegetation",
+        6 => "Building",
+        7 => "Low point (noise)",
+        9 => "Water",
+        10 => "Rail",
+        11 => "Road surface",
+        13 => "Wire - guard",
+        14 => "Wire - conductor",
+        15 => "Transmission tower",
+        16 => "Wire-structure connector",
+        17 => "Bridge deck",
+        18 => "High noise",
+        19 => "Overhead structure",
+        20 => "Ignored ground",
+        21 => "Snow",
+        22 => "Temporal exclusion",
+        _ => return None,
+    })
+}
+
+/// Packed RGBA8 (red in the low byte) for an ASPRS classification code, in the
+/// layout [`PointInstance::color`] is read with.
+///
+/// The palette follows what survey software has long drawn these classes in -
+/// bare earth tan, vegetation greening with height, noise a colour that occurs
+/// nowhere in terrain - so a classified cloud reads the same here as it did in
+/// whatever filtered it.
+pub(crate) fn classification_color(code: u8) -> u32 {
+    let rgb: u32 = match code {
+        CLASS_NEVER_CLASSIFIED => 0x9aa0a6,
+        CLASS_UNCLASSIFIED => 0xc8cdd2,
+        CLASS_GROUND => 0xb08050,
+        3 => 0xa8d08d,
+        4 => 0x6aae4f,
+        5 => 0x2e7d32,
+        6 => 0xe06c4f,
+        7 | 18 => 0xff3ddc,
+        9 => 0x3f8fd1,
+        10 => 0x8e6fbf,
+        11 => 0x6e6e6e,
+        12 => 0xb9a54b,
+        13 => 0xe8c547,
+        14 => 0xf2a93b,
+        15 => 0xc08a2e,
+        16 => 0xd9b45b,
+        17 => 0x9c6b3f,
+        19 => 0xb0729a,
+        20 => 0x7a6046,
+        21 => 0xe8f1f8,
+        22 => 0x8891a0,
+        _ => 0x7f8a99,
+    };
+    // Stored red-in-the-low-byte to match the packed RGBA8 vertex format.
+    let [_, r, g, b] = rgb.to_be_bytes();
+    u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16) | 0xff00_0000
 }
 
 /// Position-only instance used by clouds without per-point colours.
@@ -56,6 +143,26 @@ pub(crate) struct PointPosition {
 pub(crate) struct PointInstance {
     pub(crate) pos: [f32; 3],
     pub(crate) color: u32,
+}
+
+/// The two GPU instance layouts share a position, which is all the chunk
+/// preparation below needs of them. Going through this instead of a per-layout
+/// closure lets one generic builder serve both and keeps the position read
+/// inlined.
+pub(crate) trait RenderPoint: bytemuck::Pod + Send + Sync {
+    fn pos(&self) -> [f32; 3];
+}
+
+impl RenderPoint for PointPosition {
+    fn pos(&self) -> [f32; 3] {
+        self.pos
+    }
+}
+
+impl RenderPoint for PointInstance {
+    fn pos(&self) -> [f32; 3] {
+        self.pos
+    }
 }
 
 pub(crate) enum PreparedPointData {
@@ -102,15 +209,43 @@ pub(crate) struct PreparedPointChunk {
     pub(crate) base_spacing: f32,
     pub(crate) bounds_min: glam::Vec3,
     pub(crate) bounds_max: glam::Vec3,
+    /// Culling box fitted to the chunk's points, relative to the cloud origin:
+    /// a tilted slab on sloping ground where the axis-aligned box above would
+    /// be mostly air (see [`fit_chunk_box`]).
+    pub(crate) bounds: OrientedBox,
     /// Small Morton-coherent ranges used for CPU visibility queries without
     /// scanning an entire 256k-point render chunk on every snap poll.
     pub(crate) pick_groups: Vec<PointPickGroup>,
+}
+
+/// What a prepared cloud's instance colour channel holds, which decides how the
+/// classification view is served.
+///
+/// A cloud with classifications but no RGB bakes the classification colours
+/// straight into the channel, because the view it toggles back to is the
+/// cloud's own uniform colour - which the shader applies without touching the
+/// vertex buffer. A cloud that also carries RGB keeps that in the channel and
+/// its classification code in the otherwise unused alpha byte, which the
+/// shader maps through the class palette while the view is on. Neither
+/// toggle touches the vertex buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointColorChannel {
+    /// No colour channel at all: 12-byte instances drawn in the uniform colour.
+    None,
+    /// The file's own per-point RGB.
+    Source,
+    /// ASPRS classification colours.
+    Classification,
 }
 
 pub(crate) struct PreparedPointCloud {
     pub(crate) origin: DVec3,
     pub(crate) chunks: Vec<PreparedPointChunk>,
     pub(crate) colored: bool,
+    pub(crate) color_channel: PointColorChannel,
+    /// Whether the instances' alpha bytes hold classification codes (only
+    /// ever alongside `PointColorChannel::Source`).
+    pub(crate) chunk_classifications: bool,
 }
 
 const POINTS_PER_SPATIAL_CHUNK: usize = 256 * 1024;
@@ -129,7 +264,7 @@ struct MortonPointIndex {
 
 /// Convert source doubles into a spatially coherent, render-ready hierarchy.
 /// This is called by the point-cloud loader, never by the render thread.
-pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, bounds: (DVec3, DVec3)) -> PreparedPointCloud {
+pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, classifications: Option<&[u8]>, bounds: (DVec3, DVec3)) -> PreparedPointCloud {
     let origin = (bounds.0 + bounds.1) * 0.5;
     let extent = (bounds.1 - bounds.0).max(DVec3::splat(f64::EPSILON));
 
@@ -137,40 +272,166 @@ pub(crate) fn prepare_for_render(points: &[DVec3], colors: Option<&[u32]>, bound
     // expensive Morton key exactly once, lets the parallel unstable sort move
     // 16-byte records with cheap u64 comparisons, and avoids both Rayon's
     // sequential cached-key permutation and a full intermediate render-point
-    // allocation. Final f32 positions are written directly into their chunks.
+    // allocation. Widening the record to carry the render instance through the
+    // sort - and so skip the gather below entirely - was measurably worse: the
+    // sort moves each record O(log n) times, the gather touches it once.
     let mut sorted = points
         .par_iter()
         .enumerate()
         .filter(|(_, point)| point.is_finite())
-        .map(|(source_index, point)| {
-            let local = (*point - origin).as_vec3().to_array();
-            MortonPointIndex {
-                key: morton_key(local, origin, bounds.0, extent),
-                source_index,
-            }
+        .map(|(source_index, point)| MortonPointIndex {
+            key: morton_key(*point, bounds.0, extent),
+            source_index,
         })
         .collect::<Vec<_>>();
-    // Include the source index so coincident quantized points retain a stable
-    // order even though the faster unstable parallel sort is used.
-    sorted.par_sort_unstable_by_key(|point| (point.key, point.source_index));
-    if let Some(colors) = colors {
-        PreparedPointCloud {
-            origin,
-            chunks: sorted
-                .par_chunks(POINTS_PER_SPATIAL_CHUNK)
-                .map(|chunk| build_colored_chunk(chunk, points, colors, origin))
-                .collect(),
-            colored: true,
+    split_chunk_range(&mut sorted, extent);
+
+    // Resolve each point's render instance exactly once, here, writing the
+    // result in Morton order. `source_index` bears no relation to Morton order,
+    // so every read is a random access into arrays that run to gigabytes - and
+    // chunk building used to repeat that gather ten times per point, once to
+    // place the point in its LOD prefix and nine more inside the
+    // nearest-neighbour window scan. Doing it once leaves everything downstream
+    // walking chunk-local slices that stay in cache.
+    match (colors, classifications) {
+        (Some(colors), _) => {
+            // Points are drawn opaque, so the alpha byte is free to carry the
+            // classification code the shader colours by in that view.
+            let instances = gather_instances(&sorted, |point| {
+                let color = colors.get(point.source_index).copied().unwrap_or(0xffff_ffff);
+                PointInstance {
+                    pos: (points[point.source_index] - origin).as_vec3().to_array(),
+                    color: match classifications {
+                        Some(codes) => (color & 0x00ff_ffff) | (u32::from(codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED)) << 24),
+                        None => color,
+                    },
+                }
+            });
+            PreparedPointCloud {
+                origin,
+                chunk_classifications: classifications.is_some(),
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Colored),
+                colored: true,
+                color_channel: PointColorChannel::Source,
+            }
         }
-    } else {
-        PreparedPointCloud {
-            origin,
-            chunks: sorted
-                .par_chunks(POINTS_PER_SPATIAL_CHUNK)
-                .map(|chunk| build_uncolored_chunk(chunk, points, origin))
-                .collect(),
-            colored: false,
+        (None, Some(codes)) => {
+            let instances = gather_instances(&sorted, |point| PointInstance {
+                pos: (points[point.source_index] - origin).as_vec3().to_array(),
+                color: classification_color(codes.get(point.source_index).copied().unwrap_or(CLASS_UNCLASSIFIED)),
+            });
+            PreparedPointCloud {
+                origin,
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Colored),
+                colored: true,
+                color_channel: PointColorChannel::Classification,
+                chunk_classifications: false,
+            }
         }
+        (None, None) => {
+            let instances = gather_instances(&sorted, |point| PointPosition {
+                pos: (points[point.source_index] - origin).as_vec3().to_array(),
+            });
+            PreparedPointCloud {
+                origin,
+                chunks: build_chunks(&sorted, &instances, PreparedPointData::Uncolored),
+                colored: false,
+                color_channel: PointColorChannel::None,
+                chunk_classifications: false,
+            }
+        }
+    }
+}
+
+/// Partition `points` in place into chunk-sized kd leaves, as surfaces are
+/// (see `triangulation::spatial_surface_face_order`), then Morton-sort each
+/// leaf for the LOD ordering. Fixed-size runs of one global Morton order were
+/// the old split: a run crossing a high Morton boundary spans far more space
+/// than its points need, so neighbouring chunks' boxes overlapped and a small
+/// view touched several whole chunks. The slice always starts on a chunk
+/// boundary, so cutting after a whole number of chunks keeps both halves
+/// aligned with `build_chunks`' fixed stride.
+fn split_chunk_range(points: &mut [MortonPointIndex], extent: DVec3) {
+    let chunks = points.len().div_ceil(POINTS_PER_SPATIAL_CHUNK);
+    if chunks <= 1 {
+        // Include the source index so coincident quantized points retain a
+        // stable order even though the faster unstable parallel sort is used.
+        // Comparing the fields in place beats a `(u64, usize)` sort key: the
+        // key would be rebuilt on every comparison, and equal Morton keys are
+        // rare enough that the tie-break is almost never reached.
+        points.par_sort_unstable_by(|a, b| a.key.cmp(&b.key).then_with(|| a.source_index.cmp(&b.source_index)));
+        return;
+    }
+    // Quantized cell coordinates decoded from the key, so the split reads
+    // only the compact records rather than gathering source positions.
+    let bounds = |(mut min, mut max): ([u32; 3], [u32; 3]), point: &MortonPointIndex| {
+        for axis in 0..3 {
+            let cell = morton_axis(point.key, axis);
+            min[axis] = min[axis].min(cell);
+            max[axis] = max[axis].max(cell);
+        }
+        (min, max)
+    };
+    let empty = ([u32::MAX; 3], [0; 3]);
+    let (min, max) = points.par_iter().fold(|| empty, bounds).reduce(
+        || empty,
+        |(a_min, a_max), (b_min, b_max)| {
+            (
+                std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+            )
+        },
+    );
+    // Cells are normalized per axis, so compare their spans in world units.
+    let span = |axis: usize| f64::from(max[axis].saturating_sub(min[axis])) * extent[axis];
+    let axis = (0..3).max_by(|&a, &b| span(a).total_cmp(&span(b))).unwrap_or(0);
+    let cut = (chunks / 2) * POINTS_PER_SPATIAL_CHUNK;
+    points.select_nth_unstable_by_key(cut, |point| morton_axis(point.key, axis));
+    let (left, right) = points.split_at_mut(cut);
+    rayon::join(|| split_chunk_range(left, extent), || split_chunk_range(right, extent));
+}
+
+fn gather_instances<T: RenderPoint>(sorted: &[MortonPointIndex], instance: impl Fn(&MortonPointIndex) -> T + Send + Sync) -> Vec<T> {
+    sorted.par_iter().map(instance).collect()
+}
+
+fn build_chunks<T: RenderPoint>(sorted: &[MortonPointIndex], instances: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> Vec<PreparedPointChunk> {
+    sorted
+        .par_chunks(POINTS_PER_SPATIAL_CHUNK)
+        .zip(instances.par_chunks(POINTS_PER_SPATIAL_CHUNK))
+        .map(|(keys, chunk)| build_chunk(keys, chunk, wrap))
+        .collect()
+}
+
+fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], wrap: fn(Vec<T>) -> PreparedPointData) -> PreparedPointChunk {
+    // Measured while the chunk is still in Morton order, and by walking it
+    // forwards, before the LOD permutation below scrambles it.
+    let base_spacing = chunk_base_spacing(chunk);
+    let (indices, level_counts) = density_aware_prefix_indices(keys);
+    let ordered = indices.iter().map(|&index| chunk[index]).collect::<Vec<_>>();
+    let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(T::pos));
+    let chunk_origin = ((bounds_min + bounds_max) * 0.5).as_dvec3();
+    let (center, axes, half_extents) = fit_chunk_box(
+        chunk,
+        |point| Vec3::from_array(point.pos()).as_dvec3() - chunk_origin,
+        &[],
+        chunk_origin,
+        (bounds_max - bounds_min).as_dvec3(),
+    );
+    let bounds = OrientedBox {
+        center: center.as_vec3(),
+        axes,
+        half_extents,
+    };
+    let pick_groups = build_pick_groups(&ordered, level_counts, T::pos);
+    PreparedPointChunk {
+        data: wrap(ordered),
+        level_counts,
+        base_spacing,
+        bounds_min,
+        bounds_max,
+        bounds,
+        pick_groups,
     }
 }
 
@@ -190,42 +451,6 @@ pub(crate) fn finite_bounds(points: &[DVec3]) -> Option<(DVec3, DVec3)> {
     (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
-fn build_colored_chunk(sorted: &[MortonPointIndex], source_points: &[DVec3], colors: &[u32], origin: DVec3) -> PreparedPointChunk {
-    let (ordered, level_counts) = lod_prefix_order(sorted, |point| {
-        let source_index = point.source_index;
-        PointInstance {
-            pos: (source_points[source_index] - origin).as_vec3().to_array(),
-            color: colors.get(source_index).copied().unwrap_or(0xffff_ffff),
-        }
-    });
-    let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(|point| point.pos));
-    let pick_groups = build_pick_groups(&ordered, level_counts, |point| point.pos);
-    PreparedPointChunk {
-        data: PreparedPointData::Colored(ordered),
-        level_counts,
-        base_spacing: chunk_base_spacing(sorted, source_points, origin),
-        bounds_min,
-        bounds_max,
-        pick_groups,
-    }
-}
-
-fn build_uncolored_chunk(sorted: &[MortonPointIndex], source_points: &[DVec3], origin: DVec3) -> PreparedPointChunk {
-    let (ordered, level_counts) = lod_prefix_order(sorted, |point| PointPosition {
-        pos: (source_points[point.source_index] - origin).as_vec3().to_array(),
-    });
-    let (bounds_min, bounds_max) = local_bounds(ordered.iter().map(|point| point.pos));
-    let pick_groups = build_pick_groups(&ordered, level_counts, |point| point.pos);
-    PreparedPointChunk {
-        data: PreparedPointData::Uncolored(ordered),
-        level_counts,
-        base_spacing: chunk_base_spacing(sorted, source_points, origin),
-        bounds_min,
-        bounds_max,
-        pick_groups,
-    }
-}
-
 /// Estimate the full-resolution point spacing of a Morton-sorted chunk. Morton
 /// order places spatial neighbours adjacently, so the nearest of a small window
 /// of successors approximates each point's true nearest neighbour without a
@@ -236,27 +461,34 @@ fn build_uncolored_chunk(sorted: &[MortonPointIndex], source_points: &[DVec3], o
 /// also rejects the occasional large jump where the curve crosses a cell
 /// boundary.
 const BASE_SPACING_COVERAGE_PERCENTILE: f32 = 0.9;
+/// Window measurements taken per chunk. The percentile describes the chunk's
+/// distance distribution, so a strided sample estimates it just as well as
+/// measuring every point: 16k draws put the 90th percentile within a fraction
+/// of a percent, far inside the factor-of-two steps between LOD levels it
+/// feeds. Morton order makes a strided sample spatially spread, not clustered.
+const BASE_SPACING_SAMPLES: usize = 16 * 1024;
 
-fn chunk_base_spacing(sorted: &[MortonPointIndex], source_points: &[DVec3], origin: DVec3) -> f32 {
+fn chunk_base_spacing<T: RenderPoint>(chunk: &[T]) -> f32 {
     const NEIGHBOUR_WINDOW: usize = 8;
-    if sorted.len() < 2 {
+    if chunk.len() < 2 {
         return 0.0;
     }
-    let position = |point: &MortonPointIndex| (source_points[point.source_index] - origin).as_vec3();
-    let mut spacings = sorted
-        .iter()
-        .enumerate()
-        .filter_map(|(index, point)| {
-            let here = position(point);
-            let window_end = (index + 1 + NEIGHBOUR_WINDOW).min(sorted.len());
-            sorted[index + 1..window_end]
-                .iter()
-                .map(|other| here.distance_squared(position(other)))
-                .min_by(f32::total_cmp)
-                .filter(|distance| distance.is_finite())
-                .map(f32::sqrt)
-        })
-        .collect::<Vec<_>>();
+    let stride = chunk.len().div_ceil(BASE_SPACING_SAMPLES).max(1);
+    let mut spacings = Vec::with_capacity((chunk.len() - 1).div_ceil(stride));
+    for index in (0..chunk.len() - 1).step_by(stride) {
+        let here = Vec3::from_array(chunk[index].pos());
+        let window_end = (index + 1 + NEIGHBOUR_WINDOW).min(chunk.len());
+        // Squared distances between finite positions are never NaN, so plain
+        // `f32::min` is enough and lowers to one `minss`. The `total_cmp`
+        // ordering this replaces cost more than the distances themselves.
+        let mut nearest = f32::INFINITY;
+        for other in &chunk[index + 1..window_end] {
+            nearest = nearest.min(here.distance_squared(Vec3::from_array(other.pos())));
+        }
+        if nearest.is_finite() {
+            spacings.push(nearest.sqrt());
+        }
+    }
     if spacings.is_empty() {
         return 0.0;
     }
@@ -291,12 +523,6 @@ fn build_pick_groups<T>(points: &[T], level_counts: [u32; POINT_CLOUD_LOD_LEVELS
 /// points cover every LOD used for an initial GPU upload; finer prefixes fall
 /// back to the inexpensive shuffled-Morton order because density differences
 /// matter progressively less as a chunk approaches full resolution.
-fn lod_prefix_order<U: Copy>(points: &[MortonPointIndex], map: impl Fn(&MortonPointIndex) -> U + Copy) -> (Vec<U>, [u32; POINT_CLOUD_LOD_LEVELS]) {
-    let (indices, level_counts) = density_aware_prefix_indices(points);
-    let ordered = indices.into_iter().map(|index| map(&points[index])).collect();
-    (ordered, level_counts)
-}
-
 const DENSITY_AWARE_PREFIX_POINTS: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -448,14 +674,23 @@ fn local_bounds(points: impl Iterator<Item = [f32; 3]>) -> (glam::Vec3, glam::Ve
         })
 }
 
-fn morton_key(local: [f32; 3], origin: DVec3, min: DVec3, extent: DVec3) -> u64 {
-    let world = DVec3::from_array(local.map(f64::from)) + origin;
-    let normalized = ((world - min) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+fn morton_key(point: DVec3, min: DVec3, extent: DVec3) -> u64 {
+    let normalized = ((point - min) / extent).clamp(DVec3::ZERO, DVec3::ONE);
     let scale = ((1u32 << 21) - 1) as f64;
     let x = (normalized.x * scale) as u32;
     let y = (normalized.y * scale) as u32;
     let z = (normalized.z * scale) as u32;
     interleave_21(x) | (interleave_21(y) << 1) | (interleave_21(z) << 2)
+}
+
+/// One axis's quantized coordinate back out of a [`morton_key`].
+fn morton_axis(key: u64, axis: usize) -> u32 {
+    let mut value = (key >> axis) & 0x1249_2492_4924_9249;
+    value = (value | value >> 2) & 0x10c3_0c30_c30c_30c3;
+    value = (value | value >> 4) & 0x100f_00f0_0f00_f00f;
+    value = (value | value >> 8) & 0x001f_0000_ff00_00ff;
+    value = (value | value >> 16) & 0x001f_0000_0000_ffff;
+    ((value | value >> 32) & 0x1f_ffff) as u32
 }
 
 fn interleave_21(value: u32) -> u64 {

@@ -9,10 +9,10 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        Command, ItemRef, ItemStyle, SceneEntityId,
+        Command, ItemRef, ItemStyle, MemberKind, SceneEntityId,
         block_model::{
             BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RegularBlockBounds, RenderableBlockIndices,
-            compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
+            compute_world_bounds, is_no_data_sentinel, numeric_variable_default, quantize_micrometres,
         },
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, DrillValue},
         formats::{
@@ -218,7 +218,7 @@ impl<'a> App<'a> {
         self.next_block_model_id += 1;
         let mut open_model = OpenBlockModel {
             id,
-            state: crate::model::project::ProjectItemState::dirty(loaded.source.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::BlockModel, loaded.source.path.file_name().map(|name| name.to_string_lossy().into_owned())),
             name,
             model: loaded.model,
             blocks: loaded.blocks,
@@ -374,13 +374,12 @@ impl<'a> App<'a> {
         }
     }
 
-    pub(crate) fn open_create_block_model_dialog(&mut self, preferred: Option<DrillHoleId>) {
-        let selected = preferred
-            .and_then(|id| self.drill_holes.iter().find(|dataset| dataset.id == id))
-            .or_else(|| self.drill_holes.first());
+    /// Open Create Block Model on one selected drill-hole dataset, seeding the
+    /// grid and variogram from what that dataset holds.
+    pub(crate) fn open_create_block_model_dialog(&mut self, drill_hole_id: DrillHoleId) {
         self.editor.block_model_create_open = true;
-        self.editor.kriging_drill_hole_id = selected.map(|dataset| dataset.id);
-        let Some(dataset) = selected else {
+        self.editor.kriging_drill_hole_id = Some(drill_hole_id);
+        let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == drill_hole_id) else {
             return;
         };
         self.editor.kriging_variables = dataset
@@ -532,17 +531,6 @@ impl<'a> App<'a> {
     /// The explorer's properties panel shows a block model's colours and slice
     /// only while it is selected, and clicking it in the tree is the other way
     /// (besides picking it in the viewport) to say which one.
-    pub(crate) fn select_block_model(&mut self, id: BlockModelId) {
-        if !self.block_models.iter().any(|model| model.id == id && model.state.loaded) {
-            return;
-        }
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(SceneEntityId::BlockModel(id));
-        self.editor.viewport_block_model_id = Some(id);
-        self.invalidate_geometry();
-        self.invalidate_overlay();
-    }
-
     pub(crate) fn close_block_model(&mut self, id: BlockModelId) {
         self.set_item_loaded(crate::model::ItemRef::BlockModel(id), false);
     }
@@ -558,9 +546,6 @@ impl<'a> App<'a> {
         self.editor.block_model_table_pages.remove(&id);
         self.editor.viewport_block_model_id = self.editor.viewport_block_model_id.filter(|active| *active != id);
         self.editor.block_model_variable_ranges.retain(|(model_id, _), _| *model_id != id);
-        if self.active_block_model == Some(id) {
-            self.active_block_model = None;
-        }
         self.invalidate_topology_bounds_and_redraw();
     }
 
@@ -614,7 +599,7 @@ impl<'a> App<'a> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, &[]);
         };
         self.spawn_job_reporting_progress(
             crate::i18n::tr!(literal = "Building ore mesh…"),
@@ -899,7 +884,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
         let planes = [block.upper.x, block.lower.x, block.upper.y, block.lower.y, block.upper.z, block.lower.z];
         for (face_index, plane) in planes.into_iter().enumerate() {
             let face = block_face_rect(block, face_index);
-            plane_entries[face_index].entry(quantize(plane)).or_default().push(FaceCandidate {
+            plane_entries[face_index].entry(quantize_micrometres(plane)).or_default().push(FaceCandidate {
                 block_index: index,
                 rect: CoveredRect {
                     u_min: face.u_min,
@@ -918,7 +903,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
         for (face_index, plane_index) in opposite_planes.iter().enumerate() {
             let face = block_face_rect(block, face_index);
             let mut covered = Vec::new();
-            if let Some(indexed_faces) = plane_index.get(&quantize(face.plane)) {
+            if let Some(indexed_faces) = plane_index.get(&quantize_micrometres(face.plane)) {
                 let query = CoveredRect {
                     u_min: face.u_min,
                     u_max: face.u_max,
@@ -943,7 +928,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
                 }
             }
             exposed_planes[face_index]
-                .entry(quantize(face.plane))
+                .entry(quantize_micrometres(face.plane))
                 .or_insert_with(|| (face.plane, Vec::new()))
                 .1
                 .extend(uncovered_face_rects(face, &covered));
@@ -1182,10 +1167,5 @@ fn add_block_face_tile(
 }
 
 fn point_key(point: DVec3) -> [u64; 3] {
-    [quantize(point.x), quantize(point.y), quantize(point.z)]
-}
-
-fn quantize(value: f64) -> u64 {
-    let rounded = (value * 1_000_000.0).round();
-    if rounded == 0.0 { 0.0_f64.to_bits() } else { rounded.to_bits() }
+    [quantize_micrometres(point.x), quantize_micrometres(point.y), quantize_micrometres(point.z)]
 }

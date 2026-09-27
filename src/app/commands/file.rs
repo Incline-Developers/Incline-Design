@@ -246,6 +246,41 @@ fn save_label(kind: &PendingSaveKind, path: &Path) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 type LayerSnapshot = (usize, Layer, Vec<(usize, Object)>);
 
+/// Whether the project moved on while a layer-reload job (discard changes)
+/// was running in the background.
+///
+/// Checking `document.revision()` alone misses folder commands: `AddFolder`,
+/// `RenameFolder` and `DeleteFolder` only advance `OpenProject::content`'s
+/// epoch, never the document revision, so both must be compared.
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_is_stale(document_revision: u64, content_epoch: u64, project: &project::OpenProject) -> bool {
+    project.project.document.revision() != document_revision || project.content.epoch() != content_epoch
+}
+
+/// Map a reloaded layer's folder membership from the file onto the live
+/// folder registry, by name, creating nothing.
+///
+/// The live registry is authoritative for which folders currently exist:
+/// merging the file's list into it would resurrect a folder the user
+/// deleted since the last save. A file-only folder is omitted, so its
+/// members land at the section root instead of being resurrected.
+#[cfg(not(target_arch = "wasm32"))]
+fn reloaded_folder_map(live: &crate::model::FolderRegistry, from_file: &crate::model::FolderRegistry) -> std::collections::HashMap<crate::model::FolderId, crate::model::FolderId> {
+    from_file
+        .folders(crate::model::SectionKind::Designs)
+        .iter()
+        .filter_map(|folder| live.by_name(crate::model::SectionKind::Designs, &folder.name).map(|live_id| (folder.id, live_id)))
+        .collect()
+}
+
+/// Whether `live`'s folder names, per section, differ from what `from_file`
+/// records. `open_project` marks a reload saved against whichever registry
+/// it gets, so a live-only difference must be re-flagged as unsaved.
+#[cfg(not(target_arch = "wasm32"))]
+fn folders_diverge_from_file(live: &crate::model::FolderRegistry, from_file: &crate::model::FolderRegistry) -> bool {
+    crate::model::SectionKind::ALL.into_iter().any(|section| live.names(section) != from_file.names(section))
+}
+
 impl<'a> App<'a> {
     /// Restore matching unloaded layers before merging into them, so incoming
     /// objects cannot shadow or bypass a layer's backed payload.
@@ -267,8 +302,11 @@ impl<'a> App<'a> {
         let project = &mut self.workspace.projects[index];
         let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
         let mut total = 0;
+        // DXF carries no folders of its own, so every incoming layer lands at
+        // the section root, matching an empty membership map.
+        let no_folders = std::collections::HashMap::new();
         for (name, document) in parsed {
-            let added = project::merge_document(&mut project.project.document, &document);
+            let added = project::merge_document(&mut project.project.document, &document, &no_folders);
             total += added;
             userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %name%", added = added, name = name));
         }
@@ -691,7 +729,7 @@ impl<'a> App<'a> {
                     project.project.metadata.name = previous_name.clone();
                     (previous_name, snapshot_hash, snapshot_layer_hashes)
                 };
-                let mut snapshot = self.omf_export_snapshot()?;
+                let mut snapshot = self.omf_save_snapshot()?;
                 let asset_token = self.project_asset_save_token();
                 snapshot.name = new_name;
                 let kind = PendingSaveKind::Project {
@@ -1704,7 +1742,7 @@ impl<'a> App<'a> {
                 .map(|project| project.runtime_id)
                 .filter(|runtime_id| self.project_content_is_dirty(*runtime_id))
             {
-                Some(runtime_id) => match self.omf_export_snapshot() {
+                Some(runtime_id) => match self.omf_save_snapshot() {
                     Ok(snapshot) => match write_recovery_copy(snapshot, runtime_id, &recovery_dir) {
                         Ok(report) => {
                             for path in &report.written {
@@ -1899,7 +1937,7 @@ impl<'a> App<'a> {
                 let project = &self.workspace.projects[index];
                 (project.current_content_hash(), project.current_layer_hashes())
             };
-            let snapshot = self.omf_export_snapshot()?;
+            let snapshot = self.omf_save_snapshot()?;
             let asset_token = self.project_asset_save_token();
             let kind = PendingSaveKind::Project {
                 runtime_id,
@@ -1942,7 +1980,7 @@ impl<'a> App<'a> {
             (project.current_content_hash(), project.current_layer_hashes())
         };
         let asset_token = self.project_asset_save_token();
-        let snapshot = self.omf_export_snapshot()?;
+        let snapshot = self.omf_save_snapshot()?;
         let name = snapshot.name.clone();
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
         self.browser_saves_pending.insert(runtime_id);
@@ -1950,7 +1988,9 @@ impl<'a> App<'a> {
         // Encoding has to run on a worker: writing OMF reads back every item
         // the eviction pass unloaded, and only a worker may wait on that read.
         // The IndexedDB write stays here, with the event loop it reports to.
-        let compute = move |_cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0));
+        let compute = move |_cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
+            formats::omf::to_bytes(snapshot, formats::omf::Compression::Archive, &progress.phase(0.0, 1.0))
+        };
         let apply = move |_app: &mut App, encoded: Result<Vec<u8>>| {
             let record = encoded.map(|omf_bytes| crate::app::web_storage::BrowserProjectRecord {
                 id: project_id,
@@ -2127,7 +2167,6 @@ impl<'a> App<'a> {
             } else {
                 self.close_project(runtime_id);
             }
-            return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
@@ -2323,6 +2362,7 @@ impl<'a> App<'a> {
             .map(|layer| layer.name.clone())
             .unwrap_or_else(|| tr!(literal = "Layer"));
         let document_revision = project.project.document.revision();
+        let content_epoch = project.content.epoch();
 
         // Convert the current document back to portable ids, then retain only
         // snapshots for other dirty layers. The target is deliberately omitted
@@ -2335,6 +2375,10 @@ impl<'a> App<'a> {
             .collect::<std::collections::HashSet<_>>();
         let mut portable_current = project.project.clone();
         portable_current.document.apply_runtime_namespace(0);
+        // The reload below has to build on this same live registry, not a
+        // fresh one decoded from the file, or `preserved_layers`' folder ids
+        // would dangle.
+        let live_folders = portable_current.folders.clone();
         let preserved_deferred = portable_current.document.deferred_layers.clone();
         let preserved_layers: Vec<LayerSnapshot> = portable_current
             .document
@@ -2365,13 +2409,22 @@ impl<'a> App<'a> {
             let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
             let mut design = project::new_empty(Some(path.clone()));
             design.metadata.name = bundle.project_name;
+            // The live registry, not the file's, decides which folders exist:
+            // a folder deleted since the last save must stay gone even
+            // though the file on disk still names it.
+            design.folders = live_folders;
+            let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);
             for imported in bundle.designs {
-                project::merge_document_preserve_ids(&mut design.document, &imported.document);
+                project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
             }
-            Ok((path, design))
+            // `open_project` below is about to mark this registry saved. It is
+            // the live one, not the file's, so capture whether the two differ
+            // while both are still in hand; `apply` re-dirties after the fact.
+            let folders_diverge = folders_diverge_from_file(&design.folders, &bundle.folders);
+            Ok((path, design, folders_diverge))
         };
-        let apply = move |app: &mut App, result: Result<(PathBuf, project::ProjectFile)>| {
-            let (path, project) = match result {
+        let apply = move |app: &mut App, result: Result<(PathBuf, project::ProjectFile, bool)>| {
+            let (path, project, folders_diverge) = match result {
                 Ok(loaded) => loaded,
                 Err(error) => {
                     userspace_warn!("{}", tr_format!(literal = "Could not reload layer from disk: %error%", error = format!("{error:#}")));
@@ -2381,7 +2434,7 @@ impl<'a> App<'a> {
             let Some(index) = app.workspace.project_index_for_runtime_id(runtime_id) else {
                 return;
             };
-            if app.workspace.projects[index].project.document.revision() != document_revision {
+            if reload_is_stale(document_revision, content_epoch, &app.workspace.projects[index]) {
                 userspace_warn!(
                     "{}",
                     tr!(literal = "Layer discard was cancelled because the project changed while the project was reloading")
@@ -2395,6 +2448,12 @@ impl<'a> App<'a> {
                     return;
                 }
             };
+            // `open_project` just marked the live folder registry saved. Put
+            // that folder work back into unsaved state so it is not lost
+            // silently the next time the project closes.
+            if folders_diverge {
+                replacement.touch_content();
+            }
             for (layer_index, layer, objects) in preserved_layers {
                 let id = layer.id;
                 replacement.project.document.replace_layer_snapshot(layer_index, layer, objects);
@@ -2625,7 +2684,7 @@ fn sanitize_file_stem(name: &str) -> String {
 /// already-running file manager and its exit says nothing useful. Windows
 /// `explorer.exe` in particular exits non-zero on success.
 #[cfg(not(target_arch = "wasm32"))]
-fn show_in_file_manager(path: &Path) -> Result<()> {
+pub(crate) fn show_in_file_manager(path: &Path) -> Result<()> {
     use std::process::Command;
 
     #[cfg(target_os = "windows")]

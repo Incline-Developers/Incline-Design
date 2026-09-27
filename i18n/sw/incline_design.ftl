@@ -79,7 +79,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Unda Utatuzi
-tri-create-help = Bofya vitu kwenye mwonekano ili kuchagua/kuacha kuchagua. Buruta ili kuchagua kwa sanduku.
 tri-create-type-label = Aina ya utatuzi
 tri-create-type-help =
     Uso wazi huunda karatasi ya mtindo wa ardhi. Kigumu huunda mfumo
@@ -89,11 +88,10 @@ tri-create-output-name-help = Jina litakalopewa utatuzi utakaozalishwa.
 tri-create-output-name-hint = jina la utatuzi
 tri-create-run = Tatua (Triangulate)
 
-tri-selection-none = Hakuna vitu vilivyochaguliwa bado.
 tri-selection-selected = { $summary } vimechaguliwa
 
-tri-type-open-surface = Uso wazi
-tri-type-solid-closed = Kigumu – kimefungwa kabisa
+tri-type-open-surface = Uso
+tri-type-solid-closed = Kigumu
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". Each noun is pluralised
 # by its own count so languages with more than two plural forms read correctly.
@@ -146,7 +144,6 @@ tri-estimated-memory = Kumbukumbu ya juu inayokadiriwa ~{ $estimate }. { $detail
 block-grid-summary = Gridi: { $x } × { $y } × { $z } = vitalu { $count }
 status-selected = Vilivyochaguliwa: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Vipande: { $rendered }/{ $total } ({ $culled } vimeondolewa)
 status-clip = Kata karibu/mbali/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -212,7 +209,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Chagua faili au faili za chanzo za kuingiza.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Chagua chanzo hiki kwa kubofya uso uliopakiwa kwenye mwonekano
 literal-choose-9e53070883acbe06 = Chagua...
-literal-chunks-d8bf831735fec9eb = Vipande: --
 literal-clear-b4f1dffbb6be6302 = Futa
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Futa Umbile la Utatuzi Hai
 literal-clear-raster-ef94c7849961e88f = Futa Rasta
@@ -899,10 +895,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Chagua tabaka
 literal-set-axis-e3f98268c98bcfa0 = Weka %axis%
 literal-axis-value-d5e196b32161897d = thamani ya %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Pakua toleo asili la bure kwenye tovuti yetu ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Imehifadhiwa kwenye hifadhi ya kivinjari
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Haijahifadhiwa kwenye hifadhi ya kivinjari
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Umbali kwenye mteremko
 literal-horizontal-distance-643bfda0222c6424 = Umbali wa mlalo
@@ -1217,7 +1210,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Jenga u
 literal-restore-the-full-model-range-23c0898e378be1df = Rejesha wigo kamili wa mfano
 literal-axis-minimum-8a51a7bda9747700 = kima cha chini cha %axis%
 literal-axis-maximum-fa149d72f9564fca = kima cha juu cha %axis%
-literal-name-no-range-4f328990327afd0b = %name% (hakuna wigo)
 literal-choose-a-variable-62b267fd35bdce31 = Chagua kigezo
 literal-no-usable-range-6bd2da592be04b0c = (hakuna wigo unaotumika)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Hariri rangi inayotumika kwa thamani tupu
@@ -1524,8 +1516,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Chagua d
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Bofya mstari wa pointi nyingi uliofungwa wa kutumia kama umbo la ulipuaji
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc kughairi
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Bofya kola ili kuongeza au kuhariri kidokezo cha kuanzia
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Hakimiliki (c) 2026 Leo Timmins, Lucas Timmins na wachangiaji wa Incline Design. Ruhusa inatolewa hapa, bila malipo, kwa mtu yeyote anayepata nakala ya programu hii kuishughulikia bila kizuizi, kulingana na masharti ya Leseni ya MIT.
+
     Incline Design inatolewa "JINSI ILIVYO", BILA DHAMANA YA AINA YOYOTE, WAZI AU YA KUDOKEZWA, ikiwemo lakini bila kikomo kwa dhamana za UUZAJI, UFAAO KWA KUSUDI MAALUM na KUTOKIUKA.
 literal-count-connector-s-b0f5c43e0c1c25ff = viunganishi %count%
 literal-count-hole-s-d9bc7e624fadff18 = mashimo %count%

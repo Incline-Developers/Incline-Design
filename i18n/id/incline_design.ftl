@@ -54,17 +54,15 @@ ws-menubar-design-insert-point-at-elevation = Di ketinggian
 ws-menubar-design-move-to = Pindah ke
 ws-menubar-design-create-triangulation = Buat triangulasi
 tri-create-title = Buat triangulasi
-tri-create-help = Klik objek di viewport untuk memilih/menghapus. Seret ke kotak pilih.
 tri-create-type-label = Jenis triangulasi
 tri-create-type-help = Permukaan terbuka menciptakan lembaran gaya medan. Solid menciptakan jaring yang sepenuhnya tertutup dan membutuhkan input yang dapat membentuk batas tahan air.
 tri-create-output-name = Nama output
 tri-create-output-name-help = Nama yang diberikan untuk triangulasi yang dihasilkan.
 tri-create-output-name-hint = nama triangulasi
 tri-create-run = Triangulasi
-tri-selection-none = Belum ada objek yang dipilih.
 tri-selection-selected = { $summary } dipilih
-tri-type-open-surface = Permukaan terbuka
-tri-type-solid-closed = Solid – sepenuhnya tertutup
+tri-type-open-surface = Permukaan
+tri-type-solid-closed = Solid
 about-title = Tentang { $app }
 drill-hole-colour-title = Warna Lubang Bor: { $name }
 drill-hole-colour-stop = Stop { $index }
@@ -81,7 +79,6 @@ tri-estimated-memory = Diperkirakan memori puncak ~{ $estimate }. { $detail }
 block-grid-summary = Jaringan: { $x } × { $y } × { $z } = { $count } blok
 status-selected = Dipilih: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Bagian: { $rendered }/{ $total } ({ $culled } ditumbuk)
 status-clip = Klip dekat/jauh/Δ: { $near } / { $far } / { $delta } m
 
 ## Selection counts
@@ -172,7 +169,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Pilih file sumber atau file untuk diimpor.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Pilih input ini dengan mengklik permukaan yang dimuat di viewport
 literal-choose-9e53070883acbe06 = Pilihlah...
-literal-chunks-d8bf831735fec9eb = Bagian: --
 literal-clear-b4f1dffbb6be6302 = Hapus
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Hapus Tekstur Triangulasi Aktif
 literal-clear-raster-ef94c7849961e88f = Hapus Raster
@@ -885,10 +881,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% %kind%
 literal-choose-a-layer-b780e9cd371a31d2 = Pilih lapisan
 literal-set-axis-e3f98268c98bcfa0 = Atur %axis%
 literal-axis-value-d5e196b32161897d = Nilai %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Unduh versi native gratis di situs web kami ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Disimpan di penyimpanan peramban
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Tidak disimpan di penyimpanan peramban
 literal-distance-along-slope-9f62268eebab148c = Jarak sepanjang lereng
 literal-horizontal-distance-643bfda0222c6424 = Jarak horizontal
 literal-height-change-2cc1b51980081e52 = Perubahan tinggi
@@ -1180,7 +1173,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Bangun 
 literal-restore-the-full-model-range-23c0898e378be1df = Pulihkan rentang model penuh
 literal-axis-minimum-8a51a7bda9747700 = Minimum %axis%
 literal-axis-maximum-fa149d72f9564fca = Maksimum %axis%
-literal-name-no-range-4f328990327afd0b = %name% (tanpa rentang)
 literal-choose-a-variable-62b267fd35bdce31 = Pilih variabel
 literal-no-usable-range-6bd2da592be04b0c = (tidak ada rentang yang dapat digunakan)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Edit warna yang digunakan untuk nilai kosong
@@ -1487,8 +1479,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Pilih da
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Klik polyline tertutup untuk digunakan sebagai bentuk peledakan
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc membatalkan
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Klik kerah untuk menambah atau mengedit titik inisiasi
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% konektor
 literal-count-hole-s-d9bc7e624fadff18 = %count% lubang

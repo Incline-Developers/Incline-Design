@@ -17,7 +17,7 @@ pub(super) fn build_triangulation_indexes(
     progress.set_fraction(0.6);
     let edges = crate::model::triangulation::unique_edges(mesh);
     progress.set_fraction(0.8);
-    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::morton_surface_face_order(mesh));
+    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(mesh));
     progress.finish();
     (spatial, edges, surface_face_order)
 }
@@ -62,7 +62,7 @@ impl<'a> App<'a> {
                     let name = crate::model::project::unique_item_name(loaded.name, app.triangulations.iter().map(|item| item.name.as_str()));
                     app.triangulations.push(OpenTriangulation {
                         id,
-                        state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
                         name,
                         mesh: loaded.mesh,
                         spatial: loaded.spatial,
@@ -170,7 +170,7 @@ impl<'a> App<'a> {
                     let name = crate::model::project::unique_item_name(loaded.name, self.triangulations.iter().map(|item| item.name.as_str()));
                     self.triangulations.push(OpenTriangulation {
                         id,
-                        state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
                         name,
                         mesh: loaded.mesh,
                         spatial: loaded.spatial,
@@ -213,30 +213,6 @@ impl<'a> App<'a> {
         }
 
         self.pending_triangulation_loads = still_pending;
-    }
-
-    pub(crate) fn activate_triangulation(&mut self, id: TriangulationId) {
-        let Some(tri) = self.triangulations.iter().find(|tri| tri.id == id) else {
-            return;
-        };
-        let handle = tri.entity_id();
-        if self.active_triangulation == Some(id) && self.editor.selected_handles.contains(&handle) {
-            self.active_triangulation = None;
-            self.editor.selected_handles.remove(&handle);
-            userspace_log!("{}", tr_format!(literal = "Deselected triangulation '%name%'", name = tri.name));
-            self.request_topology_redraw();
-            return;
-        }
-        let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
-        self.active_triangulation = Some(id);
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(handle);
-        userspace_log!("{}", tr_format!(literal = "Activated triangulation '%name%'", name = tri.name));
-        if cleared_object_selection {
-            self.invalidate_geometry();
-        } else {
-            self.request_topology_redraw();
-        }
     }
 
     pub(crate) fn close_triangulation(&mut self, id: TriangulationId) {
@@ -290,7 +266,6 @@ impl<'a> App<'a> {
         if self.editor.tri_cut_poly_tri_id == Some(id) {
             self.editor.tri_cut_poly_tri_id = None;
             self.editor.tri_cut_poly_open = false;
-            self.editor.tri_cut_poly_awaiting_pick = false;
         }
         if self.editor.tri_cut_z_tri_id == Some(id) {
             self.editor.tri_cut_z_tri_id = None;
@@ -331,12 +306,17 @@ impl<'a> App<'a> {
     }
     /// Apply the result of a background job that produces one triangulation
     /// with a single completion log line: log + insert on success, warn on
-    /// failure. Shared by the backgrounded cut/create paths.
-    pub(crate) fn apply_generated_triangulation_job(&mut self, result: Result<crate::model::triangulation::GeneratedTriangulationLog>) {
+    /// failure. Shared by the backgrounded cut/create paths. `unload` names
+    /// the sources the result replaces; they are unloaded only on success,
+    /// once the job has finished and closing them can no longer cancel it.
+    pub(crate) fn apply_generated_triangulation_job(&mut self, result: Result<crate::model::triangulation::GeneratedTriangulationLog>, unload: &[TriangulationId]) {
         match result {
             Ok(log) => {
                 userspace_log!("{}", log.message);
                 self.insert_generated_triangulation(log.generated);
+                for &id in unload {
+                    self.close_triangulation(id);
+                }
             }
             Err(err) => {
                 let message = format!("{err:#}");
@@ -368,7 +348,7 @@ impl<'a> App<'a> {
         let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.triangulations.push(OpenTriangulation {
             id,
-            state: crate::model::project::ProjectItemState::dirty(None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None),
             name: name.clone(),
             mesh,
             spatial,
@@ -418,7 +398,7 @@ pub(crate) fn build_generated_triangulation(
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(tri_vertices, tri_faces)?;
     let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
     let edges = build_edges(&mesh);
-    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::morton_surface_face_order(&mesh));
+    let surface_face_order = std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     Ok(crate::model::triangulation::GeneratedTriangulation {
         name,
         mesh: std::sync::Arc::new(mesh),

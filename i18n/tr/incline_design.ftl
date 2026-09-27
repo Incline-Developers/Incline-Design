@@ -87,7 +87,6 @@ confirm-delete-product =
 ## Üçgenleme Oluştur iletişim kutusu
 
 tri-create-title = Üçgenleme Oluştur
-tri-create-help = Seçmek/seçimi kaldırmak için görüntü alanındaki nesnelere tıklayın. Kutu seçimi için sürükleyin.
 tri-create-type-label = Üçgenleme türü
 tri-create-type-help =
     Açık yüzey, arazi tarzı bir levha oluşturur. Katı, tam kapalı bir ağ
@@ -97,11 +96,10 @@ tri-create-output-name-help = Oluşturulan üçgenlemeye atanacak ad.
 tri-create-output-name-hint = üçgenleme adı
 tri-create-run = Üçgenle
 
-tri-selection-none = Henüz nesne seçilmedi.
 tri-selection-selected = { $summary } seçildi
 
-tri-type-open-surface = Açık yüzey
-tri-type-solid-closed = Katı – tamamen kapalı
+tri-type-open-surface = Yüzey
+tri-type-solid-closed = Katı
 
 # Seçim özeti parçaları, örn. "3 çizgi, 1 nokta". Her ad kendi sayısına göre
 # çoğullaştırılır; böylece ikiden fazla çoğul biçimi olan diller de doğru okunur.
@@ -154,7 +152,6 @@ tri-estimated-memory = Tahmini tepe bellek kullanımı ~{ $estimate }. { $detail
 block-grid-summary = Izgara: { $x } × { $y } × { $z } = { $count } blok
 status-selected = Seçili: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Yığın: { $rendered }/{ $total } ({ $culled } elendi)
 status-clip = Kırpma yakın/uzak/Δ: { $near } / { $far } / { $delta } m
 
 ## High-frequency source literals
@@ -220,7 +217,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = İçe aktarılacak kaynak dosyayı veya dosyaları seçin.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Görüntü alanında yüklü bir yüzeye tıklayarak bu girdiyi seçin
 literal-choose-9e53070883acbe06 = Seç...
-literal-chunks-d8bf831735fec9eb = Yığın: --
 literal-clear-b4f1dffbb6be6302 = Temizle
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Etkin Üçgenleme Dokusunu Temizle
 literal-clear-raster-ef94c7849961e88f = Rasteri Temizle
@@ -907,10 +903,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Bir katman seçin
 literal-set-axis-e3f98268c98bcfa0 = %axis% Ayarla
 literal-axis-value-d5e196b32161897d = %axis% değeri
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Ücretsiz masaüstü sürümünü web sitemizden indirin ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Tarayıcı deposunda kaydedildi
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Tarayıcı deposunda kaydedilmedi
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Şev boyunca mesafe
 literal-horizontal-distance-643bfda0222c6424 = Yatay mesafe
@@ -1225,7 +1218,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Bu değ
 literal-restore-the-full-model-range-23c0898e378be1df = Tam model aralığını geri yükle
 literal-axis-minimum-8a51a7bda9747700 = %axis% minimum
 literal-axis-maximum-fa149d72f9564fca = %axis% maksimum
-literal-name-no-range-4f328990327afd0b = %name% (aralık yok)
 literal-choose-a-variable-62b267fd35bdce31 = Bir değişken seçin
 literal-no-usable-range-6bd2da592be04b0c = (kullanılabilir aralık yok)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Boş değerler için kullanılan rengi düzenle
@@ -1534,8 +1526,9 @@ literal-esc-cancels-baa1fbafa2ec28c1 = Esc iptal eder
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Bir ateşleme noktası eklemek veya düzenlemek için bir ağza tıklayın
 literal-drag-a-ring-or-type-an-azimuth-and-dip-2cb078a11f62463c = Bir halkayı sürükleyin veya bir azimut ve eğim girin
 literal-each-hole-turns-about-its-own-collar-73a2499ee7279efe = her delik kendi ağzı etrafında döner
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
     Telif Hakkı (c) 2026 Leo Timmins, Lucas Timmins ve Incline Design katkıda bulunanları. Bu yazılımın bir kopyasını edinen herhangi bir kişiye, MIT Lisansı koşullarına tabi olarak, üzerinde kısıtlama olmaksızın işlem yapma izni işbu belgeyle ücretsiz olarak verilir.
+
     Incline Design, "OLDUĞU GİBİ", TİCARİ ELVERİŞLİLİK, BELİRLİ BİR AMACA UYGUNLUK ve İHLAL ETMEME garantileri dahil ancak bunlarla sınırlı olmamak üzere AÇIK VEYA ZIMNİ HİÇBİR TÜR GARANTİ OLMAKSIZIN sağlanmaktadır.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% bağlantı
 literal-count-hole-s-d9bc7e624fadff18 = %count% delik

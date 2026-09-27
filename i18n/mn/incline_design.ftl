@@ -86,7 +86,6 @@ confirm-delete-product =
 ## «Триангуляц үүсгэх» диалог
 
 tri-create-title = Триангуляц үүсгэх
-tri-create-help = Харагдах цонхон дахь объектууд дээр товшиж сонгох/сонголтыг цуцлах боломжтой. Хайрцаглан сонгохын тулд чирнэ үү.
 tri-create-type-label = Триангуляцын төрөл
 tri-create-type-help =
     Задгай гадаргуу нь рельефийн маягийн хавтгай үүсгэнэ. Хатуу бие нь бүрэн
@@ -97,11 +96,10 @@ tri-create-output-name-help = Үүсгэсэн триангуляцад оноо
 tri-create-output-name-hint = триангуляцын нэр
 tri-create-run = Триангуляц хийх
 
-tri-selection-none = Одоогоор ямар ч объект сонгогдоогүй байна.
 tri-selection-selected = { $summary } сонгогдсон
 
-tri-type-open-surface = Задгай гадаргуу
-tri-type-solid-closed = Хатуу бие – бүрэн хаалттай
+tri-type-open-surface = Гадаргуу
+tri-type-solid-closed = Хатуу бие
 
 # Сонголтын тоймын хэсгүүд, ж: "3 полилиниа, 1 цэг". Нэр үг бүр өөрийн
 # тоогоор олонлогжсон тул хоёроос олон олонлогийн хэлбэртэй хэлүүдэд ч
@@ -155,7 +153,6 @@ tri-estimated-memory = Тооцоолсон дээд санах ой ~{ $estimat
 block-grid-summary = Тор: { $x } × { $y } × { $z } = { $count } блок
 status-selected = Сонгогдсон: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Хэсгүүд: { $rendered }/{ $total } ({ $culled } хасагдсан)
 status-clip = Огтлолын ойр/хол/Δ: { $near } / { $far } / { $delta } м
 
 ## Их давтамжтай эх кодын шууд мөрүүд
@@ -221,7 +218,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Импортлох эх файл(ууд)-ыг сонгоно уу.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Харагдах цонхон дахь ачаалагдсан гадаргуу дээр товшиж энэ оролтыг сонгоно уу
 literal-choose-9e53070883acbe06 = Сонгох...
-literal-chunks-d8bf831735fec9eb = Хэсгүүд: --
 literal-clear-b4f1dffbb6be6302 = Цэвэрлэх
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Идэвхтэй триангуляцын текстурыг цэвэрлэх
 literal-clear-raster-ef94c7849961e88f = Растерыг цэвэрлэх
@@ -908,10 +904,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Давхарга сонгох
 literal-set-axis-e3f98268c98bcfa0 = %axis%-ыг тохируулах
 literal-axis-value-d5e196b32161897d = %axis% утга
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Манай вэбсайтаас үнэгүй суурин хувилбарыг татаж авах ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Хөтчийн санах ойд хадгалагдсан
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Хөтчийн санах ойд хадгалагдаагүй
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Налуугийн дагуух зай
 literal-horizontal-distance-643bfda0222c6424 = Хэвтээ зай
@@ -1226,7 +1219,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Энэ 
 literal-restore-the-full-model-range-23c0898e378be1df = Загварын бүтэн мужийг сэргээх
 literal-axis-minimum-8a51a7bda9747700 = %axis% доод
 literal-axis-maximum-fa149d72f9564fca = %axis% дээд
-literal-name-no-range-4f328990327afd0b = %name% (муж алга)
 literal-choose-a-variable-62b267fd35bdce31 = Хувьсагч сонгох
 literal-no-usable-range-6bd2da592be04b0c = (ашиглах боломжтой муж алга)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Хоосон утганд ашиглах өнгийг засах
@@ -1533,8 +1525,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Эхлэ
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Тэсэлгээний хэлбэр болгон ашиглах хаалттай полилиниа дээр товшино уу
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc цуцлана
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Дэлбэлгээ эхлүүлэх цэгийг нэмэх эсвэл засахын тулд амсар дээр товшино уу
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% холболт
 literal-count-hole-s-d9bc7e624fadff18 = %count% цооног

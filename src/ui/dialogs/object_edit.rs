@@ -11,8 +11,8 @@ use crate::{
     model::{
         FillStyle, Object, ObjectColor, ObjectId,
         object_edit::{
-            CircleSpec, ObjectEditIssue, bulge_for_radius, bulge_radius, bulge_to_sweep_degrees, chord_length_xy, compact_circle, delete_vertex, insert_vertex_after, move_vertex,
-            polyline_area_xy, polyline_length, reverse_vertices, set_compact_circle, sweep_degrees_to_bulge, validate_object,
+            CircleSpec, ObjectEditIssue, bulge_for_radius, bulge_radius, bulge_to_sweep_degrees, chord_length_xy, delete_vertex, insert_vertex_after, move_vertex,
+            polyline_area_xy, polyline_length, reverse_vertices, sweep_degrees_to_bulge, validate_object,
         },
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
@@ -258,6 +258,7 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
                 .collect();
             (polyline_length(verts, *closed), polyline_area_xy(verts, *closed), rows)
         }
+        Object::Circle { radius, .. } => (std::f64::consts::TAU * radius, Some(std::f64::consts::PI * radius * radius), Vec::new()),
         Object::Point { .. } | Object::Text { .. } => (0.0, None, Vec::new()),
     };
     // A pinned segment (see `sticky_arc`) is dropped here once row edits put it out of range.
@@ -270,7 +271,7 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
                     verts.len().saturating_sub(1)
                 }
             }
-            Object::Point { .. } | Object::Text { .. } => 0,
+            Object::Point { .. } | Object::Text { .. } | Object::Circle { .. } => 0,
         };
         if segment < segment_count {
             // `arc_rows` is ascending, so the pinned segment slots into its
@@ -373,6 +374,20 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             .show(ui);
             MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
         }
+        // A circle is always closed, so it offers fill and line weight but
+        // no "Closed" toggle - its centre and radius live on the Circle tab.
+        Object::Circle { fill, line_weight, .. } => {
+            let current_fill = *fill;
+            MenuFieldCombo::new(
+                "object_edit_fill",
+                tr!(literal = "Fill"),
+                fill,
+                fill_style_label(current_fill),
+                [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
+            )
+            .show(ui);
+            MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
+        }
         Object::Text { content, height, rotation, .. } => {
             rescan |= MenuFieldText::new(tr!(literal = "Text"), content).show(ui).changed();
             rescan |= MenuFieldF64::new(tr!(literal = "Height"), height, 0.001..=1.0e9)
@@ -405,7 +420,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
 
 fn set_object_color(object: &mut Object, color: ObjectColor) {
     match object {
-        Object::Point { color: slot, .. } | Object::Polyline { color: slot, .. } | Object::Text { color: slot, .. } => *slot = color,
+        Object::Point { color: slot, .. } | Object::Polyline { color: slot, .. } | Object::Circle { color: slot, .. } | Object::Text { color: slot, .. } => *slot = color,
     }
 }
 
@@ -618,7 +633,8 @@ fn commit_cell(dialog: &mut ObjectEditDialog, row: usize, column: VertexColumn, 
 fn vertex_row_count(object: &Object) -> usize {
     match object {
         Object::Polyline { verts, .. } => verts.len(),
-        Object::Point { .. } | Object::Text { .. } => 1,
+        // One row, holding the centre: a circle has no vertices to sheet.
+        Object::Point { .. } | Object::Text { .. } | Object::Circle { .. } => 1,
     }
 }
 
@@ -632,6 +648,7 @@ fn vertex_row(object: &Object, row: usize) -> Option<(glam::DVec3, Option<f64>)>
             (vertex.pos, starts_a_segment.then_some(vertex.bulge))
         }),
         Object::Point { pos, .. } | Object::Text { pos, .. } => (row == 0).then_some((*pos, None)),
+        Object::Circle { center, .. } => (row == 0).then_some((*center, None)),
     }
 }
 
@@ -662,6 +679,12 @@ fn set_vertex_component(object: &mut Object, row: usize, column: VertexColumn, v
                 return false;
             }
             (pos, None)
+        }
+        Object::Circle { center, .. } => {
+            if row != 0 {
+                return false;
+            }
+            (center, None)
         }
     };
     let slot = match column {
@@ -728,10 +751,8 @@ fn derived_values(dialog: &mut ObjectEditDialog) -> (f64, Option<f64>) {
 // ── Arc & Circle ──
 
 fn circle_spec(object: &Object) -> Option<CircleSpec> {
-    match object {
-        Object::Polyline { verts, closed, .. } => compact_circle(verts, *closed),
-        Object::Point { .. } | Object::Text { .. } => None,
-    }
+    let (center, radius) = object.circle()?;
+    Some(CircleSpec { center, radius })
 }
 
 fn draw_arcs_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
@@ -769,8 +790,16 @@ fn draw_arcs_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             .changed();
         if changed {
             let applied = match &mut dialog.object {
-                Object::Polyline { verts, .. } => set_compact_circle(verts, center, radius),
-                Object::Point { .. } | Object::Text { .. } => false,
+                Object::Circle {
+                    center: slot_center,
+                    radius: slot_radius,
+                    ..
+                } if center.is_finite() && radius.is_finite() && radius > 0.0 => {
+                    *slot_center = center;
+                    *slot_radius = radius;
+                    true
+                }
+                _ => false,
             };
             if applied {
                 dialog.touch();

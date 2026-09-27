@@ -140,8 +140,7 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active =
-                self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -221,6 +220,7 @@ impl<'a> App<'a> {
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
                     self.refresh_intersection_availability();
+                    self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
                     self.refresh_object_edit_dialog();
@@ -247,19 +247,6 @@ impl<'a> App<'a> {
                         let last_render_time = *self.last_render_time.get_or_insert(now);
                         let dt = now - last_render_time;
                         self.last_render_time = Some(now);
-                        if !dt.is_zero() {
-                            // Smooth the frame *interval* and invert it once, rather
-                            // than averaging instantaneous rates: frames arrive in
-                            // pairs, one blocked on the display and one taken straight
-                            // from the swapchain's spare image, and an average of 1/dt
-                            // is dominated by the short one. Alternating 16 ms and
-                            // 0.8 ms frames average to 60 rendered frames a second but
-                            // to over 600 instantaneous ones.
-                            let seconds = dt.as_secs_f32();
-                            let interval = self.editor.smoothed_frame_interval.map_or(seconds, |previous| previous * 0.9 + seconds * 0.1);
-                            self.editor.smoothed_frame_interval = Some(interval);
-                            self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
-                        }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
                         graphics.update(dt, self.editor.rotation_centre);
@@ -294,7 +281,8 @@ impl<'a> App<'a> {
                                 }
                                 if let Some(graphics) = self.graphics.as_mut() {
                                     graphics.set_fly_mode_enabled(self.editor.fly_mode_enabled);
-                                    self.editor.debug_chunk_stats = Some(graphics.chunk_render_stats);
+                                    self.editor.debug_surface_stats = Some(graphics.surface_render_stats);
+                                    self.editor.debug_point_stats = Some(graphics.point_render_stats);
                                 }
                                 if completing_topology_load && !self.graphics.as_ref().is_some_and(|graphics| graphics.point_cloud_uploads_pending()) {
                                     self.finish_topology_load();
@@ -389,7 +377,7 @@ impl<'a> App<'a> {
                                 if self.editor.active_tool != ActiveTool::FuseIntoPolyline
                                     && (self.editor.fuse_awaiting_endpoint.is_some() || !self.editor.fuse_segments.is_empty())
                                 {
-                                    self.cancel_fuse();
+                                    self.reset_fuse();
                                 }
                                 // Auto-initiate fuse from an existing selection when the fuse
                                 // tool is first activated with exactly one selected line/polyline.
@@ -436,6 +424,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    self.record_frame_time(now);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));
@@ -554,7 +543,6 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
-                            || self.editor.tri_cut_poly_awaiting_pick
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
@@ -654,9 +642,7 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick)
-                        && hover_pick_due
-                    {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick) && hover_pick_due {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -882,7 +868,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -1129,7 +1115,7 @@ impl<'a> App<'a> {
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
-            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.tri_create_open {
+            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
                 let frozen = &self.editor.frozen_handles;
                 let picked = self.graphics.as_ref().and_then(|g| {
                     g.pick_scene_entity_at_cursor(
@@ -1382,11 +1368,6 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tri_hover_handles.clear();
                     self.invalidate_geometry();
-                } else if self.editor.tri_cut_poly_awaiting_pick {
-                    self.editor.tri_cut_poly_awaiting_pick = false;
-                    self.editor.viewport_pick_hover_label = None;
-                    self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
-                    self.invalidate_geometry();
                 } else if self.editor.drill_pattern_awaiting_shape_pick {
                     self.editor.drill_pattern_awaiting_shape_pick = false;
                     self.editor.viewport_pick_hover_label = None;
@@ -1407,7 +1388,7 @@ impl<'a> App<'a> {
                 {
                     self.cancel_relimit();
                 } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
-                    self.cancel_fuse();
+                    self.reset_fuse();
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
@@ -1450,15 +1431,7 @@ impl<'a> App<'a> {
                 self.toggle_rotation_centre();
             }
             KeyCode::Backquote => {
-                let picked = self.graphics.as_ref().and_then(|graphics| {
-                    graphics.pick_at_cursor(
-                        crate::app::PICK_THRESHOLD_PX,
-                        &self.triangulations,
-                        &self.editor.hidden_handles,
-                        &self.editor.frozen_handles,
-                        self.editor.xray_enabled,
-                    )
-                });
+                let picked = self.pick_under_cursor();
                 if let Some((_handle, world)) = picked
                     && world.z.is_finite()
                 {
@@ -1518,11 +1491,6 @@ impl<'a> App<'a> {
             self.editor.viewport_pick_hover_label = None;
             self.editor.tri_hover_handles.clear();
             self.invalidate_geometry();
-        } else if self.editor.tri_cut_poly_awaiting_pick {
-            self.editor.tri_cut_poly_awaiting_pick = false;
-            self.editor.viewport_pick_hover_label = None;
-            self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
-            self.invalidate_geometry();
         } else if self.editor.drill_pattern_awaiting_shape_pick {
             self.editor.drill_pattern_awaiting_shape_pick = false;
             self.editor.viewport_pick_hover_label = None;
@@ -1535,7 +1503,7 @@ impl<'a> App<'a> {
         } else if self.editor.relimit_confirming_end || self.editor.relimit_waiting_for_pick || self.editor.relimit_awaiting_source_pick || self.editor.relimit_dialog_open {
             self.cancel_relimit();
         } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
-            self.cancel_fuse();
+            self.reset_fuse();
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();

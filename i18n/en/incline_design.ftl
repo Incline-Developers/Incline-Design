@@ -57,7 +57,7 @@ ws-menubar-triangulation = Triangulation
 ws-menubar-raster = Raster
 ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
-ws-menubar-drillholes = Drillholes
+ws-menubar-drillholes = Drill Holes
 ws-menubar-active-layer = Layer:
 
 ## Menubars functions
@@ -88,7 +88,7 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Create Triangulation
-tri-create-help = Click objects in the viewport to select/deselect. Drag to box-select.
+tri-create-help = Triangulates the objects selected when this dialog opened. Close it to change the selection.
 tri-create-type-label = Triangulation type
 tri-create-type-help =
     Open surface creates a terrain-style sheet. Solid creates a fully enclosed
@@ -98,11 +98,11 @@ tri-create-output-name-help = Name assigned to the generated triangulation.
 tri-create-output-name-hint = triangulation name
 tri-create-run = Triangulate
 
-tri-selection-none = No objects selected yet.
+tri-selection-none = The selected objects are no longer available.
 tri-selection-selected = { $summary } selected
 
-tri-type-open-surface = Open surface
-tri-type-solid-closed = Solid – fully closed
+tri-type-open-surface = Surface
+tri-type-solid-closed = Solid
 
 # Selection summary pieces, e.g. "3 polylines, 1 point". Each noun is pluralised
 # by its own count so languages with more than two plural forms read correctly.
@@ -115,6 +115,11 @@ tri-count-strings =
     { $count ->
         [one] { $count } string
        *[other] { $count } strings
+    }
+tri-count-circles =
+    { $count ->
+        [one] { $count } circle
+       *[other] { $count } circles
     }
 tri-count-points =
     { $count ->
@@ -155,8 +160,9 @@ tri-estimated-memory = Estimated peak memory ~{ $estimate }. { $detail }
 block-grid-summary = Grid: { $x } × { $y } × { $z } = { $count } blocks
 status-selected = Selected: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Chunks: { $rendered }/{ $total } ({ $culled } culled)
+status-faces = Faces: { $drawn } / { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
+status-points = Points: { $drawn } / { $target } of { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 
 ## High-frequency source literals
 
@@ -213,7 +219,6 @@ literal-categories-beyond-the-first-12-and-missing-values-remain-white-0cfe55e66
 literal-chamfer-ae5a9f3a1d4ae6f5 = Chamfer
 literal-choose-a-file-purpose-to-map-its-columns-c9d9a7858337fffd = Choose a file purpose to map its columns.
 literal-choose-offset-side-aacb869b6ee02832 = Choose offset side
-literal-choose-one-or-more-csvs-then-assign-each-file-and-column-a-role-2353bec83db94d10 = Choose one or more CSVs, then assign each file and column a role.
 literal-choose-relimit-side-a68cafc22fd54e63 = Choose relimit side
 literal-choose-the-active-block-model-variable-1d977eec7f1c81b5 = Choose the active block model variable
 literal-choose-the-boundary-by-clicking-a-closed-polyline-in-the-viewport-e5cc4f39e7101815 = Choose the boundary by clicking a closed polyline in the viewport
@@ -221,7 +226,9 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Choose the source file or files to import.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Choose this input by clicking a loaded surface in the viewport
 literal-choose-9e53070883acbe06 = Choose...
-literal-chunks-d8bf831735fec9eb = Chunks: --
+literal-faces-chunks-c777e400b789df4e = Faces: -- / -- (--/-- chunks)
+literal-points-of-chunks-ad87b40aa4e63086 = Points: -- / -- of -- (--/-- chunks)
+literal-classify-91c3dd6e6a6997cb = Classify
 literal-clear-b4f1dffbb6be6302 = Clear
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Clear Active Triangulation Texture
 literal-clear-raster-ef94c7849961e88f = Clear Raster
@@ -255,7 +262,9 @@ literal-collide-with-triangulation-3832b9f2facecd00 = Collide with Triangulation
 literal-color-7e85b996d38ae746 = Color:
 literal-colour-7e9d0b96d39e517d = Colour
 literal-colour-drillholes-7ccb9ef2779d0e8b = Colour Drillholes
-literal-colour-gpu-chunks-d6132652c2b280bb = Colour GPU chunks
+literal-surface-chunk-debug-view-b1443ab63056d7a7 = Surface chunk debug view
+literal-point-cloud-chunk-debug-view-fd20f7d3dadff3d3 = Point cloud chunk debug view
+literal-colour-points-by-classification-9ddd5b68c0eace03 = Colour Points by Classification
 literal-colour-by-6a3a01b3fc8fd000 = Colour by...
 literal-colour-mapping-8883078f49b82d0b = Colour mapping
 literal-colour-scale-1e3620195219fcc7 = Colour scale
@@ -324,6 +333,7 @@ literal-drawing-number-1c2cbb8d01e045fe = Drawing number
 literal-drawn-by-210c873a1400c8b4 = Drawn by
 literal-drill-holes-cbdd3402cba56a59 = Drill Holes
 literal-drill-holes-0e49c3c00a13c639 = Drill Holes:
+literal-dropped-point-classifications-some-of-the-joined-clouds-are-unclassified-and-a-partly-classified-cloud-cannot-be-filtered-to-ground-3191c1becf4a63f0 = Dropped point classifications: some of the joined clouds are unclassified, and a partly classified cloud cannot be filtered to ground.
 literal-duplicate-fac15b89e0668996 = Duplicate
 literal-duplicate-layer-2d1130312e4d17cf = Duplicate Layer
 literal-easting-2e463538b853949c = Easting
@@ -335,6 +345,10 @@ literal-exit-application-206c61fdca9522f7 = Exit Application
 literal-exit-incline-design-b11cdc542f0e84ef = Exit Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Exit Without Saving
 literal-exit-slice-ec67c9da3a320e5f = Exit slice
+literal-ground-points-only-152bb7a2a7c1ee99 = Ground points only
+literal-off-302cbb19bf9a174a = Off
+literal-on-091d5807b5b33550 = On
+literal-reconstruct-from-the-points-classified-as-bare-earth-discarding-vegetation-buildings-plant-and-noise-turn-this-off-to-surface-every-point-in-the-cloud-e29aa29b670c9ad1 = Reconstruct from the points classified as bare earth, discarding vegetation, buildings, plant and noise. Turn this off to surface every point in the cloud.
 literal-set-section-grid-0317412c52213ca8 = Set Section Grid
 literal-hide-rl-grid-5777afd90dcfdfef = Hide RL Grid
 literal-show-rl-grid-87a5e28c30f9ca36 = Show RL Grid
@@ -348,13 +362,12 @@ literal-export-dxf-a55b38c20132f261 = Export DXF
 literal-export-engineering-drawing-0c0002e2cdb7434a = Export Engineering Drawing
 literal-export-layer-to-dxf-dda9d8efe5359829 = Export Layer to DXF
 literal-export-omf-6ab339c1e0893291 = Export OMF
-literal-export-open-mining-format-2c86d7ef8df21a42 = Export Open Mining Format
+literal-export-open-mining-format-2-289a561f9def6ddc = Export Open Mining Format 2
 literal-export-png-e0decf4279c1597e = Export PNG...
 literal-export-project-to-dxf-1d58f99e6ded43d9 = Export Project to DXF
 literal-export-triangulation-96c456cdd2fa5764 = Export Triangulation
 literal-export-viewport-image-d497c041afb7b212 = Export Viewport Image
 literal-export-one-layer-b91213cb21d38522 = Export one layer
-literal-exports-block-centroids-as-x-y-z-block-sizes-as-dx-dy-dz-followed-by-resource-columns-ccfd16f3916aba8d = Exports block centroids as x/y/z, block sizes as dx/dy/dz, followed by resource columns.
 literal-fps-6d1e25f3633b2410 = FPS: --
 literal-face-colour-6453100ee6fd7918 = Face colour
 literal-field-of-view-4ead39edc97a64f9 = Field of view
@@ -380,6 +393,7 @@ literal-height-ffdadf0a576fd802 = Height
 literal-height-mode-490a33f56c7a9c4d = Height mode
 literal-hide-9df212d89cab196d = Hide
 literal-hide-all-15d259113e947092 = Hide All
+literal-hide-classification-b2482cf99903ace7 = Hide Classification
 literal-hide-selection-b83e537e7d9fcc13 = Hide Selection
 literal-hide-and-unload-sources-8047096fcc7ddb85 = Hide and unload sources
 literal-horizontal-width-of-each-flat-berm-between-successive-batters-a83e42804b968dbc = Horizontal width of each flat berm between successive batters.
@@ -390,7 +404,7 @@ literal-import-dxf-d96c811de1e76f42 = Import DXF
 literal-import-drillhole-csv-bundle-290b32d863509029 = Import Drillhole CSV Bundle
 literal-import-drillholes-df6d2581a26e6cc8 = Import Drillholes
 literal-import-omf-adf1641dc93ab8be = Import OMF
-literal-import-open-mining-format-c8fa010d6fb7f223 = Import Open Mining Format
+literal-import-open-mining-format-2-018a38a6e4148a11 = Import Open Mining Format 2
 literal-import-point-cloud-7f3b2109403a9283 = Import Point Cloud
 literal-import-raster-62869e3034e9b6c1 = Import Raster
 literal-import-triangulation-e7b3700df192de5b = Import Triangulation
@@ -461,6 +475,8 @@ literal-new-product-6c2124d5d6badd3a = New Product
 literal-new-project-cd084c5e5d3ea300 = New Project
 literal-new-layer-name-e4ea5292efa5d03f = New layer name
 literal-no-delay-product-to-tie-with-6d3f8682539b125f = No delay product to tie with
+literal-terrain-tin-filtered-to-ground-ground-points-of-total-1a1906f3c746c02d = Terrain TIN: filtered to %ground% ground points of %total%
+literal-this-cloud-carries-no-classifications-so-every-point-is-surfaced-import-a-las-laz-file-that-has-been-through-a-ground-filter-to-reconstruct-bare-earth-19d3f1ae982f8e16 = This cloud carries no classifications, so every point is surfaced. Import a LAS/LAZ file that has been through a ground filter to reconstruct bare earth.
 literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = right-click the Delay Palette heading to add one
 literal-no-matches-28d7266643f5992f = No matches
 literal-no-object-selected-d42da7912e4d01b6 = No object selected
@@ -590,6 +606,7 @@ literal-shape-2de969afacdaa7a6 = Shape
 literal-share-of-source-points-to-keep-fractions-such-as-0-125-are-allowed-4058d563973b7e80 = Share of source points to keep. Fractions such as 0.125% are allowed.
 literal-sheet-furniture-3b6e00f5ce64c49a = Sheet furniture
 literal-show-716a6024e3fe999c = Show
+literal-show-classification-e0573b9e00512e24 = Show Classification
 literal-show-console-f96fb178c28b11ad = Show Console
 literal-show-project-c2b1b6b657bed079 = Show Project
 literal-show-console-6db619aae4479e4d = Show console
@@ -654,7 +671,8 @@ literal-vertex-count-48fab462ae06a454 = Vertex count
 literal-vertical-exaggeration-3572327bb13435e7 = Vertical Exaggeration
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Vertical rise or fall of each bench before the next berm is created.
 literal-vertical-sync-85fd0e942adbf2be = Vertical sync
-literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Visualises the Morton spatial chunking used for frustum culling.
+literal-colours-each-surface-chunk-outlines-the-box-it-is-frustum-culled-by-and-shows-the-faces-drawn-last-frame-against-the-visible-total-in-the-status-bar-552e2ca96ec0c398 = Colours each surface chunk, outlines the box it is frustum-culled by, and shows the faces drawn last frame against the visible total in the status bar.
+literal-colours-each-point-cloud-chunk-outlines-the-box-it-is-frustum-culled-by-and-shows-the-points-drawn-last-frame-against-the-level-of-detail-target-and-the-visible-total-in-the-status-bar-14dcf04eaded3749 = Colours each point-cloud chunk, outlines the box it is frustum-culled by, and shows the points drawn last frame against the level-of-detail target and the visible total in the status bar.
 literal-website-82665b2ffabc9c0a = Website
 literal-weld-retry-b6c826b7541e89f1 = Weld & Retry
 literal-width-f21fb4f4b9e8911f = Width
@@ -900,10 +918,7 @@ literal-kind-properties-0d654a30f642b23a = %kind% %properties%
 literal-choose-a-layer-b780e9cd371a31d2 = Choose a layer
 literal-set-axis-e3f98268c98bcfa0 = Set %axis%
 literal-axis-value-d5e196b32161897d = %axis% value
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Download the free native version at our website ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Saved in browser storage
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Not saved in browser storage
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Distance along slope
 literal-horizontal-distance-643bfda0222c6424 = Horizontal distance
@@ -925,9 +940,8 @@ literal-control-point-1-faf6fbf950b17c2f = Control point 1
 literal-world-x-y-and-z-coordinates-of-the-first-bezier-control-point-189bac93dcd06e70 = World X, Y and Z coordinates of the first Bezier control point.
 literal-control-point-2-faf6fcf950b17de2 = Control point 2
 literal-world-x-y-and-z-coordinates-of-the-second-bezier-control-point-0adf27f4525cd44a = World X, Y and Z coordinates of the second Bezier control point.
-literal-interchange-cede0f7daa1829a9 = Interchange
-literal-open-mining-format-omf-50369ad5c43f1261 = Open Mining Format (.omf)
-literal-cad-0b7ef719aa408c17 = CAD
+literal-projects-199f5853f4e718f7 = Projects
+literal-open-mining-format-2-omf-9fc81b6230e38e33 = Open Mining Format 2 (.omf)
 literal-drawing-exchange-format-dxf-8c5d1ee5571a262c = Drawing Exchange Format (.dxf)
 literal-wavefront-obj-obj-663259235560c82c = Wavefront OBJ (.obj)
 literal-stl-stl-ac855d0eb0ece26c = STL (.stl)
@@ -937,7 +951,6 @@ literal-ascii-points-xyz-pts-e183cec302ce25d0 = ASCII Points (.xyz, .pts)
 literal-point-cloud-data-pcd-d88f4be3fd2ef958 = Point Cloud Data (.pcd)
 literal-comma-separated-values-csv-e98eac2bf14a98bd = Comma-Separated Values (.csv)
 literal-mapped-csv-bundle-csv-c3b487cd838e374f = Mapped CSV bundle (.csv)
-literal-textures-06eaee20d025f545 = Textures
 literal-geotiff-tif-tiff-a4c8f984908d6d8c = GeoTIFF (.tif, .tiff)
 literal-no-omf-chosen-0998297ae4891598 = No .omf chosen
 literal-import-wavefront-obj-9e22315101c4040d = Import Wavefront OBJ
@@ -952,7 +965,6 @@ literal-export-stl-17ed65c242a623c6 = Export STL
 literal-export-ply-0d5b0dc23c1f3ca4 = Export PLY
 literal-source-file-b221d7db388fcafe = Source file
 literal-no-dxf-chosen-91403908aebb9154 = No .dxf chosen
-literal-add-to-project-9be55cb299a564c2 = Add to project:
 literal-no-file-chosen-0073fee5e8d437c2 = No file chosen
 literal-model-file-bde0d1d68506b488 = Model file
 literal-no-csv-chosen-acaf959ea4a4c072 = No .csv chosen
@@ -977,11 +989,8 @@ literal-end-y-f1dd09256e64ab85 = End Y
 literal-end-z-f1dd06256e64a66c = End Z
 literal-diameter-21900f027f2d7cfa = Diameter
 literal-attribute-bba865d4b437944f = Attribute
-literal-project-199f8f53f4e7766c = Project:
 literal-triangulation-c0d5aed309c533a6 = Triangulation:
 literal-block-model-9b06800b020fb56b = Block model:
-literal-no-active-project-382637642c4c5a8d = No active project
-literal-choose-a-project-f1c0f595b9e24e62 = Choose a project
 literal-choose-a-loaded-layer-e0b05bc3ef7be5d1 = Choose a loaded layer
 literal-choose-a-loaded-triangulation-8c92b16453be8513 = Choose a loaded triangulation
 literal-choose-a-loaded-block-model-fa2f8b657a356184 = Choose a loaded block model
@@ -1217,7 +1226,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Rebuild
 literal-restore-the-full-model-range-23c0898e378be1df = Restore the full model range
 literal-axis-minimum-8a51a7bda9747700 = %axis% minimum
 literal-axis-maximum-fa149d72f9564fca = %axis% maximum
-literal-name-no-range-4f328990327afd0b = %name% (no range)
 literal-choose-a-variable-62b267fd35bdce31 = Choose a variable
 literal-no-usable-range-6bd2da592be04b0c = (no usable range)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Edit the colour used for empty values
@@ -1225,6 +1233,7 @@ literal-edit-this-category-colour-753bbf976e0a8807 = Edit this category colour
 literal-blank-05d9e0598fc96cf6 = (blank)
 literal-empty-hidden-9912adc75a8db73a =  (empty · hidden)
 literal-empty-0cb58b957b951fb5 =  (empty)
+literal-empty-collection-75ead98c9c09263a = Empty collection
 literal-no-data-for-this-variable-d4d3a88884dd02d1 = No data for this variable
 literal-drag-to-move-right-click-to-remove-middle-click-toggles-487f64ad1eafa437 = Drag to move · Right-click to remove · Middle-click toggles ≤
 literal-drag-to-move-middle-click-toggles-51333dbee702d1c2 = Drag to move · Middle-click toggles ≤
@@ -1238,7 +1247,6 @@ literal-locale-environment-lang-lang-lc-all-locale-tz-timezone-3cf966620f1287a3 
 literal-desktop-session-xdg-session-type-type-xdg-current-desktop-desktop-wayland-display-wayland-display-display-6822ab2172fa5579 = Desktop session: XDG_SESSION_TYPE=%type%, XDG_CURRENT_DESKTOP=%desktop%, WAYLAND_DISPLAY=%wayland%, DISPLAY=%display%
 literal-windows-session-sessionname-session-username-user-dd705b135e5cfa1a = Windows session: SESSIONNAME=%session%, USERNAME=%user%
 literal-macos-session-user-user-shell-shell-5d332ee1a47e7bba = macOS session: USER=%user%, SHELL=%shell%
-literal-imports-every-supported-omf-element-designs-and-line-sets-surfaces-block-models-drillholes-point-sets-and-raster-textures-7a8d4e648aaff12b = Imports every supported OMF element: designs and line sets, surfaces, block models, drillholes, point sets, and raster textures.
 
 ## Source literals discovered by the coverage audit
 literal-block-model-path-has-count-variable-s-of-an-unsupported-type-that-won-t-be-readable-names-6757175f194407a1 = Block model %path% has %count% variable(s) of an unsupported type that won't be readable: %names%
@@ -1300,9 +1308,6 @@ literal-intersect-moves-one-endpoint-to-another-line-absolute-sets-the-final-lin
 literal-the-selected-start-or-end-point-moves-along-the-line-direction-the-opposite-endpoint-stays-fixed-8f2a3c130dc719b2 = The selected start or end point moves along the line direction; the opposite endpoint stays fixed.
 literal-number-of-straight-segments-used-to-approximate-the-rounded-corner-use-1-for-a-straight-chamfer-dde9ba4f244d7220 = Number of straight segments used to approximate the rounded corner. Use 1 for a straight chamfer.
 literal-choose-which-of-the-two-polyline-paths-between-the-selected-vertices-will-be-replaced-length-includes-elevation-and-curved-edges-2cdc8907210a59dd = Choose which of the two polyline paths between the selected vertices will be replaced. Length includes elevation and curved edges.
-literal-exports-all-open-data-in-one-project-designs-design-document-triangulations-triangulation-s-block-models-block-model-s-drill-holes-drillhole-dataset-s-point-clouds-point-cloud-s-and-rasters-raster-s-adb3b42ef5c47b66 = Exports all open data in one project: %designs% design document, %triangulations% triangulation(s), %block_models% block model(s), %drill_holes% drillhole dataset(s), %point_clouds% point cloud(s), and %rasters% raster(s).
-literal-incline-design-styling-and-exact-design-drillhole-semantics-are-retained-as-omf-metadata-alongside-native-omf-geometry-and-attributes-f67793cd7f197c2c = Incline Design styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes.
-literal-choose-a-csv-file-to-map-its-columns-text-columns-are-detected-as-category-other-unmapped-columns-default-to-value-8f12a7249eaf7b2a = Choose a CSV file to map its columns. Text columns are detected as Category; other unmapped columns default to Value.
 literal-paper-orientation-width-height-mm-b068858104e7773b = %paper% %orientation% · %width% × %height% mm
 literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · covers %width% × %height% m
 literal-size-width-height-mm-3b309605c72e220c = %size% (%width% × %height% mm)
@@ -1524,8 +1529,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Choose t
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Click a closed polyline to use as the blast shape
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc cancels
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Click a collar to add or edit an initiation point
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = %count% connector(s)
 literal-count-hole-s-d9bc7e624fadff18 = %count% hole(s)
@@ -1786,4 +1792,129 @@ survey-name-exists = A coordinate system with that name already exists. Select i
 preferences-ui-size = UI size
 preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
 
+relimit-select-boundary = Select polyline or circle to relimit to
+
+relimit-click-boundary = Click the polyline or circle to intersect with…
+
+relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolute sets the final line length. Relative adds or subtracts length.
+
 browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }
+literal-no-rasters-ffe3e01615f7276c = No rasters
+literal-the-data-ticked-in-the-export-checklist-b5a9058e6f00002a = The data ticked in the export checklist
+literal-cinematic-view-ae588fed4e18bea3 = Cinematic View
+literal-disable-cinematic-view-4b21438b1a35405f = Disable Cinematic View
+literal-set-cinematic-view-826deb0d9fbe84df = Set Cinematic View
+literal-set-cinematic-view-enabled-906e4f2493f6cf03 = Set cinematic view = %enabled%
+
+literal-a-circle-cannot-be-exploded-it-is-a-single-shape-not-a-series-of-segments-2f06a4a0200607ca = A circle cannot be exploded: it is a single shape, not a series of segments
+literal-a-collection-named-name-already-exists-84365ba8896df978 = A collection named '%name%' already exists
+literal-a-save-of-this-project-is-already-running-save-again-when-it-finishes-b88b7f1483eb6744 = A save of this project is already running; save again when it finishes
+literal-circle-layer-layer-radius-radius-f3406b05fca7af8b = Circle | Layer: %layer% | radius %radius%
+literal-create-collection-866c12ab4f3d1c87 = Create Collection
+literal-created-collection-name-2814f26a9a1e6bfc = Created collection '%name%'
+literal-delete-collection-317006269d0d1476 = Delete Collection
+literal-deleted-collection-name-13874b0a5e6614ed = Deleted collection '%name%'
+literal-element-name-names-an-unknown-section-section-3d551261187a6ca7 = Element '%name%' names an unknown section '%section%'
+literal-element-name-names-section-section-which-cannot-show-this-kind-of-item-in-this-build-6b63c2b91e769490 = Element '%name%' names section '%section%' which cannot show this kind of item in this build
+literal-collection-a7eea45fe1e4d231 = Collection
+literal-folder-in-section-7f5f75d432d5b51f = %folder% in %section%
+literal-member-into-folder-63bacf30f64f0a89 = %member% into %folder%
+literal-member-to-root-979632107456396a = %member% to root
+literal-move-to-collection-b69ed2c63ee91b2f = Move to Collection
+literal-moved-item-into-collection-name-15018f1d9861d45c = Moved item into collection '%name%'
+literal-moved-item-to-root-7b7e3de780898644 = Moved item to root
+literal-new-collection-c02cbf6ebf0b6cdb = New Collection
+literal-new-collection-under-section-4dfc7a54b46862e8 = New collection under %section%
+literal-no-collection-e29ea461a8d9e7e6 = No Collection
+literal-renamed-collection-before-to-after-812972b84754f385 = Renamed collection '%before%' to '%after%'
+literal-saving-to-browser-storage-16db73c472ad85a7 = Saving to browser storage…
+literal-skipped-count-circle-s-the-offset-distance-is-larger-than-the-radius-56a2d23e63bb5014 = Skipped %count% circle(s): the offset distance is larger than the radius
+literal-that-collection-no-longer-exists-1f33420b706f5c20 = That collection no longer exists
+
+# Join Point Clouds dialog
+literal-count-cloud-s-selected-points-points-a45c4e563aee30df = %count% cloud(s) selected · %points% points
+literal-name-count-points-3ccfe5af59629e09 = %name% (%count% points)
+literal-name-count-cloud-s-fea765feba751c4f = %name% · %count% cloud(s)
+literal-all-f993bb199fefbe04 = All
+literal-combine-the-ticked-point-clouds-into-one-new-cloud-so-a-single-triangulation-can-be-built-across-all-of-them-per-point-colours-are-kept-a-cloud-without-them-contributes-its-display-colour-ba2d03354e0d8fd2 = Combine the ticked point clouds into one new cloud, so a single triangulation can be built across all of them. Per-point colours are kept; a cloud without them contributes its display colour.
+literal-delete-the-ticked-clouds-from-the-project-once-the-join-completes-freeing-the-memory-their-duplicate-copy-would-otherwise-hold-803f715377b45283 = Delete the ticked clouds from the project once the join completes, freeing the memory their duplicate copy would otherwise hold.
+literal-every-loaded-cloud-in-the-project-ticked-clouds-are-copied-into-the-joined-cloud-69c16f8d6cb0e962 = Every loaded cloud in the project. Ticked clouds are copied into the joined cloud.
+literal-failed-to-join-point-clouds-error-1864834f536d881b = Failed to join point clouds: %error%
+literal-join-6c6bf3ea2ad3d219 = Join
+literal-join-point-clouds-7854daa532961fcb = Join Point Clouds
+literal-join-8d0d37545165cbfd = Join...
+literal-joined-count-clouds-into-name-points-points-108cdf63cd231815 = Joined %count% clouds into %name% (%points% points)
+literal-joined-cloud-58abff743302d661 = Joined Cloud
+literal-joining-name-af1d6a7aca4a3392 = Joining %name%
+literal-name-assigned-to-the-joined-point-cloud-aed085780920206c = Name assigned to the joined point cloud.
+literal-no-point-clouds-are-loaded-import-them-via-file-import-first-987b60f8be314809 = No point clouds are loaded. Import them via File ▸ Import first.
+literal-point-clouds-daa4c5f978d933f1 = Point clouds
+literal-remove-sources-1d26959a5edd50b3 = Remove sources
+
+# Remaining source literals
+literal-a-cloth-resolution-about-one-and-a-half-times-the-spacing-of-the-sparsest-selected-cloud-s-points-so-every-particle-has-returns-under-it-8fb5d8a630aa2e77 = A cloth resolution about one and a half times the spacing of the sparsest selected cloud's points, so every particle has returns under it.
+literal-cinematic-view-shadows-method-c8dbed4bff1cef59 = Cinematic view shadows: %method%
+literal-classified-name-ground-ground-vegetation-vegetation-and-noise-noise-of-count-points-15751a230d3798f9 = Classified %name%: %ground% ground, %vegetation% vegetation and %noise% noise of %count% points
+literal-classify-7b247b575072160f = Classify
+literal-classify-point-clouds-b7baf954378388b9 = Classify Point Clouds
+literal-classify-vegetation-371d9ac756ab7a95 = Classify vegetation
+literal-classifying-point-clouds-055d878817ae7f5b = Classifying point clouds
+literal-cloth-resolution-f2a7e80613ee5f13 = Cloth resolution
+literal-combine-the-selected-point-clouds-into-one-new-cloud-so-a-single-triangulation-can-be-built-across-all-of-them-per-point-colours-are-kept-a-cloud-without-them-contributes-its-display-colour-9e64aad19a178e3d = Combine the selected point clouds into one new cloud, so a single triangulation can be built across all of them. Per-point colours are kept; a cloud without them contributes its display colour.
+literal-count-cloud-s-599577f2902c4841 = %count% cloud(s)
+literal-count-selected-points-points-4901ff7ed445c96c = %count% selected · %points% points
+literal-delete-the-selected-clouds-from-the-project-once-the-join-completes-freeing-the-memory-their-duplicate-copy-would-otherwise-hold-4ef83ddb8b6cc5d4 = Delete the selected clouds from the project once the join completes, freeing the memory their duplicate copy would otherwise hold.
+literal-failed-to-classify-point-clouds-error-4cb4fe307e516155 = Failed to classify point clouds: %error%
+literal-flat-pads-structures-f2ab1db164c46c6d = Flat (pads, structures)
+literal-ground-threshold-1083c7e91f760a75 = Ground threshold
+literal-how-far-around-each-point-to-count-neighbours-d14fc84ec0bc2164 = How far around each point to count neighbours.
+literal-let-the-cloth-follow-walls-down-from-their-crests-where-its-stiffness-would-otherwise-hold-it-off-the-face-turn-off-only-on-gentle-ground-crowded-with-plant-dc375503de65b40b = Let the cloth follow walls down from their crests, where its stiffness would otherwise hold it off the face. Turn off only on gentle ground crowded with plant.
+literal-mark-each-point-as-ground-noise-or-unclassified-a-cloth-is-pressed-up-under-the-cloud-and-settles-on-the-ground-surface-points-within-the-ground-threshold-of-it-are-ground-any-existing-classes-are-replaced-undo-restores-them-9fc3265ce7c4bb56 = Mark each point as ground, noise or unclassified. A cloth is pressed up under the cloud and settles on the ground surface; points within the ground threshold of it are ground. Any existing classes are replaced; undo restores them.
+literal-mark-isolated-returns-birds-dust-multipath-blunders-as-noise-before-the-ground-is-found-so-a-stray-low-point-cannot-drag-the-cloth-down-f8484e94aa799ad6 = Mark isolated returns - birds, dust, multipath blunders - as noise before the ground is found, so a stray low point cannot drag the cloth down.
+literal-mark-noise-47b5b4cb7df649b2 = Mark noise
+literal-minimum-neighbours-e57b6aa6417474b1 = Minimum neighbours
+literal-no-block-model-selected-4dcbc7d4b1a8b3db = No block model selected
+literal-no-boundary-selected-cf40c22f6f37e785 = No boundary selected
+literal-no-drill-holes-selected-f5653f242452a1e1 = No drill holes selected
+literal-no-point-cloud-selected-9bbaa68d6380de12 = No point cloud selected
+literal-no-surface-selected-87b276d67651ec86 = No surface selected
+literal-noise-radius-b081d8326b119151 = Noise radius
+literal-once-the-clip-succeeds-unload-the-source-surface-so-only-the-clipped-result-stays-in-the-scene-e6c7c8283da8321b = Once the clip succeeds, unload the source surface so only the clipped result stays in the scene.
+literal-once-the-cut-succeeds-unload-the-original-topology-so-only-the-cut-result-stays-in-the-scene-the-pit-shell-stays-loaded-1ca46fe2b17b92db = Once the cut succeeds, unload the original topology so only the cut result stays in the scene. The pit shell stays loaded.
+literal-once-the-slice-succeeds-unload-the-source-surface-so-only-the-sliced-result-stays-in-the-scene-bf5f7a3219171478 = Once the slice succeeds, unload the source surface so only the sliced result stays in the scene.
+literal-once-the-trim-succeeds-unload-the-surface-that-was-trimmed-so-only-the-result-stays-in-the-scene-the-topology-stays-loaded-f8876dc3f634df3e = Once the trim succeeds, unload the surface that was trimmed so only the result stays in the scene. The topology stays loaded.
+literal-point-cloud-classification-discarded-a-cloud-changed-while-it-ran-run-it-again-b9710b7acdbef01e = Point cloud classification discarded: a cloud changed while it ran. Run it again.
+literal-points-closer-than-this-to-the-settled-cloth-measured-across-its-surface-are-ground-c923876c708201b1 = Points closer than this to the settled cloth, measured across its surface, are ground.
+literal-points-with-fewer-neighbours-than-this-within-the-noise-radius-are-noise-5d5fd43b422b63de = Points with fewer neighbours than this within the noise radius are noise.
+literal-raise-the-cloth-resolution-if-your-machine-has-less-ram-3582f92282b4c14c = Raise the cloth resolution if your machine has less RAM.
+literal-recommended-12f6b3b9aa6fe76c = Recommended
+literal-recover-steep-slopes-23cafdbcb731b400 = Recover steep slopes
+literal-relief-dumps-rolling-ground-2016b727081e3a7a = Relief (dumps, rolling ground)
+literal-resolution-m-points-spacing-m-apart-f7c3138067bb2ce2 = %resolution% m (points ~%spacing% m apart)
+literal-select-one-loaded-block-model-before-creating-an-ore-triangulation-from-it-b2e8d61556d4ef9d = Select one loaded block model before creating an ore triangulation from it
+literal-select-one-loaded-drill-hole-collection-before-creating-a-block-model-from-it-22acf314d0ddd8c5 = Select one loaded drill hole collection before creating a block model from it
+literal-select-one-loaded-point-cloud-before-creating-a-triangulation-from-it-13f079f1e8b3c126 = Select one loaded point cloud before creating a triangulation from it
+literal-select-one-loaded-triangulation-and-one-closed-polyline-before-clipping-b178609eb5ef96ef = Select one loaded triangulation and one closed polyline before clipping
+literal-select-one-loaded-triangulation-before-generating-contours-from-it-9502cbe530a3be76 = Select one loaded triangulation before generating contours from it
+literal-select-one-loaded-triangulation-before-slicing-it-by-z-range-f2b6b468a17e1bd8 = Select one loaded triangulation before slicing it by Z range
+literal-select-one-or-more-loaded-point-clouds-before-classifying-them-192a9f0f444e52ad = Select one or more loaded point clouds before classifying them
+literal-select-the-objects-to-triangulate-before-running-create-triangulation-3869c5bef00f34ea = Select the objects to triangulate before running Create Triangulation
+literal-select-two-or-more-loaded-point-clouds-before-joining-them-a1e894918ee2ed0d = Select two or more loaded point clouds before joining them
+literal-sort-the-returns-with-a-trained-classifier-that-reads-the-shape-of-the-points-around-each-one-ground-vegetation-banded-low-under-1-m-medium-under-3-m-or-high-by-height-and-everything-else-such-as-buildings-and-plant-left-unclassified-turn-this-off-to-use-the-cloth-alone-0e49b8fda3359b1a = Sort the returns with a trained classifier that reads the shape of the points around each one: ground, vegetation - banded low (under 1 m), medium (under 3 m) or high by height - and everything else, such as buildings and plant, left unclassified. Turn this off to use the cloth alone.
+literal-spacing-of-the-cloth-s-particles-around-the-cloud-s-point-spacing-is-a-good-start-finer-follows-the-ground-more-closely-but-needs-denser-points-a0ed6231027e56bc = Spacing of the cloth's particles. Around the cloud's point spacing is a good start; finer follows the ground more closely but needs denser points.
+literal-steep-pit-walls-benches-b5a9b94bad246329 = Steep (pit walls, benches)
+literal-terrain-6a63c902245f5e0e = Terrain
+literal-the-ground-the-cloud-covers-steep-follows-walls-down-from-their-crests-flat-uses-a-stiffer-cloth-that-bridges-large-buildings-and-plant-but-rounds-off-sharp-breaks-b56ae04b63fd775d = The ground the cloud covers. Steep follows walls down from their crests; Flat uses a stiffer cloth that bridges large buildings and plant but rounds off sharp breaks.
+literal-the-selected-block-model-whose-blocks-are-thresholded-into-a-solid-close-the-dialog-to-threshold-a-different-one-f3fd9f34e9a347c6 = The selected block model, whose blocks are thresholded into a solid. Close the dialog to threshold a different one.
+literal-the-selected-closed-polyline-whose-xy-boundary-defines-the-clipping-area-73b93f02aa02aeda = The selected closed polyline, whose XY boundary defines the clipping area.
+literal-the-selected-clouds-copied-into-the-joined-cloud-close-the-dialog-to-join-a-different-set-ee2eba5ba546ecfe = The selected clouds, copied into the joined cloud. Close the dialog to join a different set.
+literal-the-selected-clouds-each-classified-on-its-own-close-the-dialog-to-classify-a-different-set-b128caf98904e390 = The selected clouds, each classified on its own. Close the dialog to classify a different set.
+literal-the-selected-drill-holes-collection-whose-numeric-intervals-are-estimated-into-blocks-close-the-dialog-to-estimate-from-a-different-one-fade33afd76bf498 = The selected Drill Holes collection, whose numeric intervals are estimated into blocks. Close the dialog to estimate from a different one.
+literal-the-selected-point-cloud-whose-points-will-be-reconstructed-into-a-terrain-surface-close-the-dialog-to-reconstruct-a-different-one-e31cd95acb57f480 = The selected point cloud, whose points will be reconstructed into a terrain surface. Close the dialog to reconstruct a different one.
+literal-the-selected-surface-from-which-contour-lines-will-be-generated-close-the-dialog-to-contour-a-different-one-20a66f41facd6190 = The selected surface, from which contour lines will be generated. Close the dialog to contour a different one.
+literal-the-selected-surface-which-will-be-clipped-close-the-dialog-to-clip-a-different-one-f3d94af095df82e5 = The selected surface, which will be clipped. Close the dialog to clip a different one.
+literal-the-selected-surface-whose-elevation-range-will-be-clipped-close-the-dialog-to-slice-a-different-one-69166ca66aa9ad64 = The selected surface, whose elevation range will be clipped. Close the dialog to slice a different one.
+literal-this-exceeds-a-safe-limit-raise-the-cloth-resolution-to-continue-23f09ec4f28d7b99 = This exceeds a safe limit; raise the cloth resolution to continue.
+literal-unload-source-surface-a55bec2876068fb8 = Unload source surface
+literal-unload-source-topology-ff3ff8496dc8dc90 = Unload source topology
+literal-use-625ad019db843f94 = Use

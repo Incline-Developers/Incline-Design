@@ -1,6 +1,7 @@
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) style: u32,
 };
 
 struct VertexOutput {
@@ -15,7 +16,12 @@ fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.color = model.color;
+    let flags = document_style_flags(model.style);
+    if document_style_culled(model.style, flags) {
+        out.clip_position = CULLED_POSITION;
+        return out;
+    }
+    out.color = document_styled_color(model.color, flags);
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0); // 2.
     out.section_offset = section_plane_offset(model.position);
     return out;

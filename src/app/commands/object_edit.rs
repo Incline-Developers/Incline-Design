@@ -106,7 +106,7 @@ impl<'a> App<'a> {
         }
         let vertex_count = match &object {
             Object::Polyline { verts, .. } => Some(verts.len()),
-            Object::Point { .. } | Object::Text { .. } => None,
+            Object::Point { .. } | Object::Circle { .. } | Object::Text { .. } => None,
         };
         match vertex_count {
             Some(count) => userspace_log!("{}", tr_format!(literal = "Edited %kind% (%count% vertices)", kind = object.kind_name(), count = count)),

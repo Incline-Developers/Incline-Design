@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use Incline Design in your work, please cite it as below."
+title: "Incline Design"
+abstract: "Free open-source application for mine design, planning, geological modeling, and geospatial data."
+type: software
+authors:
+  - family-names: Timmins
+    given-names: Leo
+    orcid: "https://orcid.org/0009-0009-4437-1958"
+  - family-names: Timmins
+    given-names: Lucas
+  - family-names: Heckscher
+    given-names: Norman
+license: MIT
+url: "https://inclinedesign.net/"
+repository-code: "https://github.com/Incline-Developers/Incline-Design"
+keywords:
+  - mining
+  - mine design
+  - geology
+  - cad

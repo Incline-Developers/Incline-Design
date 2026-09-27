@@ -475,7 +475,6 @@ impl<'open> DragableMenu<'open> {
 /// No divider under it. The whole card is the drag target, so the bar does not
 /// have to announce itself as one; the tint alone sets the title apart.
 fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::Rect, surface: egui::Color32, show_close_button: bool, close_clicked: &mut bool) {
-    let dark_mode = ui.visuals().dark_mode;
     ui.painter().rect_filled(
         rect,
         egui::CornerRadius {
@@ -484,31 +483,39 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
             sw: 0,
             se: 0,
         },
-        title_bar_fill(surface, dark_mode),
+        title_bar_fill(surface, ui.visuals().dark_mode),
     );
 
     paint_title_text(ui, &title, rect, show_close_button);
 
-    if show_close_button {
-        let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-        let response = ui.interact(close_rect, ui.id().with("close"), egui::Sense::click());
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
-        }
-        let color = if response.hovered() {
-            ui.visuals().text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let stroke = egui::Stroke::new(1.3, color);
-        let icon_rect = close_rect.shrink(6.0);
-        ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
-        ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
-        if response.clicked() {
-            *close_clicked = true;
-        }
+    if show_close_button && title_bar_close_button(ui, rect, surface) {
+        *close_clicked = true;
     }
+}
+
+/// The close cross in the right-hand slot of a title bar `rect`, for cards
+/// that paint their own bar. Returns whether it was clicked.
+pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
+    let dark_mode = ui.visuals().dark_mode;
+    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
+    let response = ui
+        .interact(close_rect, ui.id().with("close"), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr!(literal = "Close"));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
+    }
+    let color = if response.hovered() {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let stroke = egui::Stroke::new(1.3, color);
+    let icon_rect = close_rect.shrink(6.0);
+    ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
+    ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
+    response.clicked()
 }
 
 /// How much weight a [`MenuButton`] carries in its row.
@@ -798,6 +805,22 @@ impl MenuField {
     pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_field: impl FnOnce(&mut egui::Ui, f32, f32) -> R) -> R {
         menu_field_row(ui, self.label, self.help_text, add_field)
     }
+}
+
+/// A read-only row naming what a selection-driven tool was opened on.
+///
+/// These tools take their input from the scene selection rather than from a
+/// control inside the dialog, so the input reads as a stated fact. It keeps
+/// the label column and control width of the picker rows beside it, so a
+/// dialog that mixes the two still lines up.
+pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, value: impl Into<egui::WidgetText>, help_text: impl Into<egui::WidgetText>, width: f32) {
+    let value = value.into();
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
+        })
+        .response
+    });
 }
 
 /// A labelled file-picker row showing the selected file count/name and a choose button.

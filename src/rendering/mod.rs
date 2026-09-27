@@ -14,6 +14,10 @@ pub(crate) mod text;
 pub(crate) struct Vertex {
     pub(crate) pos: [f32; 3],
     pub(crate) color: [f32; 4],
+    /// Document style slot the shader restyles this vertex by (selection,
+    /// hover, translucency); `scene::document_style::STYLE_SLOT_NONE` for
+    /// geometry that is never restyled, such as text.
+    pub(crate) style: u32,
 }
 
 /// Vertex for triangulation surfaces - colour comes from a per-draw uniform.
@@ -42,12 +46,37 @@ pub(crate) struct BlockInstance {
     pub(crate) _pad: f32,
 }
 
+/// One stroke primitive, expanded by `stroke.wgsl` into a screen-space quad:
+/// a world-space line, a round disc (a join, cap or marker), or a
+/// screen-aligned bar anchored at a world point. `style` carries the
+/// document style slot in its low bits and the `STROKE_*` flags of
+/// `scene::document_style` in its high bits.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
-pub(crate) struct StrokeVertex {
-    pub(crate) pos: [f32; 3],
+pub(crate) struct StrokeInstance {
+    pub(crate) start: [f32; 3],
+    /// Half the stroke width, or a disc's radius, in physical pixels.
+    pub(crate) half_width_px: f32,
+    /// The line's far end. A disc ignores it; a screen-aligned bar reads its
+    /// `xy` as the bar's half-extent in physical pixels.
+    pub(crate) end: [f32; 3],
+    pub(crate) style: u32,
     pub(crate) color: [f32; 4],
-    pub(crate) other_pos: [f32; 3],
-    pub(crate) offset_px: [f32; 2],
-    pub(crate) screen_space: f32,
+}
+
+impl StrokeInstance {
+    /// The world positions the primitive covers: both ends of a line, or
+    /// the anchor twice for a disc or screen-aligned bar.
+    pub(crate) fn world_ends(&self) -> ([f32; 3], [f32; 3]) {
+        if self.style & (scene::document_style::STROKE_ROUND | scene::document_style::STROKE_SCREEN_AXIS) != 0 {
+            (self.start, self.start)
+        } else {
+            (self.start, self.end)
+        }
+    }
+
+    /// Drawn only while its owner is selected; never picked.
+    pub(crate) fn selection_only(&self) -> bool {
+        self.style & scene::document_style::STROKE_SELECTION_ONLY != 0
+    }
 }

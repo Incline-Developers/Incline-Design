@@ -37,11 +37,7 @@ impl<'a> App<'a> {
         }
 
         // Phase 1: pick a line to add to the chain.
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
             userspace_warn!("{}", tr!(literal = "Fuse: click did not hit any object (nothing under cursor)"));
             return;
@@ -313,7 +309,7 @@ impl<'a> App<'a> {
             *closed = true;
         }
         self.execute_edit(Command::Replace { before, after });
-        self.finish_fuse_state();
+        self.reset_fuse();
     }
 
     fn commit_fuse(&mut self, closed: bool) {
@@ -446,21 +442,8 @@ impl<'a> App<'a> {
                 self.invalidate_geometry();
                 self.invalidate_overlay();
             }
-            _ => self.finish_fuse_state(),
+            _ => self.reset_fuse(),
         }
-    }
-
-    fn finish_fuse_state(&mut self) {
-        if let Some(id) = self.editor.fuse_awaiting_endpoint {
-            self.editor.selected_handles.remove(&SceneEntityId::Object(id));
-        }
-        self.editor.fuse_segments.clear();
-        self.editor.fuse_awaiting_endpoint = None;
-        self.editor.fuse_endpoint_markers.clear();
-        self.editor.fuse_chain_tail = None;
-        self.editor.fuse_close_marker = None;
-        self.invalidate_geometry();
-        self.invalidate_overlay();
     }
 
     /// If exactly one polyline is currently selected, pre-fill the fuse
@@ -486,7 +469,8 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
-    pub(crate) fn cancel_fuse(&mut self) {
+    /// Leave the fuse tool's in-progress state, after a fuse or on cancel.
+    pub(crate) fn reset_fuse(&mut self) {
         if let Some(id) = self.editor.fuse_awaiting_endpoint {
             self.editor.selected_handles.remove(&SceneEntityId::Object(id));
         }
