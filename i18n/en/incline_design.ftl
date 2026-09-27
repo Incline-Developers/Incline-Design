@@ -1052,7 +1052,6 @@ literal-exact-number-of-surface-vertices-to-target-very-large-values-build-slowl
 literal-candidate-fine-cells-per-budgeted-vertex-higher-gives-the-adaptive-sampler-more-freedom-to-place-detail-but-is-slower-to-build-c51493a4874eee00 = Candidate fine cells per budgeted vertex. Higher gives the adaptive sampler more freedom to place detail, but is slower to build.
 literal-0ac1e107b717c23f = ×
 literal-reduce-the-budget-or-candidate-detail-if-your-machine-has-less-ram-1161546b01aa3606 = Reduce the budget or candidate detail if your machine has less RAM.
-literal-this-exceeds-a-safe-limit-reduce-the-budget-or-candidate-detail-to-continue-4670a310044fa401 = This exceeds a safe limit; reduce the budget or candidate detail to continue.
 literal-reject-reconstructed-triangle-edges-longer-than-this-distance-use-0-for-no-edge-length-limit-fd26ed3105448412 = Reject reconstructed triangle edges longer than this distance. Use 0 for no edge-length limit.
 literal-bridge-gaps-and-boundary-concavities-narrower-than-this-across-the-surface-0-still-bridges-gaps-up-to-roughly-the-sampling-cell-size-larger-values-fill-bigger-holes-and-erode-boundary-concavities-d6d10d1a39161d78 = Bridge gaps and boundary concavities narrower than this across the surface. 0 still bridges gaps up to roughly the sampling cell size; larger values fill bigger holes and erode boundary concavities.
 literal-ordinary-kriging-estimates-numeric-drill-hole-intervals-at-each-block-centre-using-a-spherical-variogram-6da81baf711b558e = Ordinary Kriging estimates numeric drill-hole intervals at each block centre using a spherical variogram.
@@ -1914,7 +1913,6 @@ literal-the-selected-point-cloud-whose-points-will-be-reconstructed-into-a-terra
 literal-the-selected-surface-from-which-contour-lines-will-be-generated-close-the-dialog-to-contour-a-different-one-20a66f41facd6190 = The selected surface, from which contour lines will be generated. Close the dialog to contour a different one.
 literal-the-selected-surface-which-will-be-clipped-close-the-dialog-to-clip-a-different-one-f3d94af095df82e5 = The selected surface, which will be clipped. Close the dialog to clip a different one.
 literal-the-selected-surface-whose-elevation-range-will-be-clipped-close-the-dialog-to-slice-a-different-one-69166ca66aa9ad64 = The selected surface, whose elevation range will be clipped. Close the dialog to slice a different one.
-literal-this-exceeds-a-safe-limit-raise-the-cloth-resolution-to-continue-23f09ec4f28d7b99 = This exceeds a safe limit; raise the cloth resolution to continue.
 literal-unload-source-surface-a55bec2876068fb8 = Unload source surface
 literal-unload-source-topology-ff3ff8496dc8dc90 = Unload source topology
 literal-use-625ad019db843f94 = Use
