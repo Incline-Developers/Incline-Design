@@ -14,7 +14,7 @@ use glam::DVec3;
 use strum::{Display, EnumIter};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Axis, FillStyle, FolderId, FolderMember, FolderRegistry, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId, SectionKind,
@@ -338,10 +338,10 @@ pub(crate) enum TriangulationPickTarget {
 impl TriangulationPickTarget {
     pub(crate) fn prompt(self) -> String {
         match self {
-            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!(literal = "Click the topology in the viewport."),
-            Self::CutPitShell => tr!(literal = "Click the pit shell in the viewport."),
-            Self::IncludeShape => tr!(literal = "Click the pit or stockpile solid in the viewport."),
-            Self::TrimSurface => tr!(literal = "Click the surface in the viewport."),
+            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!("state-click-topology-viewport"),
+            Self::CutPitShell => tr!("state-click-pit-shell-viewport"),
+            Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
+            Self::TrimSurface => tr!("state-click-surface-viewport"),
         }
     }
 }
@@ -449,8 +449,8 @@ pub(crate) fn fitted_slice_preview_zoom(slice_half_length: f64, viewport_height_
 impl TriPolylineClipMode {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::KeepInside => tr!(literal = "Keep inside"),
-            Self::KeepOutside => tr!(literal = "Keep outside"),
+            Self::KeepInside => tr!("state-keep-inside"),
+            Self::KeepOutside => tr!("state-keep-outside"),
         }
     }
 }
@@ -460,15 +460,15 @@ impl TriSurfaceCutSide {
     /// which is less ambiguous than the historical "cut top/bottom" wording.
     pub(crate) fn trim_label(self) -> String {
         match self {
-            Self::CutTop => tr!(literal = "Trim below"),
-            Self::CutBottom => tr!(literal = "Trim above"),
+            Self::CutTop => tr!("state-trim-below"),
+            Self::CutBottom => tr!("state-trim-above"),
         }
     }
 
     pub(crate) fn retained_relation(self) -> String {
         match self {
-            Self::CutTop => tr!(literal = "at or below"),
-            Self::CutBottom => tr!(literal = "at or above"),
+            Self::CutTop => tr!("state-below"),
+            Self::CutBottom => tr!("state-above"),
         }
     }
 }
@@ -571,12 +571,12 @@ impl StandardView {
     /// Localised name used in user-facing activity reports.
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Up => tr!(literal = "Up"),
-            Self::Down => tr!(literal = "Down"),
-            Self::North => tr!(literal = "North"),
-            Self::South => tr!(literal = "South"),
-            Self::West => tr!(literal = "West"),
-            Self::East => tr!(literal = "East"),
+            Self::Up => tr!("common-up"),
+            Self::Down => tr!("common-down"),
+            Self::North => tr!("state-north"),
+            Self::South => tr!("state-south"),
+            Self::West => tr!("state-west"),
+            Self::East => tr!("state-east"),
         }
     }
 }
@@ -775,16 +775,12 @@ impl CircleDraft {
 pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::CollarRotation) -> String {
     use crate::model::drill_hole::CollarRotation;
     match rotation {
-        CollarRotation::Absolute(orientation) => tr_format!(
-            literal = "to azimuth %azimuth%°, dip %dip%°",
+        CollarRotation::Absolute(orientation) => tr!(
+            "state-rotate-to-azimuth-dip",
             azimuth = format!("{:.1}", orientation.azimuth),
             dip = format!("{:.1}", orientation.dip)
         ),
-        CollarRotation::Delta { azimuth, dip } => tr_format!(
-            literal = "by azimuth %azimuth%°, dip %dip%°",
-            azimuth = format!("{azimuth:+.1}"),
-            dip = format!("{dip:+.1}")
-        ),
+        CollarRotation::Delta { azimuth, dip } => tr!("state-rotate-by-azimuth-dip", azimuth = format!("{azimuth:+.1}"), dip = format!("{dip:+.1}")),
     }
 }
 
@@ -1031,13 +1027,13 @@ pub(crate) enum RenameTarget {
 impl RenameTarget {
     pub(crate) fn kind_label(self) -> String {
         match self {
-            Self::Layer(_) => tr!(literal = "Layer"),
-            Self::Triangulation(_) => tr!(literal = "Triangulation"),
-            Self::Raster(_) => tr!(literal = "Raster"),
-            Self::PointCloud(_) => tr!(literal = "Point Cloud"),
-            Self::BlockModel(_) => tr!(literal = "Block Model"),
-            Self::DrillHole(_) => tr!(literal = "Drill Holes"),
-            Self::Folder(..) => tr!(literal = "Collection"),
+            Self::Layer(_) => tr!("common-layer"),
+            Self::Triangulation(_) => tr!("ws-menubar-triangulation"),
+            Self::Raster(_) => tr!("ws-menubar-raster"),
+            Self::PointCloud(_) => tr!("ws-menubar-point-cloud"),
+            Self::BlockModel(_) => tr!("ws-menubar-block-model"),
+            Self::DrillHole(_) => tr!("ws-menubar-drillholes"),
+            Self::Folder(..) => tr!("common-collection"),
         }
     }
 
@@ -2135,7 +2131,7 @@ impl EditorState {
         // rather than inheriting whatever the previous tool left standing.
         self.tool_highlight_id = None;
         if self.drill_pattern_name.trim().is_empty() {
-            self.drill_pattern_name = tr!(literal = "Drill Pattern");
+            self.drill_pattern_name = tr!("state-drill-pattern");
         }
         self.drill_pattern_open = true;
     }
@@ -2164,8 +2160,8 @@ impl EditorState {
             .filter(|value| !value.trim().is_empty())
             .map(str::trim)
             .map(str::to_owned)
-            .unwrap_or_else(|| tr!(literal = "Surface"));
-        self.tri_contour_layer_name_input = tr_format!(literal = "%stem% Contours", stem = stem);
+            .unwrap_or_else(|| tr!("tri-type-open-surface"));
+        self.tri_contour_layer_name_input = tr!("state-stem-contours", stem = stem.to_string());
     }
 
     /// Clear every project/object-owned interaction session in one lifecycle
@@ -2458,7 +2454,7 @@ impl EditorState {
             drill_pattern_diameter_mm: 165.0,
             drill_pattern_depth: 10.0,
             drill_pattern_layout: DrillPatternLayout::Square,
-            drill_pattern_name: tr!(literal = "Drill Pattern"),
+            drill_pattern_name: tr!("state-drill-pattern"),
             drill_pattern_preview_collars: Vec::new(),
             drill_pattern_preview_depth: 10.0,
             drill_pattern_preview_diameter: 0.165,
@@ -2470,7 +2466,7 @@ impl EditorState {
             #[cfg(target_arch = "wasm32")]
             new_project_name: String::new(),
             new_layer_dialog_open: false,
-            new_layer_name: tr!(literal = "Design"),
+            new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
             pending_delete_layer: None,
             pending_delete_item: None,
@@ -2676,11 +2672,11 @@ impl EditorState {
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
             tri_contour_target_layer: None,
-            tri_contour_layer_name_input: tr!(literal = "Surface Contours"),
+            tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
-            point_cloud_tin_name_input: tr!(literal = "Surface"),
+            point_cloud_tin_name_input: tr!("tri-type-open-surface"),
             point_cloud_tin_max_edge: 0.0,
             point_cloud_tin_budget_is_percent: true,
             point_cloud_tin_percent: 1.0,
@@ -2692,7 +2688,7 @@ impl EditorState {
             point_cloud_tin_ground_count: None,
             point_cloud_join_open: false,
             point_cloud_join_sources: Vec::new(),
-            point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
+            point_cloud_join_name_input: tr!("common-joined-cloud"),
             point_cloud_join_remove_sources: true,
             point_cloud_classify_open: false,
             point_cloud_classify_sources: Vec::new(),
@@ -2711,7 +2707,7 @@ impl EditorState {
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
-            kriging_name_input: tr!(literal = "Kriged Block Model"),
+            kriging_name_input: tr!("state-kriged-block-model"),
             kriging_lower: DVec3::ZERO,
             kriging_upper: DVec3::splat(100.0),
             kriging_cell: DVec3::splat(10.0),
@@ -2947,8 +2943,8 @@ impl EditorState {
                 self.explicitly_frozen.extend(newly_frozen.iter().copied());
                 self.tri_selected_object_ids.retain(|object_id| !newly_frozen.contains(&SceneEntityId::Object(*object_id)));
                 crate::logging::report_completed_action(
-                    CommandReportSpec::new(tr!(literal = "Lock Selection"), tr_format!(literal = "%count% object(s)", count = count)),
-                    tr_format!(literal = "Locked %count% object(s)", count = count),
+                    CommandReportSpec::new(tr!("common-lock-selection"), tr!("common-count-object-s", count = count.to_string())),
+                    tr!("state-locked-count-object-s", count = count.to_string()),
                 );
                 // Deselecting removes selection highlights and can move a
                 // cached stroke between scene streams, so rebuild geometry.
@@ -3146,9 +3142,9 @@ pub(crate) enum ViewToggle {
 impl ViewToggle {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Console => tr!(literal = "Show Console"),
-            Self::DarkMode => tr!(literal = "Dark Mode"),
-            Self::BoreholeInspector => tr!(literal = "Borehole Inspector"),
+            Self::Console => tr!("state-show-console"),
+            Self::DarkMode => tr!("state-dark-mode"),
+            Self::BoreholeInspector => tr!("common-borehole-inspector"),
         }
     }
 
@@ -3829,268 +3825,248 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestDiscardLayerChanges(_) => None,
 
-            Self::SetLanguage(choice) => report(tr!(literal = "Language"), choice.endonym().to_owned()),
-            Self::SetFlyModeEnabled(enabled) => report(tr!(literal = "Fly Mode"), if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") }),
-            Self::SetSliceModeEnabled(enabled) => report(tr!(literal = "Slice Mode"), if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") }),
+            Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
+            Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
+            Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SetSlicePreviewDetached(detached) => report(tr!(literal = "Slice Preview"), if *detached { tr!(literal = "Detached") } else { tr!(literal = "Docked") }),
-            Self::NewProject => report(tr!(literal = "Create Project"), tr!(literal = "Untitled project")),
+            Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
+            Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
-            Self::CreateBrowserProject { name } => report(tr!(literal = "Create Project"), name.clone()),
-            Self::OpenProject => report(tr!(literal = "Open Project"), tr!(literal = "Choose one or more files")),
+            Self::CreateBrowserProject { name } => report(tr!("state-create-project"), name.clone()),
+            Self::OpenProject => report(tr!("state-open-project"), tr!("state-choose-one-more-files")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ActivateTrackedProject(path) => report(tr!(literal = "Activate Project"), path.display().to_string()),
+            Self::ActivateTrackedProject(path) => report(tr!("state-activate-project"), path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
-            Self::ActivateTrackedProject(id) => report(tr!(literal = "Activate Project"), id.to_string()),
+            Self::ActivateTrackedProject(id) => report(tr!("state-activate-project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::RemoveTrackedProject(path) => report(tr!(literal = "Remove Project"), path.display().to_string()),
+            Self::RemoveTrackedProject(path) => report(tr!("common-remove-project"), path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
-            Self::RemoveTrackedProject(id) => report(tr!(literal = "Remove Project"), id.to_string()),
+            Self::RemoveTrackedProject(id) => report(tr!("common-remove-project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ShowProjectInFileManager => report(tr!(literal = "Show Project"), tr!(literal = "Open the containing folder")),
+            Self::ShowProjectInFileManager => report(tr!("state-show-project"), tr!("state-open-containing-folder")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ShowTrackedProjectInFileManager(path) => report(tr!(literal = "Show Project"), path.display().to_string()),
-            Self::ImportOmfPaths(paths) => report(tr!(literal = "Import OMF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportDxfPathsInto(paths) => report(tr!(literal = "Import DXF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportTriangulationPaths(paths) => report(tr!(literal = "Import Triangulation"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportPointCloudPaths(paths) => report(tr!(literal = "Import Point Cloud"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportRasterPaths(paths) => report(tr!(literal = "Import Raster"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::LoadRaster(id) => report(tr!(literal = "Load Raster"), format!("{id:?}")),
-            Self::UnloadRaster(id) => report(tr!(literal = "Unload Raster"), format!("{id:?}")),
-            Self::ToggleRasterLocked(id) => report(tr!(literal = "Set Raster Lock"), format!("{id:?}")),
-            Self::RemoveRaster(id) => report(tr!(literal = "Remove Raster"), format!("{id:?}")),
-            Self::DrapeRaster(id) => report(tr!(literal = "Drape Raster"), format!("{id:?}")),
-            Self::UndrapeRaster(id) => report(tr!(literal = "Undrape Raster"), format!("{id:?}")),
-            Self::UndrapeAllRasters => report(tr!(literal = "Undrape Rasters"), tr!(literal = "Removed from every triangulation")),
-            Self::ClearActiveTriangulationRaster => report(tr!(literal = "Clear Raster"), tr!(literal = "Removed from active triangulation")),
-            Self::LoadPointCloud(id) => report(tr!(literal = "Load Point Cloud"), format!("{id:?}")),
-            Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
-            Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
-            Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
+            Self::ShowTrackedProjectInFileManager(path) => report(tr!("state-show-project"), path.display().to_string()),
+            Self::ImportOmfPaths(paths) => report(tr!("state-import-omf"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportDxfPathsInto(paths) => report(tr!("common-import-dxf"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportTriangulationPaths(paths) => report(tr!("state-import-triangulation"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportPointCloudPaths(paths) => report(tr!("state-import-point-cloud"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportRasterPaths(paths) => report(tr!("state-import-raster"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::LoadRaster(id) => report(tr!("state-load-raster"), format!("{id:?}")),
+            Self::UnloadRaster(id) => report(tr!("state-unload-raster"), format!("{id:?}")),
+            Self::ToggleRasterLocked(id) => report(tr!("state-set-raster-lock"), format!("{id:?}")),
+            Self::RemoveRaster(id) => report(tr!("state-remove-raster"), format!("{id:?}")),
+            Self::DrapeRaster(id) => report(tr!("state-drape-raster"), format!("{id:?}")),
+            Self::UndrapeRaster(id) => report(tr!("state-undrape-raster"), format!("{id:?}")),
+            Self::UndrapeAllRasters => report(tr!("state-undrape-rasters"), tr!("state-removed-from-every-triangulation")),
+            Self::ClearActiveTriangulationRaster => report(tr!("state-clear-raster"), tr!("state-removed-from-active-triangulation")),
+            Self::LoadPointCloud(id) => report(tr!("state-load-point-cloud"), format!("{id:?}")),
+            Self::ClosePointCloud(id) => report(tr!("state-unload-point-cloud"), format!("{id:?}")),
+            Self::RemovePointCloud(id) => report(tr!("state-remove-point-cloud"), format!("{id:?}")),
+            Self::ImportCsvBlockModel { path, .. } => report(tr!("common-import-csv-block-model"), path.display().to_string()),
             Self::ExportOmf(selection) => report(
-                tr!(literal = "Export OMF"),
+                tr!("state-export-omf"),
                 if *selection.as_ref() == OmfExportSelection::default() {
-                    tr!(literal = "All open Incline Design data")
+                    tr!("state-all-open-incline-design-data")
                 } else {
-                    tr!(literal = "The data ticked in the export checklist")
+                    tr!("state-data-ticked-export-checklist")
                 },
             ),
-            Self::ExportProjectDxf(id) => report(tr!(literal = "Export Project to DXF"), tr_format!(literal = "Project %id%", id = id)),
-            Self::ExportViewportImage => report(tr!(literal = "Export Viewport Image"), tr!(literal = "Choose a destination")),
-            Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
-            Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
-            Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
-            Self::ExportDrillHoleCsv(id) => report(tr!(literal = "Export Drillhole CSV"), format!("{id:?}")),
+            Self::ExportProjectDxf(id) => report(tr!("state-export-project-dxf"), tr!("state-project-id", id = id.to_string())),
+            Self::ExportViewportImage => report(tr!("state-export-viewport-image"), tr!("state-choose-destination")),
+            Self::ExportLayerDxf(id) => report(tr!("state-export-layer-dxf"), format!("{id:?}")),
+            Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
+            Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
+            Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
-            Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
-            Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
-            Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
+            Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
+            Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
+            Self::ExitWithoutSaving => report(tr!("common-exit-without-saving"), tr!("state-discarding-unsaved-changes")),
+            Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
             Self::CreateFolder(section) => report(
-                tr!(literal = "Create Collection"),
-                tr_format!(literal = "New collection under %section%", section = ExplorerSection::from_kind(*section).label()),
+                tr!("state-create-collection"),
+                tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
             ),
             Self::DeleteFolder { section, folder } => report(
-                tr!(literal = "Delete Collection"),
-                tr_format!(
-                    literal = "%folder% in %section%",
+                tr!("common-delete-collection"),
+                tr!(
+                    "state-folder-section",
                     folder = format!("{folder:?}"),
-                    section = ExplorerSection::from_kind(*section).label()
+                    section = ExplorerSection::from_kind(*section).label().to_string()
                 ),
             ),
             Self::MoveToFolder { member, section, folder } => report(
-                tr!(literal = "Move to Collection"),
+                tr!("common-move-collection"),
                 match folder {
-                    Some(folder) => tr_format!(
-                        literal = "%member% into %folder% in %section%",
+                    Some(folder) => tr!(
+                        "state-member-into-folder-section",
                         member = format!("{member:?}"),
                         folder = format!("{folder:?}"),
-                        section = ExplorerSection::from_kind(*section).label()
+                        section = ExplorerSection::from_kind(*section).label().to_string()
                     ),
-                    None => tr_format!(
-                        literal = "%member% to the root of %section%",
+                    None => tr!(
+                        "state-member-root-section",
                         member = format!("{member:?}"),
-                        section = ExplorerSection::from_kind(*section).label()
+                        section = ExplorerSection::from_kind(*section).label().to_string()
                     ),
                 },
             ),
-            Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
-            Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
-            Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
-            Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
-            Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
-            Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
-            Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
-            Self::SetTopologyWireframes(enabled) => report(
-                tr!(literal = "Set Topology Wireframes"),
-                if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
-            ),
-            Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
-            Self::SetPointCloudClassificationColors(enabled) => report(
-                tr!(literal = "Colour Points by Classification"),
-                if *enabled { tr!(literal = "On") } else { tr!(literal = "Off") },
-            ),
-            Self::SetShowPoints(enabled) => report(
-                tr!(literal = "Set Point Visibility"),
-                if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
-            ),
+            Self::AddDelayProduct { delay_ms, name, .. } => report(tr!("common-add-product"), format!("{delay_ms} ms · {name}")),
+            Self::DeleteDelayProduct(id) => report(tr!("common-delete-product"), format!("{id:?}")),
+            Self::FinishPolyClose => report(tr!("common-create-polyline"), tr!("state-finish-closed-polyline")),
+            Self::CommitStrokeOpen => report(tr!("common-create-line"), tr!("state-finish-open-polyline")),
+            Self::CommitCircleTypedRadius => report(tr!("common-create-circle"), tr!("state-use-typed-radius")),
+            Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
+            Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
+            Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetPointCloudClassificationColors(enabled) => report(tr!("state-colour-points-classification"), if *enabled { tr!("state-on") } else { tr!("state-off") }),
+            Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SetCinematicEnabled(enabled) => report(
-                tr!(literal = "Set Cinematic View"),
-                if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") },
-            ),
-            Self::SetStandardView(view) => report(tr!(literal = "Set Standard View"), view.label()),
-            Self::SaveProject => report(tr!(literal = "Save Project"), tr!(literal = "Current project")),
-            Self::SaveAndReplaceProject => report(tr!(literal = "Save and Replace Project"), tr!(literal = "Current project")),
-            Self::DiscardAndReplaceProject => report(tr!(literal = "Discard and Replace Project"), tr!(literal = "Current project")),
-            Self::ConfirmLossyProjectSave => report(tr!(literal = "Confirm OMF Rewrite"), tr!(literal = "Save despite unsupported content")),
+            Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
+            Self::SetStandardView(view) => report(tr!("state-set-standard-view"), view.label()),
+            Self::SaveProject => report(tr!("menu-file-save-project"), tr!("state-current-project")),
+            Self::SaveAndReplaceProject => report(tr!("state-save-replace-project"), tr!("state-current-project")),
+            Self::DiscardAndReplaceProject => report(tr!("state-discard-replace-project"), tr!("state-current-project")),
+            Self::ConfirmLossyProjectSave => report(tr!("common-confirm-omf-rewrite"), tr!("state-save-despite-unsupported-content")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveProjectAs(id) => report(tr!(literal = "Save Project As"), tr_format!(literal = "Project %id%", id = id)),
-            Self::CloseProjectForce(id) => report(tr!(literal = "Close Project"), tr_format!(literal = "Project %id%", id = id)),
-            Self::SaveAndCloseProject(id) => report(tr!(literal = "Save and Close Project"), tr_format!(literal = "Project %id%", id = id)),
+            Self::SaveProjectAs(id) => report(tr!("state-save-project"), tr!("state-project-id", id = id.to_string())),
+            Self::CloseProjectForce(id) => report(tr!("state-close-project"), tr!("state-project-id", id = id.to_string())),
+            Self::SaveAndCloseProject(id) => report(tr!("state-save-close-project"), tr!("state-project-id", id = id.to_string())),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardProjectChanges(id) => report(tr!(literal = "Discard Project Changes"), tr_format!(literal = "Project %id%", id = id)),
+            Self::DiscardProjectChanges(id) => report(tr!("state-discard-project-changes"), tr!("state-project-id", id = id.to_string())),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardLayerChanges(id) => report(tr!(literal = "Discard Layer Changes"), format!("{id:?}")),
-            Self::DeleteLayer(id) => report(tr!(literal = "Delete Layer"), format!("{id:?}")),
-            Self::DuplicateLayer(id) => report(tr!(literal = "Duplicate Layer"), format!("{id:?}")),
+            Self::DiscardLayerChanges(id) => report(tr!("common-discard-layer-changes"), format!("{id:?}")),
+            Self::DeleteLayer(id) => report(tr!("common-delete-layer"), format!("{id:?}")),
+            Self::DuplicateLayer(id) => report(tr!("state-duplicate-layer"), format!("{id:?}")),
             Self::RenameItem { target, new_name } => report(
-                tr_format!(literal = "Rename %kind%", kind = target.kind_label()),
-                tr_format!(literal = "%target% to “%new_name%”", target = format!("{target:?}"), new_name = new_name),
+                tr!("state-rename-kind", kind = target.kind_label().to_string()),
+                tr!("state-target-new-name", target = format!("{target:?}"), new_name = new_name.to_string()),
             ),
-            Self::ApplyChamfer => report(tr!(literal = "Chamfer"), tr!(literal = "Apply to selection")),
-            Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
-            Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
-            Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
-            Self::LoadLayer(id) => report(tr!(literal = "Load Layer"), format!("{id:?}")),
-            Self::UnloadLayer(id) => report(tr!(literal = "Unload Layer"), format!("{id:?}")),
-            Self::ToggleLayerLocked(id) => report(tr!(literal = "Set Layer Lock"), format!("{id:?}")),
-            Self::ToggleEntityLocked(handle) => report(tr!(literal = "Set Entity Lock"), format!("{handle:?}")),
+            Self::ApplyChamfer => report(tr!("common-chamfer"), tr!("state-apply-selection")),
+            Self::ApplyBezier => report(tr!("common-create-bezier-curve"), tr!("state-apply-selection")),
+            Self::ApplyMoveDelta(delta) => report(tr!("common-move-selection"), format!("{delta}")),
+            Self::ApplyCollarRotation => report(tr!("common-rotate-collar"), tr!("state-apply-selection")),
+            Self::LoadLayer(id) => report(tr!("state-load-layer"), format!("{id:?}")),
+            Self::UnloadLayer(id) => report(tr!("state-unload-layer"), format!("{id:?}")),
+            Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
+            Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
-                if *visible { tr!(literal = "Reveal All") } else { tr!(literal = "Hide All") },
-                tr_format!(literal = "%section% section", section = section.label()),
+                if *visible { tr!("common-reveal-all") } else { tr!("common-hide-all") },
+                tr!("state-section-name", section = section.label().to_string()),
             ),
             Self::SetSectionLocked(section, locked) => report(
-                if *locked { tr!(literal = "Lock All") } else { tr!(literal = "Unlock All") },
-                tr_format!(literal = "%section% section", section = section.label()),
+                if *locked { tr!("common-lock-all") } else { tr!("common-unlock-all") },
+                tr!("state-section-name", section = section.label().to_string()),
             ),
-            Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
-            Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
-            Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
+            Self::SelectAllObjectsInLayer(id) => report(tr!("state-select-layer-objects"), format!("{id:?}")),
+            Self::CloseTriangulation(id) => report(tr!("state-unload-triangulation"), format!("{id:?}")),
+            Self::BatchSetObjectColor(ids, _) => report(tr!("state-set-object-colour"), tr!("common-count-object-s", count = ids.len().to_string())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
-                tr!(literal = "Set Polyline Closed"),
-                tr_format!(literal = "%count% object(s) · %closed%", count = ids.len(), closed = closed),
+                tr!("state-set-polyline-closed"),
+                tr!("state-count-object-s-closed", count = ids.len().to_string(), closed = closed.to_string()),
             ),
-            Self::BatchSetObjectFill(ids, _) => report(tr!(literal = "Set Object Fill"), tr_format!(literal = "%count% object(s)", count = ids.len())),
+            Self::BatchSetObjectFill(ids, _) => report(tr!("state-set-object-fill"), tr!("common-count-object-s", count = ids.len().to_string())),
             Self::BatchSetPolylineLineWeight(ids, weight) => report(
-                tr!(literal = "Set Line Weight"),
-                tr_format!(literal = "%count% object(s) · %weight%", count = ids.len(), weight = weight),
+                tr!("state-set-line-weight"),
+                tr!("state-count-object-s-weight", count = ids.len().to_string(), weight = weight.to_string()),
             ),
             Self::MoveObjectsToLayer { object_ids, target_layer, copy } => report(
-                if *copy {
-                    tr!(literal = "Copy Objects to Layer")
-                } else {
-                    tr!(literal = "Move Objects to Layer")
-                },
-                tr_format!(literal = "%count% object(s) · %layer%", count = object_ids.len(), layer = format!("{target_layer:?}")),
+                if *copy { tr!("state-copy-objects-layer") } else { tr!("state-move-objects-layer") },
+                tr!("state-count-object-s-layer", count = object_ids.len().to_string(), layer = format!("{target_layer:?}")),
             ),
             Self::BatchSetAxisValue(ids, axis, value) => report(
-                tr!(literal = "Move to Axis Value"),
-                tr_format!(literal = "%count% object(s) · %axis% %value%", count = ids.len(), axis = axis.label(), value = value),
+                tr!("state-move-axis-value"),
+                tr!(
+                    "state-count-object-s-axis-value",
+                    count = ids.len().to_string(),
+                    axis = axis.label().to_string(),
+                    value = value.to_string()
+                ),
             ),
-            Self::CommitTextEdit(id, _, _, _, _) => report(tr!(literal = "Edit Text"), format!("{id:?}")),
-            Self::SetTriangulationColor(id, _) => report(tr!(literal = "Set Triangulation Colour"), format!("{id:?}")),
-            Self::LoadTriangulation(id) => report(tr!(literal = "Load Triangulation"), format!("{id:?}")),
-            Self::LoadBlockModel(id) => report(tr!(literal = "Load Block Model"), format!("{id:?}")),
-            Self::CloseBlockModel(id) => report(tr!(literal = "Unload Block Model"), format!("{id:?}")),
-            Self::RemoveBlockModel(id) => report(tr!(literal = "Remove Block Model"), format!("{id:?}")),
-            Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
-            Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
+            Self::CommitTextEdit(id, _, _, _, _) => report(tr!("common-edit-text"), format!("{id:?}")),
+            Self::SetTriangulationColor(id, _) => report(tr!("state-set-triangulation-colour"), format!("{id:?}")),
+            Self::LoadTriangulation(id) => report(tr!("state-load-triangulation"), format!("{id:?}")),
+            Self::LoadBlockModel(id) => report(tr!("state-load-block-model"), format!("{id:?}")),
+            Self::CloseBlockModel(id) => report(tr!("state-unload-block-model"), format!("{id:?}")),
+            Self::RemoveBlockModel(id) => report(tr!("state-remove-block-model"), format!("{id:?}")),
+            Self::SetBlockModelColorVariable { variable, .. } => report(tr!("state-set-block-model-variable"), variable.clone()),
+            Self::ImportDrillHole(source) => report(tr!("state-import-drillholes"), source.display_name()),
             Self::CreateDrillPattern { name, collars, .. } => report(
-                tr!(literal = "Create Drill Pattern"),
-                tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
+                tr!("common-create-drill-pattern"),
+                tr!("state-name-count-holes", name = name.to_string(), count = collars.len().to_string()),
             ),
-            Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
-            Self::CloseDrillHole(id) => report(tr!(literal = "Unload Drillholes"), format!("{id:?}")),
-            Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
-            Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
-            Self::SetDrillHoleColorByWorkingSection { field, .. } => report(tr!(literal = "Colour Drillholes by Working Section"), field.clone()),
-            Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
+            Self::LoadDrillHole(id) => report(tr!("state-load-drillholes"), format!("{id:?}")),
+            Self::CloseDrillHole(id) => report(tr!("state-unload-drillholes"), format!("{id:?}")),
+            Self::RemoveDrillHole(id) => report(tr!("state-remove-drillholes"), format!("{id:?}")),
+            Self::SetDrillHoleColorField { field, .. } => report(tr!("state-colour-drillholes"), field.clone().unwrap_or_else(|| tr!("common-uniform-white"))),
+            Self::SetDrillHoleColorByWorkingSection { field, .. } => report(tr!("state-colour-drillholes-working-section"), field.clone()),
+            Self::SetDrillHoleColorPreset { preset, .. } => report(tr!("state-set-drillhole-colour-preset"), preset.label()),
             Self::SetDrillHoleWidth {
                 radius_scale, min_pixel_diameter, ..
-            } => report(tr!(literal = "Set Drillhole Width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
-            Self::SetDrillHoleStyle { style, .. } => report(tr!(literal = "Set Drillhole Style"), style.label()),
+            } => report(tr!("state-set-drillhole-width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
+            Self::SetDrillHoleStyle { style, .. } => report(tr!("state-set-drillhole-style"), style.label()),
             Self::SetDrillHoleDiscs {
                 disc_diameter,
                 string_pixel_width,
                 ..
-            } => report(tr!(literal = "Set Drillhole Discs"), format!("{disc_diameter:.2} m, {string_pixel_width:.1} px")),
-            Self::BuildReferencePoints { holes, target, side, .. } => report(
-                tr!(literal = "Build Reference Points"),
-                format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()),
-            ),
+            } => report(tr!("state-set-drillhole-discs"), format!("{disc_diameter:.2} m, {string_pixel_width:.1} px")),
+            Self::BuildReferencePoints { holes, target, side, .. } => {
+                report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
+            }
             Self::BuildReferenceSurface { points, controls, extent } => report(
-                tr!(literal = "Build Surface"),
+                tr!("common-build-surface"),
                 match extent {
-                    Some(_) => tr_format!(
-                        literal = "%count% point(s) · %controls% control string(s) · clipped to the extent string",
-                        count = points.len(),
-                        controls = controls.len()
-                    ),
-                    None => tr_format!(
-                        literal = "%count% point(s) · %controls% control string(s) · unclipped",
-                        count = points.len(),
-                        controls = controls.len()
-                    ),
+                    Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                    None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
             Self::SetProjectCoordinateSystem(stored) => report(
-                tr!(literal = "Set Project Coordinate System"),
-                if stored.is_empty() { tr!(literal = "None") } else { stored.clone() },
+                tr!("state-set-project-coordinate-system"),
+                if stored.is_empty() { tr!("common-none") } else { stored.clone() },
             ),
-            Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
-            Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!(literal = "Create Ore Triangulation"), name.clone()),
-            Self::ExportPlotSheet => report(tr!(literal = "Export Engineering Drawing"), tr!(literal = "Choose a destination")),
-            Self::RemoveTriangulation(id) => report(tr!(literal = "Remove Triangulation"), format!("{id:?}")),
-            Self::HideSelection => report(tr!(literal = "Hide Selection"), tr!(literal = "Selected scene elements")),
-            Self::ZoomToExtents => report(tr!(literal = "Zoom to Extents"), tr!(literal = "Preserve view angle")),
-            Self::BeginOffsetPick { object_ids, .. } => report(tr!(literal = "Offset"), tr_format!(literal = "%count% object(s)", count = object_ids.len())),
-            Self::RelimitLineResize { source_id, .. } => report(tr!(literal = "Relimit Line"), format!("{source_id:?}")),
-            Self::CommitBatterBerm => report(tr!(literal = "Create Batter Berm"), tr!(literal = "Apply generated rings")),
-            Self::InsertPointsAtIntersections => report(tr!(literal = "Insert Intersection Points"), tr!(literal = "Selected polylines")),
-            Self::ApplyObjectEdit { object, .. } => report(tr!(literal = "Edit Object"), object.kind_name()),
+            Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
+            Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
+            Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
+            Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
+            Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
+            Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
+            Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
+            Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
+            Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
+            Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
+            Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
-                tr!(literal = "Insert Points at Elevation"),
-                tr_format!(literal = "%count% object(s) · Z %elevation%", count = object_ids.len(), elevation = elevation),
+                tr!("state-insert-points-elevation"),
+                tr!("state-count-object-s-z-elevation", count = object_ids.len().to_string(), elevation = elevation.to_string()),
             ),
             Self::ExecuteCreateTriangulation { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationWithWeld { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationUpperSurface { name, object_ids, .. } => report(
-                tr!(literal = "Create Triangulation"),
-                tr_format!(literal = "%name% · %count% object(s)", name = name, count = object_ids.len()),
+                tr!("tri-create-title"),
+                tr!("state-name-count-object-s", name = name.to_string(), count = object_ids.len().to_string()),
             ),
-            Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!(literal = "Create Point Cloud TIN"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!("state-create-point-cloud-tin"), format!("{cloud_id:?}")),
             Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
-                tr!(literal = "Join Point Clouds"),
-                tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
+                tr!("common-join-point-clouds"),
+                tr!("state-name-count-cloud-s", name = name.to_string(), count = cloud_ids.len().to_string()),
             ),
-            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!(literal = "Classify Point Clouds"), tr_format!(literal = "%count% cloud(s)", count = cloud_ids.len())),
-            Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
-            Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
+            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!("common-classify-point-clouds"), tr!("state-count-cloud-s", count = cloud_ids.len().to_string())),
+            Self::ConfirmDeleteSelection => report(tr!("common-delete-selection"), tr!("state-selected-objects")),
+            Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!("state-cut-triangulation-polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(
-                tr!(literal = "Cut Triangulation by Z"),
-                tr_format!(literal = "%name% · %z_min% to %z_max%", name = name, z_min = z_min, z_max = z_max),
+                tr!("state-cut-triangulation-z"),
+                tr!("state-name-z-min-z-max", name = name.to_string(), z_min = z_min.to_string(), z_max = z_max.to_string()),
             ),
-            Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!(literal = "Trim Triangulation to Surface"), name.clone()),
-            Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!(literal = "Cut Topology to Pit Shell"), name.clone()),
-            Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!(literal = "Merge Shell into Topology"), name.clone()),
-            Self::Undo => report(tr!(literal = "Undo"), tr!(literal = "Previous edit")),
-            Self::Redo => report(tr!(literal = "Redo"), tr!(literal = "Next edit")),
+            Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
+            Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
+            Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
+            Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
                 major_interval, minor_interval, ..
             } => report(
-                tr!(literal = "Generate Contours"),
-                tr_format!(literal = "Major %major% · minor %minor%", major = major_interval, minor = minor_interval),
+                tr!("state-generate-contours"),
+                tr!("state-major-minor", major = major_interval.to_string(), minor = minor_interval.to_string()),
             ),
         }
     }
@@ -4219,13 +4195,13 @@ impl ExplorerSection {
     /// Heading text, used to name the section in console reports.
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Designs => tr!(literal = "Designs"),
-            Self::Triangulations => tr!(literal = "Triangulations"),
-            Self::Rasters => tr!(literal = "Rasters"),
-            Self::PointClouds => tr!(literal = "Point Clouds"),
-            Self::BlockModels => tr!(literal = "Block Models"),
-            Self::DrillHoles => tr!(literal = "Drill Holes"),
-            Self::Modelling => tr!(literal = "Modelling"),
+            Self::Designs => tr!("common-designs"),
+            Self::Triangulations => tr!("common-triangulations"),
+            Self::Rasters => tr!("common-rasters"),
+            Self::PointClouds => tr!("common-point-clouds"),
+            Self::BlockModels => tr!("common-block-models"),
+            Self::DrillHoles => tr!("ws-menubar-drillholes"),
+            Self::Modelling => tr!("common-modelling"),
         }
     }
 

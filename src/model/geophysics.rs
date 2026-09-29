@@ -12,7 +12,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    i18n::tr_format,
+    i18n::tr,
     model::drill_hole::{DrillHoleId, OpenDrillHoleDataset},
 };
 
@@ -976,10 +976,10 @@ struct CachedHole {
 /// say why not. Always granted on the desktop.
 pub(crate) fn reserve_hole(dhid: &str, bytes: usize) -> Result<crate::app::memory::MemoryReservation, String> {
     crate::app::memory::reserve(bytes, &format!("{dhid} geophysics")).map_err(|_| {
-        tr_format!(
-            literal = "%hole% needs %size% MiB for its geophysics, more than the browser has left: unload other items, then unload and load this dataset again",
-            hole = dhid.to_owned(),
-            size = bytes.div_ceil(1024 * 1024)
+        tr!(
+            "geophysics-hole-needs-size-mib-its",
+            hole = dhid.to_owned().to_string(),
+            size = bytes.div_ceil(1024 * 1024).to_string()
         )
     })
 }

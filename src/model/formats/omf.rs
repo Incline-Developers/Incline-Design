@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
         block_model::{
@@ -420,10 +420,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
     }
 
     make_element_names_unique(&mut elements);
-    let fallback_name = tr!(literal = "Incline Design project");
+    let fallback_name = tr!("common-incline-design-project");
     let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { fallback_name.as_str() } else { &snapshot.name });
     project.application = format!("Incline {}", env!("CARGO_PKG_VERSION"));
-    project.description = tr!(literal = "Mining data exported by Incline");
+    project.description = tr!("omf-mining-data-exported-incline");
     if let Some(design) = snapshot.designs.as_ref()
         && !design.metadata.coordinate_reference_system.trim().is_empty()
     {
@@ -1768,16 +1768,13 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     };
     let written_by_incline = project.application.starts_with("Incline ");
     if !project.description.trim().is_empty() && !written_by_incline {
-        bundle.warnings.push(tr!(literal = "Project description is not retained"));
+        bundle.warnings.push(tr!("omf-project-description-not-retained"));
     }
     if !project.author.trim().is_empty() {
-        bundle.warnings.push(tr!(literal = "Project author is not retained"));
+        bundle.warnings.push(tr!("omf-project-author-not-retained"));
     }
     if !project.application.trim().is_empty() && !project.application.starts_with("Incline ") {
-        bundle.warnings.push(tr_format!(
-            literal = "Project application metadata '%application%' is not retained",
-            application = &project.application
-        ));
+        bundle.warnings.push(tr!("omf-application-metadata-dropped", application = project.application.to_string()));
     }
     // Parsed before any element is walked, so a name on an element's own
     // META_FOLDER below always has something to resolve against.
@@ -1791,23 +1788,20 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     }
     let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
-        bundle.warnings.push(tr_format!(
-            literal = "Project has unsupported metadata keys: %keys%",
-            keys = unsupported_project_metadata.join(", ")
-        ));
-    }
-    if !problems.is_empty() {
         bundle
             .warnings
-            .push(tr_format!(literal = "OMF validation warnings: %warnings%", warnings = format!("{problems:?}")));
+            .push(tr!("omf-unsupported-metadata-keys", keys = unsupported_project_metadata.join(", ").to_string()));
+    }
+    if !problems.is_empty() {
+        bundle.warnings.push(tr!("omf-validation-warnings", warnings = format!("{problems:?}")));
     }
     // Drillhole datasets in the older per-hole layout are left out, not read,
     // so the rest of the project still opens.
     let old_drill = old_drill_datasets(&project.elements);
     if !old_drill.is_empty() {
-        bundle.warnings.push(tr_format!(
-            literal = "Skipped drillhole data saved in an older layout (%names%); import it again from its source files",
-            names = old_drill.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ")
+        bundle.warnings.push(tr!(
+            "omf-skipped-drillhole-data-saved-older",
+            names = (old_drill.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ")).to_string()
         ));
     }
     let mut decoder = Decoder {
@@ -1960,21 +1954,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             return natural;
         };
         let section = SectionKind::from_key(key).unwrap_or_else(|| {
-            self.bundle.warnings.push(tr_format!(
-                literal = "Element '%name%' names an unknown section '%section%'",
-                name = &element.name,
-                section = key
-            ));
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-names-unknown-section", name = element.name.to_string(), section = key.to_string()));
             natural
         });
         if section.admits(kind) {
             return section;
         }
-        self.bundle.warnings.push(tr_format!(
-            literal = "Element '%name%' names section '%section%' which cannot show this kind of item in this build",
-            name = &element.name,
-            section = key
-        ));
+        self.bundle
+            .warnings
+            .push(tr!("omf-element-unsupported-section", name = element.name.to_string(), section = key.to_string()));
         section.healed_for(kind)
     }
 
@@ -1996,11 +1986,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let Some(color) = style.and_then(|style| style.get("color")) else { return };
         let count = skipped_working_sections(color);
         if count > 0 {
-            self.bundle.warnings.push(tr_format!(
-                literal = "Element '%name%' has %count% unreadable working section(s); they were left out",
-                name = name,
-                count = count
-            ));
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-has-count-unreadable", name = name.to_string(), count = count.to_string()));
         }
     }
 
@@ -2040,7 +2028,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba: Arc::new(Vec::new()),
                     world_to_uv: style_value(style, "world_to_uv").unwrap_or([0.0; 6]),
                     projection: style_value(style, "projection").unwrap_or_else(|| self.project_crs.clone()),
-                    driver_name: tr!(literal = "OMF texture"),
+                    driver_name: tr!("omf-texture"),
                 },
             });
             return Ok(true);
@@ -3010,9 +2998,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     }
                     Err(error) => crate::userspace_warn!(
                         "{}",
-                        crate::i18n::tr_format!(
-                            literal = "Ignoring the colour map on OMF attribute '%attribute%': %error%",
-                            attribute = &attribute.name,
+                        crate::i18n::tr!(
+                            "omf-ignoring-colour-map-omf-attribute",
+                            attribute = attribute.name.to_string(),
                             error = format!("{error:#}")
                         )
                     ),
@@ -3177,11 +3165,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         {
             let dropped = dataset.apply_stored_ties(stored);
             if dropped > 0 {
-                self.bundle.warnings.push(tr_format!(
-                    literal = "Element '%name%' has %count% tie-in(s) naming holes it no longer contains",
-                    name = &element.name,
-                    count = dropped
-                ));
+                self.bundle
+                    .warnings
+                    .push(tr!("omf-element-name-has-count-tie", name = element.name.to_string(), count = dropped.to_string()));
             }
         }
         let dataset = Arc::new(dataset);
@@ -3346,7 +3332,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba,
                     world_to_uv,
                     projection,
-                    driver_name: tr!(literal = "OMF texture"),
+                    driver_name: tr!("omf-texture"),
                 },
                 folder,
                 section,
@@ -3628,7 +3614,7 @@ fn file_stem(path: &str) -> String {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| tr!(literal = "OMF import"))
+        .unwrap_or_else(|| tr!("omf-import"))
 }
 
 fn safe_component(name: &str) -> String {

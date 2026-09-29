@@ -19,7 +19,8 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, `history_storage.rs` move payloads to temporary backing in `asset_storage.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
 | Ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); see its README; check with `cargo check -p mineflow` |
-| Translations | `src/i18n.rs`, `i18n/en/incline_design.ftl` |
+| Reusable UI widgets | `ui/widgets/` (`menu.rs` buttons and fields, `collapsible_section.rs`, `data_table.rs`, `toolbar.rs`) |
+| Translations | `src/i18n.rs` (`tr!` macro, loader), `i18n/en/incline_design.ftl` |
 | Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 
 `res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`.
@@ -91,7 +92,8 @@ wasm is `panic = "abort"` (the job queue's panic recovery does *not* apply), nee
 
 ## Conventions
 
-- **Translate user-facing text.** `tr!("message-id")`, `tr!("greeting", name = who)`, or the literal forms `tr!(literal = "Apply")` / `tr_format!` (see `src/i18n.rs`). New keys go in `i18n/en/incline_design.ftl`.
+- **Translate user-facing text, and give every string a hand-written id in `i18n/en/incline_design.ftl`.** Use `tr!("message-id")` or `tr!("greeting", name = value)` (`{ $name }` in the catalog); pass arguments as strings (`.to_string()`). `cargo check` enforces it: an unknown id or a missing argument fails the build. Ids are kebab-case with an area prefix (`menu-`, `tri-`, `common-`). Add the English text first; other languages fall back to it until translated. Fluent trims values, so add any padding spaces at the call site.
+- **Build UI from `ui/widgets/`, not bare egui.** Reach for the house widget before the stock one: `menu::MenuButton` over `egui::Button`, `MenuField*` / `MenuFieldCombo` for labelled controls, `properties::read_only_row` for reported values, `CollapsibleSection` / `menu_section` for grouping, `DataTable` for tabular data. When a look or behaviour is needed a second time, or a hand-painted block would help other panels, make it a widget in `ui/widgets/` instead of copying it.
 - `userspace_log!` / `userspace_warn!` / `userspace_error!` (`src/logging.rs`) surface messages in the in-app activity console; plain `log::` macros only reach the log file.
 - `themed_icon!(ui, "name.svg")` / `unthemed_icon!("name.svg")` embed SVGs from `res/ui/` at compile time; `themed_icon!` picks between `icons_dark/` and `icons_light/`.
 - **One corner radius for the whole window.** Panel regions (`chrome::REGION_RADIUS`), floating tiles, toolbar buttons, anything new — all use `widgets::toolbar::GROUP_CORNER_RADIUS`. Never pick a radius by eye.

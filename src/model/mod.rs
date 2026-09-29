@@ -225,11 +225,11 @@ impl Object {
     /// polyline is a plain line and is named as one.
     pub(crate) fn kind_name(&self) -> String {
         match self {
-            Object::Point { .. } => crate::i18n::tr!(literal = "Point"),
-            Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!(literal = "Line"),
-            Object::Polyline { .. } => crate::i18n::tr!(literal = "Polyline"),
-            Object::Circle { .. } => crate::i18n::tr!(literal = "Circle"),
-            Object::Text { .. } => crate::i18n::tr!(literal = "Text"),
+            Object::Point { .. } => crate::i18n::tr!("common-point"),
+            Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!("common-line"),
+            Object::Polyline { .. } => crate::i18n::tr!("common-polyline"),
+            Object::Circle { .. } => crate::i18n::tr!("common-circle"),
+            Object::Text { .. } => crate::i18n::tr!("common-text"),
         }
     }
 

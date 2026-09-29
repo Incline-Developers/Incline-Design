@@ -9,7 +9,7 @@ use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState},
 };
 
@@ -86,7 +86,7 @@ impl DrillHoleSource {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| tr!(literal = "Unsupported drillhole source")),
+                .unwrap_or_else(|| tr!("drill-hole-unsupported-drillhole-source")),
             Self::Csv { name, .. } => name.clone(),
             Self::Omf { name, .. } => name.clone(),
         }
@@ -227,9 +227,9 @@ pub(crate) enum OrientationSource {
 impl OrientationSource {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Measured => tr!(literal = "Measured"),
-            Self::Assumed => tr!(literal = "Assumed"),
-            Self::Unknown => tr!(literal = "Unknown"),
+            Self::Measured => tr!("drill-hole-measured"),
+            Self::Assumed => tr!("drill-hole-assumed"),
+            Self::Unknown => tr!("common-unknown"),
         }
     }
 }
@@ -264,8 +264,8 @@ impl DrillPatternLayout {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Square => tr!(literal = "Square"),
-            Self::Staggered => tr!(literal = "Staggered"),
+            Self::Square => tr!("drill-hole-square"),
+            Self::Staggered => tr!("drill-hole-staggered"),
         }
     }
 }
@@ -283,13 +283,13 @@ pub(crate) fn generate_pattern_collars(
     layout: DrillPatternLayout,
 ) -> Result<Vec<DVec3>, String> {
     if boundary.len() < 3 || boundary.iter().any(|point| !point.is_finite()) {
-        return Err(tr!(literal = "Choose a valid closed polyline"));
+        return Err(tr!("drill-hole-choose-valid-closed-polyline"));
     }
     if !burden.is_finite() || !spacing.is_finite() || burden <= 0.0 || spacing <= 0.0 {
-        return Err(tr!(literal = "Burden and spacing must be greater than zero"));
+        return Err(tr!("drill-hole-burden-spacing-must-greater-than"));
     }
     if !rotation_degrees.is_finite() || !offset.is_finite() {
-        return Err(tr!(literal = "Rotation and offsets must contain valid numbers"));
+        return Err(tr!("drill-hole-rotation-offsets-must-contain-valid"));
     }
 
     let centroid = boundary.iter().copied().sum::<DVec3>() / boundary.len() as f64;
@@ -316,10 +316,7 @@ pub(crate) fn generate_pattern_collars(
     let rows = ((height / burden).ceil() as usize).max(1);
     let cells = columns.saturating_mul(rows);
     if cells > MAX_PATTERN_HOLES.saturating_mul(20) {
-        return Err(crate::i18n::tr_format!(
-            literal = "This spacing would scan too many grid cells; increase burden or spacing (maximum %maximum% holes)",
-            maximum = MAX_PATTERN_HOLES
-        ));
+        return Err(crate::i18n::tr!("drill-hole-spacing-would-scan-too-many", maximum = MAX_PATTERN_HOLES.to_string()));
     }
 
     // Newell's method gives a stable normal for either winding and polygons
@@ -334,7 +331,7 @@ pub(crate) fn generate_pattern_collars(
         normal.z += (current.x - next.x) * (current.y + next.y);
     }
     if normal.z.abs() <= (width * height).abs().max(1.0) * 1.0e-12 {
-        return Err(tr!(literal = "The selected polyline has no usable XY area"));
+        return Err(tr!("drill-hole-selected-polyline-has-no-usable"));
     }
     let elevation = |x: f64, y: f64| {
         if normal.z.abs() > 1.0e-12 {
@@ -447,16 +444,13 @@ pub(crate) fn generate_pattern_collars(
                 let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
                 collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
                 if collars.len() > MAX_PATTERN_HOLES {
-                    return Err(crate::i18n::tr_format!(
-                        literal = "Pattern exceeds the maximum of %maximum% holes; increase burden or spacing",
-                        maximum = MAX_PATTERN_HOLES
-                    ));
+                    return Err(crate::i18n::tr!("drill-hole-pattern-too-many-holes", maximum = MAX_PATTERN_HOLES.to_string()));
                 }
             }
         }
     }
     if collars.is_empty() {
-        return Err(tr!(literal = "No holes fit inside this boundary at the current burden and spacing"));
+        return Err(tr!("drill-hole-no-holes-fit-inside-boundary"));
     }
     Ok(collars)
 }
@@ -1015,10 +1009,10 @@ impl DrillColorPreset {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Rainbow => crate::i18n::tr!(literal = "Rainbow"),
-            Self::Grayscale => crate::i18n::tr!(literal = "Grayscale"),
-            Self::Heat => crate::i18n::tr!(literal = "Heat"),
-            Self::GreenYellowRed => crate::i18n::tr!(literal = "Green–Yellow–Red"),
+            Self::Rainbow => crate::i18n::tr!("drill-hole-rainbow"),
+            Self::Grayscale => crate::i18n::tr!("drill-hole-grayscale"),
+            Self::Heat => crate::i18n::tr!("drill-hole-heat"),
+            Self::GreenYellowRed => crate::i18n::tr!("drill-hole-green-yellow-red"),
         }
     }
 
@@ -1162,8 +1156,8 @@ impl DrillHoleStyle {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::TrueDiameter => tr!(literal = "True diameter"),
-            Self::StringAndDiscs => tr!(literal = "String and discs"),
+            Self::TrueDiameter => tr!("drill-hole-true-diameter"),
+            Self::StringAndDiscs => tr!("drill-hole-string-discs"),
         }
     }
 }
@@ -1198,11 +1192,11 @@ pub(crate) enum SectionProblem {
 impl SectionProblem {
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::NoName => tr!(literal = "A working section needs a name."),
-            Self::NameIsCode => tr!(literal = "A code outside this section has that name. A section may share its name only with a code it holds."),
-            Self::CodeClaimed { code, section } => tr_format!(literal = "%code% is already in working section %section%.", code = code.clone(), section = section.clone()),
-            Self::DuplicateName => tr!(literal = "Another working section of this field has that name."),
-            Self::NoCodes => tr!(literal = "Every code it lists is already in another working section."),
+            Self::NoName => tr!("drill-hole-working-section-needs-name"),
+            Self::NameIsCode => tr!("drill-hole-code-outside-section-has-name"),
+            Self::CodeClaimed { code, section } => tr!("drill-hole-code-already-in-section", code = code.clone().to_string(), section = section.clone().to_string()),
+            Self::DuplicateName => tr!("drill-hole-another-working-section-field-has"),
+            Self::NoCodes => tr!("drill-hole-every-code-lists-already-another"),
         }
     }
 }
@@ -2038,7 +2032,7 @@ impl ReferenceTarget {
     pub(crate) fn label(&self) -> String {
         match self {
             Self::Code(code) => code.clone(),
-            Self::Section(name) => tr_format!(literal = "%name% (working section)", name = name.clone()),
+            Self::Section(name) => tr!("drill-hole-name-working-section", name = name.clone().to_string()),
         }
     }
 }
@@ -2056,8 +2050,8 @@ impl ReferenceSide {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Roof => tr!(literal = "Roof"),
-            Self::Floor => tr!(literal = "Floor"),
+            Self::Roof => tr!("drill-hole-roof"),
+            Self::Floor => tr!("drill-hole-floor"),
         }
     }
 }

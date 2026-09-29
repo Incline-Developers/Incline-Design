@@ -67,7 +67,7 @@ impl<'a> App<'a> {
             return;
         }
         if project_to_rl.is_none() && horiz_dist.abs() < 1e-9 && z_delta.abs() < 1e-9 {
-            userspace_warn!("{}", tr!(literal = "Offset distance must be greater than zero"));
+            userspace_warn!("{}", tr!("cmd-offset-distance-must-be-positive"));
             return;
         }
         let target_ids: Vec<ObjectId> = object_ids
@@ -303,13 +303,7 @@ impl<'a> App<'a> {
         }
 
         if collapsed_circles > 0 {
-            userspace_warn!(
-                "{}",
-                crate::i18n::tr_format!(
-                    literal = "Skipped %count% circle(s): the offset distance is larger than the radius",
-                    count = collapsed_circles
-                )
-            );
+            userspace_warn!("{}", crate::i18n::tr!("cmd-offset-skipped-count-circle-s-offset", count = collapsed_circles.to_string()));
         }
 
         let offset_count = offset_specs.len();
@@ -351,10 +345,10 @@ impl<'a> App<'a> {
         self.cancel_offset();
         crate::logging::report_completed_action(
             CommandReportSpec::new(
-                crate::i18n::tr!(literal = "Create Offset"),
-                crate::i18n::tr_format!(literal = "%count% object(s)", count = offset_count),
+                crate::i18n::tr!("cmd-offset-create-offset"),
+                crate::i18n::tr!("common-count-object-s", count = offset_count.to_string()),
             ),
-            crate::i18n::tr_format!(literal = "Created offset of %count% object(s)", count = offset_count),
+            crate::i18n::tr!("cmd-offset-created-offset-count-object-s", count = offset_count.to_string()),
         );
         self.invalidate_geometry();
     }

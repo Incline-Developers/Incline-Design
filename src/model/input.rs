@@ -20,10 +20,10 @@ pub(crate) struct InputFile {
 pub(crate) async fn read_browser_range(file: &web_sys::File, start: u64, end: u64) -> Result<Vec<u8>, String> {
     let blob = file
         .slice_with_f64_and_f64(start as f64, end as f64)
-        .map_err(|error| crate::i18n::tr_format!(literal = "could not slice %name%: %error%", name = file.name(), error = format!("{error:?}")))?;
+        .map_err(|error| crate::i18n::tr!("input-could-not-slice-name-error", name = file.name().to_string(), error = format!("{error:?}")))?;
     let value = wasm_bindgen_futures::JsFuture::from(blob.array_buffer())
         .await
-        .map_err(|error| crate::i18n::tr_format!(literal = "could not read %name%: %error%", name = file.name(), error = format!("{error:?}")))?;
+        .map_err(|error| crate::i18n::tr!("input-could-not-read-name-error", name = file.name().to_string(), error = format!("{error:?}")))?;
     let array = js_sys::Uint8Array::new(&value);
     let mut bytes = vec![0u8; array.length() as usize];
     array.copy_to(&mut bytes);
@@ -81,7 +81,7 @@ pub(crate) async fn read_browser_handle(handle: rfd::FileHandle) -> Result<Input
 pub(crate) async fn read_browser_head(file: &web_sys::File, max_len: usize) -> Result<InputFile, String> {
     let size = file.size();
     if !size.is_finite() || size < 0.0 {
-        return Err(crate::i18n::tr_format!(literal = "%name% has no readable size", name = file.name()));
+        return Err(crate::i18n::tr!("common-name-has-no-readable-size", name = file.name().to_string()));
     }
     let head_len = (max_len as f64).min(size).max(0.0) as u64;
     let bytes = read_browser_range(file, 0, head_len).await?;

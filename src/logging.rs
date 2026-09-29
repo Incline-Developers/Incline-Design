@@ -21,7 +21,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt as _,
 };
 
-use crate::i18n::{tr, tr_format};
+use crate::i18n::tr;
 
 /// Length of the rolling log buffer.
 const MAX_BUFFER_BYTES: usize = 2 * 1024 * 1024;
@@ -189,13 +189,13 @@ fn concise(text: &str) -> String {
 fn standalone_title(target: Option<&str>, severity: ConsoleSeverity) -> String {
     let target = target.unwrap_or_default();
     if target.contains("render") || target.contains("wgpu") {
-        tr!(literal = "Renderer")
+        tr!("logging-renderer")
     } else if target.contains("job") || target.contains("load") {
-        tr!(literal = "Background")
+        tr!("common-background")
     } else if severity == ConsoleSeverity::Error {
-        tr!(literal = "System Error")
+        tr!("logging-system-error")
     } else {
-        tr!(literal = "System")
+        tr!("logging-system")
     }
 }
 
@@ -226,7 +226,7 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
                         entry.details.push(entry.summary.clone());
                     }
                     entry.details.push(message);
-                    entry.summary = tr_format!(literal = "%count% messages", count = entry.details.len());
+                    entry.summary = tr!("logging-count-messages", count = entry.details.len().to_string());
                 });
                 return;
             }
@@ -406,8 +406,8 @@ fn complete_if_settled(entry: &mut ConsoleEntry) -> bool {
     entry.state = ConsoleEntryState::Complete;
     if !entry.cancelled && entry.severity == ConsoleSeverity::Info {
         entry.severity = ConsoleSeverity::Success;
-        if entry.summary.is_empty() || entry.summary == tr!(literal = "Working…") {
-            entry.summary = tr!(literal = "Completed");
+        if entry.summary.is_empty() || entry.summary == tr!("logging-working") {
+            entry.summary = tr!("logging-completed");
         }
     }
     true
@@ -415,7 +415,7 @@ fn complete_if_settled(entry: &mut ConsoleEntry) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn trace_activity_started(id: ConsoleEntryId, title: &str, summary: &str) {
-    let message = tr!(literal = "Activity started");
+    let message = tr!("logging-activity-started");
     tracing::info!(
         target: "incline_design::activity",
         activity_id = id.0,
@@ -467,7 +467,7 @@ impl CompletedActivity {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn trace_activity_completed(activity: &CompletedActivity) {
-    let message = tr!(literal = "Activity completed");
+    let message = tr!("logging-activity-completed");
     match activity.severity {
         ConsoleSeverity::Error => tracing::error!(
             target: "incline_design::activity",
@@ -590,7 +590,7 @@ impl Drop for ConsoleReportHandle {
                 entry.pending_children = entry.pending_children.saturating_sub(1);
                 if self.cancelled {
                     entry.cancelled = true;
-                    entry.summary = tr!(literal = "Cancelled");
+                    entry.summary = tr!("common-cancelled");
                     entry.severity = ConsoleSeverity::Info;
                 }
                 settled = complete_if_settled(entry);
@@ -677,75 +677,75 @@ macro_rules! userspace_error {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn startup_log() {
-    let id = begin_command_report(CommandReportSpec::new(tr!(literal = "Application Startup"), tr!(literal = "Initialising Incline Design")));
+    let id = begin_command_report(CommandReportSpec::new(tr!("logging-application-startup"), tr!("logging-initialising-incline-design")));
     with_report_scope(id, || {
-        userspace_log!("{}", tr_format!(literal = "Application name: %name%", name = crate::APP_NAME));
-        userspace_log!("{}", tr_format!(literal = "Application ID: %id%", id = crate::APP_ID));
-        userspace_log!("{}", tr_format!(literal = "Release version: %version%", version = crate::APP_RELEASE));
+        userspace_log!("{}", tr!("logging-application-name", name = crate::APP_NAME.to_string()));
+        userspace_log!("{}", tr!("logging-application-id-id", id = crate::APP_ID.to_string()));
+        userspace_log!("{}", tr!("logging-release-version", version = crate::APP_RELEASE.to_string()));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Build target: %os%-%architecture%",
-                os = std::env::consts::OS,
-                architecture = std::env::consts::ARCH
+            tr!(
+                "logging-build-target-os-architecture",
+                os = std::env::consts::OS.to_string(),
+                architecture = std::env::consts::ARCH.to_string()
             )
         );
-        userspace_log!("{}", tr_format!(literal = "Pointer width: %width%-bit", width = usize::BITS));
+        userspace_log!("{}", tr!("logging-pointer-width", width = usize::BITS.to_string()));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Rust compiler host: %host%",
-                host = std::env::var("HOST").unwrap_or_else(|_| tr!(literal = "unknown"))
+            tr!(
+                "logging-rust-compiler-host",
+                host = std::env::var("HOST").unwrap_or_else(|_| tr!("logging-unknown")).to_string()
             )
         );
-        userspace_log!("{}", tr_format!(literal = "Process ID: %id%", id = std::process::id()));
+        userspace_log!("{}", tr!("logging-process-id-id", id = std::process::id().to_string()));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Locale environment: LANG=%lang%, LC_ALL=%locale%, TZ=%timezone%",
+            tr!(
+                "logging-locale-environment",
                 lang = format!("{:?}", std::env::var_os("LANG")),
                 locale = format!("{:?}", std::env::var_os("LC_ALL")),
-                timezone = format!("{:?}", std::env::var_os("TZ")),
+                timezone = format!("{:?}", std::env::var_os("TZ"))
             )
         );
 
         #[cfg(target_os = "linux")]
         {
-            userspace_log!("{}", tr!(literal = "Operating system: GNU / Linux"));
+            userspace_log!("{}", tr!("logging-operating-system-gnu-linux"));
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "Desktop session: XDG_SESSION_TYPE=%type%, XDG_CURRENT_DESKTOP=%desktop%, WAYLAND_DISPLAY=%wayland%, DISPLAY=%display%",
-                    type = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")),
+                tr!(
+                    "logging-desktop-session-xdg-session-type",
+                    session = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")),
                     desktop = format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP")),
                     wayland = format!("{:?}", std::env::var_os("WAYLAND_DISPLAY")),
-                    display = format!("{:?}", std::env::var_os("DISPLAY")),
+                    display = format!("{:?}", std::env::var_os("DISPLAY"))
                 )
             );
         }
 
         #[cfg(target_os = "windows")]
         {
-            userspace_log!("{}", tr!(literal = "Operating system: Microsoft Windows"));
+            userspace_log!("{}", tr!("logging-operating-system-microsoft-windows"));
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "Windows session: SESSIONNAME=%session%, USERNAME=%user%",
+                tr!(
+                    "logging-windows-session-sessionname-session",
                     session = format!("{:?}", std::env::var_os("SESSIONNAME")),
-                    user = format!("{:?}", std::env::var_os("USERNAME")),
+                    user = format!("{:?}", std::env::var_os("USERNAME"))
                 )
             );
         }
 
         #[cfg(target_os = "macos")]
         {
-            userspace_log!("{}", tr!(literal = "Operating system: macOS"));
+            userspace_log!("{}", tr!("logging-operating-system-macos"));
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "macOS session: USER=%user%, SHELL=%shell%",
+                tr!(
+                    "logging-macos-session",
                     user = format!("{:?}", std::env::var_os("USER")),
-                    shell = format!("{:?}", std::env::var_os("SHELL")),
+                    shell = format!("{:?}", std::env::var_os("SHELL"))
                 )
             );
         }

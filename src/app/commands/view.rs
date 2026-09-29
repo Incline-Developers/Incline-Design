@@ -1,6 +1,6 @@
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     ui::state::{ActiveTool, DelayProduct},
     userspace_log, userspace_warn,
 };
@@ -11,9 +11,9 @@ impl<'a> App<'a> {
     pub(crate) fn toggle_rotation_centre(&mut self) {
         if self.editor.rotation_centre.is_some() {
             self.clear_rotation_centre();
-            userspace_log!("{}", tr!(literal = "Released the centre of rotation"));
+            userspace_log!("{}", tr!("cmd-view-released-centre-rotation"));
         } else if self.editor.fly_mode_enabled {
-            userspace_warn!("{}", tr!(literal = "The centre of rotation is not available in flying mode"));
+            userspace_warn!("{}", tr!("cmd-view-centre-rotation-not-available-flying"));
         } else {
             self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
         }
@@ -49,7 +49,7 @@ impl<'a> App<'a> {
                 self.editor.z_level,
                 self.editor.xray_enabled,
             ) else {
-                userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
+                userspace_warn!("{}", tr!("cmd-view-no-point-under-cursor-fix"));
                 return;
             };
             centre
@@ -58,8 +58,8 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Fixed the centre of rotation at %x%, %y%, %z%",
+            tr!(
+                "cmd-view-fixed-centre-rotation-x-y",
                 x = format!("{:.3}", centre.x),
                 y = format!("{:.3}", centre.y),
                 z = format!("{:.3}", centre.z)
@@ -82,7 +82,7 @@ impl<'a> App<'a> {
         // The topology GPU cache detects the style change during the next
         // render; document geometry does not need rebuilding.
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set topology wireframes = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-topology-wireframes-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -90,7 +90,7 @@ impl<'a> App<'a> {
         self.editor.show_points = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set view points = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-view-points-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -102,7 +102,7 @@ impl<'a> App<'a> {
         self.editor.cinematic_enabled = enabled;
         self.invalidate_geometry();
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set cinematic view = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-cinematic-view-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -114,7 +114,7 @@ impl<'a> App<'a> {
     pub(crate) fn set_xy_grid_shown(&mut self, enabled: bool) {
         self.editor.show_xy_grid = enabled;
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set XY grid = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-xy-grid-enabled", enabled = enabled.to_string()));
     }
 
     /// Flip one View menu switch and save it, exactly as the Interface tab
@@ -305,7 +305,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("{}", tr!(literal = "Reset view (fit to extents)"));
+        userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -321,7 +321,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("{}", tr!(literal = "Zoom to extents (preserving angle)"));
+        userspace_log!("{}", tr!("cmd-view-zoom-extents-preserving-angle"));
     }
 }
 

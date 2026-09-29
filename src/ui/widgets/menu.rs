@@ -1,7 +1,7 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
 use super::shifted;
-use crate::i18n::{tr, tr_format};
+use crate::i18n::tr;
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -501,7 +501,7 @@ pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surfac
     let response = ui
         .interact(close_rect, ui.id().with("close"), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(tr!(literal = "Close"));
+        .on_hover_text(tr!("survey-close"));
     if response.hovered() {
         ui.painter()
             .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
@@ -901,8 +901,8 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             label: label.into(),
             help_text: None,
             paths,
-            empty_text: tr!(literal = "No file chosen").into(),
-            button_text: tr!(literal = "Choose...").into(),
+            empty_text: tr!("common-no-file-chosen").into(),
+            button_text: tr!("common-choose").into(),
             width: None,
         }
     }
@@ -962,7 +962,7 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
             .map(str::to_owned)
             .unwrap_or_else(|| path.to_string_lossy().into_owned())
             .into(),
-        paths => tr_format!(literal = "%count% files selected", count = paths.len()).into(),
+        paths => tr!("menu-count-files-selected", count = paths.len().to_string()).into(),
     }
 }
 
@@ -1417,12 +1417,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             width,
         } = self;
         let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let widest_text = std::iter::once(selected_text.text())
-            .chain(options.iter().map(|(_, text)| text.text()))
-            .map(|text| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x)
-            .fold(0.0, f32::max);
-        let natural_control_width =
-            (widest_text + ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
+        let text_width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
+        let selected_needs = text_width(selected_text.text()) + chrome;
+        let widest_text = options.iter().map(|(_, text)| text_width(text.text())).fold(0.0, f32::max);
+        let natural_control_width = (widest_text + chrome).max(selected_needs).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
         menu_field_row(ui, label, help_text, |ui, _, column_width| {
             let width = width.unwrap_or(column_width).max(natural_control_width);
             let selected_tooltip = selected_text.text().to_owned();
@@ -1436,8 +1435,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                         selection_changed |= ui.selectable_value(value, option, text).changed();
                     }
                 })
-                .response
-                .on_hover_text(selected_tooltip);
+                .response;
+            // Only a value the box cuts short is worth repeating on hover.
+            if selected_needs > width + 0.5 {
+                response = response.on_hover_text(selected_tooltip);
+            }
             if selection_changed {
                 response.mark_changed();
             }

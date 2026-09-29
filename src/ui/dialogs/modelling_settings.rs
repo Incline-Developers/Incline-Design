@@ -16,13 +16,13 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
         return;
     }
     let mut open = true;
-    DragableMenu::new("modelling_settings_dialog", tr!(literal = "Modelling Settings"))
+    DragableMenu::new("modelling_settings_dialog", tr!("modelling-settings-modelling-settings"))
         .open(&mut open)
         .min_width(380.0)
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             if !project.has_active_project {
-                menu::menu_note(ui, tr!(literal = "No open project"));
+                menu::menu_note(ui, tr!("common-no-open-project"));
                 return;
             }
             let current = project.coordinate_reference_system.trim();
@@ -40,7 +40,7 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
             let mut chosen: Option<String> = definitions.iter().find(|(_, stored)| stored == current).map(|(name, _)| name.clone());
             let shown = match (&chosen, current.is_empty()) {
                 (Some(name), _) => name.clone(),
-                (None, true) => tr!(literal = "Not set"),
+                (None, true) => tr!("modelling-settings-not-set"),
                 // A spelling from another program, or one no definition
                 // matches: shown as the project carries it, never guessed at.
                 (None, false) => match crs::CoordinateSystem::parse_stored(current) {
@@ -48,8 +48,8 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     _ => current.to_owned(),
                 },
             };
-            let options = std::iter::once((None, tr!(literal = "None").into())).chain(definitions.iter().map(|(name, _)| (Some(name.clone()), name.clone().into())));
-            if MenuFieldCombo::new("modelling_settings_datum", tr!(literal = "Survey datum"), &mut chosen, shown, options)
+            let options = std::iter::once((None, tr!("common-none").into())).chain(definitions.iter().map(|(name, _)| (Some(name.clone()), name.clone().into())));
+            if MenuFieldCombo::new("modelling_settings_datum", tr!("modelling-settings-survey-datum"), &mut chosen, shown, options)
                 .show(ui)
                 .changed()
             {
@@ -60,9 +60,7 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     .unwrap_or_default();
                 commands.push(UiCommand::SetProjectCoordinateSystem(stored));
             }
-            ui.small(tr!(
-                literal = "The coordinate system every point and surface in this project is in. Defined under Survey; a project-level setting, whichever place it is set from."
-            ));
+            ui.small(tr!("modelling-settings-crs-help"));
         });
     if !open {
         editor.show_modelling_settings = false;

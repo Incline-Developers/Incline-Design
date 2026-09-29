@@ -89,7 +89,7 @@ impl fmt::Display for CsvDrillError {
         match self {
             Self::Io(error) => error.fmt(f),
             Self::Invalid(message) => f.write_str(message),
-            Self::Cancelled => f.write_str(&crate::i18n::tr!(literal = "Cancelled")),
+            Self::Cancelled => f.write_str(&crate::i18n::tr!("common-cancelled")),
         }
     }
 }
@@ -132,15 +132,15 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
         rows.push((0..records.len()).map(|index| cell_text(records.cell(index)).into_owned()).collect::<Vec<_>>());
     }
     let mut rows = rows.into_iter();
-    let headers = rows.next().ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV file is empty")))?;
+    let headers = rows.next().ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-file-empty")))?;
     if headers.is_empty() || headers.iter().all(|header| header.trim().is_empty()) {
-        return Err(CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV header has no columns")));
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-header-has-no-columns")));
     }
     let mut seen = std::collections::HashSet::new();
     for header in &headers {
         let key = strip_repair_marks(header).trim().to_ascii_lowercase();
         if key.is_empty() || !seen.insert(key) {
-            return Err(CsvDrillError::Invalid(crate::i18n::tr!(literal = "CSV headers must be nonblank and unique")));
+            return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-headers-must-nonblank-unique")));
         }
     }
     Ok(CsvDrillPreview { headers, rows: rows.collect() })
@@ -350,9 +350,7 @@ fn check_purposes<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) 
     }
     let has_geophysics = files.iter().any(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
     if has_geophysics && bundle_anchor(files.iter().copied()).is_none() {
-        return Err(CsvDrillError::Invalid(crate::i18n::tr!(
-            literal = "Downhole geophysics needs a collar or explicit-segment file in the bundle, whose holes it attaches to"
-        )));
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-geophysics-needs-geometry")));
     }
     Ok(())
 }
@@ -475,11 +473,7 @@ fn link_geophysics<'m, R: std::io::BufRead>(
             Err(CsvDrillError::Cancelled) => return Err(CsvDrillError::Cancelled),
             Err(error) => userspace_warn!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "%file% was left out of the downhole geophysics: %error%",
-                    file = mapping.path.display().to_string(),
-                    error = error.to_string()
-                )
+                crate::i18n::tr!("common-file-was-left-out-downhole", file = mapping.path.display().to_string(), error = error.to_string())
             ),
         }
     }
@@ -552,8 +546,8 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
         if repaired {
             userspace_warn!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "%file% is not valid UTF-8; %count% unreadable byte(s) were replaced in %cells% cell(s); a damaged cell is not read as data",
+                crate::i18n::tr!(
+                    "csv-drill-hole-invalid-utf8",
                     file = mapping.path.display().to_string(),
                     count = parsed.repaired_bytes.to_string(),
                     cells = parsed.repaired_cells.to_string()
@@ -583,17 +577,14 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
         if inclination_as_dip {
             userspace_warn!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "%file% inclination values that could be an angle are all at or below zero, so the column was read as dip, negative downward",
-                    file = mapping.path.display().to_string()
-                )
+                crate::i18n::tr!("csv-drill-hole-file-inclination-values-could-angle", file = mapping.path.display().to_string())
             );
         }
         if angles.azimuth_off_compass > 0 {
             userspace_warn!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "%file% holds %count% rows whose azimuth is not between 0 and 360",
+                crate::i18n::tr!(
+                    "csv-drill-hole-azimuth-out-of-range",
                     file = mapping.path.display().to_string(),
                     count = angles.azimuth_off_compass.to_string()
                 )
@@ -602,8 +593,8 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
         if angles.tilt_not_an_angle > 0 {
             userspace_warn!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "%file% holds %count% rows whose dip is not between -90 and 90; those rows were read without a direction",
+                crate::i18n::tr!(
+                    "csv-drill-hole-dip-out-of-range",
                     file = mapping.path.display().to_string(),
                     count = angles.tilt_not_an_angle.to_string()
                 )
@@ -636,7 +627,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
         let mut report_skip = |error: &CsvDrillError| {
             skipped += 1;
             if skipped <= SKIP_REPORT_LIMIT {
-                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Skipped a row: %reason%", reason = error.to_string()));
+                userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-skipped-row-reason", reason = error.to_string()));
             }
         };
         // Each gate rides with the row it was read from, so the two cannot
@@ -709,11 +700,11 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                         if orphaned <= SKIP_REPORT_LIMIT {
                             userspace_warn!(
                                 "{}",
-                                crate::i18n::tr_format!(
-                                    literal = "%file% row %row% is for DHID '%dhid%', a hole the bundle's geometry does not define",
+                                crate::i18n::tr!(
+                                    "csv-drill-hole-row-undefined-hole",
                                     file = mapping.path.display().to_string(),
                                     row = line.to_string(),
-                                    dhid = dhid.clone()
+                                    dhid = dhid.clone().to_string()
                                 )
                             );
                         }
@@ -749,13 +740,10 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
     }
 
     if skipped > SKIP_REPORT_LIMIT {
-        userspace_warn!("{}", crate::i18n::tr_format!(literal = "%count% rows were skipped in total", count = skipped.to_string()));
+        userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-count-rows-were-skipped-total", count = skipped.to_string()));
     }
     if orphaned > SKIP_REPORT_LIMIT {
-        userspace_warn!(
-            "{}",
-            crate::i18n::tr_format!(literal = "%count% rows were for a hole the bundle's geometry does not define", count = orphaned.to_string())
-        );
+        userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-rows-for-undefined-holes", count = orphaned.to_string()));
     }
 
     report_overlaps(&intervals);
@@ -872,14 +860,14 @@ fn validate_roles(mapping: &CsvDrillFileMapping) -> Result<(), CsvDrillError> {
             require(CsvDrillColumnRole::Depth, "depth")?;
             let curves = [CsvDrillColumnRole::Gamma, CsvDrillColumnRole::LongDensity, CsvDrillColumnRole::ShortDensity].map(|role| count(&role));
             if curves.iter().any(|mapped| *mapped > 1) {
-                return Err(CsvDrillError::Invalid(crate::i18n::tr_format!(
-                    literal = "%file% maps a gamma or density column twice",
+                return Err(CsvDrillError::Invalid(crate::i18n::tr!(
+                    "csv-drill-hole-file-maps-gamma-density-column",
                     file = mapping.path.display().to_string()
                 )));
             }
             if curves.iter().all(|mapped| *mapped == 0) {
-                return Err(CsvDrillError::Invalid(crate::i18n::tr_format!(
-                    literal = "%file% requires a gamma or density column",
+                return Err(CsvDrillError::Invalid(crate::i18n::tr!(
+                    "csv-drill-hole-file-requires-gamma-density-column",
                     file = mapping.path.display().to_string()
                 )));
             }
@@ -1193,10 +1181,10 @@ fn report_overlaps(intervals: &HashMap<String, Vec<DrillInterval>>) {
     }
     userspace_warn!(
         "{}",
-        crate::i18n::tr_format!(
-            literal = "%holes% hole(s) carry overlapping intervals, such as a seam logged alongside its splits: %summary%",
+        crate::i18n::tr!(
+            "csv-drill-hole-holes-hole-s-carry-overlapping",
             holes = affected.len().to_string(),
-            summary = summary
+            summary = summary.to_string()
         )
     );
 }
@@ -1338,11 +1326,7 @@ fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvD
         return Ok((std::borrow::Cow::Borrowed(bytes), 0));
     }
     let budget = (bytes.len() / 10).max(MINIMUM_REPAIR_BUDGET);
-    let (fixed, count) = repair_utf8(bytes, budget).ok_or_else(|| {
-        CsvDrillError::Invalid(crate::i18n::tr!(
-            literal = "CSV has too many unreadable bytes to repair; it is probably in a legacy encoding, so save it as UTF-8 and import it again"
-        ))
-    })?;
+    let (fixed, count) = repair_utf8(bytes, budget).ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-has-too-many-unreadable")))?;
     Ok((std::borrow::Cow::Owned(fixed), count))
 }
 

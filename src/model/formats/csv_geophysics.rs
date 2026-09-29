@@ -26,7 +26,7 @@ use std::{
 use rayon::prelude::*;
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         formats::csv_drill_hole::{self, CsvDrillColumnRole, CsvDrillError, CsvDrillFileRole, SKIP_REPORT_LIMIT},
         geophysics::{ColumnRole, ColumnSet, FileIdentity, GeophysicsLink, HoleLogs, HoleRuns, LinkedColumn, LinkedFile, LogKind, LogTrace, TraceError},
@@ -170,44 +170,44 @@ impl IndexReport {
             .collect::<Vec<_>>();
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Linked downhole geophysics from %file%: %holes% hole(s), curves %curves%; %rows% row(s) read, %skipped% skipped. The readings stay in the file and are read a hole at a time",
-                file = file.identity.name.clone(),
-                holes = file.holes.len(),
-                curves = curves.join(", "),
-                rows = self.rows,
-                skipped = self.skipped
+            tr!(
+                "csv-geophysics-linked-downhole-geophysics-from-file",
+                file = file.identity.name.clone().to_string(),
+                holes = file.holes.len().to_string(),
+                curves = curves.join(", ").to_string(),
+                rows = self.rows.to_string(),
+                skipped = self.skipped.to_string()
             )
         );
         if !self.split.is_empty() {
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "Geophysics for %count% hole(s) comes in more than one run, not grouped by hole; each later run adds only depths its hole has no reading at: %holes%",
-                    count = self.split.len(),
-                    holes = hole_list(self.split.iter().map(String::as_str))
+                tr!(
+                    "csv-geophysics-runs-not-grouped",
+                    count = self.split.len().to_string(),
+                    holes = hole_list(self.split.iter().map(String::as_str)).to_string()
                 )
             );
         }
         if !self.orphans.is_empty() {
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "%rows% geophysics row(s) for %count% hole(s) the dataset does not define are not linked: %holes%",
-                    rows = self.orphan_rows,
-                    count = self.orphans.len(),
-                    holes = hole_list(self.orphans.iter().map(String::as_str))
+                tr!(
+                    "csv-geophysics-rows-geophysics-row-s-count",
+                    rows = self.orphan_rows.to_string(),
+                    count = self.orphans.len().to_string(),
+                    holes = hole_list(self.orphans.iter().map(String::as_str)).to_string()
                 )
             );
         }
         for (curve, side) in &self.left_out {
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "%curve% in %file% was left out: most of its readings are %side%, so its median is outside 0.5 to 5 g/cc and its unit looks wrong (g/cc expected). Incline converts no units; correct the export and link it again",
-                    curve = curve.clone(),
-                    file = file.identity.name.clone(),
-                    side = side.clone()
+                tr!(
+                    "csv-geophysics-curve-file-was-left-out",
+                    curve = curve.clone().to_string(),
+                    file = file.identity.name.clone().to_string(),
+                    side = side.clone().to_string()
                 )
             );
         }
@@ -310,10 +310,7 @@ fn close_run(ended: RunScan, holes: &mut HashMap<String, (HoleRuns, [[f64; 2]; 3
     let split = *known_runs - seen;
     let allowed = (SPLIT_RUN_FLOOR + SPLIT_RUNS_PER_HOLE * seen).min(MAX_SPLIT_RUNS);
     if split > allowed {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "%file% is not grouped by hole: its holes' rows are split across too many runs. Sort it by hole id, then depth, and link it again",
-            file = name.to_owned()
-        )));
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-not-grouped-hole-its", file = name.to_owned().to_string())));
     }
     Ok(())
 }
@@ -328,9 +325,7 @@ const INDEX_BUFFER_BYTES: usize = 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_for_index(path: &std::path::Path) -> Result<(FileIdentity, std::io::BufReader<std::fs::File>), CsvDrillError> {
     if path.to_str().is_none() {
-        return Err(CsvDrillError::Invalid(tr!(
-            literal = "the file's path is not valid UTF-8, which a project cannot save: rename the file or its folder and link it again"
-        )));
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-s-path-not-valid")));
     }
     let identity = FileIdentity::of_path(path)?;
     Ok((identity, std::io::BufReader::with_capacity(INDEX_BUFFER_BYTES, std::fs::File::open(path)?)))
@@ -353,25 +348,22 @@ pub(crate) fn index_file(
     let name = identity.name.clone();
     let mut records = Records::new(input)?;
     if !records.next()? {
-        return Err(CsvDrillError::Invalid(tr_format!(literal = "%file% is empty", file = name.clone())));
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-empty", file = name.clone().to_string())));
     }
     let headers = (0..records.len()).map(|index| cell_text(records.cell(index)).trim().to_owned()).collect::<Vec<_>>();
     let roles = columns.roles(&headers);
     let width = headers.len();
     if roles.len() != width {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "%file% mapping has %mapped% columns, CSV has %found%",
-            file = name.clone(),
+        return Err(CsvDrillError::Invalid(tr!(
+            "csv-geophysics-file-mapping-has-mapped-columns",
+            file = name.clone().to_string(),
             mapped = roles.len().to_string(),
             found = width.to_string()
         )));
     }
     let column = |role: CsvDrillColumnRole| roles.iter().position(|mapped| *mapped == role);
     let (Some(dhid_column), Some(depth_column)) = (column(CsvDrillColumnRole::Dhid), column(CsvDrillColumnRole::Depth)) else {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "%file% requires one DHID and one depth column",
-            file = name.clone()
-        )));
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-requires-one-dhid-one", file = name.clone().to_string())));
     };
     let kinds = roles.iter().map(curve_kind).collect::<Vec<_>>();
     let (mut numbers, mut texts) = (vec![0usize; width], vec![0usize; width]);
@@ -403,7 +395,7 @@ pub(crate) fn index_file(
             Err(reason) => {
                 skipped += 1;
                 if skipped <= SKIP_REPORT_LIMIT {
-                    userspace_warn!("{}", tr_format!(literal = "Skipped a row: %reason%", reason = reason));
+                    userspace_warn!("{}", tr!("csv-drill-hole-skipped-row-reason", reason = reason.to_string()));
                 }
                 continue;
             }
@@ -470,14 +462,14 @@ pub(crate) fn index_file(
     if skipped > SKIP_REPORT_LIMIT {
         userspace_warn!(
             "{}",
-            tr_format!(literal = "%count% rows were skipped in total in %file%", count = skipped.to_string(), file = name.clone())
+            tr!("csv-geophysics-count-rows-were-skipped-total", count = skipped.to_string(), file = name.clone().to_string())
         );
     }
     // Most of a file failing is a mapping mistake, not dirty data.
     if rows > 0 && skipped * 2 > rows {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "%file%: %skipped% of %rows% rows could not be read; the reasons are in the console",
-            file = name,
+        return Err(CsvDrillError::Invalid(tr!(
+            "csv-geophysics-rows-skipped",
+            file = name.to_string(),
             skipped = skipped.to_string(),
             rows = rows.to_string()
         )));
@@ -504,10 +496,7 @@ pub(crate) fn index_file(
         })
         .collect::<Vec<_>>();
     if !columns.iter().any(|column| matches!(column.role, ColumnRole::Curve { .. } | ColumnRole::LeftOut { .. })) {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "%file% has no curve: no column besides the hole id and depth holds numbers",
-            file = name
-        )));
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-has-no-curve-no", file = name.to_string())));
     }
     let mut curves = ColumnSet::default();
     for (index, column) in columns.iter().enumerate() {
@@ -568,9 +557,9 @@ fn density_side(value: f64) -> usize {
 fn unit_side([below, within, above]: [usize; 3]) -> Option<String> {
     let total = below + within + above;
     if below * 2 > total {
-        Some(tr!(literal = "below 0.5"))
+        Some(tr!("csv-geophysics-below-0-5"))
     } else if above * 2 > total {
-        Some(tr!(literal = "above 5"))
+        Some(tr!("csv-geophysics-above-5"))
     } else {
         None
     }
@@ -660,11 +649,11 @@ enum CurveKey {
 pub(crate) fn read_hole(link: &GeophysicsLink, dhid: &str, runs: &[Vec<u8>]) -> Result<HoleLogs, CsvDrillError> {
     let files = link.runs_of(dhid).map(|(file, _)| file).collect::<Vec<_>>();
     if files.len() != runs.len() {
-        return Err(CsvDrillError::Invalid(tr_format!(
-            literal = "Read %read% run(s) of %hole%, the link has %runs%",
-            read = runs.len(),
-            hole = dhid.to_owned(),
-            runs = files.len()
+        return Err(CsvDrillError::Invalid(tr!(
+            "csv-geophysics-run-count-mismatch",
+            read = runs.len().to_string(),
+            hole = dhid.to_owned().to_string(),
+            runs = files.len().to_string()
         )));
     }
     let mut reader = HoleReader::new(dhid, link);
@@ -748,10 +737,7 @@ impl<'a> HoleReader<'a> {
         let width = file.columns.len();
         let column = |role: ColumnRole| file.columns.iter().position(|column| column.role == role);
         let (Some(dhid_column), Some(depth_column)) = (column(ColumnRole::Dhid), column(ColumnRole::Depth)) else {
-            return Err(CsvDrillError::Invalid(tr_format!(
-                literal = "%file% requires one DHID and one depth column",
-                file = name.clone()
-            )));
+            return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-requires-one-dhid-one", file = name.clone().to_string())));
         };
         let mut read = Vec::new();
         self.curves.iter_mut().for_each(|curve| curve.label.clear());
@@ -855,11 +841,11 @@ impl<'a> HoleReader<'a> {
         for (label, error) in notes.take(SKIP_REPORT_LIMIT) {
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "A run of %hole% %curve% was not kept (%reason%)",
-                    hole = self.dhid.to_owned(),
-                    curve = label.clone(),
-                    reason = trace_error(error)
+                tr!(
+                    "csv-geophysics-run-hole-curve-was-not",
+                    hole = self.dhid.to_owned().to_string(),
+                    curve = label.clone().to_string(),
+                    reason = trace_error(error).to_string()
                 )
             );
         }
@@ -973,9 +959,9 @@ impl RowFormat<'_> {
                 continue;
             };
             if id != dhid {
-                return Err(CsvDrillError::Invalid(tr_format!(
-                    literal = "%file% no longer matches its index: link it again",
-                    file = self.name.to_owned()
+                return Err(CsvDrillError::Invalid(tr!(
+                    "csv-geophysics-file-no-longer-matches-its",
+                    file = self.name.to_owned().to_string()
                 )));
             }
             samples.depths.push(depth);
@@ -1020,10 +1006,10 @@ fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_
     // for the text on every one.
     let row = || records.record_number().to_string();
     if records.len() != width {
-        return Err(tr_format!(
-            literal = "%file% row %row% has %found% columns; expected %expected%",
-            file = file.to_owned(),
-            row = row(),
+        return Err(tr!(
+            "csv-geophysics-row-column-count",
+            file = file.to_owned().to_string(),
+            row = row().to_string(),
             found = records.len().to_string(),
             expected = width.to_string()
         ));
@@ -1033,11 +1019,11 @@ fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_
         Cow::Owned(text) => Cow::Owned(text.trim().to_owned()),
     };
     if dhid.is_empty() {
-        return Err(tr_format!(literal = "%file% row %row% has a blank hole id", file = file.to_owned(), row = row()));
+        return Err(tr!("csv-geophysics-row-blank-hole-id", file = file.to_owned().to_string(), row = row().to_string()));
     }
     match cell_number(records.cell(depth_column)) {
-        None => Err(tr_format!(literal = "%file% row %row% has no readable depth", file = file.to_owned(), row = row())),
-        Some(depth) if depth < 0.0 => Err(tr_format!(literal = "%file% row %row% has a negative depth", file = file.to_owned(), row = row())),
+        None => Err(tr!("csv-geophysics-row-no-depth", file = file.to_owned().to_string(), row = row().to_string())),
+        Some(depth) if depth < 0.0 => Err(tr!("csv-geophysics-row-negative-depth", file = file.to_owned().to_string(), row = row().to_string())),
         Some(depth) => Ok((dhid, depth)),
     }
 }
@@ -1157,13 +1143,9 @@ fn plain_decimal(cell: &[u8]) -> Option<f64> {
 
 fn trace_error(error: &TraceError) -> String {
     match error {
-        TraceError::NoSamples => tr!(literal = "no readings"),
-        TraceError::BadStep => tr!(literal = "no usable depth step"),
-        TraceError::SpanTooLong { rows, requested } => tr_format!(
-            literal = "%rows% readings would need %samples% samples",
-            rows = rows.to_string(),
-            samples = requested.to_string()
-        ),
+        TraceError::NoSamples => tr!("csv-geophysics-no-readings"),
+        TraceError::BadStep => tr!("csv-geophysics-no-usable-depth-step"),
+        TraceError::SpanTooLong { rows, requested } => tr!("csv-geophysics-rows-readings-would-need-samples", rows = rows.to_string(), samples = requested.to_string()),
     }
 }
 
@@ -1172,7 +1154,7 @@ fn hole_list<'h>(holes: impl ExactSizeIterator<Item = &'h str>) -> String {
     let total = holes.len();
     let mut text = holes.take(HOLE_LIST_LIMIT).collect::<Vec<_>>().join(", ");
     if total > HOLE_LIST_LIMIT {
-        text.push_str(&tr_format!(literal = " (+%count% more)", count = (total - HOLE_LIST_LIMIT).to_string()));
+        text.push_str(&format!(" {}", tr!("csv-geophysics-count-more", count = (total - HOLE_LIST_LIMIT).to_string())));
     }
     text
 }
@@ -1244,7 +1226,7 @@ impl<R: BufRead> Records<R> {
             }
             // A quoted cell runs on over the line break.
             if read == 0 {
-                return Err(CsvDrillError::Invalid(tr!(literal = "CSV has an unterminated quoted field")));
+                return Err(CsvDrillError::Invalid(tr!("csv-geophysics-csv-has-unterminated-quoted-field")));
             }
         }
     }
@@ -1268,8 +1250,8 @@ impl<R: BufRead> Records<R> {
                 None => (available.len(), false),
             };
             if self.line.len() + take > MAX_RECORD_BYTES {
-                return Err(CsvDrillError::Invalid(tr_format!(
-                    literal = "CSV has a record longer than %limit% MiB: the file has no line breaks where a CSV has them, or is not text",
+                return Err(CsvDrillError::Invalid(tr!(
+                    "csv-geophysics-csv-has-record-longer-than",
                     limit = (MAX_RECORD_BYTES / (1024 * 1024)).to_string()
                 )));
             }

@@ -7,7 +7,7 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    i18n::tr_format,
+    i18n::tr,
     model::drill_hole::{
         COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DISC_MIN_PIXEL_LENGTH, DrillColorState,
         DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillValue, HoleDisc, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieIn, hole_discs,
@@ -434,11 +434,11 @@ impl DrillHoleGpuCache {
             if bits.over_capacity > 0 && self.warned_over_capacity.insert(dataset.id) {
                 crate::userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "Drill hole set %name% has %count% holes and tie-ins, past the %capacity% the selection highlight can carry: selecting the set as a whole still highlights it, selecting single holes will not",
-                        name = dataset.name,
-                        count = bits.over_capacity,
-                        capacity = SELECTION_CAPACITY,
+                    tr!(
+                        "drill-hole-cache-drill-hole-set-name-has",
+                        name = dataset.name.to_string(),
+                        count = bits.over_capacity.to_string(),
+                        capacity = SELECTION_CAPACITY.to_string()
                     )
                 );
             }
@@ -481,13 +481,13 @@ impl DrillHoleGpuCache {
                         if self.reported_build.insert(dataset.id) {
                             crate::userspace_log!(
                                 "{}",
-                                tr_format!(
-                                    literal = "Drill hole set %name%: %stations% stations, %before% segments merged to %after%, %cells% cells",
-                                    name = dataset.name,
-                                    stations = built.stations,
-                                    before = built.before_merge,
-                                    after = built.instances.len(),
-                                    cells = cells.len(),
+                                tr!(
+                                    "drill-hole-cache-drill-hole-set-name-stations",
+                                    name = dataset.name.to_string(),
+                                    stations = built.stations.to_string(),
+                                    before = built.before_merge.to_string(),
+                                    after = built.instances.len().to_string(),
+                                    cells = cells.len().to_string()
                                 )
                             );
                         }

@@ -63,7 +63,7 @@ pub(crate) fn show_in_file_manager_label() -> String {
     #[cfg(target_os = "windows")]
     return tr!("menu-file-show-in-explorer");
     #[cfg(target_os = "macos")]
-    return crate::i18n::tr!(literal = "Reveal in Finder");
+    return crate::i18n::tr!("common-reveal-finder");
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     return tr!("menu-file-show-in-folder");
 }
@@ -559,19 +559,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // at a time, a join needs two or more to join, and classifying
                 // takes any number.
                 let selected_clouds = editor.selection_counts.point_clouds;
-                if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
-                    .enabled(selected_clouds == 1)
-                    .show(ui)
-                    .clicked()
-                {
+                if ContextMenuAction::new(tr!("common-create-triangulation")).enabled(selected_clouds == 1).show(ui).clicked() {
                     commands.push(UiCommand::OpenPointCloudTin);
                     ui.close();
                 }
-                if ContextMenuAction::new(tr!(literal = "Join...")).enabled(selected_clouds >= 2).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-join")).enabled(selected_clouds >= 2).show(ui).clicked() {
                     commands.push(UiCommand::OpenPointCloudJoin);
                     ui.close();
                 }
-                if ContextMenuAction::new(tr!(literal = "Classify...")).enabled(selected_clouds >= 1).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-classify")).enabled(selected_clouds >= 1).show(ui).clicked() {
                     commands.push(UiCommand::OpenPointCloudClassify);
                     ui.close();
                 }
@@ -584,7 +580,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // it - the menu is the input's own and the one selected model is
             // what the tool opens on.
             MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
+                if ContextMenuAction::new(tr!("common-create-ore-triangulation-ellipsis"))
                     .enabled(editor.selection_counts.block_models == 1)
                     .show(ui)
                     .clicked()
@@ -598,7 +594,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // them and takes the one selected collection as its input, the
             // way the other select-first tools do.
             MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!(literal = "Create Block Model..."))
+                if ContextMenuAction::new(tr!("common-create-block-model-ellipsis"))
                     .enabled(editor.selection_counts.drill_holes == 1)
                     .show(ui)
                     .clicked()
@@ -621,7 +617,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
-                if ContextMenuAction::new(tr!(literal = "Reference Points...")).enabled(can_build_points).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-reference-points")).enabled(can_build_points).show(ui).clicked() {
                     commands.push(UiCommand::OpenReferencePoints);
                     ui.close();
                 }
@@ -629,7 +625,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // that are selected when it opens, not from a layer picked
                 // inside the dialog.
                 let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
-                if ContextMenuAction::new(tr!(literal = "Build Surface...")).enabled(can_build_surface).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-build-surface-ellipsis")).enabled(can_build_surface).show(ui).clicked() {
                     commands.push(UiCommand::OpenReferenceSurface);
                     ui.close();
                 }
@@ -683,11 +679,11 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // surface from the other, so they still pick theirs in the dialog.
             let one_surface_selected = editor.selection_counts.triangulations == 1;
             let can_clip = one_surface_selected && editor.selection_counts.clip_boundaries == 1;
-            if ContextMenuAction::new(tr!(literal = "Clip Surface by Polyline...")).enabled(can_clip).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-clip-surface-polyline")).enabled(can_clip).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationByPolyline);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Slice Triangulation by Z Range..."))
+            if ContextMenuAction::new(tr!("common-slice-triangulation-z-range"))
                 .enabled(one_surface_selected)
                 .show(ui)
                 .clicked()
@@ -695,21 +691,21 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 commands.push(UiCommand::OpenCutTriangulationByZ);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Trim to Topology...")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-trim-topology")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationBySurface);
                 ui.close();
             }
             context_menu_separator(ui);
-            if ContextMenuAction::new(tr!(literal = "Cut Topology with Pit Shell...")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-cut-topology-pit-shell")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTopologyByPitShell);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Merge Shell into Topology...")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-merge-shell-into-topology-ellipsis")).show(ui).clicked() {
                 commands.push(UiCommand::OpenIncludeSolidInTopology);
                 ui.close();
             }
             context_menu_separator(ui);
-            if ContextMenuAction::new(tr!(literal = "Generate Contour Lines..."))
+            if ContextMenuAction::new(tr!("common-generate-contour-lines"))
                 .enabled(one_surface_selected)
                 .show(ui)
                 .clicked()
@@ -721,7 +717,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
 
         MenuBarMenu::new(&tr!("ws-menubar-raster")).show(ui, |ui| {
             let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
-            if ContextMenuAction::new(tr!(literal = "Undrape All")).enabled(any_draped).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-undrape-all")).enabled(any_draped).show(ui).clicked() {
                 commands.push(UiCommand::UndrapeAllRasters);
                 ui.close();
             }

@@ -1,12 +1,14 @@
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::{
+        elements::properties::read_only_row,
         state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields},
+            data_table::DataTable,
             log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
             menu, toolbar,
         },
@@ -89,7 +91,7 @@ fn section_header_with_reset(ui: &mut egui::Ui, heading: impl Into<String>, rese
     let weak = ui.visuals().weak_text_color();
     let font = egui::FontId::proportional(11.0);
     let heading = ui.painter().layout_no_wrap(heading.into(), font.clone(), weak);
-    let reset = ui.painter().layout_no_wrap(tr!(literal = "Reset"), font, egui::Color32::PLACEHOLDER);
+    let reset = ui.painter().layout_no_wrap(tr!("viewport-reset"), font, egui::Color32::PLACEHOLDER);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), SECTION_HEADER_HEIGHT), egui::Sense::hover());
 
     let reset_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - reset.size().x - 16.0, rect.top()), rect.right_bottom());
@@ -481,7 +483,7 @@ impl<'a> BlockModelProperties<'a> {
             ui.vertical(|ui| {
                 let content_width = 440.0;
                 ui.set_width(content_width);
-                if section_header_with_reset(ui, tr!(literal = "Colour mapping"), tr!(literal = "Rebuild this variable's colours from its data")) {
+                if section_header_with_reset(ui, tr!("viewport-colour-mapping"), tr!("viewport-rebuild-variable-s-colours-from")) {
                     commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
                 }
                 self.draw_variable_dropdown(ui, content_width, model, editor, commands);
@@ -503,7 +505,7 @@ impl<'a> BlockModelProperties<'a> {
         let mut slice = model.slice.unwrap_or(full).clamped_to(lower, upper);
         let mut changed = false;
 
-        if section_header_with_reset(ui, tr!(literal = "Slice"), tr!(literal = "Restore the full model range")) {
+        if section_header_with_reset(ui, tr!("common-slice"), tr!("viewport-restore-full-model-range")) {
             commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
         }
 
@@ -529,14 +531,14 @@ impl<'a> BlockModelProperties<'a> {
                         egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(tr_format!(literal = "%axis% minimum", axis = label))
+                    .on_hover_text(tr!("viewport-axis-minimum", axis = label.to_string()))
                     .changed();
                 changed |= ui
                     .add_sized(
                         egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(tr_format!(literal = "%axis% maximum", axis = label))
+                    .on_hover_text(tr!("viewport-axis-maximum", axis = label.to_string()))
                     .changed();
             });
         }
@@ -561,17 +563,17 @@ impl<'a> BlockModelProperties<'a> {
                 } else if let Some((min, max)) = cached_variable_range(editor, model, name) {
                     format_grade_range(min, max)
                 } else {
-                    tr!(literal = "(no usable range)")
+                    tr!("viewport-no-usable-range")
                 };
                 (name.to_owned(), detail)
             })
-            .unwrap_or_else(|| (tr!(literal = "Choose a variable"), String::new()));
+            .unwrap_or_else(|| (tr!("viewport-choose-variable"), String::new()));
         let filter_id = self.id.with(("variable_filter", model.id));
         let mut filter = ui.data_mut(|data| data.get_persisted::<String>(filter_id)).unwrap_or_default();
 
         let popup_id = self.id.with(("variable_popup", model.id));
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let button_response = variable_field(ui, content_width, open, &selected_name, &selected_detail).on_hover_text(tr!(literal = "Choose the active block model variable"));
+        let button_response = variable_field(ui, content_width, open, &selected_name, &selected_detail).on_hover_text(tr!("viewport-choose-active-block-model-variable"));
         ui.add_space(2.0);
 
         let _ = egui::Popup::menu(&button_response)
@@ -581,7 +583,7 @@ impl<'a> BlockModelProperties<'a> {
             .show(|ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut filter)
-                        .hint_text(tr!(literal = "Filter variables"))
+                        .hint_text(tr!("viewport-filter-variables"))
                         .desired_width(content_width - 12.0),
                 );
                 if response.changed() {
@@ -603,7 +605,7 @@ impl<'a> BlockModelProperties<'a> {
                         } else {
                             cached_variable_range(editor, model, name)
                                 .map(|(min, max)| format_grade_range(min, max))
-                                .unwrap_or_else(|| tr!(literal = "(no usable range)"))
+                                .unwrap_or_else(|| tr!("viewport-no-usable-range"))
                         };
                         let selected = name == current;
                         let row = ui
@@ -625,7 +627,7 @@ impl<'a> BlockModelProperties<'a> {
                     }
                 });
                 if !any {
-                    ui.label(egui::RichText::new(tr!(literal = "No matches")).color(ui.visuals().weak_text_color()));
+                    ui.label(egui::RichText::new(tr!("viewport-no-matches")).color(ui.visuals().weak_text_color()));
                 }
             });
     }
@@ -667,9 +669,9 @@ impl<'a> BlockModelProperties<'a> {
                             let mut srgba = straight_to_unmultiplied_srgba(color);
                             if super::color::edit_srgba_unmultiplied(ui, &mut srgba)
                                 .on_hover_text(if is_default {
-                                    tr!(literal = "Edit the colour used for empty values")
+                                    tr!("viewport-edit-colour-used-empty-values")
                                 } else {
-                                    tr!(literal = "Edit this category colour")
+                                    tr!("viewport-edit-category-colour")
                                 })
                                 .changed()
                             {
@@ -677,11 +679,11 @@ impl<'a> BlockModelProperties<'a> {
                                 changed = true;
                             }
                         }
-                        let display_label = if label.trim().is_empty() { tr!(literal = "(blank)") } else { label.clone() };
+                        let display_label = if label.trim().is_empty() { tr!("viewport-blank") } else { label.clone() };
                         let suffix = if is_default && model.hide_empty_color_values {
-                            tr!(literal = " (empty · hidden)")
+                            format!(" {}", tr!("viewport-empty-hidden"))
                         } else if is_default {
-                            tr!(literal = " (empty)")
+                            format!(" {}", tr!("viewport-empty"))
                         } else {
                             String::new()
                         };
@@ -692,10 +694,10 @@ impl<'a> BlockModelProperties<'a> {
         });
         if variable.strings.len() >= MAX_GRADIENT_ENTRIES {
             ui.label(
-                egui::RichText::new(tr_format!(
-                    literal = "All %total% categories keep their colour; only the first %shown% are drawn distinctly",
-                    total = variable.strings.len(),
-                    shown = MAX_GRADIENT_ENTRIES - 1
+                egui::RichText::new(tr!(
+                    "viewport-all-total-categories-keep-their",
+                    total = variable.strings.len().to_string(),
+                    shown = (MAX_GRADIENT_ENTRIES - 1).to_string()
                 ))
                 .color(ui.visuals().weak_text_color()),
             );
@@ -715,7 +717,7 @@ impl<'a> BlockModelProperties<'a> {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            tr!(literal = "No data for this variable"),
+            tr!("viewport-no-data-variable"),
             egui::FontId::proportional(11.0),
             ui.visuals().weak_text_color(),
         );
@@ -778,7 +780,7 @@ impl<'a> BlockModelProperties<'a> {
 
         let bar_response = ui
             .interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click())
-            .on_hover_text(tr!(literal = "Double-click to add a boundary here"));
+            .on_hover_text(tr!("viewport-double-click-add-boundary-here"));
         // A double-click on either the bar or a handle requests an insert.
         // We record the target `t` and apply it *after* the handle loop so the
         // insertion never shifts indices mid-iteration, and so it lands in
@@ -796,9 +798,9 @@ impl<'a> BlockModelProperties<'a> {
             let handle_rect = egui::Rect::from_center_size(egui::pos2(x, handle_center_y), egui::vec2(COLOR_STOP_HANDLE_SIZE, COLOR_STOP_HANDLE_SIZE));
             let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
             let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
-                tr!(literal = "Drag to move · Right-click to remove · Middle-click toggles ≤")
+                tr!("viewport-drag-move-right-click-remove")
             } else {
-                tr!(literal = "Drag to move · Middle-click toggles ≤")
+                tr!("viewport-drag-move-middle-click-toggles")
             });
             // Handles sit directly beside the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
@@ -893,7 +895,7 @@ impl<'a> BlockModelProperties<'a> {
                 let label = ui
                     .interact(value_rect, self.id.with(("color_stop_value_label", ramp.stops[i].id)), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::Text)
-                    .on_hover_text(tr!(literal = "Click to type this boundary's value"));
+                    .on_hover_text(tr!("viewport-click-type-boundary-s-value"));
                 value_field_hovered = label.hovered();
                 if label.clicked() {
                     selected = i;
@@ -978,7 +980,7 @@ impl<'a> BlockModelProperties<'a> {
                     super::color::edit_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
-                .on_hover_text(tr!(literal = "Click to edit color; right-click to remove"));
+                .on_hover_text(tr!("viewport-click-edit-color-right-click"));
             let picker_remove_clicked =
                 (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked()))) && ramp.stops.len() > 1;
             if picker_remove_clicked {
@@ -1034,68 +1036,14 @@ impl<'a> BlockModelProperties<'a> {
 }
 
 /// Read-only summary of one drill hole: collar, trace extent, orientation,
-/// provenance, and the interval table as a grid.
+/// provenance, and the interval table as a grid. The two halves draw
+/// separately, so the caller can fold each into a section of its own.
 pub(crate) struct DrillHoleProperties<'a> {
     id: egui::Id,
     hole: &'a crate::model::drill_hole::DrillHole,
     /// The dataset's fields, in order, become the columns after From and
     /// To, so every hole gets the same columns even if it never recorded one.
     fields: &'a [crate::model::drill_hole::DrillField],
-    list_height: f32,
-}
-
-/// Default height the interval table scrolls within.
-const DRILL_INTERVAL_LIST_HEIGHT: f32 = 220.0;
-
-/// Breathing room either side of a cell's text.
-const DRILL_TABLE_CELL_PADDING: f32 = 5.0;
-
-/// Added to the body text height to get a row's height.
-const DRILL_TABLE_ROW_PADDING: f32 = 3.0;
-
-/// Narrowest a column is drawn, even one full of blanks.
-const DRILL_TABLE_MIN_COLUMN_WIDTH: f32 = 40.0;
-
-/// Widest a column is drawn; text past this truncates on screen but still
-/// travels whole in a copy.
-const DRILL_TABLE_MAX_COLUMN_WIDTH: f32 = 180.0;
-
-/// Intervals measured when sizing the columns, before the first row is
-/// drawn.
-const DRILL_TABLE_WIDTH_SAMPLE: usize = 512;
-
-/// A rectangular block of cells marked for copying: the cell the reader
-/// started from and the cell they last extended to.
-#[derive(Clone, Copy, PartialEq)]
-struct DrillTableSelection {
-    anchor: (usize, usize),
-    focus: (usize, usize),
-}
-
-impl DrillTableSelection {
-    fn rows(self) -> std::ops::RangeInclusive<usize> {
-        self.anchor.0.min(self.focus.0)..=self.anchor.0.max(self.focus.0)
-    }
-
-    fn columns(self) -> std::ops::RangeInclusive<usize> {
-        self.anchor.1.min(self.focus.1)..=self.anchor.1.max(self.focus.1)
-    }
-}
-
-/// Column widths measured once and cached in egui's frame store, keyed by
-/// a fingerprint so a different hole under the same panel re-measures.
-#[derive(Clone)]
-struct DrillTableColumns {
-    fingerprint: u64,
-    widths: Vec<f32>,
-}
-
-/// One column as the table draws it: its width and which edge its cells
-/// sit against.
-#[derive(Clone, Copy)]
-struct DrillTableColumn {
-    width: f32,
-    align: egui::Align,
 }
 
 impl<'a> DrillHoleProperties<'a> {
@@ -1104,303 +1052,61 @@ impl<'a> DrillHoleProperties<'a> {
             id: egui::Id::new(id_source),
             hole,
             fields,
-            list_height: DRILL_INTERVAL_LIST_HEIGHT,
         }
     }
 
-    /// Cap the interval table at `height` instead of the default, so a panel
-    /// with little left below the summary still ends above its own edge.
-    pub(crate) fn max_list_height(mut self, height: f32) -> Self {
-        self.list_height = height;
-        self
-    }
-
-    pub(crate) fn show(self, ui: &mut egui::Ui) {
+    /// The hole's collar, trace, orientation and interval count, as rows
+    /// lined up with the fields of the panel around them.
+    pub(crate) fn show_summary(&self, ui: &mut egui::Ui) {
         let hole = self.hole;
         let collar = hole.collar_position();
-
-        egui::Grid::new(self.id.with("summary")).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-            ui.label(tr!(literal = "Hole ID"));
-            ui.add(egui::Label::new(&hole.dhid).truncate());
-            ui.end_row();
-
-            ui.label(tr!(literal = "Easting"));
-            ui.label(format!("{:.2}", collar.x));
-            ui.end_row();
-
-            ui.label(tr!(literal = "Northing"));
-            ui.label(format!("{:.2}", collar.y));
-            ui.end_row();
-
-            ui.label(tr!(literal = "Elevation"));
-            ui.label(format!("{:.2}", collar.z));
-            ui.end_row();
-
-            ui.label(tr!(literal = "Trace extent"));
-            // Truncated with an ellipsis rather than clipped mid-glyph.
-            ui.add(
-                egui::Label::new(match (hole.trace.first(), hole.trace.last()) {
-                    (Some(first), Some(last)) => {
-                        tr_format!(literal = "%from% to %to%", from = format!("{:.2}", first.depth), to = format!("{:.2}", last.depth))
-                    }
-                    _ => tr!(literal = "No trace"),
-                })
-                .truncate(),
-            );
-            ui.end_row();
-
-            ui.label(tr!(literal = "Orientation"));
-            ui.add(
-                egui::Label::new(match hole.orientation() {
-                    Some(orientation) => tr_format!(
-                        literal = "Azimuth %azimuth%, dip %dip%",
-                        azimuth = format!("{:.1}", orientation.azimuth),
-                        dip = format!("{:.1}", orientation.dip)
-                    ),
-                    // Not "none": nobody recorded one, the same as its source.
-                    None => tr!(literal = "Unknown"),
-                })
-                .truncate(),
-            );
-            ui.end_row();
-
-            ui.label(tr!(literal = "Orientation source"));
-            ui.add(egui::Label::new(hole.orientation_source.label()).truncate());
-            ui.end_row();
-
-            ui.label(tr!(literal = "Intervals"));
-            ui.label(hole.intervals.len().to_string());
-            ui.end_row();
-        });
-
-        if hole.intervals.is_empty() {
-            return;
-        }
-
-        ui.separator();
-        self.show_interval_table(ui);
+        read_only_row(ui, &tr!("common-easting"), &format!("{:.2}", collar.x));
+        read_only_row(ui, &tr!("common-northing"), &format!("{:.2}", collar.y));
+        read_only_row(ui, &tr!("common-elevation"), &format!("{:.2}", collar.z));
+        let extent = match (hole.trace.first(), hole.trace.last()) {
+            (Some(first), Some(last)) => tr!("viewport-from", from = format!("{:.2}", first.depth), to = format!("{:.2}", last.depth)),
+            _ => tr!("viewport-no-trace"),
+        };
+        read_only_row(ui, &tr!("viewport-trace-extent"), &extent);
+        let orientation = match hole.orientation() {
+            Some(orientation) => tr!(
+                "viewport-azimuth-dip",
+                azimuth = format!("{:.1}", orientation.azimuth),
+                dip = format!("{:.1}", orientation.dip)
+            ),
+            // Not "none": nobody recorded one, the same as its source.
+            None => tr!("common-unknown"),
+        };
+        read_only_row(ui, &tr!("common-orientation"), &orientation);
+        read_only_row(ui, &tr!("viewport-orientation-source"), &hole.orientation_source.label());
+        read_only_row(ui, &tr!("viewport-intervals"), &hole.intervals.len().to_string());
     }
 
-    /// The interval spreadsheet: copy actions, a header row, and the rows.
-    /// Never reports a width wider than the panel gave it.
-    fn show_interval_table(&self, ui: &mut egui::Ui) {
+    /// The interval spreadsheet, scrolling within `max_height`.
+    pub(crate) fn show_intervals(&self, ui: &mut egui::Ui, max_height: f32) {
         let hole = self.hole;
         let header = drill_table_header(self.fields);
-        let columns = self.columns(ui, &header);
-        let total_width: f32 = columns.iter().map(|column| column.width).sum();
-        let row_height = ui.text_style_height(&egui::TextStyle::Body) + DRILL_TABLE_ROW_PADDING;
-        let row_height_with_spacing = row_height + ui.spacing().item_spacing.y;
-
-        let selection_id = self.id.with("table_selection");
-        let drag_id = self.id.with("table_drag");
-        let mut selection: Option<DrillTableSelection> = ui.data(|data| data.get_temp(selection_id));
-        let mut drag_anchor: Option<(usize, usize)> = ui.data(|data| data.get_temp(drag_id));
-        let (copy_table, copy_selection) = self.show_table_heading(ui, selection.is_some());
-
-        // Painted after the scroll area reports its offset, so it tracks.
-        let available = ui.available_width();
-        let (header_rect, _) = ui.allocate_exact_size(egui::vec2(available, row_height), egui::Sense::hover());
-
-        let mut pending: Option<DrillTableSelection> = None;
-        // Captured from the first row drawn, so a live drag can map the
-        // pointer back to a row even if that row scrolls out of view.
-        let mut table_left: Option<f32> = None;
-        let mut first_row_top: Option<f32> = None;
-        let list_height = self.list_height.min(ui.available_height()).max(row_height * 3.0);
-        let output = egui::ScrollArea::both()
-            .id_salt(self.id.with("intervals_scroll"))
-            .max_width(available)
-            .max_height(list_height)
-            .auto_shrink([false, true])
-            // Turns off drag-to-scroll, which would otherwise fight the
-            // rows' own press-drag for the same pointer motion.
-            .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR | egui::scroll_area::ScrollSource::MOUSE_WHEEL)
-            .show_rows(ui, row_height, hole.intervals.len(), |ui, rows| {
-                let clip = ui.clip_rect();
-                for index in rows {
-                    let Some(interval) = hole.intervals.get(index) else {
-                        continue;
-                    };
-                    let (_, row_rect) = ui.allocate_space(egui::vec2(total_width, row_height));
-                    if table_left.is_none() {
-                        table_left = Some(row_rect.left());
-                        first_row_top = Some(row_rect.top() - index as f32 * row_height_with_spacing);
-                    }
-                    // An explicit id, keyed by row index, keeps the row's
-                    // identity as the virtualised window slides.
-                    let response = ui.interact(row_rect, self.id.with(("interval_row", index)), egui::Sense::click_and_drag());
-                    if index % 2 == 1 {
-                        ui.painter().rect_filled(row_rect, 0.0, ui.visuals().faint_bg_color);
-                    }
-                    if let Some(current) = selection.filter(|current| current.rows().contains(&index)) {
-                        ui.painter().rect_filled(
-                            drill_table_span(&columns, row_rect, current.columns()),
-                            crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
-                            ui.visuals().selection.bg_fill.gamma_multiply(0.4),
-                        );
-                    }
-                    draw_drill_table_row(
-                        ui,
-                        row_rect,
-                        clip,
-                        &columns,
-                        self.id.with(("interval_cells", index)),
-                        &drill_table_row(interval, self.fields, false),
-                        false,
-                    );
-                    if response.clicked()
-                        && let Some(position) = response.interact_pointer_pos()
-                    {
-                        let column = drill_table_column_at(&columns, row_rect.left(), position.x);
-                        let extend = ui.input(|input| input.modifiers.shift);
-                        pending = Some(match selection.filter(|_| extend) {
-                            Some(current) => DrillTableSelection {
-                                anchor: current.anchor,
-                                focus: (index, column),
-                            },
-                            None => DrillTableSelection {
-                                anchor: (index, column),
-                                focus: (index, column),
-                            },
-                        });
-                    }
-                    // Reads `press_origin`, not the pointer: it may already be
-                    // over another row by the time the drag is confirmed.
-                    if response.drag_started()
-                        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
-                    {
-                        drag_anchor = Some((index, drill_table_column_at(&columns, row_rect.left(), origin.x)));
-                    }
-                }
-            });
-
-        // Follows the pointer from here rather than from the origin row's
-        // response, since that row can scroll out of view mid-drag.
-        if let Some(anchor) = drag_anchor {
-            if let (Some(left), Some(top), Some(position)) = (table_left, first_row_top, ui.input(|input| input.pointer.interact_pos())) {
-                let row = drill_table_row_at(top, row_height_with_spacing, hole.intervals.len(), position.y);
-                let column = drill_table_column_at(&columns, left, position.x);
-                pending = Some(DrillTableSelection { anchor, focus: (row, column) });
-            }
-            if !ui.input(|input| input.pointer.primary_down()) {
-                drag_anchor = None;
-            }
-        }
-
-        if let Some(next) = pending {
-            selection = Some(next);
-            ui.data_mut(|data| data.insert_temp(selection_id, next));
-        }
-        // Stored as the anchor itself: egui's store is keyed by id and
-        // type, so writing `Option<T>` and reading `T` back would fail.
-        ui.data_mut(|data| match drag_anchor {
-            Some(anchor) => {
-                data.insert_temp(drag_id, anchor);
-            }
-            None => data.remove::<(usize, usize)>(drag_id),
-        });
-
-        // Tracks the columns horizontally but ignores them vertically, so
-        // it still names the right one however far the reader has scrolled.
-        let header_row = egui::Rect::from_min_size(
-            egui::pos2(header_rect.left() - output.state.offset.x, header_rect.top()),
-            egui::vec2(total_width, row_height),
-        );
-        let header_clip = header_rect.intersect(ui.clip_rect());
-        ui.painter().rect_filled(header_rect, 0.0, ui.visuals().faint_bg_color);
-        draw_drill_table_row(ui, header_row, header_clip, &columns, self.id.with("header_cells"), &header, true);
-
-        // Ctrl+C over the table, scoped to the pointer being over it.
-        let wants_shortcut = ui.rect_contains_pointer(header_rect.union(output.inner_rect)) && ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::C));
-        match selection.filter(|_| copy_selection || (wants_shortcut && !copy_table)) {
-            Some(current) => ui.ctx().copy_text(drill_selection_text(hole, self.fields, current)),
-            None if copy_table || wants_shortcut => ui.ctx().copy_text(drill_table_text(hole, self.fields)),
-            None => {}
-        }
+        let aligns = drill_table_aligns(self.fields);
+        let shown = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, false)).unwrap_or_default();
+        let copied = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, true)).unwrap_or_default();
+        DataTable::new(self.id.with("intervals"), &header, hole.intervals.len(), &shown)
+            .aligns(&aligns)
+            .copy_cells(&copied)
+            .fingerprint(self.fingerprint())
+            .max_height(max_height)
+            .show(ui);
     }
 
-    /// The strip above the table: its name on the left, its copy actions
-    /// on the right, both drawn into one exactly sized rect.
-    fn show_table_heading(&self, ui: &mut egui::Ui, has_selection: bool) -> (bool, bool) {
-        let strip_height = ui.spacing().interact_size.y;
-        let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), strip_height), egui::Sense::hover());
-
-        let mut actions = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(self.id.with("table_actions"))
-                .max_rect(strip)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        let copy_table = actions.small_button(tr!(literal = "Copy table")).clicked();
-        let copy_selection = actions.add_enabled(has_selection, egui::Button::new(tr!(literal = "Copy selection")).small()).clicked();
-
-        let mut title = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(self.id.with("table_title"))
-                .max_rect(strip.with_max_x((actions.min_rect().left() - 6.0).max(strip.left())))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        title.add(egui::Label::new(egui::RichText::new(tr!(literal = "Interval data")).strong().color(ui.visuals().weak_text_color())).truncate());
-
-        (copy_table, copy_selection)
-    }
-
-    /// The table's columns: each measured width paired with its alignment.
-    fn columns(&self, ui: &egui::Ui, header: &[String]) -> Vec<DrillTableColumn> {
-        self.column_widths(ui, header)
-            .into_iter()
-            .zip(drill_table_aligns(self.fields))
-            .map(|(width, align)| DrillTableColumn { width, align })
-            .collect()
-    }
-
-    /// Measure each column once, keyed on what it was measured from.
-    fn column_widths(&self, ui: &egui::Ui, header: &[String]) -> Vec<f32> {
-        let id = self.id.with("table_columns");
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let fingerprint = self.column_fingerprint(&font);
-        if let Some(cached) = ui.data(|data| data.get_temp::<DrillTableColumns>(id)).filter(|cached| cached.fingerprint == fingerprint) {
-            return cached.widths;
-        }
-
-        let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
-        let mut widths: Vec<f32> = header.iter().map(|label| measure(label)).collect();
-        for interval in self.hole.intervals.iter().take(DRILL_TABLE_WIDTH_SAMPLE) {
-            for (width, cell) in widths.iter_mut().zip(drill_table_row(interval, self.fields, false)) {
-                *width = width.max(measure(&cell));
-            }
-        }
-        for width in &mut widths {
-            *width = (*width + DRILL_TABLE_CELL_PADDING * 2.0).clamp(DRILL_TABLE_MIN_COLUMN_WIDTH, DRILL_TABLE_MAX_COLUMN_WIDTH);
-        }
-
-        ui.data_mut(|data| {
-            data.insert_temp(
-                id,
-                DrillTableColumns {
-                    fingerprint,
-                    widths: widths.clone(),
-                },
-            )
-        });
-        widths
-    }
-
-    /// What the cached widths were measured from; a change invalidates them.
-    fn column_fingerprint(&self, font: &egui::FontId) -> u64 {
+    /// What the table's columns were measured from; a change re-measures.
+    fn fingerprint(&self) -> u64 {
         use std::hash::Hasher;
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hole.intervals.len().hash(&mut hasher);
         self.hole
             .intervals
             .last()
             .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
             .hash(&mut hasher);
-        for field in self.fields {
-            field.label.hash(&mut hasher);
-        }
-        font.size.to_bits().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -1408,8 +1114,8 @@ impl<'a> DrillHoleProperties<'a> {
 /// The table's header row: From, To, then one column per dataset field.
 fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<String> {
     let mut header = Vec::with_capacity(fields.len() + 2);
-    header.push(tr!(literal = "From"));
-    header.push(tr!(literal = "To"));
+    header.push(tr!("survey-from"));
+    header.push(tr!("survey-to"));
     header.extend(fields.iter().map(|field| field.label.clone()));
     header
 }
@@ -1454,104 +1160,6 @@ fn drill_table_aligns(fields: &[crate::model::drill_hole::DrillField]) -> Vec<eg
         crate::model::drill_hole::DrillFieldKind::Categorical { .. } => egui::Align::Min,
     }));
     aligns
-}
-
-/// The whole table as tab separated text, header included, ready to paste.
-fn drill_table_text(hole: &crate::model::drill_hole::DrillHole, fields: &[crate::model::drill_hole::DrillField]) -> String {
-    let mut rows = Vec::with_capacity(hole.intervals.len() + 1);
-    rows.push(drill_table_header(fields));
-    rows.extend(hole.intervals.iter().map(|interval| drill_table_row(interval, fields, true)));
-    drill_table_tsv(&rows)
-}
-
-/// The marked block as tab separated text, with no header row.
-fn drill_selection_text(hole: &crate::model::drill_hole::DrillHole, fields: &[crate::model::drill_hole::DrillField], selection: DrillTableSelection) -> String {
-    let columns = selection.columns();
-    let rows: Vec<Vec<String>> = selection
-        .rows()
-        .filter_map(|index| hole.intervals.get(index))
-        .map(|interval| {
-            let row = drill_table_row(interval, fields, true);
-            columns.clone().filter_map(|column| row.get(column).cloned()).collect()
-        })
-        .collect();
-    drill_table_tsv(&rows)
-}
-
-/// Serialise rows as tab separated lines, one cell per tab.
-fn drill_table_tsv(rows: &[Vec<String>]) -> String {
-    let mut text = String::new();
-    for row in rows {
-        for (index, cell) in row.iter().enumerate() {
-            if index > 0 {
-                text.push('\t');
-            }
-            // A tab or newline inside a value travels as a space instead.
-            text.extend(cell.chars().map(|character| if matches!(character, '\t' | '\n' | '\r') { ' ' } else { character }));
-        }
-        text.push('\n');
-    }
-    text
-}
-
-/// The rect a run of columns covers within `row`, for painting behind them.
-fn drill_table_span(columns: &[DrillTableColumn], row: egui::Rect, span: std::ops::RangeInclusive<usize>) -> egui::Rect {
-    let start: f32 = columns.iter().take(*span.start()).map(|column| column.width).sum();
-    let end: f32 = columns.iter().take(span.end().saturating_add(1)).map(|column| column.width).sum();
-    egui::Rect::from_x_y_ranges(row.left() + start..=row.left() + end, row.y_range())
-}
-
-/// Which column the pointer is over, clamped to the table's own edges.
-fn drill_table_column_at(columns: &[DrillTableColumn], left: f32, x: f32) -> usize {
-    let mut edge = left;
-    for (index, column) in columns.iter().enumerate() {
-        edge += column.width;
-        if x < edge {
-            return index;
-        }
-    }
-    columns.len().saturating_sub(1)
-}
-
-/// Which row the pointer is over during a drag, clamped to the row count.
-fn drill_table_row_at(first_row_top: f32, row_height: f32, total_rows: usize, y: f32) -> usize {
-    if total_rows == 0 || row_height <= 0.0 {
-        return 0;
-    }
-    let offset = ((y - first_row_top) / row_height).floor();
-    if offset <= 0.0 { 0 } else { (offset as usize).min(total_rows - 1) }
-}
-
-/// Lay one row of cells across `row`, each in its column's width and
-/// against its column's edge, clipped to `clip`.
-fn draw_drill_table_row(ui: &mut egui::Ui, row: egui::Rect, clip: egui::Rect, columns: &[DrillTableColumn], salt: egui::Id, cells: &[String], strong: bool) {
-    let mut x = row.left();
-    for (index, cell) in cells.iter().enumerate() {
-        let Some(&column) = columns.get(index) else {
-            break;
-        };
-        let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(column.width, row.height()));
-        x += column.width;
-        let visible = rect.intersect(clip);
-        // Columns scrolled off either side are not laid out at all.
-        if cell.is_empty() || !visible.is_positive() {
-            continue;
-        }
-        let layout = if column.align == egui::Align::Max {
-            egui::Layout::right_to_left(egui::Align::Center)
-        } else {
-            egui::Layout::left_to_right(egui::Align::Center)
-        };
-        let mut cell_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(salt.with(index))
-                .max_rect(rect.shrink2(egui::vec2(DRILL_TABLE_CELL_PADDING, 0.0)))
-                .layout(layout),
-        );
-        cell_ui.set_clip_rect(visible);
-        let text = egui::RichText::new(cell);
-        cell_ui.add(egui::Label::new(if strong { text.strong() } else { text }).truncate().selectable(false));
-    }
 }
 
 /// The variable picker's closed face: a combo-box field with the variable's
@@ -1848,8 +1456,8 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
         let number = format!("{value:.0}");
         let text = match line.kind {
             SectionGridLineKind::Level => number,
-            SectionGridLineKind::Upright(SectionGridAxis::Easting) => format!("{}{number}", tr!(literal = "E ")),
-            SectionGridLineKind::Upright(SectionGridAxis::Northing) => format!("{}{number}", tr!(literal = "N ")),
+            SectionGridLineKind::Upright(SectionGridAxis::Easting) => format!("{} {number}", tr!("viewport-e")),
+            SectionGridLineKind::Upright(SectionGridAxis::Northing) => format!("{} {number}", tr!("viewport-n")),
         };
         // RLs read down the right edge, not the left, to clear the slice view's bottom-left dock panel.
         let (endpoint, align, offset) = match line.kind {
@@ -1957,9 +1565,9 @@ fn category_count(variable: &crate::model::formats::block_model_data::BlockVaria
 fn format_category_count(variable: &crate::model::formats::block_model_data::BlockVariable) -> String {
     let count = category_count(variable);
     if count == 1 {
-        tr_format!(literal = "%count% category", count = count)
+        tr!("viewport-count-category", count = count.to_string())
     } else {
-        tr_format!(literal = "%count% categories", count = count)
+        tr!("viewport-count-categories", count = count.to_string())
     }
 }
 
@@ -2231,9 +1839,9 @@ impl ViewportMiniMap {
                     commands.push(UiCommand::SetSlicePreviewDetached(true));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                response.on_hover_text(tr!(literal = "Middle-drag to pan · Scroll to zoom · Click to detach"));
+                response.on_hover_text(tr!("viewport-navigation-hint-detach"));
                 #[cfg(target_arch = "wasm32")]
-                response.on_hover_text(tr!(literal = "Middle-drag to pan · Scroll to zoom"));
+                response.on_hover_text(tr!("viewport-navigation-hint"));
             });
     }
 }
@@ -2409,7 +2017,7 @@ impl<'a> BoreholeLog<'a> {
     /// save.
     pub(crate) fn show(self, ui: &mut egui::Ui) -> Option<WellLogStyle> {
         let Some(hole) = self.depth_range() else {
-            ui.weak(tr!(literal = "This hole has no trace to draw."));
+            ui.weak(tr!("viewport-hole-has-no-trace-draw"));
             return None;
         };
 
@@ -2439,7 +2047,7 @@ impl<'a> BoreholeLog<'a> {
         // The compass has its own drag zone, separate from the plot's.
         let spin = ui
             .interact(compass, self.id.with("compass"), egui::Sense::click_and_drag())
-            .on_hover_text(tr!(literal = "Drag to spin the view around the hole. Double-click to face north."));
+            .on_hover_text(tr!("viewport-drag-spin-view-around-hole"));
         if spin.dragged() {
             azimuth = spun(azimuth, spin.drag_delta().x);
         }
@@ -2521,20 +2129,20 @@ impl<'a> BoreholeLog<'a> {
             egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&handle));
             None
         } else {
-            context_menu_popup(&handle, tr!(literal = "Sideways scale"), |ui| {
-                let fit = ContextMenuAction::new(tr!(literal = "Fit the hole to the track"))
+            context_menu_popup(&handle, tr!("viewport-sideways-scale"), |ui| {
+                let fit = ContextMenuAction::new(tr!("viewport-fit-hole-track"))
                     .checked(squeeze == LogSqueeze::Fit)
                     .show(ui)
-                    .on_hover_text(tr!(literal = "Squeeze sideways just enough to keep the hole in view. Never stretches."));
+                    .on_hover_text(tr!("viewport-squeeze-sideways-just-enough-keep"));
                 if fit.clicked() {
                     squeeze = LogSqueeze::Fit;
                     ui.close();
                 }
                 for ratio in LOG_SQUEEZE_CHOICES {
                     let label = if ratio == 1.0 {
-                        tr!(literal = "1:1, true shape")
+                        tr!("viewport-1-1-true-shape")
                     } else {
-                        tr_format!(literal = "1:%ratio%", ratio = crate::model::plot::format_quantity(ratio, 0))
+                        tr!("viewport-1-ratio", ratio = crate::model::plot::format_quantity(ratio, 0).to_string())
                     };
                     if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
                         squeeze = LogSqueeze::Fixed(ratio);
@@ -2669,15 +2277,15 @@ impl<'a> BoreholeLog<'a> {
     fn trace_notes(&self, held: [bool; 2], columns: LogColumns) -> [Option<String>; 2] {
         let missing = match held {
             _ if !self.logs_loaded => None,
-            [false, false] => Some(tr!(literal = "No downhole geophysics for this hole")),
-            [false, true] => Some(tr!(literal = "No density log for this hole")),
-            [true, false] => Some(tr!(literal = "No gamma log for this hole")),
+            [false, false] => Some(tr!("viewport-no-downhole-geophysics-hole")),
+            [false, true] => Some(tr!("viewport-no-density-log-hole")),
+            [true, false] => Some(tr!("viewport-no-gamma-log-hole")),
             [true, true] => None,
         };
         let narrow = match (held[0] && columns.density <= 0.0, held[1] && columns.gamma <= 0.0) {
-            (true, true) => Some(tr!(literal = "Widen the panel to show density and gamma")),
-            (true, false) => Some(tr!(literal = "Widen the panel to show density")),
-            (false, true) => Some(tr!(literal = "Widen the panel to show gamma")),
+            (true, true) => Some(tr!("viewport-widen-panel-show-density-gamma")),
+            (true, false) => Some(tr!("viewport-widen-panel-show-density")),
+            (false, true) => Some(tr!("viewport-widen-panel-show-gamma")),
             (false, false) => None,
         };
         [missing, narrow]
@@ -2697,17 +2305,10 @@ impl<'a> BoreholeLog<'a> {
         );
         buttons.set_clip_rect(room.intersect(ui.clip_rect()));
         let reset = buttons
-            .add_enabled(
-                zoomed,
-                egui::Button::new(tr!(literal = "Reset View"))
-                    .small()
-                    .corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
-            )
-            .on_hover_text(tr!(literal = "Back to the whole log."))
+            .add(menu::MenuButton::new(tr!("common-reset-view")).enabled(zoomed))
+            .on_hover_text(tr!("viewport-back-whole-log"))
             // Disabled exactly when the log already shows the whole hole.
-            .on_disabled_hover_text(tr!(
-                literal = "Roll the wheel over the log to zoom in on a seam. Drag the log to spin the hole and to walk down it."
-            ))
+            .on_disabled_hover_text(tr!("viewport-roll-wheel-over-log-zoom"))
             .clicked();
 
         // Painted, not laid out, and dropped when the width is not there.
@@ -2717,9 +2318,9 @@ impl<'a> BoreholeLog<'a> {
         for label in [
             format!("{azimuth:.0}°"),
             if zoomed {
-                tr_format!(literal = "%from% to %to% m", from = format!("{:.1}", view.0), to = format!("{:.1}", view.1))
+                tr!("viewport-from-m", from = format!("{:.1}", view.0), to = format!("{:.1}", view.1))
             } else {
-                tr_format!(literal = "%depth% m", depth = format!("{:.1}", hole.1 - hole.0))
+                tr!("log-traces-depth-m", depth = format!("{:.1}", hole.1 - hole.0))
             },
         ] {
             let galley = painter.layout_no_wrap(label, font.clone(), ink);
@@ -2848,7 +2449,7 @@ impl<'a> BoreholeLog<'a> {
                 }
                 None => {
                     painter.rect_filled(block, 0.0, visuals.extreme_bg_color);
-                    (tr!(literal = "Not logged"), visuals.weak_text_color(), None)
+                    (tr!("viewport-not-logged"), visuals.weak_text_color(), None)
                 }
             };
             painter.rect_stroke(block, 0.0, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.45)), egui::StrokeKind::Inside);
@@ -2999,7 +2600,7 @@ impl<'a> BoreholeLog<'a> {
         let bearing = format!("{:03}", ((lean.azimuth + 90.0).round() as i32).rem_euclid(360));
         let caption = elided(
             painter,
-            tr_format!(literal = "m from collar, toward %bearing%°", bearing = bearing),
+            tr!("viewport-m-from-collar-toward-bearing", bearing = bearing.to_string()),
             font.clone(),
             ink,
             track.width(),
@@ -3013,7 +2614,10 @@ impl<'a> BoreholeLog<'a> {
         let ratio = elided(
             painter,
             // Written as the plot sheet writes its 1:N, bar a fitted 1:2.5.
-            tr_format!(literal = "H 1:%ratio%", ratio = trim_decimal_zeros(crate::model::plot::format_quantity(lean.ratio, 1))),
+            tr!(
+                "viewport-h-1-ratio",
+                ratio = trim_decimal_zeros(crate::model::plot::format_quantity(lean.ratio, 1)).to_string()
+            ),
             font,
             ink,
             track.width(),
@@ -3413,7 +3017,7 @@ fn draw_recorded_depth(ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect,
         6.0,
         4.0,
     ));
-    let label = tr_format!(literal = "%depth% m hole end", depth = format!("{depth:.1}"));
+    let label = tr!("viewport-depth-m-hole-end", depth = format!("{depth:.1}"));
     let galley = painter.layout_no_wrap(label, egui::TextStyle::Small.resolve(ui.style()), ink);
     let above = y - galley.size().y - 3.0;
     let top = if above >= plot.top() { above } else { y + 3.0 };
@@ -3525,10 +3129,10 @@ fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
 
     let font = egui::TextStyle::Small.resolve(ui.style());
     for (label, bearing, strong) in [
-        (tr!(literal = "N"), 0.0_f32, true),
-        (tr!(literal = "E"), 90.0, false),
-        (tr!(literal = "S"), 180.0, false),
-        (tr!(literal = "W"), 270.0, false),
+        (tr!("viewport-n"), 0.0_f32, true),
+        (tr!("viewport-e"), 90.0, false),
+        (tr!("viewport-s"), 180.0, false),
+        (tr!("viewport-w"), 270.0, false),
     ] {
         // Screen angle, with the current bearing rotated to the top.
         let screen = (bearing - azimuth - 90.0).to_radians();

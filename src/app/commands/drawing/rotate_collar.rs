@@ -124,10 +124,14 @@ impl<'a> App<'a> {
         let described = crate::ui::state::describe_collar_rotation(rotation);
         crate::logging::report_completed_action(
             CommandReportSpec::new(
-                crate::i18n::tr!(literal = "Rotate Collar"),
-                crate::i18n::tr_format!(literal = "%count% hole(s)", count = turned),
+                crate::i18n::tr!("common-rotate-collar"),
+                crate::i18n::tr!("cmd-move-tool-count-hole-s", count = turned.to_string()),
             ),
-            crate::i18n::tr_format!(literal = "Turned %count% drillhole collar(s) %rotation%", count = turned, rotation = described),
+            crate::i18n::tr!(
+                "cmd-rotate-collar-turned-count-drillhole-collar-s",
+                count = turned.to_string(),
+                rotation = described.to_string()
+            ),
         );
         self.reset_rotate_editor_state();
         self.invalidate_topology_bounds_and_redraw();

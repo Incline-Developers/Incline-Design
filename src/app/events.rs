@@ -6,14 +6,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{
-    app::App,
-    i18n::{tr, tr_format},
-    logging::CommandReportSpec,
-    rendering::graphics::RenderSurfaceError,
-    ui::state::ActiveTool,
-    userspace_error, userspace_warn,
-};
+use crate::{app::App, i18n::tr, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error, userspace_warn};
 
 /// Right-press-to-drag threshold, in logical points, scaled by the window's scale factor before use.
 const RIGHT_CLICK_DRAG_THRESHOLD_PT: f32 = 3.0;
@@ -189,7 +182,7 @@ impl<'a> App<'a> {
             match event {
                 WindowEvent::CloseRequested => {
                     if let Err(error) = self.request_exit() {
-                        userspace_error!("{}", tr_format!(literal = "Couldn't exit: %error%", error = error));
+                        userspace_error!("{}", tr!("events-couldn-t-exit-error", error = error.to_string()));
                     }
                 }
                 WindowEvent::KeyboardInput { .. } => self.handle_key_action(&event),
@@ -1182,7 +1175,7 @@ impl<'a> App<'a> {
                 KeyCode::KeyY => self.apply_history_step(false),
                 KeyCode::KeyS => {
                     if let Err(error) = self.save_dirty_project() {
-                        userspace_error!("{}", tr_format!(literal = "Couldn't save: %error%", error = error));
+                        userspace_error!("{}", tr!("events-couldn-t-save-error", error = error.to_string()));
                     }
                 }
                 KeyCode::KeyA => {
@@ -1445,8 +1438,8 @@ impl<'a> App<'a> {
                     self.editor.z_input = z;
                     self.redraw_requested = true;
                     crate::logging::report_completed_action(
-                        CommandReportSpec::new(crate::i18n::tr!(literal = "Set Elevation"), format!("Z {z:.4}")),
-                        crate::i18n::tr_format!(literal = "Set elevation from cursor hit to Z %z%", z = format!("{z:.4}")),
+                        CommandReportSpec::new(crate::i18n::tr!("events-set-elevation"), format!("Z {z:.4}")),
+                        crate::i18n::tr!("events-set-elevation-from-cursor-hit", z = format!("{z:.4}")),
                     );
                 }
             }
@@ -1559,7 +1552,7 @@ impl<'a> App<'a> {
             return;
         }
         if self.editor.slice_mode_enabled && tool.section_refuses() {
-            userspace_warn!("{}", tr!(literal = "That tool is not available in the section view"));
+            userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }
         if tool != self.editor.active_tool
