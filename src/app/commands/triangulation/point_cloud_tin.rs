@@ -160,11 +160,7 @@ fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>>
     }
     userspace_log!(
         "{}",
-        tr!(
-            "cmd-point-cloud-tin-terrain-tin-filtered-ground-ground",
-            ground = ground.len().to_string(),
-            total = points.len().to_string()
-        )
+        tr!("cmd-point-cloud-tin-filtered-ground", ground = ground.len().to_string(), total = points.len().to_string())
     );
     Ok(ground)
 }
@@ -218,11 +214,7 @@ fn reconstruct_terrain_tin_from_point_cloud(
     if sampled.len() < points.len() {
         userspace_log!(
             "{}",
-            tr!(
-                "cmd-point-cloud-tin-terrain-tin-spatially-subsampled-sam",
-                sampled = sampled.len().to_string(),
-                total = points.len().to_string()
-            )
+            tr!("cmd-point-cloud-tin-subsampled", sampled = sampled.len().to_string(), total = points.len().to_string())
         );
     }
     let generated = reconstruct_terrain_tin(sampled, occupancy.as_ref(), params.name.clone(), params.max_edge, cancel)?;
@@ -283,7 +275,7 @@ fn reconstruct_terrain_tin(
     userspace_log!(
         "{}",
         tr!(
-            "cmd-point-cloud-tin-terrain-tin-triangulated-vertex-coun",
+            "cmd-point-cloud-tin-triangulated",
             vertex_count = vertices.len().to_string(),
             face_count = faces.len().to_string(),
             suffix = max_edge_suffix.to_string()

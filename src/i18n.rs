@@ -222,9 +222,9 @@ pub(crate) fn select_language(choice: LanguageChoice) {
     log::info!(
         "{}",
         crate::i18n::tr!(
-            "i18n-active-language-language-bundled-bun",
+            "i18n-active-language",
             language = LOADER.current_language().to_string(),
-            bundled = (format!("{:?}", available_languages())).to_string()
+            bundled = format!("{:?}", available_languages())
         )
     );
 }

@@ -862,15 +862,12 @@ pub(crate) fn poll_volume_feedback(volume: &mut CachedBlockVolumeGpu) {
         }
         Ok(Err(error)) => {
             volume.feedback_receiver = None;
-            log::warn!(
-                "{}",
-                crate::i18n::tr!("block-model-volume-cache-block-volume-usage-feedback-readback-2", error = error.to_string())
-            );
+            log::warn!("{}", crate::i18n::tr!("block-model-volume-feedback-failed", error = error.to_string()));
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {}
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             volume.feedback_receiver = None;
-            log::warn!("{}", crate::i18n::tr!("block-model-volume-cache-block-volume-usage-feedback-readback"));
+            log::warn!("{}", crate::i18n::tr!("block-model-volume-feedback-disconnected"));
         }
     }
 }

@@ -38,7 +38,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .memory(|memory| memory.focused())
         .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
     let mut open = true;
-    let title = tr!("drill-hole-drill-hole-appearance-name", name = dataset.name.clone().to_string());
+    let title = tr!("drill-hole-appearance-title", name = dataset.name.clone().to_string());
     DragableMenu::new("drill_hole_colour_dialog", title)
         .open(&mut open)
         .min_width(400.0)
@@ -141,7 +141,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                                 .fixed_decimals(2)
                                 .suffix(tr!("common-x")),
                         )
-                        .on_hover_text(tr!("drill-hole-hole-its-drilled-width-reads"))
+                        .on_hover_text(tr!("drill-hole-drilled-width-help"))
                         .changed();
                 });
                 MenuField::new(tr!("drill-hole-never-thinner-than")).show(ui, |ui, _, _| {
@@ -184,7 +184,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                                 .fixed_decimals(1)
                                 .suffix(format!(" {}", tr!("drill-hole-px"))),
                         )
-                        .on_hover_text(tr!("drill-hole-hole-itself-drawn-line-wide"))
+                        .on_hover_text(tr!("drill-hole-line-width-help"))
                         .changed();
                 });
                 if discs_changed {
@@ -245,7 +245,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         changed |= ui
                             .add_sized([145.0, ui.spacing().interact_size.y], egui::Slider::new(&mut stop.t, 0.0..=1.0).show_value(false))
                             .changed();
-                        if can_remove && ui.small_button(tr!("drill-hole-text-2")).clicked() {
+                        if can_remove && ui.small_button(tr!("common-minus-sign")).clicked() {
                             remove = Some(index);
                         }
                     });
@@ -377,7 +377,7 @@ fn draw_working_sections(
         for section in dataset.color.working_sections.iter().filter(|section| section.field == field.key) {
             MenuField::new(section.name.as_str()).show(ui, |ui, _, _| {
                 ui.label(egui::RichText::new(section.codes.join(", ")).weak());
-                if ui.small_button(tr!("drill-hole-text-2")).clicked() {
+                if ui.small_button(tr!("common-minus-sign")).clicked() {
                     edits.push(SectionEdit::Remove(section.name.clone()));
                 }
             });
@@ -571,7 +571,7 @@ fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
         let before = ui.available_width();
         let mut changed = false;
         if ui
-            .add_enabled(!text.is_empty(), egui::Button::new(tr!("drill-hole-text")).small())
+            .add_enabled(!text.is_empty(), egui::Button::new(tr!("common-times-sign")).small())
             .on_hover_text(tr!("drill-hole-clear-filter"))
             .clicked()
         {

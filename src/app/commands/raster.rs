@@ -34,7 +34,7 @@ impl<'a> App<'a> {
         let hardware_limit = self.graphics.as_ref().map(|graphics| graphics.max_raster_texture_dimension()).unwrap_or(u32::MAX);
         let preview_limit = raster_preview_dimension_limit(self.editor.downscale_raster_previews, hardware_limit);
         self.spawn_job(
-            crate::i18n::tr!("cmd-block-model-loading-name-2", name = name.to_string()),
+            crate::i18n::tr!("cmd-block-model-loading-name-ellipsis", name = name.to_string()),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
@@ -117,7 +117,7 @@ impl<'a> App<'a> {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    crate::userspace_warn!("{}", tr!("cmd-raster-raster-loader-disconnected-path", path = path.display().to_string()));
+                    crate::userspace_warn!("{}", tr!("cmd-raster-loader-disconnected", path = path.display().to_string()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -245,7 +245,7 @@ impl<'a> App<'a> {
             .map(|triangulation| (triangulation.id, triangulation.name.clone()))
             .collect();
         if overlapping.is_empty() {
-            anyhow::bail!("{}", tr!("cmd-raster-no-loaded-triangulation-overlaps-ext", name = raster_name.to_string()));
+            anyhow::bail!("{}", tr!("cmd-raster-no-overlapping-triangulation", name = raster_name.to_string()));
         }
         for (id, name) in &overlapping {
             if self
@@ -253,14 +253,7 @@ impl<'a> App<'a> {
                 .iter()
                 .any(|triangulation| triangulation.id == *id && triangulation.raster_texture != Some(raster_id))
             {
-                userspace_log!(
-                    "{}",
-                    tr!(
-                        "cmd-raster-draped-raster-raster-over-triangulat",
-                        raster = raster_name.clone().to_string(),
-                        triangulation = name.to_string()
-                    )
-                );
+                userspace_log!("{}", tr!("cmd-raster-draped", raster = raster_name.clone().to_string(), triangulation = name.to_string()));
             }
         }
         let ids: Vec<_> = overlapping.into_iter().map(|(id, _)| id).collect();
@@ -279,7 +272,7 @@ impl<'a> App<'a> {
             .collect();
         let count = self.set_triangulation_drapes(&draped, None);
         if count > 0 {
-            userspace_log!("{}", tr!("cmd-raster-undraped-rasters-from-count-triangul", count = count.to_string()));
+            userspace_log!("{}", tr!("cmd-raster-undraped", count = count.to_string()));
         }
     }
 

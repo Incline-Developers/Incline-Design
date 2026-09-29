@@ -110,7 +110,7 @@ impl<'a> App<'a> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                userspace_warn!("{}", tr!("cmd-include-include-failed-message", message = message.to_string()));
+                userspace_warn!("{}", tr!("cmd-include-failed", message = message.to_string()));
             }
         };
 

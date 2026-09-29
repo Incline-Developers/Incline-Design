@@ -16,7 +16,7 @@ pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         #[cfg(not(target_arch = "wasm32"))]
         ui.label(tr!("confirmations-save-modified-project-before-exiting"));
         #[cfg(target_arch = "wasm32")]
-        ui.label(tr!("confirmations-save-modified-project-browser-storag"));
+        ui.label(tr!("confirmations-save-to-browser-before-exit"));
         menu::menu_actions(ui, |ui| {
             if ui.add(MenuButton::new(tr!("common-save-exit")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndExit);

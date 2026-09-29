@@ -54,7 +54,7 @@ impl<'a> App<'a> {
         let source_name = input.source.name.clone();
         let model_name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!("common-block-model"));
         self.spawn_job(
-            tr!("cmd-block-model-loading-name-2", name = source_name.to_string()),
+            tr!("cmd-block-model-loading-name-ellipsis", name = source_name.to_string()),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {

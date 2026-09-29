@@ -79,7 +79,7 @@ pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole
         userspace_log!(
             "{}",
             tr!(
-                "cmd-omf-dataset-name-field-field-was",
+                "cmd-omf-field-codes-partly-coloured",
                 name = open.name.clone().to_string(),
                 field = field.label.clone().to_string(),
                 saved = saved.to_string(),
@@ -288,11 +288,7 @@ impl<'a> App<'a> {
 
         userspace_log!(
             "{}",
-            tr!(
-                "cmd-omf-opened-project-project-name-from",
-                project_name = project_name.to_string(),
-                source_name = source_name.to_string()
-            )
+            tr!("cmd-omf-opened-project", project_name = project_name.to_string(), source_name = source_name.to_string())
         );
         self.invalidate_geometry();
         if should_fit {
@@ -329,7 +325,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("{}", tr!("cmd-omf-omf-import-failed-error", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-import-failed", error = format!("{error:#}"))),
             },
         );
     }
@@ -355,7 +351,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("{}", tr!("cmd-omf-omf-import-failed-error", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-import-failed", error = format!("{error:#}"))),
             },
         );
         Ok(())
@@ -419,7 +415,7 @@ impl<'a> App<'a> {
                     userspace_warn!(
                         "{}",
                         tr!(
-                            "cmd-omf-source-name-coordinate-reference-sys",
+                            "cmd-omf-crs-differs",
                             source_name = source_name.clone().to_string(),
                             source_crs = source_crs.to_string(),
                             target_crs = target_crs.to_string()
@@ -477,7 +473,7 @@ impl<'a> App<'a> {
             userspace_log!(
                 "{}",
                 tr!(
-                    "cmd-omf-imported-project-project-name-from",
+                    "cmd-omf-imported-project",
                     project_name = project_name.to_string(),
                     source_name = source_name.to_string(),
                     count = count.to_string()
@@ -672,7 +668,7 @@ impl<'a> App<'a> {
                 },
                 move |_app, result| match result {
                     Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
-                    Err(error) => userspace_warn!("{}", tr!("cmd-omf-omf-export-failed-error", error = format!("{error:#}"))),
+                    Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
                 },
             );
         }
@@ -718,7 +714,7 @@ impl<'a> App<'a> {
             },
             move |_app, result| match result {
                 Ok(()) => userspace_log!("{}", tr!("cmd-omf-exported-project-path", path = display_path.display().to_string())),
-                Err(error) => userspace_warn!("{}", tr!("cmd-omf-omf-export-failed-error", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
             },
         );
     }

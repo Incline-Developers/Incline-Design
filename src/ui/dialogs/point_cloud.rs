@@ -47,11 +47,7 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
             MenuField::new(tr!("point-cloud-point-clouds"))
                 .help_text(tr!("point-cloud-selected-clouds-copied-into-joined"))
                 .show(ui, |ui, _row_height, _field_width| {
-                    ui.label(tr!(
-                        "point-cloud-count-selected-points-points",
-                        count = selected.len().to_string(),
-                        points = total.to_string()
-                    ));
+                    ui.label(tr!("point-cloud-selected-count", count = selected.len().to_string(), points = total.to_string()));
                 });
             egui::ScrollArea::vertical()
                 .id_salt("point_cloud_join_list")
@@ -131,11 +127,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
             MenuField::new(tr!("point-cloud-point-clouds"))
                 .help_text(tr!("point-cloud-selected-clouds-each-classified-its"))
                 .show(ui, |ui, _row_height, _field_width| {
-                    ui.label(tr!(
-                        "point-cloud-count-selected-points-points",
-                        count = selected.len().to_string(),
-                        points = total.to_string()
-                    ));
+                    ui.label(tr!("point-cloud-selected-count", count = selected.len().to_string(), points = total.to_string()));
                 });
             egui::ScrollArea::vertical()
                 .id_salt("point_cloud_classify_list")
@@ -221,7 +213,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                 .help_text(tr!("point-cloud-let-cloth-follow-walls-down"))
                 .show(ui);
             MenuFieldBool::new(tr!("point-cloud-classify-vegetation"), &mut params.classify_vegetation)
-                .help_text(tr!("point-cloud-sort-returns-trained-classifier-read"))
+                .help_text(tr!("point-cloud-classify-help"))
                 .show(ui);
 
             ui.add_space(4.0);

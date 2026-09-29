@@ -290,7 +290,7 @@ fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high:
         y = format!("{:.3}", position.y),
         za = format!("{low:.2}"),
         zb = format!("{high:.2}"),
-        difference = (format!("{:.2}", (high - low).abs())).to_string()
+        difference = format!("{:.2}", (high - low).abs())
     )
 }
 
@@ -442,7 +442,7 @@ fn delaunay_surface_from_points(
             .collect::<Vec<_>>()
             .join("\n");
         if surface.overridden.len() > OVERRIDE_LINES {
-            report.push_str(&tr!("cmd-reference-surface-more-more", more = (surface.overridden.len() - OVERRIDE_LINES).to_string()));
+            report.push_str(&tr!("cmd-reference-surface-and-more", more = (surface.overridden.len() - OVERRIDE_LINES).to_string()));
         }
         userspace_warn!("{}", report);
     }

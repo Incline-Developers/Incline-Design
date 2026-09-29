@@ -433,7 +433,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                 .show(ui);
 
                             menu::menu_section(ui, tr!("plot-scale-framing"));
-                            MenuFieldF64::new(tr!("plot-scale-1"), &mut dialog.scale, 1.0..=1.0e7)
+                            MenuFieldF64::new(tr!("plot-scale-ratio"), &mut dialog.scale, 1.0..=1.0e7)
                                 .help_text(tr!("plot-1-1000-one-millimetre-sheet"))
                                 .speed(10.0)
                                 .max_decimals(0)
@@ -463,11 +463,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                     .show(ui);
                             }
 
-                            if ui
-                                .button(tr!("plot-fit-scale-visible-data"))
-                                .on_hover_text(tr!("plot-choose-smallest-conventional-scale-f"))
-                                .clicked()
-                            {
+                            if ui.button(tr!("plot-fit-scale-visible-data")).on_hover_text(tr!("plot-fit-scale-help")).clicked() {
                                 commands.push(UiCommand::FitPlotScaleToData);
                             }
 
@@ -508,8 +504,8 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                             .map_or_else(|| tr!("plot-e-g-example-gold-project"), |stem| stem.to_string_lossy().into_owned()),
                                     )
                                     .show(ui);
-                                MenuFieldText::new(tr!("plot-drawn-2"), &mut dialog.author).width(PLOT_FIELD_WIDTH).show(ui);
-                                MenuFieldText::new(tr!("plot-date-2"), &mut dialog.date)
+                                MenuFieldText::new(tr!("plot-drawn-by"), &mut dialog.author).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("plot-date"), &mut dialog.date)
                                     .width(PLOT_FIELD_WIDTH)
                                     .hint_text(tr!("plot-today"))
                                     .show(ui);

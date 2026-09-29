@@ -350,8 +350,8 @@ fn settings_section(
         let restore_clicked = ui
             .scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                ui.add_enabled(draft != restored, egui::Button::new(tr!("properties-restore-defaults-2")))
-                    .on_hover_text(tr!("properties-restore-defaults", heading = heading))
+                ui.add_enabled(draft != restored, egui::Button::new(tr!("properties-restore-defaults")))
+                    .on_hover_text(tr!("properties-restore-defaults-tooltip", heading = heading))
                     .clicked()
             })
             .inner;
@@ -485,7 +485,7 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
             CollapsibleSection::new("camera_fly_mode", tr!("common-fly-mode")).show(ui, |ui| {
                 changed |= committed(
                     &MenuFieldF64::new(tr!("properties-field-view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
-                        .suffix(tr!("common-text-2"))
+                        .suffix(tr!("common-degree-suffix"))
                         .show(ui),
                 );
                 changed |= committed(

@@ -184,9 +184,9 @@ impl<'a> App<'a> {
         crate::logging::report_completed_action(
             CommandReportSpec::new(
                 crate::i18n::tr!("common-create-circle"),
-                crate::i18n::tr!("cmd-placement-radius-radius-m", radius = format!("{radius:.3}")),
+                crate::i18n::tr!("cmd-placement-radius", radius = format!("{radius:.3}")),
             ),
-            crate::i18n::tr!("cmd-placement-created-circle-radius-radius-m", radius = format!("{radius:.3}")),
+            crate::i18n::tr!("cmd-placement-created-circle", radius = format!("{radius:.3}")),
         );
     }
 
@@ -232,7 +232,7 @@ impl<'a> App<'a> {
                 crate::i18n::tr!("common-create-polyline"),
                 crate::i18n::tr!("cmd-placement-count-vertices", count = vertex_count.to_string()),
             ),
-            crate::i18n::tr!("cmd-placement-created-closed-polyline-count-vertic", count = vertex_count.to_string()),
+            crate::i18n::tr!("cmd-placement-created-closed-polyline", count = vertex_count.to_string()),
         );
     }
 

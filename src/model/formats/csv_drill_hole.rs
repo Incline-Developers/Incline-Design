@@ -350,7 +350,7 @@ fn check_purposes<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) 
     }
     let has_geophysics = files.iter().any(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
     if has_geophysics && bundle_anchor(files.iter().copied()).is_none() {
-        return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-downhole-geophysics-needs-collar-exp")));
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-geophysics-needs-geometry")));
     }
     Ok(())
 }
@@ -547,7 +547,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
             userspace_warn!(
                 "{}",
                 crate::i18n::tr!(
-                    "csv-drill-hole-file-not-valid-utf-8",
+                    "csv-drill-hole-invalid-utf8",
                     file = mapping.path.display().to_string(),
                     count = parsed.repaired_bytes.to_string(),
                     cells = parsed.repaired_cells.to_string()
@@ -584,7 +584,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
             userspace_warn!(
                 "{}",
                 crate::i18n::tr!(
-                    "csv-drill-hole-file-holds-count-rows-whose",
+                    "csv-drill-hole-azimuth-out-of-range",
                     file = mapping.path.display().to_string(),
                     count = angles.azimuth_off_compass.to_string()
                 )
@@ -594,7 +594,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
             userspace_warn!(
                 "{}",
                 crate::i18n::tr!(
-                    "csv-drill-hole-file-holds-count-rows-whose-2",
+                    "csv-drill-hole-dip-out-of-range",
                     file = mapping.path.display().to_string(),
                     count = angles.tilt_not_an_angle.to_string()
                 )
@@ -701,7 +701,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                             userspace_warn!(
                                 "{}",
                                 crate::i18n::tr!(
-                                    "csv-drill-hole-file-row-row-dhid-dhid",
+                                    "csv-drill-hole-row-undefined-hole",
                                     file = mapping.path.display().to_string(),
                                     row = line.to_string(),
                                     dhid = dhid.clone().to_string()
@@ -743,7 +743,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
         userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-count-rows-were-skipped-total", count = skipped.to_string()));
     }
     if orphaned > SKIP_REPORT_LIMIT {
-        userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-count-rows-were-hole-bundle", count = orphaned.to_string()));
+        userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-rows-for-undefined-holes", count = orphaned.to_string()));
     }
 
     report_overlaps(&intervals);

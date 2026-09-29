@@ -233,9 +233,9 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         ExplorerHeader::new(egui::Id::new("import_triangulations_section"), tr!("common-triangulations"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!("io-wavefront-obj-obj"), DataMenu::Obj);
-                draw_entry(ui, editor, &tr!("io-stl-stl"), DataMenu::Stl);
-                draw_entry(ui, editor, &tr!("io-ply-ply"), DataMenu::Ply);
+                draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
+                draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
+                draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
             });
         ExplorerHeader::new(egui::Id::new("import_rasters_section"), tr!("common-rasters"))
             .default_open(false)
@@ -271,9 +271,9 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
             draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
         });
         ExplorerHeader::new(egui::Id::new("export_triangulations_section"), tr!("common-triangulations")).show(ui, |ui| {
-            draw_entry(ui, editor, &tr!("io-wavefront-obj-obj"), DataMenu::Obj);
-            draw_entry(ui, editor, &tr!("io-stl-stl"), DataMenu::Stl);
-            draw_entry(ui, editor, &tr!("io-ply-ply"), DataMenu::Ply);
+            draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
+            draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
+            draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
         });
         ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!("common-block-models")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-comma-separated-values-csv"), DataMenu::CsvBlockModel);

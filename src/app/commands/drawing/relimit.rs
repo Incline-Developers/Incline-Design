@@ -67,20 +67,20 @@ impl<'a> App<'a> {
 
         // Phase 1: pick the target boundary (only when dialog is closed).
         if !self.editor.relimit_waiting_for_pick {
-            userspace_warn!("{}", tr!("cmd-relimit-relimit-click-ignored-tool-not"));
+            userspace_warn!("{}", tr!("cmd-relimit-click-ignored"));
             return;
         }
         let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(second_id), _)) = picked else {
-            userspace_warn!("{}", tr!("cmd-relimit-relimit-click-did-not-hit"));
+            userspace_warn!("{}", tr!("cmd-relimit-click-missed"));
             return;
         };
         let Some(source_id) = self.editor.relimit_source_id else {
-            userspace_warn!("{}", tr!("cmd-relimit-relimit-no-source-line-set"));
+            userspace_warn!("{}", tr!("cmd-relimit-no-source-line"));
             return;
         };
         if second_id == source_id {
-            userspace_warn!("{}", tr!("cmd-relimit-relimit-clicked-source-line-itself"));
+            userspace_warn!("{}", tr!("cmd-relimit-clicked-source-line"));
             return;
         }
 

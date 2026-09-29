@@ -146,7 +146,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
 
             ui.add_space(4.0);
             MenuFieldF64::new(tr!("drill-pattern-burden"), &mut editor.drill_pattern_burden, 0.01..=1_000_000.0)
-                .help_text(tr!("drill-pattern-perpendicular-distance-between-patte"))
+                .help_text(tr!("drill-pattern-spacing-help"))
                 .speed(0.1)
                 .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
@@ -156,10 +156,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
             MenuFieldF64::new(tr!("drill-pattern-rotation"), &mut editor.drill_pattern_rotation_deg, -360.0..=360.0)
-                .help_text(tr!(
-                    "drill-pattern-counter-clockwise-pattern-rotation-f",
-                    axis = crate::model::survey::axis_name(0).to_string()
-                ))
+                .help_text(tr!("drill-pattern-rotation-help", axis = crate::model::survey::axis_name(0).to_string()))
                 .speed(1.0)
                 .suffix("°")
                 .show(ui);
@@ -191,7 +188,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             .help_text(tr!("drill-pattern-staggered-offsets-every-second-row"))
             .show(ui);
             MenuFieldF64::new(tr!("drill-pattern-hole-diameter"), &mut editor.drill_pattern_diameter_mm, 25.0..=1_000.0)
-                .help_text(tr!("drill-pattern-finished-hole-diameter-entered-milli"))
+                .help_text(tr!("drill-pattern-diameter-help"))
                 .speed(1.0)
                 .suffix(" mm")
                 .show(ui);
@@ -201,8 +198,8 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
             MenuFieldText::new(tr!("drill-pattern-pattern-name"), &mut editor.drill_pattern_name)
-                .help_text(tr!("drill-pattern-name-drillhole-dataset-created-proje"))
-                .hint_text(tr!("drill-pattern-e-g-west-cut-03"))
+                .help_text(tr!("drill-pattern-name-help"))
+                .hint_text(tr!("drill-pattern-name-hint"))
                 .show(ui);
 
             ui.add_space(6.0);

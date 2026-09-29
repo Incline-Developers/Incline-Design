@@ -229,7 +229,7 @@ pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut Edi
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui.ctx(), |ui| {
             ui.label(target.prompt());
-            ui.label(egui::RichText::new(tr!("tri-only-loaded-triangulations-can-picke")).weak());
+            ui.label(egui::RichText::new(tr!("tri-only-loaded-pickable")).weak());
             ui.add_space(6.0);
             viewport_pick_status(ui, editor, &tr!("tri-move-cursor-over-loaded-surface"));
             ui.add_space(6.0);
@@ -362,7 +362,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     }
                 });
             } else if failure.upper_surface_retry_available {
-                ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-highlighted-breakline-edges-cross-ov"));
+                ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-breaklines-cross"));
                 ui.add_space(4.0);
                 ui.strong(tr!("tri-solution-generate-upper-surface"));
                 ui.colored_label(egui::Color32::GRAY, tr!("tri-higher-edge-will-enforced-each"));
@@ -465,7 +465,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 ui,
                 match editor.tri_cut_poly_mode {
                     TriPolylineClipMode::KeepInside => tr!("tri-keeps-only-surface-within-polyline"),
-                    TriPolylineClipMode::KeepOutside => tr!("tri-removes-surface-within-polyline-boun"),
+                    TriPolylineClipMode::KeepOutside => tr!("tri-remove-inside-help"),
                 },
             );
 
@@ -523,7 +523,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
         .show(ui.ctx(), |ui| {
             let width = picker_control_width(ui);
             let selected_name = surface_name(project, editor.tri_cut_z_tri_id);
-            selected_source_field(ui, tr!("tri-type-open-surface"), selected_name, tr!("tri-selected-surface-whose-elevation-ran"), width);
+            selected_source_field(ui, tr!("tri-type-open-surface"), selected_name, tr!("tri-slice-source-help"), width);
 
             ui.add_space(4.0);
 
@@ -557,7 +557,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
             ui.add_space(4.0);
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_z_name_input)
-                .help_text(tr!("tri-name-assigned-elevation-clipped-outp"))
+                .help_text(tr!("tri-slice-output-name-help"))
                 .width(width)
                 .hint_text(tr!("tri-e-g-mysurf-slice"))
                 .show(ui);
@@ -629,7 +629,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 &mut editor.tri_cut_surface_reference_id,
                 reference_label,
                 loaded.iter().filter(|(id, _)| Some(*id) != target_id).map(|(id, name)| (Some(*id), (*name).into())),
-                tr!("tri-reference-topology-defines-where-oth"),
+                tr!("tri-reference-topology-help"),
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::TrimTopology);
             }
@@ -648,7 +648,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 &mut editor.tri_cut_surface_target_id,
                 target_label,
                 loaded.iter().filter(|(id, _)| Some(*id) != reference_id).map(|(id, name)| (Some(*id), (*name).into())),
-                tr!("tri-surface-will-changed-selected-topolo"),
+                tr!("tri-target-surface-help"),
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::TrimSurface);
             }
@@ -692,10 +692,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
             tool_help_panel(
                 ui,
-                tr!(
-                    "tri-keeps-surface-relation-topology-with",
-                    relation = editor.tri_cut_surface_side.retained_relation().to_string()
-                ),
+                tr!("tri-keep-surface-relation-help", relation = editor.tri_cut_surface_side.retained_relation().to_string()),
             );
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_surface_name_input)
@@ -1000,7 +997,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             let mut minor_color = rgba_to_color32(editor.tri_contour_minor_color);
             let mut major_color = rgba_to_color32(editor.tri_contour_major_color);
             MenuField::new(tr!("tri-intervals-colours"))
-                .help_text(tr!("tri-minor-controls-ordinary-contours-maj"))
+                .help_text(tr!("tri-contour-interval-help"))
                 .show(ui, |ui, row_height, _| {
                     let width = control_width;
                     let gap = ui.spacing().item_spacing.x;
@@ -1190,7 +1187,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
         .open(&mut open)
         .min_width(400.0)
         .show(ui.ctx(), |ui| {
-            tool_help_panel(ui, tr!("tri-reconstruct-triangulated-terrain-sur"));
+            tool_help_panel(ui, tr!("tri-reconstruct-help"));
             ui.add_space(4.0);
 
             // The cloud is the one that was selected when the dialog opened.
@@ -1219,7 +1216,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             let mut ground_only = classified && editor.point_cloud_tin_ground_only;
             ui.add_enabled_ui(classified, |ui| {
                 let field = MenuFieldBool::new(tr!("tri-ground-points-only"), &mut ground_only).help_text(if classified {
-                    tr!("tri-reconstruct-from-points-classified-b")
+                    tr!("tri-reconstruct-ground-only-help")
                 } else {
                     tr!("tri-cloud-carries-no-classifications-so")
                 });
@@ -1242,7 +1239,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                     (TerrainSampler::Grid, tr!("tri-uniform-grid").into()),
                 ],
             )
-            .help_text(tr!("tri-adaptive-concentrates-vertices-compl"))
+            .help_text(tr!("tri-sampling-method-help"))
             .width(220.0)
             .show(ui);
 
@@ -1270,7 +1267,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 MenuFieldF64::new(tr!("tri-percentage"), &mut editor.point_cloud_tin_percent, 0.001..=100.0)
                     .help_text(tr!("tri-share-source-points-keep-fractions"))
                     .speed(0.05)
-                    .suffix(tr!("tri-text"))
+                    .suffix(tr!("common-percent-suffix"))
                     .max_decimals(3)
                     .width(220.0)
                     .show(ui);
@@ -1310,7 +1307,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             if editor.point_cloud_tin_sampler == TerrainSampler::Adaptive {
                 MenuFieldU32::new(tr!("tri-candidate-detail"), &mut editor.point_cloud_tin_candidate_mult, 1..=8)
                     .help_text(tr!("tri-candidate-fine-cells-per-budgeted"))
-                    .suffix(tr!("drill-hole-text"))
+                    .suffix(tr!("common-times-sign"))
                     .width(220.0)
                     .show(ui);
             }
@@ -1343,7 +1340,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 .show(ui);
 
             MenuFieldF64::new(tr!("tri-fill-holes-up"), &mut editor.point_cloud_tin_hole_fill, 0.0..=10_000.0)
-                .help_text(tr!("tri-bridge-gaps-boundary-concavities-nar"))
+                .help_text(tr!("tri-bridge-gaps-help"))
                 .speed(0.5)
                 .suffix(tr!("common-m"))
                 .max_decimals(2)
@@ -1354,7 +1351,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             ui.separator();
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.point_cloud_tin_name_input)
-                .help_text(tr!("tri-name-assigned-reconstructed-triangul"))
+                .help_text(tr!("tri-reconstruct-output-name-help"))
                 .width(220.0)
                 .hint_text(tr!("tri-type-open-surface"))
                 .show(ui);

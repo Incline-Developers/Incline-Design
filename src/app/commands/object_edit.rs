@@ -62,7 +62,7 @@ impl<'a> App<'a> {
     pub(crate) fn apply_object_edit(&mut self, id: ObjectId, object: Object, close: bool) {
         if object.id() != id {
             self.editor.object_edit_dialog = None;
-            userspace_warn!("{}", tr!("cmd-object-edit-object-edit-target-changed-discardin"));
+            userspace_warn!("{}", tr!("cmd-object-edit-target-changed"));
             return;
         }
         let Some(before) = self.workspace.active_document().and_then(|document| document.get_object(id)).cloned() else {

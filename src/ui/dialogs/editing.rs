@@ -804,7 +804,7 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
                 .changed();
             *geometry_dirty |= MenuFieldF64::new(tr!("drill-pattern-rotation"), &mut editor.pending_text_rotation_degrees, f64::MIN..=f64::MAX)
                 .speed(1.0)
-                .suffix(tr!("common-text-2"))
+                .suffix(tr!("common-degree-suffix"))
                 .show(ui)
                 .changed();
             *geometry_dirty |= MenuFieldRgba::new(tr!("common-colour"), &mut editor.pending_text_color)
@@ -875,7 +875,7 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 .help_text(tr!("edit-slope-angle-offset-positive-negative"))
                 .width(70.0)
                 .speed(0.5)
-                .suffix(tr!("common-text-2"))
+                .suffix(tr!("common-degree-suffix"))
                 .show(ui);
             if response.changed() {
                 editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
@@ -883,29 +883,25 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
 
             ui.add_space(4.0);
 
-            MenuField::new(tr!("edit-measure"))
-                .help_text(tr!("edit-choose-whether-entered-value-distanc"))
-                .show(ui, |ui, _, _| {
+            MenuField::new(tr!("edit-measure")).help_text(tr!("edit-measure-help")).show(ui, |ui, _, _| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
+                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
+                    let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
+                    if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
+                        editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
+                    }
+                })
+                .response
+            });
+            if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
+                MenuField::new(tr!("edit-height-mode")).help_text(tr!("edit-elevation-mode-help")).show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
-                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
-                        let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
-                        if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
-                            editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
-                        }
+                        ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
+                        ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
                     })
                     .response
                 });
-            if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
-                MenuField::new(tr!("edit-height-mode"))
-                    .help_text(tr!("edit-relative-applies-vertical-change-eve"))
-                    .show(ui, |ui, _, _| {
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
-                            ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
-                        })
-                        .response
-                    });
             }
 
             ui.add_space(4.0);
@@ -923,7 +919,7 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 0.0..=f64::MAX
             };
             MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                .help_text(tr!("edit-value-interpreted-using-selected-mea"))
+                .help_text(tr!("edit-value-help"))
                 .speed(0.1)
                 .suffix(tr!("common-m"))
                 .show(ui);
@@ -1056,7 +1052,7 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                 });
 
             MenuField::new(tr!("edit-direction"))
-                .help_text(tr!("edit-up-raises-each-bench-bench"))
+                .help_text(tr!("edit-bench-direction-help"))
                 .show(ui, |ui, row_height, _| {
                     let gap = ui.spacing().item_spacing.x;
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
@@ -1161,7 +1157,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         .suffix(tr!("common-m"))
                         .show(ui);
                     MenuField::new(tr!("edit-move-which-end"))
-                        .help_text(tr!("edit-select-endpoint-changes-other-endpoi"))
+                        .help_text(tr!("edit-endpoint-help"))
                         .show(ui, |ui, _, _| {
                             ui.horizontal(|ui| {
                                 ui.selectable_value(
@@ -1220,15 +1216,15 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     };
     ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
         let dx_resp = MenuFieldF64::new(tr!("edit-dx"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-distance-along-world-axi", axis = crate::model::survey::axis_name(0).to_string()))
+            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(0).to_string()))
             .speed(0.1)
             .show(ui);
         let dy_resp = MenuFieldF64::new(tr!("edit-dy"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-distance-along-world-axi", axis = crate::model::survey::axis_name(1).to_string()))
+            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(1).to_string()))
             .speed(0.1)
             .show(ui);
         let dz_resp = MenuFieldF64::new(tr!("edit-dz"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-distance-along-world-axi", axis = crate::model::survey::axis_name(2).to_string()))
+            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(2).to_string()))
             .speed(0.1)
             .show(ui);
         if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
@@ -1275,11 +1271,11 @@ pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorSta
                 ui.add_space(2.0);
             }
             let azimuth = MenuFieldF64::new(tr!("edit-azimuth"), &mut editor.rotate_panel_azimuth, 0.0..=360.0)
-                .help_text(tr!("edit-bearing-holes-drilled-degrees-clockw"))
+                .help_text(tr!("edit-azimuth-help"))
                 .speed(0.25)
                 .show(ui);
             let dip = MenuFieldF64::new(tr!("edit-dip"), &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
-                .help_text(tr!("edit-angle-from-horizontal-negative-downw"))
+                .help_text(tr!("edit-dip-help"))
                 .speed(0.25)
                 .show(ui);
             let target = CollarRotation::Absolute(HoleOrientation {
@@ -1315,7 +1311,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
                 ui.label(tr!("edit-click-corner-closed-polyline"));
             } else {
                 MenuFieldU32::new(tr!("edit-segments"), &mut editor.chamfer_segments, 1..=64)
-                    .help_text(tr!("edit-number-straight-segments-used-approx"))
+                    .help_text(tr!("edit-chamfer-segments-help"))
                     .speed(0.1)
                     .show(ui);
 
@@ -1376,7 +1372,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
                 }
             } else {
                 MenuFieldU32::new(tr!("edit-segments"), &mut editor.bezier_segments, 2..=64)
-                    .help_text(tr!("edit-number-line-segments-used-approximat"))
+                    .help_text(tr!("edit-bezier-segments-help"))
                     .speed(0.1)
                     .show(ui);
 
@@ -1407,8 +1403,8 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
                     }
                 }
 
-                draw_bezier_xyz(ui, tr!("edit-control-point-1"), tr!("edit-world-x-y-z-coordinates"), &mut editor.bezier_cp1);
-                draw_bezier_xyz(ui, tr!("edit-control-point-2"), tr!("edit-world-x-y-z-coordinates-2"), &mut editor.bezier_cp2);
+                draw_bezier_xyz(ui, tr!("edit-control-point-1"), tr!("edit-bezier-control-point-1-help"), &mut editor.bezier_cp1);
+                draw_bezier_xyz(ui, tr!("edit-control-point-2"), tr!("edit-bezier-control-point-2-help"), &mut editor.bezier_cp2);
             }
 
             ui.add_space(4.0);

@@ -797,7 +797,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
                                         .unwrap_or_default();
                                     let details = tr!(
-                                        "explorer-id-raster-id-source-driver",
+                                        "explorer-raster-id",
                                         id = raster.id.0.to_string(),
                                         source = source_suffix.to_string(),
                                         driver = raster.driver_name.to_string(),

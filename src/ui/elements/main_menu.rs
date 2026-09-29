@@ -580,7 +580,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // it - the menu is the input's own and the one selected model is
             // what the tool opens on.
             MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("common-create-ore-triangulation-2"))
+                if ContextMenuAction::new(tr!("common-create-ore-triangulation-ellipsis"))
                     .enabled(editor.selection_counts.block_models == 1)
                     .show(ui)
                     .clicked()
@@ -594,7 +594,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // them and takes the one selected collection as its input, the
             // way the other select-first tools do.
             MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("common-create-block-model-2"))
+                if ContextMenuAction::new(tr!("common-create-block-model-ellipsis"))
                     .enabled(editor.selection_counts.drill_holes == 1)
                     .show(ui)
                     .clicked()
@@ -625,7 +625,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // that are selected when it opens, not from a layer picked
                 // inside the dialog.
                 let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
-                if ContextMenuAction::new(tr!("common-build-surface-2")).enabled(can_build_surface).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-build-surface-ellipsis")).enabled(can_build_surface).show(ui).clicked() {
                     commands.push(UiCommand::OpenReferenceSurface);
                     ui.close();
                 }
@@ -700,7 +700,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 commands.push(UiCommand::OpenCutTopologyByPitShell);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!("common-merge-shell-into-topology-2")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-merge-shell-into-topology-ellipsis")).show(ui).clicked() {
                 commands.push(UiCommand::OpenIncludeSolidInTopology);
                 ui.close();
             }

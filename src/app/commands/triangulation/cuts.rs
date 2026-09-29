@@ -235,7 +235,7 @@ impl<'a> App<'a> {
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!(
-                    "cmd-cuts-trimmed-surface-surface-topology-top",
+                    "cmd-cuts-trimmed-surface",
                     surface = target_name.to_string(),
                     topology = reference_name.to_string(),
                     mode = side.trim_label().to_string()
@@ -624,13 +624,7 @@ pub(super) fn clip_mesh_by_surface(
     let target_vertices = target.vertices();
     let reference_surface = validate_reference_surface(reference)?;
     if reference_surface.skipped_vertical_faces > 0 {
-        userspace_warn!(
-            "{}",
-            tr!(
-                "cmd-cuts-ignored-count-vertical-degenerate-re",
-                count = reference_surface.skipped_vertical_faces.to_string()
-            )
-        );
+        userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = reference_surface.skipped_vertical_faces.to_string()));
     }
 
     let mut output_vertices = Vec::new();
@@ -938,10 +932,7 @@ pub(super) fn add_split_constraints(cdt: &mut spade::ConstrainedDelaunayTriangul
         }
     }
     if skipped > 0 {
-        userspace_warn!(
-            "{}",
-            tr!("cmd-cuts-site-skipped-skipped-near-degenerate", site = site.to_string(), skipped = skipped.to_string())
-        );
+        userspace_warn!("{}", tr!("cmd-cuts-skipped-degenerate-edges", site = site.to_string(), skipped = skipped.to_string()));
     }
 }
 

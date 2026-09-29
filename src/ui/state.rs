@@ -776,11 +776,11 @@ pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::Colla
     use crate::model::drill_hole::CollarRotation;
     match rotation {
         CollarRotation::Absolute(orientation) => tr!(
-            "state-azimuth-azimuth-dip-dip-2",
+            "state-rotate-to-azimuth-dip",
             azimuth = format!("{:.1}", orientation.azimuth),
             dip = format!("{:.1}", orientation.dip)
         ),
-        CollarRotation::Delta { azimuth, dip } => tr!("state-azimuth-azimuth-dip-dip", azimuth = format!("{azimuth:+.1}"), dip = format!("{dip:+.1}")),
+        CollarRotation::Delta { azimuth, dip } => tr!("state-rotate-by-azimuth-dip", azimuth = format!("{azimuth:+.1}"), dip = format!("{dip:+.1}")),
     }
 }
 
@@ -3952,11 +3952,11 @@ impl UiCommand {
             Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
                 if *visible { tr!("common-reveal-all") } else { tr!("common-hide-all") },
-                tr!("state-section-section", section = section.label().to_string()),
+                tr!("state-section-name", section = section.label().to_string()),
             ),
             Self::SetSectionLocked(section, locked) => report(
                 if *locked { tr!("common-lock-all") } else { tr!("common-unlock-all") },
-                tr!("state-section-section", section = section.label().to_string()),
+                tr!("state-section-name", section = section.label().to_string()),
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!("state-select-layer-objects"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!("state-unload-triangulation"), format!("{id:?}")),
@@ -4016,16 +4016,8 @@ impl UiCommand {
             Self::BuildReferenceSurface { points, controls, extent } => report(
                 tr!("common-build-surface"),
                 match extent {
-                    Some(_) => tr!(
-                        "state-count-point-s-controls-control",
-                        count = points.len().to_string(),
-                        controls = controls.len().to_string()
-                    ),
-                    None => tr!(
-                        "state-count-point-s-controls-control-2",
-                        count = points.len().to_string(),
-                        controls = controls.len().to_string()
-                    ),
+                    Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                    None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
             Self::SetProjectCoordinateSystem(stored) => report(
@@ -4074,7 +4066,7 @@ impl UiCommand {
                 major_interval, minor_interval, ..
             } => report(
                 tr!("state-generate-contours"),
-                tr!("state-major-major-minor-minor", major = major_interval.to_string(), minor = minor_interval.to_string()),
+                tr!("state-major-minor", major = major_interval.to_string(), minor = minor_interval.to_string()),
             ),
         }
     }

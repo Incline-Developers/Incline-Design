@@ -48,7 +48,7 @@ impl<'a> App<'a> {
                     crate::i18n::tr!("common-move-selection"),
                     crate::i18n::tr!("common-count-object-s", count = moved.to_string()),
                 ),
-                crate::i18n::tr!("cmd-move-tool-applied-move-delta-delta-count-2", delta = delta.to_string(), count = moved.to_string()),
+                crate::i18n::tr!("cmd-move-tool-moved-objects", delta = delta.to_string(), count = moved.to_string()),
             );
         }
         self.reset_move_editor_state();
@@ -517,7 +517,7 @@ impl<'a> App<'a> {
                 crate::i18n::tr!("common-move-collar"),
                 crate::i18n::tr!("cmd-move-tool-count-hole-s", count = moved.to_string()),
             ),
-            crate::i18n::tr!("cmd-move-tool-applied-move-delta-delta-count", delta = delta.to_string(), count = moved.to_string()),
+            crate::i18n::tr!("cmd-move-tool-moved-collars", delta = delta.to_string(), count = moved.to_string()),
         );
         self.reset_move_editor_state();
         self.invalidate_topology_bounds_and_redraw();

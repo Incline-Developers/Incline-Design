@@ -35,7 +35,7 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             dataset = dataset.name.clone().to_string()
         ),
         involved => tr!(
-            "reference-points-count-holes-from-datasets-datasets",
+            "reference-points-holes-from-datasets",
             count = draft.holes.len().to_string(),
             datasets = involved.len().to_string()
         ),

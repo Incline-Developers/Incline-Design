@@ -98,7 +98,7 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         self.editor.selected_handles.clear();
-        userspace_log!("{}", tr!("cmd-layer-deleted-layer-layer-id-all", layer_id = format!("{layer_id:?}")));
+        userspace_log!("{}", tr!("cmd-layer-deleted-with-objects", layer_id = format!("{layer_id:?}")));
         self.invalidate_geometry();
         Ok(())
     }

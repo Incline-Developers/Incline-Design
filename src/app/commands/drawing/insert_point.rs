@@ -182,7 +182,7 @@ impl<'a> App<'a> {
 
     pub(crate) fn insert_points_at_elevation(&mut self, object_ids: Vec<ObjectId>, elevation: f64) {
         if !elevation.is_finite() {
-            userspace_warn!("{}", tr!("cmd-insert-point-insert-point-elevation-requires-fini"));
+            userspace_warn!("{}", tr!("cmd-insert-point-elevation-must-be-finite"));
             return;
         }
         let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = object_ids

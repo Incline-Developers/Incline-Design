@@ -737,7 +737,7 @@ impl<'a> App<'a> {
         match io::load_config() {
             Ok(config) => app.apply_config(config),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-failed-load-browser-preferences-erro", error = error.to_string())),
+            Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-browser-preferences-load-failed", error = error.to_string())),
         }
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
@@ -2380,7 +2380,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                         userspace_log!("{}", crate::i18n::tr!("app-deleted-browser-project"));
                     }
                     Err(error) => {
-                        userspace_warn!("{}", crate::i18n::tr!("app-browser-project-deletion-failed-erro", error = error.to_string()));
+                        userspace_warn!("{}", crate::i18n::tr!("app-browser-project-delete-failed", error = error.to_string()));
                     }
                 }
             }

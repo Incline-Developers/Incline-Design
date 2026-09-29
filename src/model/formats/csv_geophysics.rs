@@ -183,7 +183,7 @@ impl IndexReport {
             userspace_warn!(
                 "{}",
                 tr!(
-                    "csv-geophysics-geophysics-count-hole-s-comes",
+                    "csv-geophysics-runs-not-grouped",
                     count = self.split.len().to_string(),
                     holes = hole_list(self.split.iter().map(String::as_str)).to_string()
                 )
@@ -468,7 +468,7 @@ pub(crate) fn index_file(
     // Most of a file failing is a mapping mistake, not dirty data.
     if rows > 0 && skipped * 2 > rows {
         return Err(CsvDrillError::Invalid(tr!(
-            "csv-geophysics-file-skipped-rows-rows-could",
+            "csv-geophysics-rows-skipped",
             file = name.to_string(),
             skipped = skipped.to_string(),
             rows = rows.to_string()
@@ -650,7 +650,7 @@ pub(crate) fn read_hole(link: &GeophysicsLink, dhid: &str, runs: &[Vec<u8>]) -> 
     let files = link.runs_of(dhid).map(|(file, _)| file).collect::<Vec<_>>();
     if files.len() != runs.len() {
         return Err(CsvDrillError::Invalid(tr!(
-            "csv-geophysics-read-read-run-s-hole",
+            "csv-geophysics-run-count-mismatch",
             read = runs.len().to_string(),
             hole = dhid.to_owned().to_string(),
             runs = files.len().to_string()
@@ -1007,7 +1007,7 @@ fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_
     let row = || records.record_number().to_string();
     if records.len() != width {
         return Err(tr!(
-            "csv-geophysics-file-row-row-has-found",
+            "csv-geophysics-row-column-count",
             file = file.to_owned().to_string(),
             row = row().to_string(),
             found = records.len().to_string(),
@@ -1019,11 +1019,11 @@ fn gate<'r, R: BufRead>(records: &'r Records<R>, file: &str, width: usize, dhid_
         Cow::Owned(text) => Cow::Owned(text.trim().to_owned()),
     };
     if dhid.is_empty() {
-        return Err(tr!("csv-geophysics-file-row-row-has-blank", file = file.to_owned().to_string(), row = row().to_string()));
+        return Err(tr!("csv-geophysics-row-blank-hole-id", file = file.to_owned().to_string(), row = row().to_string()));
     }
     match cell_number(records.cell(depth_column)) {
-        None => Err(tr!("csv-geophysics-file-row-row-has-no", file = file.to_owned().to_string(), row = row().to_string())),
-        Some(depth) if depth < 0.0 => Err(tr!("csv-geophysics-file-row-row-has-negative", file = file.to_owned().to_string(), row = row().to_string())),
+        None => Err(tr!("csv-geophysics-row-no-depth", file = file.to_owned().to_string(), row = row().to_string())),
+        Some(depth) if depth < 0.0 => Err(tr!("csv-geophysics-row-negative-depth", file = file.to_owned().to_string(), row = row().to_string())),
         Some(depth) => Ok((dhid, depth)),
     }
 }

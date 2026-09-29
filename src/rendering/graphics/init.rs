@@ -87,7 +87,7 @@ impl<'a> Graphics<'a> {
         userspace_log!(
             "{}",
             tr!(
-                "init-gpu-driver-driver-driver-info",
+                "init-gpu-driver",
                 driver = adapter_info.driver.to_string(),
                 driver_info = adapter_info.driver_info.to_string()
             )
@@ -197,7 +197,7 @@ impl<'a> Graphics<'a> {
         let no_vsync_present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
             .into_iter()
             .find(|mode| surface_caps.present_modes.contains(mode));
-        userspace_log!("{}", tr!("init-surface-presentation-mode-mode", mode = format!("{present_mode:?}")));
+        userspace_log!("{}", tr!("init-surface-present-mode", mode = format!("{present_mode:?}")));
         let alpha_mode = surface_caps
             .alpha_modes
             .first()

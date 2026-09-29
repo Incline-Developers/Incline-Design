@@ -679,9 +679,9 @@ macro_rules! userspace_error {
 pub(crate) fn startup_log() {
     let id = begin_command_report(CommandReportSpec::new(tr!("logging-application-startup"), tr!("logging-initialising-incline-design")));
     with_report_scope(id, || {
-        userspace_log!("{}", tr!("logging-application-name-name", name = crate::APP_NAME.to_string()));
+        userspace_log!("{}", tr!("logging-application-name", name = crate::APP_NAME.to_string()));
         userspace_log!("{}", tr!("logging-application-id-id", id = crate::APP_ID.to_string()));
-        userspace_log!("{}", tr!("logging-release-version-version", version = crate::APP_RELEASE.to_string()));
+        userspace_log!("{}", tr!("logging-release-version", version = crate::APP_RELEASE.to_string()));
         userspace_log!(
             "{}",
             tr!(
@@ -690,11 +690,11 @@ pub(crate) fn startup_log() {
                 architecture = std::env::consts::ARCH.to_string()
             )
         );
-        userspace_log!("{}", tr!("logging-pointer-width-width-bit", width = usize::BITS.to_string()));
+        userspace_log!("{}", tr!("logging-pointer-width", width = usize::BITS.to_string()));
         userspace_log!(
             "{}",
             tr!(
-                "logging-rust-compiler-host-host",
+                "logging-rust-compiler-host",
                 host = std::env::var("HOST").unwrap_or_else(|_| tr!("logging-unknown")).to_string()
             )
         );
@@ -702,10 +702,10 @@ pub(crate) fn startup_log() {
         userspace_log!(
             "{}",
             tr!(
-                "logging-locale-environment-lang-lang-lc",
-                lang = (format!("{:?}", std::env::var_os("LANG"))).to_string(),
-                locale = (format!("{:?}", std::env::var_os("LC_ALL"))).to_string(),
-                timezone = (format!("{:?}", std::env::var_os("TZ"))).to_string()
+                "logging-locale-environment",
+                lang = format!("{:?}", std::env::var_os("LANG")),
+                locale = format!("{:?}", std::env::var_os("LC_ALL")),
+                timezone = format!("{:?}", std::env::var_os("TZ"))
             )
         );
 
@@ -714,7 +714,7 @@ pub(crate) fn startup_log() {
             userspace_log!("{}", tr!("logging-operating-system-gnu-linux"));
             userspace_log!(
                 "{}",
-                tr!("logging-desktop-session-xdg-session-type", type = (format!("{:?}", std::env::var_os("XDG_SESSION_TYPE"))).to_string(), desktop = (format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP"))).to_string(), wayland = (format!("{:?}", std::env::var_os("WAYLAND_DISPLAY"))).to_string(), display = (format!("{:?}", std::env::var_os("DISPLAY"))).to_string())
+                tr!("logging-desktop-session-xdg-session-type", type = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")), desktop = format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP")), wayland = format!("{:?}", std::env::var_os("WAYLAND_DISPLAY")), display = format!("{:?}", std::env::var_os("DISPLAY")))
             );
         }
 
@@ -725,8 +725,8 @@ pub(crate) fn startup_log() {
                 "{}",
                 tr!(
                     "logging-windows-session-sessionname-session",
-                    session = (format!("{:?}", std::env::var_os("SESSIONNAME"))).to_string(),
-                    user = (format!("{:?}", std::env::var_os("USERNAME"))).to_string()
+                    session = format!("{:?}", std::env::var_os("SESSIONNAME")),
+                    user = format!("{:?}", std::env::var_os("USERNAME"))
                 )
             );
         }
@@ -737,9 +737,9 @@ pub(crate) fn startup_log() {
             userspace_log!(
                 "{}",
                 tr!(
-                    "logging-macos-session-user-user-shell",
-                    user = (format!("{:?}", std::env::var_os("USER"))).to_string(),
-                    shell = (format!("{:?}", std::env::var_os("SHELL"))).to_string()
+                    "logging-macos-session",
+                    user = format!("{:?}", std::env::var_os("USER")),
+                    shell = format!("{:?}", std::env::var_os("SHELL"))
                 )
             );
         }

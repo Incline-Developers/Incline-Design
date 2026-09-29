@@ -99,10 +99,10 @@ impl<'a> App<'a> {
             anyhow::bail!("{}", tr!("cmd-drill-hole-enter-name-drill-pattern"));
         }
         if !depth.is_finite() || depth <= 0.0 {
-            anyhow::bail!("{}", tr!("cmd-drill-hole-hole-depth-must-greater-than"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-depth-must-be-positive"));
         }
         if !diameter.is_finite() || diameter <= 0.0 {
-            anyhow::bail!("{}", tr!("cmd-drill-hole-hole-diameter-must-greater-than"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-diameter-must-be-positive"));
         }
         if collars.is_empty() {
             anyhow::bail!("{}", tr!("cmd-drill-hole-pattern-contains-no-holes"));

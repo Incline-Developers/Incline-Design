@@ -444,7 +444,7 @@ pub(crate) fn generate_pattern_collars(
                 let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
                 collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
                 if collars.len() > MAX_PATTERN_HOLES {
-                    return Err(crate::i18n::tr!("drill-hole-pattern-exceeds-maximum-maximum-hole", maximum = MAX_PATTERN_HOLES.to_string()));
+                    return Err(crate::i18n::tr!("drill-hole-pattern-too-many-holes", maximum = MAX_PATTERN_HOLES.to_string()));
                 }
             }
         }
@@ -1194,11 +1194,7 @@ impl SectionProblem {
         match self {
             Self::NoName => tr!("drill-hole-working-section-needs-name"),
             Self::NameIsCode => tr!("drill-hole-code-outside-section-has-name"),
-            Self::CodeClaimed { code, section } => tr!(
-                "drill-hole-code-already-working-section-section",
-                code = code.clone().to_string(),
-                section = section.clone().to_string()
-            ),
+            Self::CodeClaimed { code, section } => tr!("drill-hole-code-already-in-section", code = code.clone().to_string(), section = section.clone().to_string()),
             Self::DuplicateName => tr!("drill-hole-another-working-section-field-has"),
             Self::NoCodes => tr!("drill-hole-every-code-lists-already-another"),
         }

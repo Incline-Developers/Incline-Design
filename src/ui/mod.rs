@@ -374,10 +374,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(ViewportMessage::text(tr!(
-            "ui-distance-meters",
-            distance = (format!("{:.3}", start.distance(end))).to_string()
-        )));
+        return Some(ViewportMessage::text(tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)))));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
@@ -387,7 +384,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
             // dimmed as an aside.
             let dip = tr!("ui-value-dip", value = format!("{:.2}", measurement.dip_degrees));
             return Some(match measurement.strike_degrees {
-                Some(strike) => ViewportMessage::text(tr!("ui-strike-strike-dip", strike = format!("{strike:06.2}"), dip = dip.to_string())),
+                Some(strike) => ViewportMessage::text(tr!("ui-strike-dip", strike = format!("{strike:06.2}"), dip = dip.to_string())),
                 None => ViewportMessage::text(tr!("ui-dip-horizontal-no-strike", dip = dip.to_string())),
             });
         }

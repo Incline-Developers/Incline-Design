@@ -102,7 +102,7 @@ impl<'a> App<'a> {
             };
             let project_is_active = app.workspace.active_project().is_some_and(|project| project.runtime_id == project_runtime_id);
             let Some(project) = app.workspace.projects.iter_mut().find(|project| project.runtime_id == project_runtime_id) else {
-                userspace_warn!("{}", tr!("cmd-contours-contours-name-were-discarded-project", name = apply_tri_name.to_string()));
+                userspace_warn!("{}", tr!("cmd-contours-discarded-project-closed", name = apply_tri_name.to_string()));
                 return;
             };
             let (layer_id, layer_name, create_layer) = match output_layer {
@@ -111,7 +111,7 @@ impl<'a> App<'a> {
                         userspace_warn!(
                             "{}",
                             tr!(
-                                "cmd-contours-contours-name-were-discarded-layer",
+                                "cmd-contours-discarded-layer-exists",
                                 name = apply_tri_name.to_string(),
                                 layer_name = layer_name.to_string()
                             )
@@ -123,7 +123,7 @@ impl<'a> App<'a> {
                 }
                 ContourOutputLayer::Existing(layer_id) => {
                     let Some(layer_name) = project.project.document.layer(layer_id).map(|layer| layer.name.clone()) else {
-                        userspace_warn!("{}", tr!("cmd-contours-contours-name-were-discarded-selecte", name = apply_tri_name.to_string()));
+                        userspace_warn!("{}", tr!("cmd-contours-discarded-layer-deleted", name = apply_tri_name.to_string()));
                         return;
                     };
                     (layer_id, layer_name, false)
@@ -164,7 +164,7 @@ impl<'a> App<'a> {
             userspace_log!(
                 "{}",
                 tr!(
-                    "cmd-contours-generated-line-count-contour-polylin",
+                    "cmd-contours-generated",
                     line_count = line_count.to_string(),
                     name = apply_tri_name.to_string(),
                     layer_name = layer_name.to_string()

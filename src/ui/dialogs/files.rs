@@ -39,7 +39,7 @@ pub(crate) fn draw_vertical_exaggeration_dialog(ui: &mut egui::Ui, editor: &mut 
                     editor.vertical_exaggeration = editor.vertical_exaggeration_input;
                     editor.vertical_exaggeration_dialog_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("files-reset-1"))).clicked() {
+                if ui.add(MenuButton::new(tr!("files-reset-scale"))).clicked() {
                     editor.vertical_exaggeration = 1.0;
                     editor.vertical_exaggeration_input = 1.0;
                     editor.vertical_exaggeration_dialog_open = false;

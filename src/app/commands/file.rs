@@ -372,7 +372,7 @@ impl<'a> App<'a> {
                 let execute = || {
                     if let Err(err) = self.execute_file_dialog_action(action) {
                         let msg = format!("{err:#}");
-                        userspace_warn!("{}", tr!("cmd-file-file-dialog-action-failed-msg", msg = msg.to_string()));
+                        userspace_warn!("{}", tr!("cmd-file-dialog-action-failed", msg = msg.to_string()));
                         if self.exit_after_pending_saves {
                             self.cancel_exit_request();
                         }
@@ -860,7 +860,7 @@ impl<'a> App<'a> {
                             }
                         }
                         Err(error) => {
-                            userspace_warn!("{}", tr!("cmd-file-triangulation-download-encoding-fail", error = format!("{error:#}")))
+                            userspace_warn!("{}", tr!("cmd-file-triangulation-download-encoding-failed", error = format!("{error:#}")))
                         }
                     },
                 );
@@ -1067,9 +1067,9 @@ impl<'a> App<'a> {
                                             .and_then(|stem| stem.to_str())
                                             .map(ToOwned::to_owned)
                                             .unwrap_or_else(|| tr!("common-incline-design-project"));
-                                        userspace_log!("{}", tr!("cmd-file-saved-project-path", path = save.path.display().to_string()));
+                                        userspace_log!("{}", tr!("cmd-file-saved-project-as", path = save.path.display().to_string()));
                                     } else {
-                                        userspace_log!("{}", tr!("cmd-file-saved-project-path-2", path = save.path.display().to_string()));
+                                        userspace_log!("{}", tr!("cmd-file-saved-project", path = save.path.display().to_string()));
                                     }
                                     self.workspace.projects[index].mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
                                     if save_as_previous_name.is_some() {
@@ -1578,7 +1578,7 @@ impl<'a> App<'a> {
     /// has. Several are linked in name order, `_2` before `_10`.
     pub(crate) fn choose_geophysics_file(&mut self, id: DrillHoleId) {
         if self.known_holes(id).is_none() {
-            userspace_warn!("{}", tr!("common-load-drillhole-dataset-before-linkin"));
+            userspace_warn!("{}", tr!("common-load-drillholes-before-linking-geophysics"));
             return;
         }
         let filter = tr!("cmd-file-downhole-geophysics-csv");
@@ -1976,11 +1976,11 @@ impl<'a> App<'a> {
                 None => log::error!("{}", tr!("cmd-file-no-unsaved-project-content-nothing")),
             },
             Err(error) => {
-                log::error!("{}", tr!("cmd-file-no-recovery-directory-available-erro", error = format!("{error:#}")));
+                log::error!("{}", tr!("cmd-file-no-recovery-directory", error = format!("{error:#}")));
             }
         }
         #[cfg(target_arch = "wasm32")]
-        log::error!("{}", tr!("cmd-file-browser-recovery-files-unavailable-s"));
+        log::error!("{}", tr!("cmd-file-browser-recovery-unavailable"));
         self.persist_session();
         self.fatal_shutdown = true;
         self.redraw_requested = true;
@@ -2000,7 +2000,7 @@ impl<'a> App<'a> {
             self.exit_after_pending_saves = true;
             self.discard_changes_on_deferred_exit = true;
             self.redraw_requested = true;
-            userspace_log!("{}", tr!("cmd-file-exit-deferred-until-background-expor"));
+            userspace_log!("{}", tr!("cmd-file-exit-deferred-exports"));
         } else {
             self.persist_session();
             self.close_requested = true;
@@ -2041,7 +2041,7 @@ impl<'a> App<'a> {
             self.exit_after_pending_saves = true;
             self.discard_changes_on_deferred_exit = true;
             self.redraw_requested = true;
-            userspace_log!("{}", tr!("cmd-file-exit-deferred-until-background-expor"));
+            userspace_log!("{}", tr!("cmd-file-exit-deferred-exports"));
             return;
         }
         self.exit_after_pending_saves = false;
@@ -2376,7 +2376,7 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
-            userspace_log!("{}", tr!("cmd-file-project-will-close-after-its"));
+            userspace_log!("{}", tr!("cmd-file-project-closes-after-save"));
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -2485,7 +2485,7 @@ impl<'a> App<'a> {
                 return;
             };
             if app.workspace.projects[index].current_content_hash() != expected_hash {
-                userspace_warn!("{}", tr!("cmd-file-discard-was-cancelled-because-projec"));
+                userspace_warn!("{}", tr!("cmd-file-discard-cancelled-project-changed"));
                 return;
             }
             app.apply_opened_omf_bundle(Some(path.clone()), source_name, bundle, ViewOnOpen::Keep);
@@ -2765,7 +2765,7 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
-            userspace_warn!("{}", tr!("cmd-file-project-will-close-after-its-2"));
+            userspace_warn!("{}", tr!("cmd-file-the-project-closes-after-save"));
             return;
         }
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {

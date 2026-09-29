@@ -180,7 +180,7 @@ impl<'a> App<'a> {
             anyhow::bail!("No usable polylines selected; triangulation requires a closed boundary, or open strings whose endpoints form one");
         }
         if rejected > 0 {
-            userspace_warn!("{}", tr!("cmd-creation-ignored-rejected-non-polyline-degene", rejected = rejected.to_string()));
+            userspace_warn!("{}", tr!("cmd-creation-ignored-objects", rejected = rejected.to_string()));
         }
 
         // Whether a coarse-weld retry could help, computed from the un-welded
@@ -304,7 +304,7 @@ fn build_created_triangulation(
 ) -> Result<crate::model::triangulation::GeneratedTriangulation> {
     let welded = weld_breakline_vertices(&mut paths, crate::model::kernel::XY_TOL, crate::model::kernel::Z_TOL);
     if welded > 0 {
-        userspace_log!("{}", tr!("cmd-creation-welded-welded-breakline-vertex-verti", welded = welded.to_string()));
+        userspace_log!("{}", tr!("cmd-creation-welded-breakline-vertices", welded = welded.to_string()));
     }
     if coarse_weld {
         let coarse_welded = weld_breakline_vertices(&mut paths, COARSE_WELD_TOL, COARSE_WELD_TOL);
@@ -537,10 +537,7 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
         anyhow::bail!("Selected open strings do not define an unambiguous closed boundary ({unmatched} unmatched endpoint(s), {junctions} branching junction(s))");
     }
     if assembled_count > 0 {
-        userspace_log!(
-            "{}",
-            tr!("cmd-creation-assembled-assembled-count-closed-bou", assembled_count = assembled_count.to_string())
-        );
+        userspace_log!("{}", tr!("cmd-creation-assembled-boundary-rings", assembled_count = assembled_count.to_string()));
     }
 
     Ok(TriangulationInput { boundaries, constraints })

@@ -1774,9 +1774,7 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         bundle.warnings.push(tr!("omf-project-author-not-retained"));
     }
     if !project.application.trim().is_empty() && !project.application.starts_with("Incline ") {
-        bundle
-            .warnings
-            .push(tr!("omf-project-application-metadata-applica", application = project.application.to_string()));
+        bundle.warnings.push(tr!("omf-application-metadata-dropped", application = project.application.to_string()));
     }
     // Parsed before any element is walked, so a name on an element's own
     // META_FOLDER below always has something to resolve against.
@@ -1792,10 +1790,10 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     if !unsupported_project_metadata.is_empty() {
         bundle
             .warnings
-            .push(tr!("omf-project-has-unsupported-metadata-key", keys = unsupported_project_metadata.join(", ").to_string()));
+            .push(tr!("omf-unsupported-metadata-keys", keys = unsupported_project_metadata.join(", ").to_string()));
     }
     if !problems.is_empty() {
-        bundle.warnings.push(tr!("omf-omf-validation-warnings-warnings", warnings = format!("{problems:?}")));
+        bundle.warnings.push(tr!("omf-validation-warnings", warnings = format!("{problems:?}")));
     }
     // Drillhole datasets in the older per-hole layout are left out, not read,
     // so the rest of the project still opens.
@@ -1966,7 +1964,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }
         self.bundle
             .warnings
-            .push(tr!("omf-element-name-names-section-section", name = element.name.to_string(), section = key.to_string()));
+            .push(tr!("omf-element-unsupported-section", name = element.name.to_string(), section = key.to_string()));
         section.healed_for(kind)
     }
 
@@ -2030,7 +2028,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba: Arc::new(Vec::new()),
                     world_to_uv: style_value(style, "world_to_uv").unwrap_or([0.0; 6]),
                     projection: style_value(style, "projection").unwrap_or_else(|| self.project_crs.clone()),
-                    driver_name: tr!("omf-omf-texture"),
+                    driver_name: tr!("omf-texture"),
                 },
             });
             return Ok(true);
@@ -3334,7 +3332,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba,
                     world_to_uv,
                     projection,
-                    driver_name: tr!("omf-omf-texture"),
+                    driver_name: tr!("omf-texture"),
                 },
                 folder,
                 section,
@@ -3616,7 +3614,7 @@ fn file_stem(path: &str) -> String {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| tr!("omf-omf-import"))
+        .unwrap_or_else(|| tr!("omf-import"))
 }
 
 fn safe_component(name: &str) -> String {

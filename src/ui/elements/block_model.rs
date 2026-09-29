@@ -18,7 +18,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
         .open(&mut open)
         .min_width(390.0)
         .show(ui.ctx(), |ui| {
-            menu::menu_note(ui, tr!("block-model-ordinary-kriging-estimates-numeric-d"));
+            menu::menu_note(ui, tr!("block-model-kriging-help"));
             ui.add_space(4.0);
 
             // The collection is the one that was selected when the dialog
@@ -31,7 +31,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 ui,
                 tr!("ws-menubar-drillholes"),
                 selected_dataset.map_or_else(|| tr!("block-model-no-drill-holes-selected"), |dataset| dataset.name.clone()),
-                tr!("block-model-selected-drill-holes-collection-whos"),
+                tr!("block-model-source-drill-holes-help"),
                 220.0,
             );
 
@@ -143,16 +143,16 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
 
             menu::menu_section(ui, tr!("block-model-spherical-variogram-search"));
             MenuFieldF64::new(tr!("block-model-range-search-radius"), &mut editor.kriging_range, 0.001..=f64::MAX)
-                .help_text(tr!("block-model-samples-farther-than-distance-exclud"))
+                .help_text(tr!("block-model-range-help"))
                 .show(ui);
             MenuFieldF64::new(tr!("block-model-partial-sill"), &mut editor.kriging_sill, 0.000001..=f64::MAX)
-                .help_text(tr!("block-model-spatially-correlated-variance-contri"))
+                .help_text(tr!("block-model-sill-help"))
                 .show(ui);
             MenuFieldF64::new(tr!("block-model-nugget"), &mut editor.kriging_nugget, 0.0..=f64::MAX)
                 .help_text(tr!("block-model-variance-effectively-zero-separation"))
                 .show(ui);
             MenuFieldU32::new(tr!("block-model-minimum-samples"), &mut editor.kriging_min_samples, 1..=64)
-                .help_text(tr!("block-model-minimum-nearby-samples-required-esti"))
+                .help_text(tr!("block-model-min-samples-help"))
                 .show(ui);
             MenuFieldU32::new(tr!("block-model-maximum-samples"), &mut editor.kriging_max_samples, 1..=64)
                 .help_text(tr!("block-model-maximum-nearest-samples-used-each"))
@@ -275,8 +275,8 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             )
             .show(ui);
 
-            let ge_threshold_label = tr!("block-model-threshold-2");
-            let le_threshold_label = tr!("block-model-threshold");
+            let ge_threshold_label = tr!("block-model-threshold-at-least");
+            let le_threshold_label = tr!("block-model-threshold-at-most");
             let between_label = tr!("block-model-between");
             let mode_label = match editor.ore_filter_mode {
                 OreFilterMode::GreaterOrEqual => ge_threshold_label.clone(),

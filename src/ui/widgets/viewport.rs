@@ -1153,7 +1153,7 @@ impl<'a> DrillHoleProperties<'a> {
             ui.add(
                 egui::Label::new(match hole.orientation() {
                     Some(orientation) => tr!(
-                        "viewport-azimuth-azimuth-dip-dip",
+                        "viewport-azimuth-dip",
                         azimuth = format!("{:.1}", orientation.azimuth),
                         dip = format!("{:.1}", orientation.dip)
                     ),
@@ -2231,9 +2231,9 @@ impl ViewportMiniMap {
                     commands.push(UiCommand::SetSlicePreviewDetached(true));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                response.on_hover_text(tr!("viewport-middle-drag-pan-scroll-zoom-2"));
+                response.on_hover_text(tr!("viewport-navigation-hint-detach"));
                 #[cfg(target_arch = "wasm32")]
-                response.on_hover_text(tr!("viewport-middle-drag-pan-scroll-zoom"));
+                response.on_hover_text(tr!("viewport-navigation-hint"));
             });
     }
 }

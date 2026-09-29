@@ -305,7 +305,7 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-background-result-po", poll_label = poll_label.clone().to_string()));
+                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }

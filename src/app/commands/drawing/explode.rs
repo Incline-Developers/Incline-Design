@@ -102,7 +102,7 @@ impl<'a> App<'a> {
         self.editor.tool_highlight_id = None;
         crate::logging::report_completed_action(
             CommandReportSpec::new(
-                crate::i18n::tr!("cmd-explode-explode-polyline"),
+                crate::i18n::tr!("cmd-explode-polyline"),
                 crate::i18n::tr!("cmd-explode-count-line-s", count = edge_count.to_string()),
             ),
             crate::i18n::tr!("cmd-explode-exploded-polyline-into-count-line", count = edge_count.to_string()),

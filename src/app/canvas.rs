@@ -173,22 +173,16 @@ impl<'a> App<'a> {
                 Some(object) if if pattern_picker { is_drill_pattern_boundary(object) } else { object.encloses_area() } => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                     match object {
-                        Object::Circle { radius, .. } => (
-                            Some(id),
-                            Some(tr!("canvas-circle-layer-layer-radius-radius", layer = layer.to_string(), radius = format!("{radius:.3}"))),
-                        ),
+                        Object::Circle { radius, .. } => (Some(id), Some(tr!("canvas-circle-summary", layer = layer.to_string(), radius = format!("{radius:.3}")))),
                         _ => {
                             let count = object.string_geometry().map_or(0, |(verts, _)| verts.len());
-                            (
-                                Some(id),
-                                Some(tr!("canvas-polyline-layer-layer-count-vertices", layer = layer.to_string(), count = count.to_string())),
-                            )
+                            (Some(id), Some(tr!("canvas-polyline-summary", layer = layer.to_string(), count = count.to_string())))
                         }
                     }
                 }
-                _ => (None, Some(tr!("canvas-not-selectable-choose-closed-polylin"))),
+                _ => (None, Some(tr!("canvas-not-selectable-closed-polyline"))),
             },
-            Some(_) => (None, Some(tr!("canvas-not-selectable-choose-closed-polylin"))),
+            Some(_) => (None, Some(tr!("canvas-not-selectable-closed-polyline"))),
             None => (None, None),
         };
         if self.editor.tool_highlight_id != next_highlight || self.editor.viewport_pick_hover_label != next_label {

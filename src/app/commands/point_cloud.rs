@@ -415,7 +415,7 @@ impl<'a> App<'a> {
                 userspace_log!(
                     "{}",
                     tr!(
-                        "cmd-point-cloud-classified-name-ground-ground-vegeta",
+                        "cmd-point-cloud-classified",
                         name = cloud.name.clone().to_string(),
                         ground = output.ground.to_string(),
                         vegetation = output.vegetation.to_string(),
@@ -471,7 +471,7 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
     // says so.
     let classified = sources.iter().all(|source| source.classifications.is_some());
     if !classified && sources.iter().any(|source| source.classifications.is_some()) {
-        userspace_warn!("{}", tr!("cmd-point-cloud-dropped-point-classifications-some-j"));
+        userspace_warn!("{}", tr!("cmd-point-cloud-join-dropped-classifications"));
     }
     let mut points = try_vec_with_capacity::<DVec3>(total, "joined point cloud")?;
     let mut colors = if colored {

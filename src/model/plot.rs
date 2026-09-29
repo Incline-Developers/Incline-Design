@@ -211,7 +211,7 @@ pub(crate) fn layout(spec: &PlotSpec) -> Result<PlotLayout, String> {
         return Err(tr!("plot-margins-leave-no-room-map"));
     }
     if !(spec.scale.is_finite() && spec.scale > 0.0) {
-        return Err(tr!("plot-plot-scale-must-positive-number"));
+        return Err(tr!("plot-scale-must-be-positive"));
     }
 
     // One sheet millimetre is `scale` millimetres on the ground.
@@ -918,8 +918,8 @@ fn draw_title_block(canvas: &mut Canvas, painter: &mut TextPainter, rect: RectPx
 
     let fields = [
         (tr!("plot-scale"), format!("1:{}", format_quantity(scale, 0))),
-        (tr!("plot-drawn"), block.author.clone()),
-        (tr!("plot-date"), block.date.clone()),
+        (tr!("plot-drawn-by-caps"), block.author.clone()),
+        (tr!("plot-date-caps"), block.date.clone()),
         (tr!("plot-drawing-no"), block.drawing_number.clone()),
         (tr!("plot-rev"), block.revision.clone()),
     ];

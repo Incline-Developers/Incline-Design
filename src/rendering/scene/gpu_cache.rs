@@ -412,7 +412,7 @@ impl BlockModelGpuCache {
                     self.pending_volume_builds.insert(id, build);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::warn!("{}", crate::i18n::tr!("gpu-cache-block-volume-preparation-worker-disc"));
+                    log::warn!("{}", crate::i18n::tr!("gpu-cache-block-volume-worker-disconnected"));
                 }
             }
         }
@@ -1500,7 +1500,7 @@ fn build_surface_chunks(
             log::error!(
                 "{}",
                 crate::i18n::tr!(
-                    "gpu-cache-triangulation-name-has-count-vertice",
+                    "gpu-cache-triangulation-too-many-vertices",
                     name = triangulation.name.to_string(),
                     count = source.len().to_string()
                 )
@@ -1636,7 +1636,7 @@ fn build_surface_chunks(
         log::info!(
             "{}",
             crate::i18n::tr!(
-                "gpu-cache-triangulation-name-uploaded-chunks-s",
+                "gpu-cache-triangulation-uploaded",
                 name = triangulation.name.to_string(),
                 chunks = chunks.len().to_string(),
                 faces = face_count.to_string()
@@ -1698,7 +1698,7 @@ fn upload_surface_chunk(
         log::error!(
             "{}",
             crate::i18n::tr!(
-                "gpu-cache-triangulation-gpu-chunk-rejected-bef",
+                "gpu-cache-triangulation-chunk-rejected",
                 vertices = vertex_bytes.to_string(),
                 indices = index_bytes.to_string(),
                 limit = limit.to_string()
@@ -1830,11 +1830,7 @@ fn upload_edge_chunk(device: &wgpu::Device, instances: &[EdgeInstance]) -> Optio
     if instance_bytes > limit {
         log::error!(
             "{}",
-            crate::i18n::tr!(
-                "gpu-cache-triangulation-edge-chunk-rejected-be",
-                instances = instance_bytes.to_string(),
-                limit = limit.to_string()
-            )
+            crate::i18n::tr!("gpu-cache-edge-chunk-rejected", instances = instance_bytes.to_string(), limit = limit.to_string())
         );
         return None;
     }

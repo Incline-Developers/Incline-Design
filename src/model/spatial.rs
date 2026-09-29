@@ -509,7 +509,7 @@ impl TriangleBvh {
                 // index must resolve; substituting a degenerate triangle keeps
                 // ray tests safe but must not pass silently.
                 debug_assert!(false, "BVH face index {index} out of range");
-                log::error!("{}", crate::i18n::tr!("spatial-bvh-face-index-index-out", index = index.to_string()));
+                log::error!("{}", crate::i18n::tr!("spatial-bvh-face-index-out-of-range", index = index.to_string()));
                 [0, 0, 0]
             })
             .map(|v| {

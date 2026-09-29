@@ -83,10 +83,10 @@ impl<'a> App<'a> {
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
                     crate::i18n::tr!("common-chamfer"),
-                    crate::i18n::tr!("cmd-chamfer-radius-radius", radius = format!("{:.3}", self.editor.chamfer_radius)),
+                    crate::i18n::tr!("cmd-chamfer-radius", radius = format!("{:.3}", self.editor.chamfer_radius)),
                 ),
                 crate::i18n::tr!(
-                    "cmd-chamfer-chamfered-corner-corner-radius-radiu",
+                    "cmd-chamfer-applied",
                     corner = ci.to_string(),
                     radius = format!("{:.3}", self.editor.chamfer_radius),
                     segments = self.editor.chamfer_segments.to_string()

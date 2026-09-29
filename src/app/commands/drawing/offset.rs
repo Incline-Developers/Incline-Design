@@ -67,7 +67,7 @@ impl<'a> App<'a> {
             return;
         }
         if project_to_rl.is_none() && horiz_dist.abs() < 1e-9 && z_delta.abs() < 1e-9 {
-            userspace_warn!("{}", tr!("cmd-offset-offset-distance-must-greater-than"));
+            userspace_warn!("{}", tr!("cmd-offset-distance-must-be-positive"));
             return;
         }
         let target_ids: Vec<ObjectId> = object_ids

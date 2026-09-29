@@ -31,7 +31,7 @@ pub(crate) struct FileChanged;
 #[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Display for FileChanged {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&crate::i18n::tr!("geophysics-geophysics-file-changed-since-was"))
+        f.write_str(&crate::i18n::tr!("geophysics-file-changed"))
     }
 }
 
@@ -318,7 +318,7 @@ mod native {
                 userspace_warn!(
                     "{}",
                     tr!(
-                        "geophysics-geophysics-file-linked-name-cannot",
+                        "geophysics-file-unreadable",
                         name = name.to_string(),
                         path = file.path.display().to_string(),
                         error = error.clone().to_string()
@@ -345,7 +345,7 @@ mod native {
                 self.well_logs.set_state(id, generation, LinkState::Ready);
                 return;
             }
-            userspace_log!("{}", tr!("geophysics-geophysics-linked-name-changed-since", name = name.to_string()));
+            userspace_log!("{}", tr!("geophysics-linked-changed-rereading", name = name.to_string()));
             self.spawn_native_index(id, Some(link), tasks);
         }
 

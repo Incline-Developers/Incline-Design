@@ -93,7 +93,7 @@ impl<'a> App<'a> {
         // would leave an empty piece and are therefore not actionable.
         if !closed {
             if vertex_index == 0 || vertex_index + 1 == verts.len() {
-                userspace_warn!("{}", tr!("cmd-split-split-points-choose-interior-vertex"));
+                userspace_warn!("{}", tr!("cmd-split-points-needs-interior-vertex"));
                 return;
             }
             self.editor.split_selected_verts = [Some(vertex_index), None];
@@ -150,9 +150,9 @@ impl<'a> App<'a> {
             let Some(second) = second else {
                 return;
             };
-            split_closed_ring(verts, first, second).ok_or_else(|| tr!("cmd-split-split-points-choose-two-non"))
+            split_closed_ring(verts, first, second).ok_or_else(|| tr!("cmd-split-points-needs-non-adjacent-vertices"))
         } else {
-            split_open_line(verts, first).ok_or_else(|| tr!("cmd-split-split-points-choose-interior-vertex"))
+            split_open_line(verts, first).ok_or_else(|| tr!("cmd-split-points-needs-interior-vertex"))
         };
         let (first_ring, second_ring) = match pieces {
             Ok(pieces) => pieces,
@@ -195,8 +195,8 @@ impl<'a> App<'a> {
         self.clear_split_at_points_state();
         self.editor.active_tool = ActiveTool::None;
         crate::logging::report_completed_action(
-            CommandReportSpec::new(crate::i18n::tr!("cmd-split-split-line"), crate::i18n::tr!("cmd-split-created-2-open-polylines")),
-            crate::i18n::tr!("cmd-split-split-source-polyline-into-two"),
+            CommandReportSpec::new(crate::i18n::tr!("cmd-split-line"), crate::i18n::tr!("cmd-split-created-2-open-polylines")),
+            crate::i18n::tr!("cmd-split-polyline-into-two"),
         );
         self.invalidate_geometry();
         self.invalidate_overlay();

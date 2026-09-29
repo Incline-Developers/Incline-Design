@@ -129,9 +129,9 @@ impl<'a> App<'a> {
         }
         self.finish_text_edit_state();
         if created || changed {
-            userspace_log!("{}", tr!("cmd-text-updated-text-object-object-id", object_id = format!("{object_id:?}")));
+            userspace_log!("{}", tr!("cmd-text-updated", object_id = format!("{object_id:?}")));
         }
-        userspace_log!("{}", tr!("cmd-text-finished-text-edit-object-object", object_id = format!("{object_id:?}")));
+        userspace_log!("{}", tr!("cmd-text-edit-finished", object_id = format!("{object_id:?}")));
         self.invalidate_geometry();
     }
 

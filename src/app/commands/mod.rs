@@ -1055,7 +1055,7 @@ impl<'a> App<'a> {
                 // in agreement.
                 let object_ids = self.selected_triangulation_sources();
                 if object_ids.is_empty() {
-                    userspace_warn!("{}", tr!("cmd-commands-select-objects-triangulate-before-ru"));
+                    userspace_warn!("{}", tr!("cmd-triangulate-needs-selection"));
                     return Ok(());
                 }
                 self.editor.tri_create_open = true;
@@ -1159,7 +1159,7 @@ impl<'a> App<'a> {
             UiCommand::OpenCutTriangulationByZ => {
                 let selected = self.selected_triangulations();
                 let [tri_id] = selected[..] else {
-                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-triangulation-befo-2"));
+                    userspace_warn!("{}", tr!("cmd-slice-needs-triangulation"));
                     return Ok(());
                 };
                 let Some(surface) = self.triangulations.iter().find(|t| t.id == tri_id) else {
@@ -1269,7 +1269,7 @@ impl<'a> App<'a> {
             UiCommand::OpenContourTriangulation => {
                 let selected = self.selected_triangulations();
                 let [tri_id] = selected[..] else {
-                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-triangulation-befo"));
+                    userspace_warn!("{}", tr!("cmd-contours-needs-triangulation"));
                     return Ok(());
                 };
                 let surface_name = self

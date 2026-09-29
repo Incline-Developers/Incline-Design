@@ -114,7 +114,7 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
 
         if intersected_vertices == 0 {
-            userspace_warn!("{}", tr!("cmd-drape-none-selected-design-vertices-inters"));
+            userspace_warn!("{}", tr!("cmd-drape-no-intersections"));
         } else {
             crate::logging::report_completed_action(
                 CommandReportSpec::new(

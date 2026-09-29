@@ -118,7 +118,7 @@ impl<'a> App<'a> {
                     userspace_log!(
                         "{}",
                         tr!(
-                            "cmd-session-loaded-triangulation-name-path-verte",
+                            "cmd-session-loaded-triangulation",
                             name = name.to_string(),
                             path = path.display().to_string(),
                             vertex_count = mesh.vertex_count().to_string(),
@@ -200,7 +200,7 @@ impl<'a> App<'a> {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("{}", tr!("cmd-session-triangulation-load-path-ended-withou", path = path.display().to_string()));
+                    userspace_warn!("{}", tr!("cmd-session-triangulation-load-no-result", path = path.display().to_string()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -254,7 +254,7 @@ impl<'a> App<'a> {
         // Rasters draped onto this surface are a property of the surface, so
         // they come back with it; nothing else references it.
         self.delete_project_item(ItemRef::Triangulation(id));
-        userspace_log!("{}", tr!("cmd-session-deleted-triangulation-name-from-proj", name = name.to_string()));
+        userspace_log!("{}", tr!("cmd-session-deleted-triangulation", name = name.to_string()));
     }
 
     fn clear_dialog_refs_to_triangulation(&mut self, id: TriangulationId) {
@@ -320,7 +320,7 @@ impl<'a> App<'a> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                userspace_warn!("{}", tr!("cmd-session-triangulation-operation-failed-messa", message = message.to_string()));
+                userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = message.to_string()));
             }
         }
     }
@@ -376,7 +376,7 @@ impl<'a> App<'a> {
         userspace_log!(
             "{}",
             tr!(
-                "cmd-session-created-triangulation-name-vertex-co",
+                "cmd-session-created-triangulation",
                 name = name.to_string(),
                 vertex_count = vertex_count.to_string(),
                 face_count = face_count.to_string(),

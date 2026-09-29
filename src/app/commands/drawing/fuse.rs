@@ -24,7 +24,7 @@ impl<'a> App<'a> {
             };
             match self.pick_fuse_endpoint(awaiting_id, cursor_px) {
                 Some(marker_index) => self.select_fuse_endpoint(awaiting_id, marker_index),
-                None => userspace_warn!("{}", tr!("cmd-fuse-fuse-click-was-not-close")),
+                None => userspace_warn!("{}", tr!("cmd-fuse-click-not-near-endpoint")),
             }
             return;
         }
@@ -39,13 +39,13 @@ impl<'a> App<'a> {
         // Phase 1: pick a line to add to the chain.
         let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-click-did-not-hit"));
+            userspace_warn!("{}", tr!("cmd-fuse-click-missed"));
             return;
         };
         // Near a shared endpoint the pick can land back on a line already in
         // the chain; fusing a line onto itself would double its vertices.
         if self.editor.fuse_segments.iter().any(|segment| segment.object_id == object_id) {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-object-object-id-already", object_id = format!("{object_id:?}")));
+            userspace_warn!("{}", tr!("cmd-fuse-object-already-in-chain", object_id = format!("{object_id:?}")));
             return;
         }
         // Must be an open polyline. Fusing modifies/deletes existing objects, so
@@ -56,17 +56,13 @@ impl<'a> App<'a> {
                 vec![(0, verts[0].pos), (verts.len() - 1, verts[verts.len() - 1].pos)]
             }
             Some(Object::Polyline { closed: true, .. }) => {
-                userspace_warn!("{}", tr!("cmd-fuse-fuse-clicked-object-object-id", object_id = format!("{object_id:?}")));
+                userspace_warn!("{}", tr!("cmd-fuse-clicked-closed-polyline", object_id = format!("{object_id:?}")));
                 return;
             }
             Some(Object::Polyline { verts, .. }) => {
                 userspace_warn!(
                     "{}",
-                    tr!(
-                        "cmd-fuse-fuse-clicked-polyline-object-id",
-                        object_id = format!("{object_id:?}"),
-                        count = verts.len().to_string()
-                    )
+                    tr!("cmd-fuse-clicked-too-few-vertices", object_id = format!("{object_id:?}"), count = verts.len().to_string())
                 );
                 return;
             }
@@ -74,7 +70,7 @@ impl<'a> App<'a> {
                 userspace_warn!(
                     "{}",
                     tr!(
-                        "cmd-fuse-fuse-clicked-object-object-id-2",
+                        "cmd-fuse-clicked-not-open-polyline",
                         object_id = format!("{object_id:?}"),
                         kind = other.kind_name().to_string()
                     )
@@ -82,7 +78,7 @@ impl<'a> App<'a> {
                 return;
             }
             None => {
-                userspace_warn!("{}", tr!("cmd-fuse-fuse-clicked-object-object-id-3", object_id = format!("{object_id:?}")));
+                userspace_warn!("{}", tr!("cmd-fuse-clicked-object-missing", object_id = format!("{object_id:?}")));
                 return;
             }
         };
@@ -113,13 +109,13 @@ impl<'a> App<'a> {
     /// once two segments are collected.
     fn select_fuse_endpoint(&mut self, awaiting_id: ObjectId, marker_index: usize) {
         let Some(&(vertex_index, join_point)) = self.editor.fuse_endpoint_markers.get(marker_index) else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-endpoint-marker-marker-index", marker_index = marker_index.to_string()));
+            userspace_warn!("{}", tr!("cmd-fuse-endpoint-marker-missing", marker_index = marker_index.to_string()));
             return;
         };
         let (vertex_count, closed) = match self.active_document().get_object(awaiting_id) {
             Some(Object::Polyline { verts, closed, .. }) => (verts.len(), *closed),
             _ => {
-                userspace_warn!("{}", tr!("cmd-fuse-fuse-object-awaiting-id-no", awaiting_id = format!("{awaiting_id:?}")));
+                userspace_warn!("{}", tr!("cmd-fuse-awaiting-object-invalid", awaiting_id = format!("{awaiting_id:?}")));
                 return;
             }
         };
@@ -240,15 +236,15 @@ impl<'a> App<'a> {
 
     fn close_single_fuse_source(&mut self) {
         let Some(segment) = self.editor.fuse_segments.first() else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-no-source-line-close"));
+            userspace_warn!("{}", tr!("cmd-fuse-no-source-line"));
             return;
         };
         let Some(before) = self.active_document().get_object(segment.object_id).cloned() else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-source-object-object-id-2", object_id = format!("{:?}", segment.object_id)));
+            userspace_warn!("{}", tr!("cmd-fuse-source-object-missing", object_id = format!("{:?}", segment.object_id)));
             return;
         };
         let Object::Polyline { closed: false, .. } = &before else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-source-object-object-id", object_id = format!("{:?}", segment.object_id)));
+            userspace_warn!("{}", tr!("cmd-fuse-source-object-invalid", object_id = format!("{:?}", segment.object_id)));
             return;
         };
         let mut after = before.clone();
@@ -264,7 +260,7 @@ impl<'a> App<'a> {
                 verts.pop();
             }
             if verts.len() < 3 {
-                userspace_warn!("{}", tr!("cmd-fuse-fuse-line-needs-least-3", count = verts.len().to_string()));
+                userspace_warn!("{}", tr!("cmd-fuse-close-needs-three-vertices", count = verts.len().to_string()));
                 return;
             }
             *closed = true;
@@ -275,11 +271,11 @@ impl<'a> App<'a> {
 
     fn commit_fuse(&mut self, closed: bool) {
         if self.editor.fuse_segments.len() < 2 {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-need-least-2-segments", count = self.editor.fuse_segments.len().to_string()));
+            userspace_warn!("{}", tr!("cmd-fuse-needs-two-segments", count = self.editor.fuse_segments.len().to_string()));
             return;
         }
         if !self.editing_ready() {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-no-active-project-cannot"));
+            userspace_warn!("{}", tr!("cmd-fuse-no-active-project"));
             return;
         }
 
@@ -292,7 +288,7 @@ impl<'a> App<'a> {
             let verts = match doc.get_object(seg.object_id) {
                 Some(Object::Polyline { verts, .. }) => verts.clone(),
                 _ => {
-                    userspace_warn!("{}", tr!("cmd-fuse-fuse-segment-object-object-id", object_id = format!("{:?}", seg.object_id)));
+                    userspace_warn!("{}", tr!("cmd-fuse-segment-object-invalid", object_id = format!("{:?}", seg.object_id)));
                     return;
                 }
             };
@@ -314,12 +310,12 @@ impl<'a> App<'a> {
         };
 
         if all_verts.len() < 2 || (closed && all_verts.len() < 3) {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-result-has-too-few", count = all_verts.len().to_string()));
+            userspace_warn!("{}", tr!("cmd-fuse-result-too-few-vertices", count = all_verts.len().to_string()));
             return;
         }
 
         let Some(layer) = self.active_layer() else {
-            userspace_warn!("{}", tr!("cmd-fuse-fuse-no-active-layer-place"));
+            userspace_warn!("{}", tr!("cmd-fuse-no-active-layer"));
             return;
         };
         let color = crate::model::ObjectColor::Fixed(self.editor.tool_line_color);
@@ -360,7 +356,7 @@ impl<'a> App<'a> {
             let source_count = self.editor.fuse_segments.len();
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    crate::i18n::tr!("cmd-fuse-fuse-lines"),
+                    crate::i18n::tr!("cmd-fuse-lines"),
                     crate::i18n::tr!("cmd-fuse-count-source-line-s", count = source_count.to_string()),
                 ),
                 crate::i18n::tr!(

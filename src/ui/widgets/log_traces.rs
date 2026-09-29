@@ -729,8 +729,8 @@ pub(crate) fn menu(ui: &mut egui::Ui, column: TraceColumn, draft: &mut WellLogSt
     let scale = draft.scale(column);
 
     let auto_hover = match auto {
-        Some(range) => tr!("log-traces-hole-s-1st-99th-percentile-2", range = range_label(column, range).to_string()),
-        None => tr!("log-traces-hole-s-1st-99th-percentile"),
+        Some(range) => tr!("log-traces-percentile-range", range = range_label(column, range).to_string()),
+        None => tr!("log-traces-percentile-range-no-data"),
     };
     let auto_row = ContextMenuAction::new(tr!("log-traces-auto-from-hole"))
         .checked(scale.auto)

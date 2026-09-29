@@ -459,7 +459,7 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        &tr!("common-merge-shell-into-topology-2"),
+        &tr!("common-merge-shell-into-topology-ellipsis"),
         "",
         MacMenuAction::OpenIncludeSolidInTopology,
         &target,
@@ -486,7 +486,7 @@ pub(crate) fn install_menu_bar() {
     block_model_menu.setAutoenablesItems(false);
     add_action(
         &block_model_menu,
-        &tr!("common-create-ore-triangulation-2"),
+        &tr!("common-create-ore-triangulation-ellipsis"),
         "",
         MacMenuAction::OpenCreateOreTriangulation,
         &target,
@@ -497,7 +497,14 @@ pub(crate) fn install_menu_bar() {
 
     let drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
     drill_hole_menu.setAutoenablesItems(false);
-    add_action(&drill_hole_menu, &tr!("common-create-block-model-2"), "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!("common-create-block-model-ellipsis"),
+        "",
+        MacMenuAction::OpenCreateBlockModel,
+        &target,
+        mtm,
+    );
     add_separator(&drill_hole_menu, mtm);
     // The inspector's own switch, kept in sync by `sync_menu_state`.
     add_action(
@@ -510,7 +517,14 @@ pub(crate) fn install_menu_bar() {
     );
     add_separator(&drill_hole_menu, mtm);
     add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
-    add_action(&drill_hole_menu, &tr!("common-build-surface-2"), "", MacMenuAction::OpenReferenceSurface, &target, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!("common-build-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenReferenceSurface,
+        &target,
+        mtm,
+    );
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 

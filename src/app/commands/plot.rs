@@ -253,7 +253,7 @@ impl PlotSheetOutcome {
         userspace_log!(
             "{}",
             crate::i18n::tr!(
-                "cmd-plot-saved-engineering-drawing-descriptio",
+                "cmd-plot-saved-drawing",
                 description = self.description.to_string(),
                 width = self.width.to_string(),
                 height = self.height.to_string(),
@@ -328,7 +328,7 @@ fn sanitised_file_stem(title: &str) -> String {
         .map(|character| if character.is_alphanumeric() { character.to_ascii_lowercase() } else { '_' })
         .collect();
     let trimmed = stem.trim_matches('_').to_owned();
-    if trimmed.is_empty() { crate::i18n::tr!("cmd-plot-plot") } else { trimmed }
+    if trimmed.is_empty() { crate::i18n::tr!("cmd-plot") } else { trimmed }
 }
 
 /// Default file name: the drawing number if there is one, otherwise the title.
@@ -338,7 +338,7 @@ pub(crate) fn plot_file_name(dialog: &PlotDialog) -> String {
     } else {
         dialog.drawing_number.trim()
     };
-    let fallback = crate::i18n::tr!("cmd-plot-plot");
+    let fallback = crate::i18n::tr!("cmd-plot");
     let stem = sanitised_file_stem(if stem.is_empty() { &fallback } else { stem });
     format!("{stem}.png")
 }

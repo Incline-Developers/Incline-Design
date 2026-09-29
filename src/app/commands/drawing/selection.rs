@@ -133,7 +133,7 @@ impl<'a> App<'a> {
         crate::logging::report_completed_action(
             CommandReportSpec::new(crate::i18n::tr!("cmd-selection-delete-vertex"), format!("{:?}", hit.object_id)),
             crate::i18n::tr!(
-                "cmd-selection-deleted-vertex-vertex-from-polyline",
+                "cmd-selection-deleted-vertex",
                 vertex = hit.vertex_index.to_string(),
                 object_id = format!("{:?}", hit.object_id)
             ),

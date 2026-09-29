@@ -141,7 +141,7 @@ impl ObjectEditDialog {
 /// inline message and console warning cannot drift apart.
 pub(crate) fn issue_message(issue: ObjectEditIssue) -> String {
     match issue {
-        ObjectEditIssue::NonFiniteVertex(row) => tr!("object-edit-row-row-position-bulge-not", row = (row + 1).to_string()),
+        ObjectEditIssue::NonFiniteVertex(row) => tr!("object-edit-row-invalid-number", row = (row + 1).to_string()),
         ObjectEditIssue::NonFiniteValue => tr!("object-edit-one-more-properties-not-valid"),
         ObjectEditIssue::TooFewVertices { required } => tr!("object-edit-object-needs-least-required-vertices", required = required.to_string()),
     }
@@ -402,7 +402,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             if MenuFieldF64::new(tr!("drill-pattern-rotation"), &mut degrees, -360.0..=360.0)
                 .speed(1.0)
                 .max_decimals(3)
-                .suffix(tr!("common-text-2"))
+                .suffix(tr!("common-degree-suffix"))
                 .show(ui)
                 .changed()
             {
@@ -434,8 +434,8 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     if is_polyline {
         let (length, area) = derived_values(dialog);
         let summary = match area {
-            Some(area) => tr!("object-edit-perimeter-length-m-area-area", length = format!("{length:.3}"), area = format!("{area:.3}")),
-            None => tr!("object-edit-length-length-m", length = format!("{length:.3}")),
+            Some(area) => tr!("object-edit-perimeter-area", length = format!("{length:.3}"), area = format!("{area:.3}")),
+            None => tr!("object-edit-length", length = format!("{length:.3}")),
         };
         ui.label(egui::RichText::new(summary).color(ui.visuals().weak_text_color()));
     } else {
@@ -876,7 +876,7 @@ fn draw_arc_row(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, segment: usize
                     .range(-359.9..=359.9)
                     .clamp_existing_to_range(false)
                     .max_decimals(3)
-                    .suffix(tr!("common-text-2")),
+                    .suffix(tr!("common-degree-suffix")),
             );
             if radius_response.changed() {
                 new_bulge = bulge_for_radius(chord, radius, bulge);

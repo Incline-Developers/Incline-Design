@@ -110,7 +110,7 @@ impl<'a> App<'a> {
             userspace_log!(
                 "{}",
                 tr!(
-                    "cmd-rename-renamed-before-name-requested-alread",
+                    "cmd-rename-renamed-name-taken",
                     before = before.to_string(),
                     name = name.to_string(),
                     requested = requested.to_string()

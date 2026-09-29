@@ -218,7 +218,7 @@ impl App<'_> {
         };
         let detail = if replaced > 0 {
             tr!(
-                "tie-in-tied-count-connector-s-delay-2",
+                "tie-in-tied-connectors-replacing",
                 count = laid.to_string(),
                 delay = product.delay_ms.to_string(),
                 product = product.name.to_string(),
@@ -226,7 +226,7 @@ impl App<'_> {
             )
         } else {
             tr!(
-                "tie-in-tied-count-connector-s-delay",
+                "tie-in-tied-connectors",
                 count = laid.to_string(),
                 delay = product.delay_ms.to_string(),
                 product = product.name.to_string()

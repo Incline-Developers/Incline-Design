@@ -40,13 +40,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 width,
             );
             ui.add_space(4.0);
-            selected_source_field(
-                ui,
-                tr!("reference-surface-extent"),
-                draft.extent_label.clone(),
-                tr!("reference-surface-selected-closed-string-finished-surf"),
-                width,
-            );
+            selected_source_field(ui, tr!("reference-surface-extent"), draft.extent_label.clone(), tr!("reference-surface-extent-help"), width);
             menu::menu_note(ui, tr!("reference-surface-triangulates-selected-points-plan-in"));
             ui.small(tr!("reference-surface-points-outside-extent-still-shape"));
             menu::menu_actions(ui, |ui| {

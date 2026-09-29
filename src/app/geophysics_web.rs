@@ -111,7 +111,7 @@ impl<'a> App<'a> {
             return;
         }
         if self.known_holes(id).is_none() {
-            userspace_warn!("{}", tr!("common-load-drillhole-dataset-before-linkin"));
+            userspace_warn!("{}", tr!("common-load-drillholes-before-linking-geophysics"));
             return;
         }
         let generation = self.restart_geophysics(id, current.as_ref(), LinkState::Indexing);
@@ -180,7 +180,7 @@ impl<'a> App<'a> {
     /// others are linked, as on the desktop; only those are held.
     fn spawn_browser_index(&mut self, id: DrillHoleId, generation: u64, files: Vec<(Columns, web_sys::File, FileIdentity)>) {
         let Some(known) = self.known_holes(id) else {
-            let error = tr!("common-load-drillhole-dataset-before-linkin");
+            let error = tr!("common-load-drillholes-before-linking-geophysics");
             self.finish_geophysics_index(id, generation, None, Err(anyhow::anyhow!(error)));
             return;
         };

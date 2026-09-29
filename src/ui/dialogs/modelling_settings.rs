@@ -60,7 +60,7 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     .unwrap_or_default();
                 commands.push(UiCommand::SetProjectCoordinateSystem(stored));
             }
-            ui.small(tr!("modelling-settings-coordinate-system-every-point-surfac"));
+            ui.small(tr!("modelling-settings-crs-help"));
         });
     if !open {
         editor.show_modelling_settings = false;
