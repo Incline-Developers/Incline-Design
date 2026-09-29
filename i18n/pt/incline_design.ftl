@@ -1089,7 +1089,7 @@ logging-application-startup = Inicialização da aplicação
 logging-build-target-os-architecture = Destino da compilação: { $os }-{ $architecture }
 logging-completed = Concluído
 logging-count-messages = { $count } mensagens
-logging-desktop-session-xdg-session-type = Sessão do ambiente de trabalho: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = Sessão do ambiente de trabalho: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = A inicializar o Incline Design
 logging-locale-environment = Ambiente de localidade: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = Sessão do macOS: USER={ $user }, SHELL={ $shell }

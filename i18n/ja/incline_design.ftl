@@ -1120,7 +1120,7 @@ logging-application-startup = アプリケーション起動
 logging-build-target-os-architecture = ビルドターゲット: { $os }-{ $architecture }
 logging-completed = 完了
 logging-count-messages = { $count } 件のメッセージ
-logging-desktop-session-xdg-session-type = デスクトップセッション: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = デスクトップセッション: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design を初期化中
 logging-locale-environment = ロケール環境: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = macOSセッション: USER={ $user }, SHELL={ $shell }

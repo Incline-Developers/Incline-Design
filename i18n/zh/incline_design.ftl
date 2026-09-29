@@ -1091,7 +1091,7 @@ logging-application-startup = 应用程序启动
 logging-build-target-os-architecture = 构建目标：{ $os }-{ $architecture }
 logging-completed = 已完成
 logging-count-messages = { $count } 条消息
-logging-desktop-session-xdg-session-type = 桌面会话：XDG_SESSION_TYPE={ $type }，XDG_CURRENT_DESKTOP={ $desktop }，WAYLAND_DISPLAY={ $wayland }，DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = 桌面会话：XDG_SESSION_TYPE={ $session }，XDG_CURRENT_DESKTOP={ $desktop }，WAYLAND_DISPLAY={ $wayland }，DISPLAY={ $display }
 logging-initialising-incline-design = 正在初始化 Incline Design
 logging-locale-environment = 区域设置环境：LANG={ $lang }，LC_ALL={ $locale }，TZ={ $timezone }
 logging-macos-session = macOS 会话：USER={ $user }，SHELL={ $shell }

@@ -1133,7 +1133,7 @@ logging-application-startup = Uygulama Başlatma
 logging-build-target-os-architecture = Derleme hedefi: { $os }-{ $architecture }
 logging-completed = Tamamlandı
 logging-count-messages = { $count } mesaj
-logging-desktop-session-xdg-session-type = Masaüstü oturumu: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = Masaüstü oturumu: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design başlatılıyor
 logging-locale-environment = Yerel ortam: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = macOS oturumu: USER={ $user }, SHELL={ $shell }

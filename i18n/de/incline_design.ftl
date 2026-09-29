@@ -1132,7 +1132,7 @@ logging-application-startup = Anwendungsstart
 logging-build-target-os-architecture = Build-Ziel: { $os }-{ $architecture }
 logging-completed = Abgeschlossen
 logging-count-messages = { $count } Meldungen
-logging-desktop-session-xdg-session-type = Desktop-Sitzung: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = Desktop-Sitzung: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design wird initialisiert
 logging-locale-environment = Gebietsschema-Umgebung: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = macOS-Sitzung: USER={ $user }, SHELL={ $shell }

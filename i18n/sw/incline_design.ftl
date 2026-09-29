@@ -1123,7 +1123,7 @@ logging-application-startup = Kuanzisha Programu
 logging-build-target-os-architecture = Lengo la ujenzi: { $os }-{ $architecture }
 logging-completed = Imekamilika
 logging-count-messages = Ujumbe { $count }
-logging-desktop-session-xdg-session-type = Kipindi cha eneo-kazi: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = Kipindi cha eneo-kazi: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Inaanzisha Incline Design
 logging-locale-environment = Mazingira ya lugha: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = Kipindi cha macOS: USER={ $user }, SHELL={ $shell }

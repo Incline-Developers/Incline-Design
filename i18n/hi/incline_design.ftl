@@ -1091,7 +1091,7 @@ logging-application-startup = अनुप्रयोग प्रारंभ
 logging-build-target-os-architecture = बिल्ड लक्ष्य: { $os }-{ $architecture }
 logging-completed = पूर्ण
 logging-count-messages = { $count } संदेश
-logging-desktop-session-xdg-session-type = डेस्कटॉप सत्र: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = डेस्कटॉप सत्र: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design प्रारंभ हो रहा है
 logging-locale-environment = स्थानीय परिवेश: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = macOS सत्र: USER={ $user }, SHELL={ $shell }

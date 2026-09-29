@@ -1142,7 +1142,7 @@ logging-application-startup = Программын эхлэл
 logging-build-target-os-architecture = Билд бай: { $os }-{ $architecture }
 logging-completed = Дууссан
 logging-count-messages = { $count } мессеж
-logging-desktop-session-xdg-session-type = Ажлын талбарын сешн: XDG_SESSION_TYPE={ $type }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = Ажлын талбарын сешн: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design-г эхлүүлж байна
 logging-locale-environment = Локал орчин: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
 logging-macos-session = macOS сешн: USER={ $user }, SHELL={ $shell }

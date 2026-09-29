@@ -1091,7 +1091,7 @@ logging-application-startup = راه‌اندازی برنامه
 logging-build-target-os-architecture = هدف ساخت: { $os }-{ $architecture }
 logging-completed = تکمیل شد
 logging-count-messages = { $count } پیام
-logging-desktop-session-xdg-session-type = نشست دسکتاپ: XDG_SESSION_TYPE={ $type }، XDG_CURRENT_DESKTOP={ $desktop }، WAYLAND_DISPLAY={ $wayland }، DISPLAY={ $display }
+logging-desktop-session-xdg-session-type = نشست دسکتاپ: XDG_SESSION_TYPE={ $session }، XDG_CURRENT_DESKTOP={ $desktop }، WAYLAND_DISPLAY={ $wayland }، DISPLAY={ $display }
 logging-initialising-incline-design = در حال راه‌اندازی Incline Design
 logging-locale-environment = محیط محلی: LANG={ $lang }، LC_ALL={ $locale }، TZ={ $timezone }
 logging-macos-session = نشست macOS: USER={ $user }، SHELL={ $shell }
