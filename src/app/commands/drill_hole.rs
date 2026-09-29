@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
@@ -52,7 +52,7 @@ fn apply_loaded_bundle(app: &mut App, result: Result<LoadedBundle>) {
             app.add_loaded_bundle(bundle);
             app.job_needs_gpu_upload();
         }
-        Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = format!("{error:#}"))),
+        Err(error) => userspace_warn!("{}", tr!("cmd-drill-hole-failed-load-drillholes-error", error = format!("{error:#}"))),
     }
 }
 
@@ -96,19 +96,19 @@ impl<'a> App<'a> {
     pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64, diameter: f64) -> Result<()> {
         let name = name.trim();
         if name.is_empty() {
-            anyhow::bail!("{}", tr!(literal = "Enter a name for the drill pattern"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-enter-name-drill-pattern"));
         }
         if !depth.is_finite() || depth <= 0.0 {
-            anyhow::bail!("{}", tr!(literal = "Hole depth must be greater than zero"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-depth-must-be-positive"));
         }
         if !diameter.is_finite() || diameter <= 0.0 {
-            anyhow::bail!("{}", tr!(literal = "Hole diameter must be greater than zero"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-diameter-must-be-positive"));
         }
         if collars.is_empty() {
-            anyhow::bail!("{}", tr!(literal = "The pattern contains no holes"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-pattern-contains-no-holes"));
         }
         if collars.len() > crate::model::drill_hole::MAX_PATTERN_HOLES || collars.iter().any(|collar| !collar.is_finite()) {
-            anyhow::bail!("{}", tr!(literal = "The drill pattern is too large or contains invalid collar coordinates"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-drill-pattern-too-large-contains"));
         }
 
         let id = DrillHoleId(self.next_drill_hole_id);
@@ -142,12 +142,12 @@ impl<'a> App<'a> {
         };
         let DrillHoleSource::Csv { files: mappings, .. } = &source else {
             self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
-            anyhow::bail!("{}", tr!(literal = "Only mapped CSV bundles are imported in the browser"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-only-mapped-csv-bundles-imported"));
         };
         let picked = self.take_web_import_picked_files();
         if picked.len() != mappings.len() {
             self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
-            anyhow::bail!("{}", tr!(literal = "Choose the drillhole source files again"));
+            anyhow::bail!("{}", tr!("cmd-drill-hole-choose-drillhole-source-files-again"));
         }
         let mut table_files = Vec::new();
         let mut geophysics = Vec::new();
@@ -162,7 +162,7 @@ impl<'a> App<'a> {
         let display_path = crate::app::browser_source_filename(&source.display_name());
         remap_browser_source_path(&mut source, display_path);
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
-        let (ticket, _progress) = self.begin_reported_task(tr_format!(literal = "Reading %name%", name = source.display_name()));
+        let (ticket, _progress) = self.begin_reported_task(tr!("cmd-drill-hole-reading-name", name = source.display_name().to_string()));
         let workspace = self.workspace_generation;
         wasm_bindgen_futures::spawn_local(async move {
             let mut tables = Vec::with_capacity(table_files.len());
@@ -203,14 +203,14 @@ impl<'a> App<'a> {
         let tables = match result {
             Ok(tables) => tables,
             Err(error) => {
-                userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = error));
+                userspace_warn!("{}", tr!("cmd-drill-hole-failed-load-drillholes-error", error = error.to_string()));
                 return;
             }
         };
         // Only a CSV bundle gets this far: the import refuses any other.
         let DrillHoleSource::Csv { files: mappings, .. } = &source else { return };
         let mappings = mappings.clone();
-        let label = tr_format!(literal = "Loading %name%", name = source.display_name());
+        let label = tr!("cmd-block-model-loading-name", name = source.display_name().to_string());
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<LoadedDrillHoleDataset> {
             let control = StreamControl {
                 progress: &|fraction| progress.set_fraction(fraction),
@@ -233,7 +233,7 @@ impl<'a> App<'a> {
                     app.link_bundle_geophysics(id, geophysics);
                 }
             }
-            Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = format!("{error:#}"))),
+            Err(error) => userspace_warn!("{}", tr!("cmd-drill-hole-failed-load-drillholes-error", error = format!("{error:#}"))),
         };
         self.spawn_job_reporting_progress(label, vec![key], compute, apply);
     }
@@ -248,7 +248,7 @@ impl<'a> App<'a> {
             .context("Open a project before importing drillholes")?;
         let key = drill_hole_load_key(source, runtime_id);
         if self.job_pending(&key) {
-            userspace_log!("{}", tr_format!(literal = "'%name%' is already loading", name = source.display_name()));
+            userspace_log!("{}", tr!("cmd-drill-hole-name-already-loading", name = source.display_name().to_string()));
             return Ok(None);
         }
         Ok(Some(key))
@@ -271,7 +271,7 @@ impl<'a> App<'a> {
             return Ok(());
         };
         let name = source.display_name();
-        let label = tr_format!(literal = "Loading %name%", name = name.clone());
+        let label = tr!("cmd-block-model-loading-name", name = name.clone().to_string());
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<LoadedBundle> {
             let control = StreamControl {
                 progress: &|fraction| progress.set_fraction(fraction),
@@ -310,11 +310,11 @@ impl<'a> App<'a> {
         let name = crate::model::project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Loaded drillhole dataset '%name%': %holes% holes, %fields% colour fields",
-                name = name.clone(),
-                holes = loaded.dataset.holes.len(),
-                fields = loaded.dataset.fields.len()
+            tr!(
+                "cmd-drill-hole-loaded-drillhole-dataset-name-holes",
+                name = name.clone().to_string(),
+                holes = loaded.dataset.holes.len().to_string(),
+                fields = loaded.dataset.fields.len().to_string()
             )
         );
         // More distinct strings than any dictionary holds is usually free text:
@@ -325,10 +325,10 @@ impl<'a> App<'a> {
             {
                 userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "Drillhole field '%label%' has %count% distinct codes, more than a coded field would typically have; it looks like free text rather than a categorical field, but every code is kept and coloured",
-                        label = field.label.clone(),
-                        count = categories.len()
+                    tr!(
+                        "cmd-drill-hole-drillhole-field-label-has-count",
+                        label = field.label.clone().to_string(),
+                        count = categories.len().to_string()
                     )
                 );
             }
@@ -457,15 +457,21 @@ impl<'a> App<'a> {
         if !dropped.is_empty() {
             let reasons = dropped
                 .iter()
-                .map(|section| tr_format!(literal = "'%name%': %reason%", name = section.name.clone(), reason = section.problem.message()))
+                .map(|section| {
+                    tr!(
+                        "cmd-drill-hole-name-reason",
+                        name = section.name.clone().to_string(),
+                        reason = section.problem.message().to_string()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "Working sections not kept in '%dataset%'. %reasons%",
-                    dataset = dataset.name.clone(),
-                    reasons = reasons
+                tr!(
+                    "cmd-drill-hole-working-sections-not-kept-dataset",
+                    dataset = dataset.name.clone().to_string(),
+                    reasons = reasons.to_string()
                 )
             );
         }
@@ -572,10 +578,7 @@ impl<'a> App<'a> {
         {
             // A setting that will not save must not hold the panel shut.
             self.editor.show_borehole_inspector = true;
-            userspace_warn!(
-                "{}",
-                tr_format!(literal = "Opened the Borehole Inspector, but could not save the setting: %error%", error = error)
-            );
+            userspace_warn!("{}", tr!("cmd-drill-hole-opened-borehole-inspector-but-could", error = error.to_string()));
         }
         Ok(())
     }
@@ -630,13 +633,7 @@ impl<'a> App<'a> {
         }
         let (codes_by_dataset, disagree) = reference_codes(&involved, &field, &target);
         if disagree {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "Working section '%name%' is not the same in every selected dataset; each dataset's own was used.",
-                    name = value.clone()
-                )
-            );
+            userspace_warn!("{}", tr!("cmd-drill-hole-working-section-name-not-same", name = value.clone().to_string()));
         }
         for reference in &holes {
             // Unloaded or removed under the open dialog: the hole is not
@@ -664,7 +661,7 @@ impl<'a> App<'a> {
             }
         }
         if picks.is_empty() {
-            userspace_warn!("{}", tr_format!(literal = "No hole holds '%value%' in that field", value = target.label()));
+            userspace_warn!("{}", tr!("cmd-drill-hole-no-hole-holds-value-field", value = target.label().to_string()));
             return;
         }
         let Some(project) = self.workspace.active_project_mut() else {
@@ -697,16 +694,16 @@ impl<'a> App<'a> {
         self.execute_edit(Command::AddLayerSnapshot { layer, objects });
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Reference points: %used% holes placed, %absent% without '%value%', %flagged% flagged as possible fault repeats",
+            tr!(
+                "cmd-drill-hole-reference-points-used-holes-placed",
                 used = used.to_string(),
                 absent = absent.to_string(),
-                value = target.label(),
+                value = target.label().to_string(),
                 flagged = flagged.len().to_string()
             )
         );
         if !flagged.is_empty() {
-            userspace_warn!("{}", tr_format!(literal = "Uppermost run used, flagged: %holes%", holes = flagged.join(", ")));
+            userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = flagged.join(", ").to_string()));
         }
         self.invalidate_geometry();
     }
@@ -718,9 +715,9 @@ impl<'a> App<'a> {
 fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side: crate::model::drill_hole::ReferenceSide) -> String {
     match target {
         crate::model::drill_hole::ReferenceTarget::Section(name) => {
-            tr_format!(literal = "%name% working section %side%", name = name.clone(), side = side.label())
+            tr!("cmd-drill-hole-name-working-section-side", name = name.clone().to_string(), side = side.label().to_string())
         }
-        crate::model::drill_hole::ReferenceTarget::Code(name) => tr_format!(literal = "%name% %side%", name = name.clone(), side = side.label()),
+        crate::model::drill_hole::ReferenceTarget::Code(name) => tr!("cmd-drill-hole-name-side", name = name.clone().to_string(), side = side.label().to_string()),
     }
 }
 

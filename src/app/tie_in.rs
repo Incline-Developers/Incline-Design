@@ -13,7 +13,7 @@
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command,
@@ -159,11 +159,11 @@ impl App<'_> {
     pub(crate) fn tie_holes_click(&mut self) {
         let product = self.editor.active_product().cloned();
         if product.is_none() {
-            crate::userspace_warn!("{}", tr!(literal = "Select a delay product in the palette before tying holes in"));
+            crate::userspace_warn!("{}", tr!("tie-in-select-delay-product-palette-before"));
             return;
         }
         if self.tie_target().is_none() {
-            crate::userspace_warn!("{}", tr!(literal = "Choose the drillhole dataset to tie in first"));
+            crate::userspace_warn!("{}", tr!("tie-in-choose-drillhole-dataset-tie-first"));
             return;
         }
         if self.editor.tie_anchor.is_none() {
@@ -217,23 +217,23 @@ impl App<'_> {
             return;
         };
         let detail = if replaced > 0 {
-            tr_format!(
-                literal = "Tied %count% connector(s) at %delay% ms with %product%, replacing %replaced%",
-                count = laid,
-                delay = product.delay_ms,
-                product = &product.name,
-                replaced = replaced
+            tr!(
+                "tie-in-tied-connectors-replacing",
+                count = laid.to_string(),
+                delay = product.delay_ms.to_string(),
+                product = product.name.to_string(),
+                replaced = replaced.to_string()
             )
         } else {
-            tr_format!(
-                literal = "Tied %count% connector(s) at %delay% ms with %product%",
-                count = laid,
-                delay = product.delay_ms,
-                product = &product.name
+            tr!(
+                "tie-in-tied-connectors",
+                count = laid.to_string(),
+                delay = product.delay_ms.to_string(),
+                product = product.name.to_string()
             )
         };
         crate::logging::report_completed_action(
-            CommandReportSpec::new(tr!(literal = "Tie Holes"), tr_format!(literal = "%count% connector(s)", count = laid)),
+            CommandReportSpec::new(tr!("common-tie-holes"), tr!("tie-in-count-connector-s", count = laid.to_string())),
             detail,
         );
     }
@@ -247,7 +247,7 @@ impl App<'_> {
         let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == hole.dataset) else {
             return;
         };
-        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| tr!("tie-in-hole"), |hole| hole.dhid.clone());
         let existing = dataset.dataset.initiations.iter().find(|initiation| initiation.hole == hole.hole).copied();
         self.editor.initiation_dialog = Some(InitiationDialog {
             target: hole,
@@ -273,17 +273,17 @@ impl App<'_> {
         if before == after {
             return;
         }
-        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| tr!("tie-in-hole"), |hole| hole.dhid.clone());
         self.execute_edit(Command::SetInitiation {
             dataset: target.dataset,
             before,
             after,
         });
         let detail = match after {
-            Some(initiation) => tr_format!(literal = "Initiation point set on %name% at %delay% ms", name = &name, delay = initiation.delay_ms),
-            None => tr_format!(literal = "Initiation point lifted from %name%", name = &name),
+            Some(initiation) => tr!("tie-in-initiation-point-set-name-delay", name = name.to_string(), delay = initiation.delay_ms.to_string()),
+            None => tr!("tie-in-initiation-point-lifted-from-name", name = name.to_string()),
         };
-        crate::logging::report_completed_action(CommandReportSpec::new(tr!(literal = "Set Initiation Point"), name), detail);
+        crate::logging::report_completed_action(CommandReportSpec::new(tr!("common-set-initiation-point"), name), detail);
     }
 
     /// Select the nearest visible tie under the pointer. Returns `false` when
@@ -387,8 +387,8 @@ impl App<'_> {
         self.execute_edit(Command::Batch(commands));
         self.editor.selected_tie_ins.clear();
         crate::logging::report_completed_action(
-            CommandReportSpec::new(tr!(literal = "Delete Tie-Ins"), tr_format!(literal = "%count% connector(s)", count = count)),
-            tr_format!(literal = "Deleted %count% selected tie-in connector(s)", count = count),
+            CommandReportSpec::new(tr!("tie-in-delete-tie-ins"), tr!("tie-in-count-connector-s", count = count.to_string())),
+            tr!("tie-in-deleted-count-selected-tie-connector", count = count.to_string()),
         );
     }
 }

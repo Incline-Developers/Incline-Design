@@ -160,14 +160,14 @@ impl<'a> App<'a> {
             self.execute_edit(Command::Replace { before, after });
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    crate::i18n::tr!(literal = "Create Bezier Curve"),
-                    crate::i18n::tr_format!(literal = "Vertices %first% to %last%", first = vi, last = vj),
+                    crate::i18n::tr!("common-create-bezier-curve"),
+                    crate::i18n::tr!("cmd-bezier-vertices-first-last", first = vi.to_string(), last = vj.to_string()),
                 ),
-                crate::i18n::tr_format!(
-                    literal = "Replaced polyline span %first%→%last% with %count% sampled intermediate points",
-                    first = vi,
-                    last = vj,
-                    count = segments - 1
+                crate::i18n::tr!(
+                    "cmd-bezier-replaced-polyline-span-first-last",
+                    first = vi.to_string(),
+                    last = vj.to_string(),
+                    count = (segments - 1).to_string()
                 ),
             );
         }

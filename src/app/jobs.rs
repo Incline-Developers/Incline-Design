@@ -35,7 +35,7 @@ use std::sync::{Mutex, OnceLock};
 
 use super::App;
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{progress::Progress, triangulation::TriangulationId},
 };
 
@@ -305,13 +305,7 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!(
-                            "{}",
-                            tr_format!(
-                                literal = "Discarded stale background result for '%poll_label%' because a source changed or closed",
-                                poll_label = poll_label.clone()
-                            )
-                        );
+                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }
@@ -323,10 +317,7 @@ impl<'a> App<'a> {
                 // must be visible rather than quietly treated as done.
                 Err(mpsc::TryRecvError::Disconnected) => {
                     if !poll_cancel.is_cancelled() {
-                        crate::userspace_error!(
-                            "{}",
-                            tr_format!(literal = "Background task '%poll_label%' ended without a result", poll_label = poll_label.clone())
-                        );
+                        crate::userspace_error!("{}", tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string()));
                     }
                     true
                 }
@@ -447,12 +438,12 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|task| task.ticket == *ticket)
                     .map(|task| task.label.clone())
-                    .unwrap_or_else(|| tr!(literal = "a drillhole import"))
+                    .unwrap_or_else(|| tr!("jobs-drillhole-import"))
             })
             .collect();
         self.cancel_jobs(|key| matches!(key, JobKey::DrillHoleLoad { .. }) && stale(key));
         for label in labels {
-            crate::userspace_log!("{}", tr_format!(literal = "Cancelled '%label%': its project is no longer active", label = label));
+            crate::userspace_log!("{}", tr!("jobs-cancelled-label-its-project-no", label = label.to_string()));
         }
     }
 }

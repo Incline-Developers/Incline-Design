@@ -7,7 +7,7 @@ use glam::DVec3;
 use crate::app::file_name;
 use crate::{
     app::App,
-    i18n::tr_format,
+    i18n::tr,
     model::{
         Command, ItemRef, ItemStyle, MemberKind, SceneEntityId,
         block_model::{
@@ -43,7 +43,7 @@ impl<'a> App<'a> {
         if !source.path.is_file() {
             anyhow::bail!("Block model source does not exist: {}", source.path.display());
         }
-        userspace_log!("{}", tr_format!(literal = "Imported block model source %path%", path = source.path.display()));
+        userspace_log!("{}", tr!("cmd-block-model-imported-block-model-source-path", path = source.path.display().to_string()));
         self.open_block_model_source(source)
     }
 
@@ -52,9 +52,9 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_block_model_input(&mut self, input: crate::model::input::InputFile, source: BlockModelSource) -> Result<()> {
         let source_name = input.source.name.clone();
-        let model_name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!(literal = "Block model"));
+        let model_name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!("common-block-model"));
         self.spawn_job(
-            tr_format!(literal = "Loading %name%…", name = &source_name),
+            tr!("cmd-block-model-loading-name-ellipsis", name = source_name.to_string()),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
@@ -68,7 +68,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(loaded) => app.add_loaded_block_model(loaded),
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load block model: %error%", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}"))),
             },
         );
         Ok(())
@@ -81,8 +81,8 @@ impl<'a> App<'a> {
         }
 
         let source_name = file_name(&source.path);
-        let name = crate::model::project::imported_item_name(&source.path, &crate::i18n::tr!(literal = "Block model"));
-        let (ticket, progress) = self.begin_reported_task(tr_format!(literal = "Loading %name%", name = &source_name));
+        let name = crate::model::project::imported_item_name(&source.path, &crate::i18n::tr!("common-block-model"));
+        let (ticket, progress) = self.begin_reported_task(tr!("cmd-block-model-loading-name", name = source_name.to_string()));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -128,11 +128,11 @@ impl<'a> App<'a> {
                             .join(", ");
                         userspace_warn!(
                             "{}",
-                            tr_format!(
-                                literal = "Block model %path% has %count% variable(s) of an unsupported type that won't be readable: %names%",
-                                path = source.path.display(),
-                                count = unsupported.len(),
-                                names = names
+                            tr!(
+                                "cmd-block-model-block-model-path-has-count",
+                                path = source.path.display().to_string(),
+                                count = unsupported.len().to_string(),
+                                names = names.to_string()
                             )
                         );
                     }
@@ -178,12 +178,12 @@ impl<'a> App<'a> {
                     self.add_loaded_block_model(loaded);
                 }
                 Ok(Err(error)) => {
-                    userspace_warn!("{}", tr_format!(literal = "Failed to load block model: %error%", error = format!("{error:#}")));
+                    userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}")));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("{}", tr_format!(literal = "Block model loader disconnected for %path%", path = source.path.display()));
+                    userspace_warn!("{}", tr!("cmd-block-model-block-model-loader-disconnected-path", path = source.path.display().to_string()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -202,15 +202,15 @@ impl<'a> App<'a> {
         let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Loaded block model '%name%': %blocks% blocks (%renderable% renderable), grid %dimx%x%dimy%x%dimz%, %variables% variables",
-                name = name.clone(),
-                blocks = loaded.model.metadata.n_blocks,
-                renderable = loaded.renderable_block_indices.len(),
-                dimx = dims[0],
-                dimy = dims[1],
-                dimz = dims[2],
-                variables = loaded.model.metadata.variables.len(),
+            tr!(
+                "cmd-block-model-loaded-block-model-name-blocks",
+                name = name.clone().to_string(),
+                blocks = loaded.model.metadata.n_blocks.to_string(),
+                renderable = loaded.renderable_block_indices.len().to_string(),
+                dimx = dims[0].to_string(),
+                dimy = dims[1].to_string(),
+                dimz = dims[2].to_string(),
+                variables = loaded.model.metadata.variables.len().to_string()
             )
         );
         let should_fit = !self.scene_has_renderables();
@@ -310,9 +310,9 @@ impl<'a> App<'a> {
             Err(error) if error.to_string() != "Cancelled" => {
                 userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "Could not decode block-model colour variable '%variable%': %error%",
-                        variable = variable,
+                    tr!(
+                        "cmd-block-model-could-not-decode-block-model",
+                        variable = variable.to_string(),
                         error = format!("{error:#}")
                     )
                 );
@@ -514,11 +514,11 @@ impl<'a> App<'a> {
         };
         let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
             Ok(loaded) => {
-                userspace_log!("{}", tr_format!(literal = "Created block model '%name%' by Ordinary Kriging", name = loaded.name.clone()));
+                userspace_log!("{}", tr!("cmd-block-model-created-block-model-name-ordinary", name = loaded.name.clone().to_string()));
                 app.add_loaded_block_model(loaded);
             }
             Err(error) if error.to_string() != "Cancelled" => {
-                userspace_warn!("{}", tr_format!(literal = "Could not create block model: %error%", error = format!("{error:#}")))
+                userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
             }
             Err(_) => {}
         };
@@ -595,14 +595,14 @@ impl<'a> App<'a> {
             )?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: crate::i18n::tr_format!(literal = "Generated ore mesh from block model '%name%'", name = &model_name),
+                message: crate::i18n::tr!("cmd-block-model-generated-ore-mesh-from-block", name = model_name.to_string()),
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
             app.apply_generated_triangulation_job(result, &[]);
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Building ore mesh…"),
+            crate::i18n::tr!("cmd-block-model-building-ore-mesh"),
             vec![crate::app::jobs::JobKey::BlockModel(block_model_id)],
             compute,
             apply,

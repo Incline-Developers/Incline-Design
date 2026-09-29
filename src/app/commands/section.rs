@@ -5,7 +5,7 @@
 
 use crate::{
     app::App,
-    i18n::tr_format,
+    i18n::tr,
     model::{Command, ItemRef, LayerId, MemberKind, SceneEntityId, SectionKind},
     ui::state::ExplorerSection,
     userspace_log,
@@ -128,11 +128,11 @@ impl<'a> App<'a> {
         }
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "%verb% %count% item(s) in %section%",
-                verb = if visible { "Revealed" } else { "Hid" },
-                count = changed,
-                section = section.label()
+            tr!(
+                "cmd-section-verb-count-item-s-section",
+                verb = (if visible { "Revealed" } else { "Hid" }).to_string(),
+                count = changed.to_string(),
+                section = section.label().to_string()
             )
         );
         self.invalidate_geometry();
@@ -185,11 +185,11 @@ impl<'a> App<'a> {
         }
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "%verb% %count% item(s) in %section%",
-                verb = if locked { "Locked" } else { "Unlocked" },
-                count = changed,
-                section = section.label()
+            tr!(
+                "cmd-section-verb-count-item-s-section",
+                verb = (if locked { "Locked" } else { "Unlocked" }).to_string(),
+                count = changed.to_string(),
+                section = section.label().to_string()
             )
         );
         self.invalidate_geometry();

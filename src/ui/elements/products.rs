@@ -74,7 +74,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     // Reserved before any row is laid out and filled once the
                     // list's height is known: see `paint_fixed_stripes`.
                     let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!(literal = "Delay Palette"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!("products-delay-palette"))
                         .icon(unthemed_icon!("tie_holes.svg"))
                         .color(HEADER_DELAY_PALETTE)
                         .show(ui, |ui| draw_delay_palette(ui, editor));
@@ -82,8 +82,8 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     // one product in it, so it hangs off the section heading -
                     // the way the explorer's own section menus do - instead of
                     // taking a permanent row at the foot of the list.
-                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Delay Palette"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "New Product")).show(ui).clicked() {
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-delay-palette"), |ui| {
+                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
                             editor.begin_new_delay_product();
                             ui.close();
                         }
@@ -107,7 +107,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
     let mut delete = None;
 
     if editor.delay_products.is_empty() {
-        explorer_note(ui, tr!(literal = "No products"));
+        explorer_note(ui, tr!("products-no-products"));
     }
     // The palette stands on its first product whenever the selection has
     // nothing to point at - a config that never named one, say - so the row
@@ -134,7 +134,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
         }
         let label = format!("{} {}", product.delay_ms, product.name);
         context_menu_popup(&response, label.clone(), |ui| {
-            if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-delete-product")).show(ui).clicked() {
                 delete = Some((product.id, label.clone()));
                 ui.close();
             }
