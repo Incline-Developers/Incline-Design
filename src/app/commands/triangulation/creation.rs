@@ -180,13 +180,7 @@ impl<'a> App<'a> {
             anyhow::bail!("No usable polylines selected; triangulation requires a closed boundary, or open strings whose endpoints form one");
         }
         if rejected > 0 {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "Ignored %rejected% non-polyline or degenerate object(s) during triangulation",
-                    rejected = rejected
-                )
-            );
+            userspace_warn!("{}", tr!("cmd-creation-ignored-rejected-non-polyline-degene", rejected = rejected.to_string()));
         }
 
         // Whether a coarse-weld retry could help, computed from the un-welded
@@ -235,7 +229,7 @@ impl<'a> App<'a> {
                 });
             }
         };
-        self.spawn_job(crate::i18n::tr!(literal = "Creating triangulation…"), vec![project_key], compute, apply);
+        self.spawn_job(crate::i18n::tr!("cmd-creation-creating-triangulation"), vec![project_key], compute, apply);
         Ok(())
     }
 
@@ -310,19 +304,16 @@ fn build_created_triangulation(
 ) -> Result<crate::model::triangulation::GeneratedTriangulation> {
     let welded = weld_breakline_vertices(&mut paths, crate::model::kernel::XY_TOL, crate::model::kernel::Z_TOL);
     if welded > 0 {
-        userspace_log!(
-            "{}",
-            tr_format!(literal = "Welded %welded% breakline vertex/vertices that coincided within tolerance", welded = welded)
-        );
+        userspace_log!("{}", tr!("cmd-creation-welded-welded-breakline-vertex-verti", welded = welded.to_string()));
     }
     if coarse_weld {
         let coarse_welded = weld_breakline_vertices(&mut paths, COARSE_WELD_TOL, COARSE_WELD_TOL);
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Weld & retry: moved %coarse_welded% vertex/vertices onto shared positions (up to %coarse_weld_tol% m); source objects are unchanged",
-                coarse_welded = coarse_welded,
-                coarse_weld_tol = COARSE_WELD_TOL
+            tr!(
+                "cmd-creation-weld-retry-moved-coarse-welded",
+                coarse_welded = coarse_welded.to_string(),
+                coarse_weld_tol = COARSE_WELD_TOL.to_string()
             )
         );
     }
@@ -353,10 +344,10 @@ fn build_created_triangulation(
 
     userspace_log!(
         "{}",
-        tr_format!(
-            literal = "Created triangulation from %boundary_count% boundary ring(s) and %constraint_count% open constraint(s), surface type %surface_type%",
-            boundary_count = boundary_count,
-            constraint_count = constraint_count,
+        tr!(
+            "cmd-creation-created-triangulation-from-boundary",
+            boundary_count = boundary_count.to_string(),
+            constraint_count = constraint_count.to_string(),
             surface_type = format!("{surface_type:?}")
         )
     );
@@ -548,10 +539,7 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
     if assembled_count > 0 {
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Assembled %assembled_count% closed boundary ring(s) from fragmented open strings",
-                assembled_count = assembled_count
-            )
+            tr!("cmd-creation-assembled-assembled-count-closed-bou", assembled_count = assembled_count.to_string())
         );
     }
 
@@ -854,13 +842,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
         .collect();
     let ignored_edges = if upper_surface { lower_conflicting_breakline_edges(&paths) } else { HashSet::new() };
     if upper_surface {
-        userspace_warn!(
-            "{}",
-            tr_format!(
-                literal = "Generate upper surface: ignored %count% lower conflicting breakline segment(s); source objects are unchanged",
-                count = ignored_edges.len()
-            )
-        );
+        userspace_warn!("{}", tr!("cmd-creation-generate-upper-surface-ignored-count", count = ignored_edges.len().to_string()));
     }
 
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();

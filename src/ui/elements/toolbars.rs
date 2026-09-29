@@ -11,7 +11,7 @@
 //! [`crate::ui::elements::viewport_bar`].
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     ui::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
@@ -64,7 +64,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
-            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr_format!(literal = "%tool% - not available in the section view", tool = tooltip.as_str())),
+            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
             tooltip,
             action: LeftToolAction::Tool(tool),
             enabled: editing_enabled && layer_ok && !blocked_by_section,
@@ -73,35 +73,27 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
     vec![
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("layer.svg")),
-            tooltip: tr!(literal = "New Layer"),
+            tooltip: tr!("toolbars-new-layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
             hint: None,
         },
-        tool(themed_icon!(ui, "create_point.svg"), tr!(literal = "Create Point"), ActiveTool::MakePoint),
-        tool(themed_icon!(ui, "create_line.svg"), tr!(literal = "Create Line"), ActiveTool::MakeLine),
-        tool(themed_icon!(ui, "create_polyline.svg"), tr!(literal = "Create Polyline"), ActiveTool::MakePoly),
-        tool(themed_icon!(ui, "create_circle.svg"), tr!(literal = "Create Circle"), ActiveTool::MakeCircle),
-        tool(unthemed_icon!("create_text.svg"), tr!(literal = "Create Text"), ActiveTool::MakeText),
-        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move Design"), ActiveTool::Move),
-        tool(themed_icon!(ui, "offset_element.svg"), tr!(literal = "Offset"), ActiveTool::OffsetElement),
-        tool(themed_icon!(ui, "drape_element.svg"), tr!(literal = "Drape to Topology"), ActiveTool::DrapeToTopology),
-        tool(unthemed_icon!("auto_bench.svg"), tr!(literal = "Auto-Bench"), ActiveTool::BatterBermOffset),
-        tool(themed_icon!(ui, "relimit_line.svg"), tr!(literal = "Relimit Line"), ActiveTool::RelimitLine),
-        tool(themed_icon!(ui, "create_bezier.svg"), tr!(literal = "Bezier Polyline"), ActiveTool::Bezier),
-        tool(themed_icon!(ui, "chamfer_corners.svg"), tr!(literal = "Chamfer Polyline Corners"), ActiveTool::Chamfer),
-        tool(themed_icon!(ui, "fuse_lines.svg"), tr!(literal = "Fuse Polylines"), ActiveTool::FuseIntoPolyline),
-        tool(
-            themed_icon!(ui, "split_at_points.svg"),
-            tr!(literal = "Split Polyline At Points"),
-            ActiveTool::SplitAtPoints,
-        ),
-        tool(
-            unthemed_icon!("explode_polyline.svg"),
-            tr!(literal = "Explode Polyline to Lines"),
-            ActiveTool::ExplodePolyline,
-        ),
-        tool(unthemed_icon!("delete_element.svg"), tr!(literal = "Delete Points"), ActiveTool::DeletePoints),
+        tool(themed_icon!(ui, "create_point.svg"), tr!("common-create-point"), ActiveTool::MakePoint),
+        tool(themed_icon!(ui, "create_line.svg"), tr!("common-create-line"), ActiveTool::MakeLine),
+        tool(themed_icon!(ui, "create_polyline.svg"), tr!("common-create-polyline"), ActiveTool::MakePoly),
+        tool(themed_icon!(ui, "create_circle.svg"), tr!("common-create-circle"), ActiveTool::MakeCircle),
+        tool(unthemed_icon!("create_text.svg"), tr!("toolbars-create-text"), ActiveTool::MakeText),
+        tool(themed_icon!(ui, "move_element.svg"), tr!("common-move-design"), ActiveTool::Move),
+        tool(themed_icon!(ui, "offset_element.svg"), tr!("common-offset"), ActiveTool::OffsetElement),
+        tool(themed_icon!(ui, "drape_element.svg"), tr!("common-drape-topology"), ActiveTool::DrapeToTopology),
+        tool(unthemed_icon!("auto_bench.svg"), tr!("toolbars-auto-bench"), ActiveTool::BatterBermOffset),
+        tool(themed_icon!(ui, "relimit_line.svg"), tr!("common-relimit-line"), ActiveTool::RelimitLine),
+        tool(themed_icon!(ui, "create_bezier.svg"), tr!("toolbars-bezier-polyline"), ActiveTool::Bezier),
+        tool(themed_icon!(ui, "chamfer_corners.svg"), tr!("toolbars-chamfer-polyline-corners"), ActiveTool::Chamfer),
+        tool(themed_icon!(ui, "fuse_lines.svg"), tr!("toolbars-fuse-polylines"), ActiveTool::FuseIntoPolyline),
+        tool(themed_icon!(ui, "split_at_points.svg"), tr!("toolbars-split-polyline-points"), ActiveTool::SplitAtPoints),
+        tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
+        tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
     ]
 }
 
@@ -120,7 +112,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
-            tooltip: tr!(literal = "Create Drill Pattern"),
+            tooltip: tr!("common-create-drill-pattern"),
             action: LeftToolAction::DrillPattern,
             enabled: project_active,
             hint: None,
@@ -129,7 +121,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             // The same mark production's Move Design carries: one translate
             // gesture, drawn the same way whichever discipline is running it.
             icon: egui::Image::new(themed_icon!(ui, "move_element.svg")),
-            tooltip: tr!(literal = "Move Collar"),
+            tooltip: tr!("common-move-collar"),
             action: LeftToolAction::Tool(ActiveTool::MoveCollar),
             enabled: editing_enabled,
             hint: None,
@@ -138,21 +130,21 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             // Move Collar's counterpart: the same holes, turned instead of
             // shifted, so it sits directly beside it in the run.
             icon: egui::Image::new(themed_icon!(ui, "rotate_element.svg")),
-            tooltip: tr!(literal = "Rotate Collar"),
+            tooltip: tr!("common-rotate-collar"),
             action: LeftToolAction::Tool(ActiveTool::RotateCollar),
             enabled: editing_enabled,
             hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
-            tooltip: tr!(literal = "Tie Holes"),
+            tooltip: tr!("common-tie-holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: editing_enabled && has_active_dataset,
             hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
-            tooltip: tr!(literal = "Set Initiation Point"),
+            tooltip: tr!("common-set-initiation-point"),
             action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
             enabled: editing_enabled && has_active_dataset,
             hint: None,
@@ -185,7 +177,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
-                editor.new_layer_name = tr!(literal = "Design");
+                editor.new_layer_name = tr!("ws-menubar-design");
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }
@@ -343,7 +335,7 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
         tool_button(
             ui,
             egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
-            tr!(literal = "Measure Distance").as_str(),
+            tr!("toolbars-measure-distance").as_str(),
             editor,
             commands,
             ActiveTool::MeasureDistance,
@@ -353,7 +345,7 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
         tool_button(
             ui,
             egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
-            tr!(literal = "Strike and Dip").as_str(),
+            tr!("toolbars-strike-dip").as_str(),
             editor,
             commands,
             ActiveTool::MeasureBatterAngle,
@@ -376,10 +368,10 @@ fn cursor_modes_width(side: f32) -> f32 {
 fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     for mode in CURSOR_MODES {
         let (icon, tooltip) = match mode {
-            CursorMode::Select => (themed_icon!(ui, "cursor_select.svg"), tr!(literal = "Cursor: Regular")),
-            CursorMode::SnapToSurface => (themed_icon!(ui, "snap_to_surface.svg"), tr!(literal = "Cursor: Snap to Surface")),
-            CursorMode::SnapToLine => (themed_icon!(ui, "snap_to_line.svg"), tr!(literal = "Cursor: Snap to Line")),
-            CursorMode::SnapToPoint => (themed_icon!(ui, "snap_to_point.svg"), tr!(literal = "Cursor: Snap to Point")),
+            CursorMode::Select => (themed_icon!(ui, "cursor_select.svg"), tr!("toolbars-cursor-regular")),
+            CursorMode::SnapToSurface => (themed_icon!(ui, "snap_to_surface.svg"), tr!("toolbars-cursor-snap-surface")),
+            CursorMode::SnapToLine => (themed_icon!(ui, "snap_to_line.svg"), tr!("toolbars-cursor-snap-line")),
+            CursorMode::SnapToPoint => (themed_icon!(ui, "snap_to_point.svg"), tr!("toolbars-cursor-snap-point")),
         };
         cursor_mode_button(ui, egui::Image::new(icon), tooltip.as_str(), editor, commands, mode, side);
     }

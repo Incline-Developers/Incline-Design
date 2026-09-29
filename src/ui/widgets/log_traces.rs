@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::geophysics::{HoleLogs, LogKind, LogTrace},
     ui::widgets::{
         context_menu::{ContextMenuAction, context_menu_fields, context_menu_separator, context_submenu},
@@ -248,9 +248,9 @@ impl<'a> ColumnTraces<'a> {
 /// The name a curve is shown by.
 fn kind_label(kind: LogKind) -> String {
     match kind {
-        LogKind::Gamma => tr!(literal = "Gamma"),
-        LogKind::LongDensity => tr!(literal = "Long density"),
-        LogKind::ShortDensity => tr!(literal = "Short density"),
+        LogKind::Gamma => tr!("log-traces-gamma"),
+        LogKind::LongDensity => tr!("log-traces-long-density"),
+        LogKind::ShortDensity => tr!("log-traces-short-density"),
     }
 }
 
@@ -645,7 +645,7 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
     }
     if traces.is_reading() {
         let font = egui::TextStyle::Small.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(tr!(literal = "Reading..."), font, ui.visuals().weak_text_color());
+        let mut job = egui::text::LayoutJob::simple_singleline(tr!("log-traces-reading"), font, ui.visuals().weak_text_color());
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width());
         let galley = clipped.layout_job(job);
         clipped.galley(rect.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
@@ -671,20 +671,20 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
 /// The hover readout over a column: the depth under the pointer, then each
 /// curve's reading there in its colour, with the file curve it came from.
 pub(crate) fn readout(ui: &mut egui::Ui, traces: &ColumnTraces, depth: f64, style: &WellLogStyle) {
-    ui.label(tr_format!(literal = "%depth% m", depth = format!("{depth:.2}")));
+    ui.label(tr!("log-traces-depth-m", depth = format!("{depth:.2}")));
     for (kind, trace) in traces.kinded() {
         // At most the two samples either side of the depth, never a scan.
         let half = 0.5 * trace.step();
         let reading = trace.samples(depth - half, depth + half).find_map(|(_, value)| value);
         let decimals = (-kind.resolution().log10()).round().max(0.0) as usize;
         let text = match reading {
-            Some(value) => tr_format!(
-                literal = "%curve%: %value% %unit%",
-                curve = kind_label(kind),
+            Some(value) => tr!(
+                "log-traces-curve-value-unit",
+                curve = kind_label(kind).to_string(),
                 value = format!("{value:.decimals$}"),
-                unit = kind.unit()
+                unit = kind.unit().to_string()
             ),
-            None => tr_format!(literal = "%curve%: no reading", curve = kind_label(kind)),
+            None => tr!("log-traces-curve-no-reading", curve = kind_label(kind).to_string()),
         };
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(text).color(to_color32(style.color(kind))));
@@ -697,8 +697,8 @@ pub(crate) fn readout(ui: &mut egui::Ui, traces: &ColumnTraces, depth: f64, styl
 
 pub(crate) fn menu_title(column: TraceColumn) -> String {
     match column {
-        TraceColumn::Density => tr!(literal = "Density scale"),
-        TraceColumn::Gamma => tr!(literal = "Gamma scale"),
+        TraceColumn::Density => tr!("log-traces-density-scale"),
+        TraceColumn::Gamma => tr!("log-traces-gamma-scale"),
     }
 }
 
@@ -712,11 +712,11 @@ fn presets(column: TraceColumn) -> &'static [[f32; 2]] {
 /// A range as the menu writes it, each edge as the header writes it:
 /// 1.0 to 3.0 g/cc, 0 to 150 API.
 fn range_label(column: TraceColumn, range: [f32; 2]) -> String {
-    tr_format!(
-        literal = "%min% to %max% %unit%",
-        min = edge_label(range[0], range),
-        max = edge_label(range[1], range),
-        unit = column.unit()
+    tr!(
+        "log-traces-min-max-unit",
+        min = edge_label(range[0], range).to_string(),
+        max = edge_label(range[1], range).to_string(),
+        unit = column.unit().to_string()
     )
 }
 
@@ -729,10 +729,10 @@ pub(crate) fn menu(ui: &mut egui::Ui, column: TraceColumn, draft: &mut WellLogSt
     let scale = draft.scale(column);
 
     let auto_hover = match auto {
-        Some(range) => tr_format!(literal = "The hole's 1st to 99th percentile, rounded outward: %range%.", range = range_label(column, range)),
-        None => tr!(literal = "The hole's 1st to 99th percentile, rounded outward. This hole has no data for it yet."),
+        Some(range) => tr!("log-traces-hole-s-1st-99th-percentile-2", range = range_label(column, range).to_string()),
+        None => tr!("log-traces-hole-s-1st-99th-percentile"),
     };
-    let auto_row = ContextMenuAction::new(tr!(literal = "Auto, from this hole"))
+    let auto_row = ContextMenuAction::new(tr!("log-traces-auto-from-hole"))
         .checked(scale.auto)
         .show(ui)
         .on_hover_text(auto_hover);
@@ -755,7 +755,7 @@ pub(crate) fn menu(ui: &mut egui::Ui, column: TraceColumn, draft: &mut WellLogSt
     context_menu_separator(ui);
 
     context_menu_fields(ui, |ui| {
-        ui.label(tr!(literal = "Custom range"));
+        ui.label(tr!("log-traces-custom-range"));
         ui.horizontal(|ui| {
             let span = f64::from((custom[1] - custom[0]).abs().max(0.01));
             let speed = span / 200.0;
@@ -775,16 +775,16 @@ pub(crate) fn menu(ui: &mut egui::Ui, column: TraceColumn, draft: &mut WellLogSt
 
     for &kind in column.kinds() {
         let label = match kind {
-            LogKind::Gamma => tr!(literal = "Gamma colour"),
-            LogKind::LongDensity => tr!(literal = "Long density colour"),
-            LogKind::ShortDensity => tr!(literal = "Short density colour"),
+            LogKind::Gamma => tr!("log-traces-gamma-colour"),
+            LogKind::LongDensity => tr!("log-traces-long-density-colour"),
+            LogKind::ShortDensity => tr!("log-traces-short-density-colour"),
         };
         context_submenu(ui, &label, true, |ui| {
             let mut color = to_color32(draft.color(kind));
             if egui::color_picker::color_picker_color32(ui, &mut color, egui::color_picker::Alpha::Opaque) {
                 draft.set_color(kind, color.to_srgba_unmultiplied());
             }
-            if ContextMenuAction::new(tr!(literal = "Default colour")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("log-traces-default-colour")).show(ui).clicked() {
                 draft.set_color(kind, WellLogStyle::default().color(kind));
                 ui.close();
             }

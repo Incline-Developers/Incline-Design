@@ -4,7 +4,7 @@
 use strum::IntoEnumIterator;
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::plot::{LegendEntry, Orientation, PaperSize, PlotLayout, PlotSpec, RectPx, SheetFurniture, TitleBlock, furniture, layout, max_dpi_for, sheet_furniture},
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
@@ -36,9 +36,9 @@ pub(crate) enum PlotCentre {
 impl PlotCentre {
     fn label(self) -> String {
         match self {
-            Self::AllData => tr!(literal = "All visible data"),
-            Self::CurrentView => tr!(literal = "Current view centre"),
-            Self::Explicit => tr!(literal = "Entered coordinates"),
+            Self::AllData => tr!("plot-all-visible-data"),
+            Self::CurrentView => tr!("plot-current-view-centre"),
+            Self::Explicit => tr!("plot-entered-coordinates"),
         }
     }
 }
@@ -89,7 +89,7 @@ impl Default for PlotDialog {
             show_north_arrow: true,
             show_legend: true,
             show_title_block: true,
-            title: tr!(literal = "Plan"),
+            title: tr!("plot-plan"),
             subtitle: String::new(),
             project_name: String::new(),
             author: String::new(),
@@ -172,7 +172,7 @@ fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[
             painter.text(
                 map.center(),
                 egui::Align2::CENTER_CENTER,
-                tr!(literal = "Nothing visible to draw"),
+                tr!("plot-nothing-visible-draw"),
                 egui::FontId::proportional(11.0),
                 PREVIEW_FAINT_INK,
             );
@@ -184,7 +184,7 @@ fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[
     let legend_label_px = legend_entries
         .iter()
         .map(|entry| estimated_text_width(&entry.label, furniture::LEGEND_LABEL_MM * sheet.px_per_mm))
-        .fold(estimated_text_width(&tr!(literal = "Legend"), furniture::LEGEND_TITLE_MM * sheet.px_per_mm), f64::max)
+        .fold(estimated_text_width(&tr!("common-legend"), furniture::LEGEND_TITLE_MM * sheet.px_per_mm), f64::max)
         .min(sheet.map.width * 0.25);
     let placement = sheet_furniture(&spec, &sheet, legend_label_px, legend_entries.len());
 
@@ -205,18 +205,18 @@ fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[
             Orientation::Landscape => (long, short),
         }
     };
-    ui.label(tr_format!(
-        literal = "%paper% %orientation% · %width% × %height% mm",
-        paper = dialog.paper,
-        orientation = dialog.orientation.label().to_lowercase(),
+    ui.label(tr!(
+        "plot-paper-orientation-width-height-mm",
+        paper = dialog.paper.to_string(),
+        orientation = dialog.orientation.label().to_lowercase().to_string(),
         width = format!("{paper_width_mm:.0}"),
-        height = format!("{paper_height_mm:.0}"),
+        height = format!("{paper_height_mm:.0}")
     ));
-    ui.weak(tr_format!(
-        literal = "1:%scale% · covers %width% × %height% m",
-        scale = crate::model::plot::format_quantity(dialog.scale, 0),
-        width = crate::model::plot::format_quantity(world_width, 0),
-        height = crate::model::plot::format_quantity(world_height, 0),
+    ui.weak(tr!(
+        "plot-1-scale-covers-width-height",
+        scale = crate::model::plot::format_quantity(dialog.scale, 0).to_string(),
+        width = crate::model::plot::format_quantity(world_width, 0).to_string(),
+        height = crate::model::plot::format_quantity(world_height, 0).to_string()
     ));
     ui.weak(tr!("plot-preview-pixels", width = sheet.sheet_width_px, height = sheet.sheet_height_px, dpi = dialog.dpi));
 }
@@ -362,7 +362,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut export = false;
     let legend_entries = preview_legend_entries(project);
 
-    DragableMenu::new("export_engineering_drawing_dialog", tr!(literal = "Export Engineering Drawing"))
+    DragableMenu::new("export_engineering_drawing_dialog", tr!("common-export-engineering-drawing"))
         .open(&mut open)
         .min_width(PLOT_DIALOG_WIDTH)
         .max_width(PLOT_DIALOG_WIDTH + 40.0)
@@ -381,20 +381,20 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         .max_height(PLOT_SETTINGS_MAX_HEIGHT)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            menu::menu_section(ui, tr!(literal = "Paper"));
+                            menu::menu_section(ui, tr!("plot-paper"));
                             let paper_label = dialog.paper.to_string();
                             MenuFieldCombo::new(
                                 "plot_paper",
-                                tr!(literal = "Paper size"),
+                                tr!("plot-paper-size"),
                                 &mut dialog.paper,
                                 paper_label,
                                 PaperSize::iter().map(|size| {
                                     let (width, height) = size.portrait_mm();
                                     (
                                         size,
-                                        tr_format!(
-                                            literal = "%size% (%width% × %height% mm)",
-                                            size = size,
+                                        tr!(
+                                            "plot-size-width-height-mm",
+                                            size = size.to_string(),
                                             width = format!("{width:.0}"),
                                             height = format!("{height:.0}")
                                         )
@@ -408,7 +408,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             let orientation_label = dialog.orientation.label();
                             MenuFieldCombo::new(
                                 "plot_orientation",
-                                tr!(literal = "Orientation"),
+                                tr!("common-orientation"),
                                 &mut dialog.orientation,
                                 orientation_label,
                                 Orientation::iter().map(|orientation| (orientation, orientation.label().into())),
@@ -418,26 +418,23 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
 
                             let max_dpi = max_dpi_for(dialog.paper, dialog.orientation);
                             dialog.dpi = dialog.dpi.min(max_dpi);
-                            MenuFieldU32::new(tr!(literal = "Resolution"), &mut dialog.dpi, 72..=max_dpi)
-                                .help_text(tr_format!(
-                                    literal = "Dots per inch. This paper size can be rasterised up to %max_dpi% dpi; 300 dpi is a normal print quality.",
-                                    max_dpi = max_dpi
-                                ))
-                                .suffix(tr!(literal = " dpi"))
+                            MenuFieldU32::new(tr!("plot-resolution"), &mut dialog.dpi, 72..=max_dpi)
+                                .help_text(tr!("plot-dots-per-inch-paper-size", max_dpi = max_dpi.to_string()))
+                                .suffix(format!(" {}", tr!("plot-dpi")))
                                 .speed(5.0)
                                 .width(PLOT_FIELD_WIDTH)
                                 .show(ui);
 
-                            MenuFieldF64::new(tr!(literal = "Margin"), &mut dialog.margin_mm, 0.0..=60.0)
-                                .suffix(tr!(literal = " mm"))
+                            MenuFieldF64::new(tr!("plot-margin"), &mut dialog.margin_mm, 0.0..=60.0)
+                                .suffix(format!(" {}", tr!("plot-mm")))
                                 .speed(0.5)
                                 .max_decimals(1)
                                 .width(PLOT_FIELD_WIDTH)
                                 .show(ui);
 
-                            menu::menu_section(ui, tr!(literal = "Scale and framing"));
-                            MenuFieldF64::new(tr!(literal = "Scale  1:"), &mut dialog.scale, 1.0..=1.0e7)
-                                .help_text(tr!(literal = "At 1:1000, one millimetre on the sheet is one metre on the ground."))
+                            menu::menu_section(ui, tr!("plot-scale-framing"));
+                            MenuFieldF64::new(tr!("plot-scale-1"), &mut dialog.scale, 1.0..=1.0e7)
+                                .help_text(tr!("plot-1-1000-one-millimetre-sheet"))
                                 .speed(10.0)
                                 .max_decimals(0)
                                 .width(PLOT_FIELD_WIDTH)
@@ -446,7 +443,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             let centre_label = dialog.centre.label();
                             MenuFieldCombo::new(
                                 "plot_centre",
-                                tr!(literal = "Centre on"),
+                                tr!("plot-centre"),
                                 &mut dialog.centre,
                                 centre_label,
                                 PlotCentre::iter().map(|centre| (centre, centre.label().into())),
@@ -454,12 +451,12 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             .width(PLOT_FIELD_WIDTH)
                             .show(ui);
                             if dialog.centre == PlotCentre::Explicit {
-                                MenuFieldF64::new(tr!(literal = "Easting"), &mut dialog.centre_east, f64::MIN..=f64::MAX)
+                                MenuFieldF64::new(tr!("common-easting"), &mut dialog.centre_east, f64::MIN..=f64::MAX)
                                     .speed(1.0)
                                     .max_decimals(3)
                                     .width(PLOT_FIELD_WIDTH)
                                     .show(ui);
-                                MenuFieldF64::new(tr!(literal = "Northing"), &mut dialog.centre_north, f64::MIN..=f64::MAX)
+                                MenuFieldF64::new(tr!("common-northing"), &mut dialog.centre_north, f64::MIN..=f64::MAX)
                                     .speed(1.0)
                                     .max_decimals(3)
                                     .width(PLOT_FIELD_WIDTH)
@@ -467,59 +464,57 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             }
 
                             if ui
-                                .button(tr!(literal = "Fit scale to visible data"))
-                                .on_hover_text(tr!(literal = "Choose the smallest conventional scale that fits everything visible onto the sheet."))
+                                .button(tr!("plot-fit-scale-visible-data"))
+                                .on_hover_text(tr!("plot-choose-smallest-conventional-scale-f"))
                                 .clicked()
                             {
                                 commands.push(UiCommand::FitPlotScaleToData);
                             }
 
-                            menu::menu_section(ui, tr!(literal = "Sheet furniture"));
-                            MenuFieldBool::new(tr!(literal = "Border"), &mut dialog.show_frame).show(ui);
-                            MenuFieldBool::new(tr!(literal = "Coordinate grid"), &mut dialog.show_grid).show(ui);
+                            menu::menu_section(ui, tr!("plot-sheet-furniture"));
+                            MenuFieldBool::new(tr!("plot-border"), &mut dialog.show_frame).show(ui);
+                            MenuFieldBool::new(tr!("plot-coordinate-grid"), &mut dialog.show_grid).show(ui);
                             if dialog.show_grid {
-                                MenuFieldBool::new(tr!(literal = "Automatic grid interval"), &mut dialog.auto_grid)
-                                    .help_text(tr!(literal = "Pick an interval that reads roughly every 50 mm on the printed sheet."))
+                                MenuFieldBool::new(tr!("plot-automatic-grid-interval"), &mut dialog.auto_grid)
+                                    .help_text(tr!("plot-pick-interval-reads-roughly-every"))
                                     .show(ui);
                                 if !dialog.auto_grid {
-                                    MenuFieldF64::new(tr!(literal = "Grid interval"), &mut dialog.grid_interval, 0.001..=1.0e6)
-                                        .suffix(tr!(literal = " m"))
+                                    MenuFieldF64::new(tr!("plot-grid-interval"), &mut dialog.grid_interval, 0.001..=1.0e6)
+                                        .suffix(format!(" {}", tr!("common-m")))
                                         .speed(1.0)
                                         .max_decimals(2)
                                         .width(PLOT_FIELD_WIDTH)
                                         .show(ui);
                                 }
                             }
-                            MenuFieldBool::new(tr!(literal = "Scale bar"), &mut dialog.show_scale_bar).show(ui);
-                            MenuFieldBool::new(tr!(literal = "North arrow"), &mut dialog.show_north_arrow).show(ui);
-                            MenuFieldBool::new(tr!(literal = "Legend"), &mut dialog.show_legend)
-                                .help_text(tr!(literal = "Lists the visible surfaces and design layers with their colours."))
+                            MenuFieldBool::new(tr!("common-scale-bar"), &mut dialog.show_scale_bar).show(ui);
+                            MenuFieldBool::new(tr!("plot-north-arrow"), &mut dialog.show_north_arrow).show(ui);
+                            MenuFieldBool::new(tr!("common-legend"), &mut dialog.show_legend)
+                                .help_text(tr!("plot-lists-visible-surfaces-design-layers"))
                                 .show(ui);
 
-                            menu::menu_section(ui, tr!(literal = "Title block"));
-                            MenuFieldBool::new(tr!(literal = "Title block"), &mut dialog.show_title_block).show(ui);
+                            menu::menu_section(ui, tr!("plot-title-block"));
+                            MenuFieldBool::new(tr!("plot-title-block"), &mut dialog.show_title_block).show(ui);
                             if dialog.show_title_block {
-                                MenuFieldText::new(tr!(literal = "Title"), &mut dialog.title).width(PLOT_FIELD_WIDTH).show(ui);
-                                MenuFieldText::new(tr!(literal = "Subtitle"), &mut dialog.subtitle).width(PLOT_FIELD_WIDTH).show(ui);
-                                MenuFieldText::new(tr!(literal = "Project"), &mut dialog.project_name)
+                                MenuFieldText::new(tr!("plot-title"), &mut dialog.title).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("plot-subtitle"), &mut dialog.subtitle).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("common-project"), &mut dialog.project_name)
                                     .width(PLOT_FIELD_WIDTH)
                                     .hint_text(
                                         project
                                             .active_path
                                             .as_ref()
                                             .and_then(|path| path.file_stem())
-                                            .map_or_else(|| tr!(literal = "e.g. Example Gold Project"), |stem| stem.to_string_lossy().into_owned()),
+                                            .map_or_else(|| tr!("plot-e-g-example-gold-project"), |stem| stem.to_string_lossy().into_owned()),
                                     )
                                     .show(ui);
-                                MenuFieldText::new(tr!(literal = "Drawn by"), &mut dialog.author).width(PLOT_FIELD_WIDTH).show(ui);
-                                MenuFieldText::new(tr!(literal = "Date"), &mut dialog.date)
+                                MenuFieldText::new(tr!("plot-drawn-2"), &mut dialog.author).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("plot-date-2"), &mut dialog.date)
                                     .width(PLOT_FIELD_WIDTH)
-                                    .hint_text(tr!(literal = "today"))
+                                    .hint_text(tr!("plot-today"))
                                     .show(ui);
-                                MenuFieldText::new(tr!(literal = "Drawing number"), &mut dialog.drawing_number)
-                                    .width(PLOT_FIELD_WIDTH)
-                                    .show(ui);
-                                MenuFieldText::new(tr!(literal = "Revision"), &mut dialog.revision).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("plot-drawing-number"), &mut dialog.drawing_number).width(PLOT_FIELD_WIDTH).show(ui);
+                                MenuFieldText::new(tr!("plot-revision"), &mut dialog.revision).width(PLOT_FIELD_WIDTH).show(ui);
                             }
                         });
 
@@ -529,12 +524,10 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     menu::menu_actions(ui, |ui| {
                         let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
                         let cancel_key = menu::dialog_cancel_pressed(ui.ctx());
-                        export = ui.add(MenuButton::new(tr!(literal = "Export PNG...")).primary().enabled(valid)).clicked() || (confirm_key && valid);
-                        cancel = ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancel_key;
+                        export = ui.add(MenuButton::new(tr!("plot-export-png")).primary().enabled(valid)).clicked() || (confirm_key && valid);
+                        cancel = ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancel_key;
                     });
-                    ui.weak(tr!(
-                        literal = "The PNG is written at the sheet's exact paper size and records its DPI, so it prints at true scale."
-                    ));
+                    ui.weak(tr!("plot-png-written-sheet-s-exact"));
                 });
             });
         });

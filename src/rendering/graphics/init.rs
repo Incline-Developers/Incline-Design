@@ -1,5 +1,5 @@
 use super::*;
-use crate::{i18n::tr_format, userspace_log};
+use crate::{i18n::tr, userspace_log};
 
 /// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
 /// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
@@ -76,20 +76,20 @@ impl<'a> Graphics<'a> {
         let adapter_info = adapter.get_info();
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "GPU adapter: %vendor% / %name% / %backend% / %device_type%",
-                vendor = adapter_info.vendor,
-                name = &adapter_info.name,
+            tr!(
+                "init-gpu-adapter-vendor-name-backend",
+                vendor = adapter_info.vendor.to_string(),
+                name = adapter_info.name.to_string(),
                 backend = format!("{:?}", adapter_info.backend),
                 device_type = format!("{:?}", adapter_info.device_type)
             )
         );
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "GPU driver: %driver% %driver_info%",
-                driver = &adapter_info.driver,
-                driver_info = &adapter_info.driver_info
+            tr!(
+                "init-gpu-driver-driver-driver-info",
+                driver = adapter_info.driver.to_string(),
+                driver_info = adapter_info.driver_info.to_string()
             )
         );
 
@@ -113,24 +113,22 @@ impl<'a> Graphics<'a> {
         };
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_storage_buffers_per_shader_stage=%max_storage_buffers_per_shader_stage%, max_uniform_buffer_binding_size=%max_uniform_buffer_binding_size% KiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
-                max_buffer_size = required_limits.max_buffer_size / (1024 * 1024),
-                max_storage_buffer_binding_size = required_limits.max_storage_buffer_binding_size / (1024 * 1024),
-                // The adapter's own two, not what was asked for: a stage that
-                // binds no storage buffer is why the selection is a uniform.
-                max_storage_buffers_per_shader_stage = adapter_limits.max_storage_buffers_per_shader_stage,
-                max_uniform_buffer_binding_size = adapter_limits.max_uniform_buffer_binding_size / 1024,
-                max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d,
-                max_bind_groups = adapter_limits.max_bind_groups
+            tr!(
+                "init-gpu-limits-max-buffer-size",
+                max_buffer_size = (required_limits.max_buffer_size / (1024 * 1024)).to_string(),
+                max_storage_buffer_binding_size = (required_limits.max_storage_buffer_binding_size / (1024 * 1024)).to_string(),
+                max_storage_buffers_per_shader_stage = adapter_limits.max_storage_buffers_per_shader_stage.to_string(),
+                max_uniform_buffer_binding_size = (adapter_limits.max_uniform_buffer_binding_size / 1024).to_string(),
+                max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d.to_string(),
+                max_bind_groups = adapter_limits.max_bind_groups.to_string()
             )
         );
         if required_limits.max_buffer_size < COMFORTABLE_MAX_BUFFER_SIZE {
             crate::userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "GPU supports a maximum buffer size of %size% MiB; large scenes may not display fully",
-                    size = required_limits.max_buffer_size / (1024 * 1024)
+                tr!(
+                    "init-gpu-supports-maximum-buffer-size",
+                    size = (required_limits.max_buffer_size / (1024 * 1024)).to_string()
                 )
             );
         }
@@ -155,7 +153,7 @@ impl<'a> Graphics<'a> {
         // validation failure (e.g. an oversized allocation) should degrade to
         // missing geometry, not lose the user's session.
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
-            crate::userspace_error!("{}", tr_format!(literal = "wgpu error (continuing): %error%", error = error));
+            crate::userspace_error!("{}", tr!("init-wgpu-error-continuing-error", error = error.to_string()));
         }));
         #[cfg(target_arch = "wasm32")]
         device.set_device_lost_callback(|reason, message| {
@@ -199,7 +197,7 @@ impl<'a> Graphics<'a> {
         let no_vsync_present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
             .into_iter()
             .find(|mode| surface_caps.present_modes.contains(mode));
-        userspace_log!("{}", tr_format!(literal = "Surface presentation mode: %mode%", mode = format!("{present_mode:?}")));
+        userspace_log!("{}", tr!("init-surface-presentation-mode-mode", mode = format!("{present_mode:?}")));
         let alpha_mode = surface_caps
             .alpha_modes
             .first()

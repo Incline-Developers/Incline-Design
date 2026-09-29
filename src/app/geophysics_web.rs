@@ -17,7 +17,7 @@ use std::{
 
 use crate::{
     app::{App, geophysics::Indexed, memory::MemoryReservation},
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         drill_hole::DrillHoleId,
         formats::{
@@ -83,7 +83,10 @@ impl<'a> App<'a> {
                     if several {
                         left_out(&file.name(), &error);
                     } else {
-                        userspace_warn!("{}", tr_format!(literal = "Could not read '%name%': %error%", name = file.name(), error = error));
+                        userspace_warn!(
+                            "{}",
+                            tr!("geophysics-web-could-not-read-name-error", name = file.name().to_string(), error = error.to_string())
+                        );
                     }
                 }
             }
@@ -102,13 +105,13 @@ impl<'a> App<'a> {
                     .find(|linked| linked.identity.matches(&identity))
                     .map_or_else(|| identity.name.clone(), |linked| linked.identity.name.clone());
                 self.hold_geophysics_file(identity, file, id);
-                userspace_log!("{}", tr_format!(literal = "'%name%' is used for this session's downhole geophysics", name = name));
+                userspace_log!("{}", tr!("geophysics-web-name-used-session-s-downhole", name = name.to_string()));
             }
             self.resolve_browser_link(id, link);
             return;
         }
         if self.known_holes(id).is_none() {
-            userspace_warn!("{}", tr!(literal = "Load the drillhole dataset before linking geophysics to it"));
+            userspace_warn!("{}", tr!("common-load-drillhole-dataset-before-linkin"));
             return;
         }
         let generation = self.restart_geophysics(id, current.as_ref(), LinkState::Indexing);
@@ -177,11 +180,11 @@ impl<'a> App<'a> {
     /// others are linked, as on the desktop; only those are held.
     fn spawn_browser_index(&mut self, id: DrillHoleId, generation: u64, files: Vec<(Columns, web_sys::File, FileIdentity)>) {
         let Some(known) = self.known_holes(id) else {
-            let error = tr!(literal = "Load the drillhole dataset before linking geophysics to it");
+            let error = tr!("common-load-drillhole-dataset-before-linkin");
             self.finish_geophysics_index(id, generation, None, Err(anyhow::anyhow!(error)));
             return;
         };
-        let label = tr_format!(literal = "Linking geophysics to %name%", name = self.drill_hole_name(id));
+        let label = tr!("geophysics-linking-geophysics-name", name = self.drill_hole_name(id).to_string());
         let total = files.iter().map(|(_, _, identity)| identity.size.max(1)).sum::<u64>().max(1);
         let several = files.len() > 1;
         let mut tasks = Vec::with_capacity(files.len());
@@ -333,10 +336,10 @@ enum Columns {
 fn left_out(file: &str, error: &str) {
     userspace_warn!(
         "{}",
-        tr_format!(
-            literal = "%file% was left out of the downhole geophysics: %error%",
-            file = file.to_owned(),
-            error = error.to_owned()
+        tr!(
+            "common-file-was-left-out-downhole",
+            file = file.to_owned().to_string(),
+            error = error.to_owned().to_string()
         )
     );
 }
@@ -346,7 +349,7 @@ fn left_out(file: &str, error: &str) {
 async fn identify_browser_file(file: &web_sys::File) -> std::result::Result<FileIdentity, String> {
     let size_f = file.size();
     if !size_f.is_finite() || size_f < 0.0 {
-        return Err(tr_format!(literal = "%name% has no readable size", name = file.name()));
+        return Err(tr!("common-name-has-no-readable-size", name = file.name().to_string()));
     }
     let size = size_f as u64;
     let [head_range, tail_range] = FileIdentity::end_ranges(size);

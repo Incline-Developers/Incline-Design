@@ -508,7 +508,7 @@ impl<'a> Graphics<'a> {
         });
 
         let scene_camera_bind_group = Self::create_scene_camera_bind_group(device, &scene_camera_layout, &self.camera_buffer, &params_buffer, &shadow_array_view, &shadow_sampler);
-        userspace_log!("{}", crate::i18n::tr_format!(literal = "Cinematic view shadows: %method%", method = "cascaded shadow maps"));
+        userspace_log!("{}", crate::i18n::tr!("cinematic-cinematic-view-shadows-method", method = "cascaded shadow maps"));
 
         CinematicPipelines {
             scene,

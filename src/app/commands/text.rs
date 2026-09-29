@@ -1,6 +1,6 @@
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
 };
@@ -50,7 +50,7 @@ impl<'a> App<'a> {
             id,
             layer,
             pos: world,
-            content: tr!(literal = "Text"),
+            content: tr!("common-text"),
             height,
             rotation: 0.0,
             color,
@@ -129,12 +129,9 @@ impl<'a> App<'a> {
         }
         self.finish_text_edit_state();
         if created || changed {
-            userspace_log!("{}", tr_format!(literal = "Updated text on object %object_id%", object_id = format!("{object_id:?}")));
+            userspace_log!("{}", tr!("cmd-text-updated-text-object-object-id", object_id = format!("{object_id:?}")));
         }
-        userspace_log!(
-            "{}",
-            tr_format!(literal = "Finished text edit for object %object_id%", object_id = format!("{object_id:?}"))
-        );
+        userspace_log!("{}", tr!("cmd-text-finished-text-edit-object-object", object_id = format!("{object_id:?}")));
         self.invalidate_geometry();
     }
 

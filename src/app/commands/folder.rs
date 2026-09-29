@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, Folder, FolderId, FolderMember, ItemRef, MemberTarget, Placement, SectionKind},
     ui::state::ExplorerSection,
     userspace_log, userspace_warn,
@@ -35,11 +35,11 @@ impl<'a> App<'a> {
             return Ok(());
         };
         let registry = &mut project.project.folders;
-        let name = unique_collection_name(&tr!(literal = "Collection"), |candidate| registry.has_name(section, candidate));
+        let name = unique_collection_name(&tr!("common-collection"), |candidate| registry.has_name(section, candidate));
         let id = registry.allocate_id();
         let folder = Folder { id, name: name.clone() };
         self.execute_edit(Command::AddFolder { section, folder });
-        userspace_log!("{}", tr_format!(literal = "Created collection '%name%'", name = name));
+        userspace_log!("{}", tr!("cmd-folder-created-collection-name", name = name.to_string()));
         Ok(())
     }
 
@@ -63,7 +63,7 @@ impl<'a> App<'a> {
             layers,
             items,
         });
-        userspace_log!("{}", tr_format!(literal = "Deleted collection '%name%'", name = name));
+        userspace_log!("{}", tr!("cmd-folder-deleted-collection-name", name = name.to_string()));
         Ok(())
     }
 
@@ -99,7 +99,7 @@ impl<'a> App<'a> {
             return;
         }
         if registry.has_name(section, &requested) {
-            userspace_warn!("{}", tr_format!(literal = "A collection named '%name%' already exists", name = requested));
+            userspace_warn!("{}", tr!("cmd-folder-collection-named-name-already-exists", name = requested.to_string()));
             return;
         }
         self.execute_edit(Command::RenameFolder {
@@ -108,7 +108,10 @@ impl<'a> App<'a> {
             before: before.clone(),
             after: requested.clone(),
         });
-        userspace_log!("{}", tr_format!(literal = "Renamed collection '%before%' to '%after%'", before = before, after = requested));
+        userspace_log!(
+            "{}",
+            tr!("cmd-folder-renamed-collection-before-after", before = before.to_string(), after = requested.to_string())
+        );
     }
 
     /// Move a layer or a project item into `folder` under `section`, or to
@@ -135,13 +138,13 @@ impl<'a> App<'a> {
         };
         // A section with no row for this kind would show the member nowhere.
         if !section.admits(member.kind()) {
-            userspace_warn!("{}", tr!(literal = "That section cannot hold this item"));
+            userspace_warn!("{}", tr!("cmd-folder-section-cannot-hold-item"));
             return;
         }
         if let Some(id) = folder
             && !project.project.folders.contains(section, id)
         {
-            userspace_warn!("{}", tr!(literal = "That collection no longer exists"));
+            userspace_warn!("{}", tr!("cmd-folder-collection-no-longer-exists"));
             return;
         }
         let after = Placement::new(section, folder);
@@ -157,8 +160,8 @@ impl<'a> App<'a> {
         userspace_log!(
             "{}",
             match &folder_name {
-                Some(name) => tr_format!(literal = "Moved item into collection '%name%'", name = name),
-                None => tr_format!(literal = "Moved item to the root of %section%", section = section_name),
+                Some(name) => tr!("cmd-folder-moved-item-into-collection-name", name = name.to_string()),
+                None => tr!("cmd-folder-moved-item-root-section", section = section_name.to_string()),
             }
         );
     }

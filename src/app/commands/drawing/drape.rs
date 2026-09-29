@@ -4,7 +4,7 @@ use glam::DVec3;
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command, Object, SceneEntityId,
@@ -38,7 +38,7 @@ impl<'a> App<'a> {
                     })
                     .collect();
                 if object_ids.is_empty() {
-                    userspace_warn!("{}", tr!(literal = "Select one or more design objects to drape"));
+                    userspace_warn!("{}", tr!("cmd-drape-select-one-more-design-objects"));
                     return;
                 }
 
@@ -59,7 +59,7 @@ impl<'a> App<'a> {
                     })
                     .collect();
                 if topology_ids.is_empty() {
-                    userspace_warn!("{}", tr!(literal = "Select one or more topologies to drape onto"));
+                    userspace_warn!("{}", tr!("cmd-drape-select-one-more-topologies-drape"));
                     return;
                 }
                 self.apply_drape_to_topologies(&topology_ids);
@@ -81,7 +81,7 @@ impl<'a> App<'a> {
         let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
         let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
         if surfaces.is_empty() {
-            userspace_warn!("{}", tr!(literal = "The selected topologies are no longer loaded"));
+            userspace_warn!("{}", tr!("cmd-drape-selected-topologies-no-longer-loaded"));
             return;
         }
 
@@ -114,22 +114,22 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
 
         if intersected_vertices == 0 {
-            userspace_warn!("{}", tr!(literal = "None of the selected design vertices intersect the selected topologies"));
+            userspace_warn!("{}", tr!("cmd-drape-none-selected-design-vertices-inters"));
         } else {
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    tr!(literal = "Drape to Topology"),
-                    tr_format!(
-                        literal = "%objects% changed object(s) · %changed% of %intersected% intersecting vertices moved",
-                        objects = changed_objects,
-                        changed = changed_vertices,
-                        intersected = intersected_vertices
+                    tr!("common-drape-topology"),
+                    tr!(
+                        "cmd-drape-objects-changed-object-s-changed",
+                        objects = changed_objects.to_string(),
+                        changed = changed_vertices.to_string(),
+                        intersected = intersected_vertices.to_string()
                     ),
                 ),
-                tr_format!(
-                    literal = "Draped %intersected% vertices; %changed% changed elevation",
-                    intersected = intersected_vertices,
-                    changed = changed_vertices
+                tr!(
+                    "cmd-drape-draped-intersected-vertices-changed",
+                    intersected = intersected_vertices.to_string(),
+                    changed = changed_vertices.to_string()
                 ),
             );
         }

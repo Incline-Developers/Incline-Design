@@ -7,7 +7,7 @@
 //! open; `App::refresh_object_edit_dialog` notices the object going away.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         FillStyle, Object, ObjectColor, ObjectId,
         object_edit::{
@@ -141,9 +141,9 @@ impl ObjectEditDialog {
 /// inline message and console warning cannot drift apart.
 pub(crate) fn issue_message(issue: ObjectEditIssue) -> String {
     match issue {
-        ObjectEditIssue::NonFiniteVertex(row) => tr_format!(literal = "Row %row%: position or bulge is not a valid number", row = row + 1),
-        ObjectEditIssue::NonFiniteValue => tr!(literal = "One or more properties is not a valid number"),
-        ObjectEditIssue::TooFewVertices { required } => tr_format!(literal = "This object needs at least %required% vertices", required = required),
+        ObjectEditIssue::NonFiniteVertex(row) => tr!("object-edit-row-row-position-bulge-not", row = (row + 1).to_string()),
+        ObjectEditIssue::NonFiniteValue => tr!("object-edit-one-more-properties-not-valid"),
+        ObjectEditIssue::TooFewVertices { required } => tr!("object-edit-object-needs-least-required-vertices", required = required.to_string()),
     }
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn draw_object_edit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     let mut cancel = false;
     let mut working_copy = None;
 
-    DragableMenu::new("object_edit_dialog", tr!(literal = "Edit Object"))
+    DragableMenu::new("object_edit_dialog", tr!("common-edit-object"))
         .open(&mut open)
         .min_width(440.0)
         .max_width(480.0)
@@ -201,9 +201,9 @@ pub(crate) fn draw_object_edit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             // cell being typed into, which commits on it. Escape is handled above.
             let can_apply = dialog.issue.is_none();
             menu::menu_actions(ui, |ui| {
-                confirm = ui.add(MenuButton::new(tr!(literal = "OK")).primary().enabled(can_apply)).clicked();
-                cancel = ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked();
-                apply = ui.add(MenuButton::new(tr!(literal = "Apply")).enabled(can_apply)).clicked();
+                confirm = ui.add(MenuButton::new(tr!("files-ok")).primary().enabled(can_apply)).clicked();
+                cancel = ui.add(MenuButton::new(tr!("common-cancel"))).clicked();
+                apply = ui.add(MenuButton::new(tr!("edit-apply")).enabled(can_apply)).clicked();
             });
 
             if apply || confirm {
@@ -303,9 +303,9 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
 fn draw_tab_bar(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, arcs_available: bool) {
     ui.horizontal(|ui| {
         for (tab, label) in [
-            (ObjectEditTab::Properties, tr!(literal = "Properties")),
-            (ObjectEditTab::Vertices, tr!(literal = "Vertices")),
-            (ObjectEditTab::Arcs, tr!(literal = "Arc & Circle")),
+            (ObjectEditTab::Properties, tr!("edit-properties")),
+            (ObjectEditTab::Vertices, tr!("object-edit-vertices")),
+            (ObjectEditTab::Arcs, tr!("object-edit-arc-circle")),
         ] {
             if tab == ObjectEditTab::Arcs && !arcs_available {
                 continue;
@@ -324,18 +324,18 @@ fn draw_tab_bar(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, arcs_available
 
 fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     let layer_rgba = dialog.layer_rgba;
-    menu::menu_section(ui, tr!(literal = "Identity"));
-    read_only_row(ui, &tr!(literal = "Type"), &dialog.object.kind_name());
-    read_only_row(ui, &tr!(literal = "ID"), &dialog.id.0.to_string());
-    read_only_row(ui, &tr!(literal = "Layer"), &dialog.layer_name);
-    read_only_row(ui, &tr!(literal = "Vertices"), &vertex_row_count(&dialog.object).to_string());
+    menu::menu_section(ui, tr!("object-edit-identity"));
+    read_only_row(ui, &tr!("edit-type"), &dialog.object.kind_name());
+    read_only_row(ui, &tr!("object-edit-id"), &dialog.id.0.to_string());
+    read_only_row(ui, &tr!("common-layer"), &dialog.layer_name);
+    read_only_row(ui, &tr!("object-edit-vertices"), &vertex_row_count(&dialog.object).to_string());
 
-    menu::menu_section(ui, tr!(literal = "Appearance"));
+    menu::menu_section(ui, tr!("object-edit-appearance"));
     // Touching the swatch pins a fixed colour on the object; the toggle
     // above returns to the layer's.
     let mut by_layer = matches!(dialog.object.color(), ObjectColor::ByLayer);
-    if MenuFieldBool::new(tr!(literal = "Colour by layer"), &mut by_layer)
-        .help_text(tr!(literal = "Follow the owning layer's colour instead of a colour pinned to this object."))
+    if MenuFieldBool::new(tr!("object-edit-colour-layer"), &mut by_layer)
+        .help_text(tr!("object-edit-follow-owning-layer-s-colour"))
         .show(ui)
         .changed()
     {
@@ -347,7 +347,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             ObjectColor::ByLayer => layer_rgba,
         };
         let mut color32 = rgba_to_color32(rgba);
-        if MenuFieldColor32::new(tr!(literal = "Colour"), &mut color32).show(ui).changed() {
+        if MenuFieldColor32::new(tr!("common-colour"), &mut color32).show(ui).changed() {
             set_object_color(&mut dialog.object, ObjectColor::Fixed(color32_to_rgba(color32)));
         }
     }
@@ -359,20 +359,20 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     let mut rescan = false;
     match &mut dialog.object {
         Object::Polyline { closed, fill, line_weight, .. } => {
-            rescan |= MenuFieldBool::new(tr!(literal = "Closed"), closed)
-                .help_text(tr!(literal = "Join the last vertex back to the first."))
+            rescan |= MenuFieldBool::new(tr!("common-closed"), closed)
+                .help_text(tr!("object-edit-join-last-vertex-back-first"))
                 .show(ui)
                 .changed();
             let current_fill = *fill;
             MenuFieldCombo::new(
                 "object_edit_fill",
-                tr!(literal = "Fill"),
+                tr!("common-fill"),
                 fill,
                 fill_style_label(current_fill),
                 [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
             )
             .show(ui);
-            MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
+            MenuFieldF32::new(tr!("common-line-weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
         }
         // A circle is always closed, so it offers fill and line weight but
         // no "Closed" toggle - its centre and radius live on the Circle tab.
@@ -380,29 +380,29 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             let current_fill = *fill;
             MenuFieldCombo::new(
                 "object_edit_fill",
-                tr!(literal = "Fill"),
+                tr!("common-fill"),
                 fill,
                 fill_style_label(current_fill),
                 [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
             )
             .show(ui);
-            MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
+            MenuFieldF32::new(tr!("common-line-weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
         }
         Object::Text { content, height, rotation, .. } => {
-            rescan |= MenuFieldText::new(tr!(literal = "Text"), content).show(ui).changed();
-            rescan |= MenuFieldF64::new(tr!(literal = "Height"), height, 0.001..=1.0e9)
+            rescan |= MenuFieldText::new(tr!("common-text"), content).show(ui).changed();
+            rescan |= MenuFieldF64::new(tr!("edit-height"), height, 0.001..=1.0e9)
                 .speed(0.25)
                 .max_decimals(3)
-                .suffix(tr!(literal = "m"))
+                .suffix(tr!("common-m"))
                 .show(ui)
                 .changed();
             // The model keeps rotation in radians; the field, like the
             // in-viewport text editor, uses degrees.
             let mut degrees = rotation.to_degrees();
-            if MenuFieldF64::new(tr!(literal = "Rotation"), &mut degrees, -360.0..=360.0)
+            if MenuFieldF64::new(tr!("drill-pattern-rotation"), &mut degrees, -360.0..=360.0)
                 .speed(1.0)
                 .max_decimals(3)
-                .suffix(tr!(literal = "°"))
+                .suffix(tr!("common-text-2"))
                 .show(ui)
                 .changed()
             {
@@ -434,18 +434,14 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     if is_polyline {
         let (length, area) = derived_values(dialog);
         let summary = match area {
-            Some(area) => tr_format!(
-                literal = "Perimeter %length% m, area %area% m²",
-                length = format!("{length:.3}"),
-                area = format!("{area:.3}")
-            ),
-            None => tr_format!(literal = "Length %length% m", length = format!("{length:.3}")),
+            Some(area) => tr!("object-edit-perimeter-length-m-area-area", length = format!("{length:.3}"), area = format!("{area:.3}")),
+            None => tr!("object-edit-length-length-m", length = format!("{length:.3}")),
         };
         ui.label(egui::RichText::new(summary).color(ui.visuals().weak_text_color()));
     } else {
         // A point or text object has exactly one position, shown as a single
         // row so every kind gets the same sheet shape.
-        ui.label(egui::RichText::new(tr!(literal = "This object has a single position.")).color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(tr!("object-edit-object-has-single-position")).color(ui.visuals().weak_text_color()));
     }
     ui.add_space(2.0);
 
@@ -456,7 +452,7 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     };
     let headings: Vec<String> = if is_polyline {
         let [x, y, z] = crate::model::survey::axis_names();
-        vec![x, y, z, tr!(literal = "Bulge")]
+        vec![x, y, z, tr!("object-edit-bulge")]
     } else {
         crate::model::survey::axis_names().to_vec()
     };
@@ -481,19 +477,19 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     let has_row = dialog.selected_row.is_some();
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        if ui.add(MenuButton::new(tr!(literal = "Insert after")).enabled(has_row)).clicked() {
+        if ui.add(MenuButton::new(tr!("object-edit-insert-after")).enabled(has_row)).clicked() {
             action = Some(RowAction::InsertAfter);
         }
-        if ui.add(MenuButton::new(tr!(literal = "Delete")).enabled(has_row)).clicked() {
+        if ui.add(MenuButton::new(tr!("confirmations-delete")).enabled(has_row)).clicked() {
             action = Some(RowAction::Delete);
         }
-        if ui.add(MenuButton::new(tr!(literal = "Move up")).enabled(has_row)).clicked() {
+        if ui.add(MenuButton::new(tr!("object-edit-move-up")).enabled(has_row)).clicked() {
             action = Some(RowAction::MoveUp);
         }
-        if ui.add(MenuButton::new(tr!(literal = "Move down")).enabled(has_row)).clicked() {
+        if ui.add(MenuButton::new(tr!("object-edit-move-down")).enabled(has_row)).clicked() {
             action = Some(RowAction::MoveDown);
         }
-        if ui.add(MenuButton::new(tr!(literal = "Reverse")).enabled(row_count >= 2)).clicked() {
+        if ui.add(MenuButton::new(tr!("object-edit-reverse")).enabled(row_count >= 2)).clicked() {
             action = Some(RowAction::Reverse);
         }
     });
@@ -620,9 +616,9 @@ fn commit_cell(dialog: &mut ObjectEditDialog, row: usize, column: VertexColumn, 
         }
         _ => {
             dialog.message = Some(if trimmed.is_empty() {
-                tr!(literal = "Enter a number")
+                tr!("object-edit-enter-number")
             } else {
-                tr_format!(literal = "\"%text%\" is not a number", text = trimmed)
+                tr!("object-edit-text-not-number", text = trimmed.to_string())
             });
             false
         }
@@ -756,36 +752,33 @@ fn circle_spec(object: &Object) -> Option<CircleSpec> {
 }
 
 fn draw_arcs_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
-    menu::menu_note(
-        ui,
-        tr!(literal = "Bulge arcs are horizontal by data model: the arc turns in plan and the elevation runs straight from one vertex to the next."),
-    );
+    menu::menu_note(ui, tr!("object-edit-bulge-arcs-horizontal-data-model"));
     ui.add_space(4.0);
 
     if let Some(spec) = circle_spec(&dialog.object) {
-        menu::menu_section(ui, tr!(literal = "Circle"));
+        menu::menu_section(ui, tr!("common-circle"));
         let mut center = spec.center;
         let mut radius = spec.radius;
         let mut changed = false;
-        changed |= MenuFieldF64::new(tr!(literal = "Centre X"), &mut center.x, f64::MIN..=f64::MAX)
+        changed |= MenuFieldF64::new(tr!("object-edit-centre-x"), &mut center.x, f64::MIN..=f64::MAX)
             .speed(0.5)
             .max_decimals(3)
             .show(ui)
             .changed();
-        changed |= MenuFieldF64::new(tr!(literal = "Centre Y"), &mut center.y, f64::MIN..=f64::MAX)
+        changed |= MenuFieldF64::new(tr!("object-edit-centre-y"), &mut center.y, f64::MIN..=f64::MAX)
             .speed(0.5)
             .max_decimals(3)
             .show(ui)
             .changed();
-        changed |= MenuFieldF64::new(tr!(literal = "Centre Z"), &mut center.z, f64::MIN..=f64::MAX)
+        changed |= MenuFieldF64::new(tr!("object-edit-centre-z"), &mut center.z, f64::MIN..=f64::MAX)
             .speed(0.5)
             .max_decimals(3)
             .show(ui)
             .changed();
-        changed |= MenuFieldF64::new(tr!(literal = "Radius"), &mut radius, 1.0e-6..=f64::MAX)
+        changed |= MenuFieldF64::new(tr!("edit-radius"), &mut radius, 1.0e-6..=f64::MAX)
             .speed(0.5)
             .max_decimals(3)
-            .suffix(tr!(literal = "m"))
+            .suffix(tr!("common-m"))
             .show(ui)
             .changed();
         if changed {
@@ -810,12 +803,12 @@ fn draw_arcs_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
 
     let arc_count = dialog.arc_rows.as_ref().map_or(0, |(_, rows)| rows.len());
     if arc_count == 0 {
-        ui.label(egui::RichText::new(tr!(literal = "This object has no arc segments.")).color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(tr!("object-edit-object-has-no-arc-segments")).color(ui.visuals().weak_text_color()));
         return;
     }
 
-    menu::menu_section(ui, tr!(literal = "Arc segments"));
-    draw_sheet_header(ui, &[tr!(literal = "Chord"), tr!(literal = "Radius"), tr!(literal = "Sweep")]);
+    menu::menu_section(ui, tr!("object-edit-arc-segments"));
+    draw_sheet_header(ui, &[tr!("object-edit-chord"), tr!("edit-radius"), tr!("object-edit-sweep")]);
     egui::ScrollArea::vertical()
         .id_salt("object_edit_arc_sheet")
         .auto_shrink([false; 2])
@@ -883,7 +876,7 @@ fn draw_arc_row(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, segment: usize
                     .range(-359.9..=359.9)
                     .clamp_existing_to_range(false)
                     .max_decimals(3)
-                    .suffix(tr!(literal = "°")),
+                    .suffix(tr!("common-text-2")),
             );
             if radius_response.changed() {
                 new_bulge = bulge_for_radius(chord, radius, bulge);

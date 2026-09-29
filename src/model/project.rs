@@ -618,7 +618,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
         format_version: PROJECT_FORMAT_VERSION,
         document,
         metadata: ProjectMetadata {
-            name: project_name(path.as_deref(), &tr!(literal = "Untitled")),
+            name: project_name(path.as_deref(), &tr!("common-untitled")),
             ..Default::default()
         },
         folders: FolderRegistry::default(),
@@ -801,7 +801,7 @@ fn copy_objects(target: &mut Document, imported: &Document, layer_map: &HashMap<
 fn unique_layer_name(document: &Document, requested: &str) -> String {
     let fallback;
     let base = if requested.trim().is_empty() {
-        fallback = tr!(literal = "Layer");
+        fallback = tr!("common-layer");
         fallback.as_str()
     } else {
         requested.trim()
@@ -823,7 +823,7 @@ fn unique_layer_name(document: &Document, requested: &str) -> String {
 /// families.
 pub(crate) fn unique_item_name<'a>(requested: String, existing: impl Iterator<Item = &'a str>) -> String {
     let base = if requested.trim().is_empty() {
-        tr!(literal = "Item")
+        tr!("project-item")
     } else {
         requested.trim().to_owned()
     };

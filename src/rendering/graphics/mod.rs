@@ -911,7 +911,7 @@ impl<'a> Graphics<'a> {
         }
         self.config.present_mode = mode;
         self.surface.configure(&self.device, &self.config);
-        crate::userspace_log!("{}", crate::i18n::tr_format!(literal = "Surface presentation mode: %mode%", mode = format!("{mode:?}")));
+        crate::userspace_log!("{}", crate::i18n::tr!("init-surface-presentation-mode-mode", mode = format!("{mode:?}")));
     }
 
     pub(crate) fn needs_continuous_redraw(&self) -> bool {

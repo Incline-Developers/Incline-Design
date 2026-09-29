@@ -134,7 +134,7 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
     let extent = match extents.len() {
         0 => None,
         1 => Some(extents[0]),
-        _ => anyhow::bail!("{}", tr!(literal = "Select exactly one closed string to clip the surface to")),
+        _ => anyhow::bail!("{}", tr!("cmd-reference-surface-select-exactly-one-closed-string")),
     };
     Ok(SurfaceInput { points, layers, controls, extent })
 }
@@ -147,7 +147,7 @@ impl<'a> App<'a> {
         let project = self
             .workspace
             .active_project()
-            .ok_or_else(|| anyhow::anyhow!("{}", tr!(literal = "Open a project before building a surface")))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-reference-surface-open-project-before-building-surface")))?;
         let project_key = crate::app::jobs::JobKey::Project {
             runtime_id: project.runtime_id,
             document_revision: project.project.document.revision(),
@@ -187,8 +187,8 @@ impl<'a> App<'a> {
                 .scene_document
                 .layer(layers[0])
                 .map(|layer| layer.name.clone())
-                .unwrap_or_else(|| tr!(literal = "Surface")),
-            _ => tr!(literal = "Surface"),
+                .unwrap_or_else(|| tr!("tri-type-open-surface")),
+            _ => tr!("tri-type-open-surface"),
         };
         // Said rather than guessed at: layers that disagree on a section send
         // the surface to its natural one, but layers that agree still keep it
@@ -196,83 +196,83 @@ impl<'a> App<'a> {
         if layers.len() > 1 {
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "The selected points span %count% layers; the surface is placed under %section%",
-                    count = layers.len(),
-                    section = crate::ui::state::ExplorerSection::from_kind(section).label()
+                tr!(
+                    "cmd-reference-surface-selected-points-span-count-layers",
+                    count = layers.len().to_string(),
+                    section = crate::ui::state::ExplorerSection::from_kind(section).label().to_string()
                 )
             );
         }
         // Said once, not guessed at: an unclipped surface runs to the hull of
         // whatever was selected, which is rarely the ground the geologist meant.
         if ring.is_none() {
-            userspace_warn!("{}", tr!(literal = "No mask selected; the surface is unclipped"));
+            userspace_warn!("{}", tr!("cmd-reference-surface-no-mask-selected-surface-unclipped"));
         }
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag| -> Result<crate::model::triangulation::GeneratedTriangulation> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!(literal = "Cancelled"));
+                anyhow::bail!("{}", tr!("common-cancelled"));
             }
             delaunay_surface_from_points(points, controls, ring, name, &|| cancel.is_cancelled())
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation_in(generated, section),
-            Err(error) => crate::userspace_error!("{}", tr_format!(literal = "Build Surface failed: %error%", error = format!("{error:#}"))),
+            Err(error) => crate::userspace_error!("{}", tr!("cmd-reference-surface-build-surface-failed-error", error = format!("{error:#}"))),
         };
-        self.spawn_job(tr!(literal = "Building surface…"), vec![project_key], compute, apply);
+        self.spawn_job(tr!("cmd-reference-surface-building-surface"), vec![project_key], compute, apply);
         Ok(())
     }
 }
 
 fn too_few_points(count: usize) -> String {
-    tr_format!(
-        literal = "%count% point(s) selected; a surface needs at least %minimum%",
-        count = count,
-        minimum = MINIMUM_POINTS
+    tr!(
+        "cmd-reference-surface-count-point-s-selected-surface",
+        count = count.to_string(),
+        minimum = MINIMUM_POINTS.to_string()
     )
 }
 
 /// Spade refusing a vertex is not a geologist's mistake, so the reason is
 /// carried through rather than summarised.
 fn insert_failed(error: impl std::fmt::Debug) -> String {
-    tr_format!(literal = "Delaunay insert failed: %error%", error = format!("{error:?}"))
+    tr!("cmd-reference-surface-delaunay-insert-failed-error", error = format!("{error:?}"))
 }
 
 /// Control strings carry no name of their own, so a refusal names one by
 /// where it sat in the selection, counting from one.
 fn too_few_control_vertices(index: usize, count: usize) -> String {
-    tr_format!(
-        literal = "Control string %index% has %count% distinct vertex(es); a control needs at least %minimum%",
-        index = index + 1,
-        count = count,
-        minimum = MINIMUM_CONTROL_VERTICES
+    tr!(
+        "cmd-reference-surface-control-string-index-has-count",
+        index = (index + 1).to_string(),
+        count = count.to_string(),
+        minimum = MINIMUM_CONTROL_VERTICES.to_string()
     )
 }
 
 fn control_not_finite(index: usize) -> String {
-    tr_format!(literal = "Control string %index% has non-finite coordinates", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-has-non", index = (index + 1).to_string())
 }
 
 fn control_not_available(index: usize) -> String {
-    tr_format!(literal = "Control string %index% is no longer available", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-no-longer", index = (index + 1).to_string())
 }
 
 fn control_self_crossing(index: usize) -> String {
-    tr_format!(literal = "Control string %index% crosses itself in plan", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-crosses-itself", index = (index + 1).to_string())
 }
 
 fn control_doubles_back(index: usize) -> String {
-    tr_format!(literal = "Control string %index% doubles back on itself in plan", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-doubles-back", index = (index + 1).to_string())
 }
 
 fn control_ends_where_it_starts(index: usize) -> String {
-    tr_format!(literal = "Control string %index% ends where it starts; close it to use it as a mask", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-ends-where", index = (index + 1).to_string())
 }
 
 /// Stop the build once the job it runs in has been cancelled.
 fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     if cancelled() {
-        anyhow::bail!("{}", tr!(literal = "Cancelled"));
+        anyhow::bail!("{}", tr!("common-cancelled"));
     }
     Ok(())
 }
@@ -282,15 +282,15 @@ fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
 /// selected first is named first, each height beside its own string.
 fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high: f64) -> String {
     let (left, right, low, high) = if left <= right { (left, right, low, high) } else { (right, left, high, low) };
-    tr_format!(
-        literal = "Control strings %a% and %b% disagree at (%x%, %y%): %za% m against %zb% m, %difference% m apart",
-        a = left + 1,
-        b = right + 1,
+    tr!(
+        "cmd-reference-surface-control-strings-b-disagree-x",
+        a = (left + 1).to_string(),
+        b = (right + 1).to_string(),
         x = format!("{:.3}", position.x),
         y = format!("{:.3}", position.y),
         za = format!("{low:.2}"),
         zb = format!("{high:.2}"),
-        difference = format!("{:.2}", (high - low).abs())
+        difference = (format!("{:.2}", (high - low).abs())).to_string()
     )
 }
 
@@ -298,33 +298,26 @@ fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high:
 /// along it is claimed twice, which is a job of its own.
 fn controls_along_each_other(left: usize, right: usize) -> String {
     let (left, right) = (left.min(right), left.max(right));
-    tr_format!(
-        literal = "Control strings %a% and %b% run along each other in plan; that is not supported yet",
-        a = left + 1,
-        b = right + 1
-    )
+    tr!("cmd-reference-surface-control-strings-b-run-along", a = (left + 1).to_string(), b = (right + 1).to_string())
 }
 
 /// A control running along the extent's edge rather than across it leaves the
 /// clip with no side to keep the string on.
 fn control_along_extent(index: usize) -> String {
-    tr_format!(
-        literal = "Control string %index% runs along the extent string in plan; that is not supported yet",
-        index = index + 1
-    )
+    tr!("cmd-reference-surface-control-string-index-runs-along", index = (index + 1).to_string())
 }
 
 /// Spade refusing a control's constraint, once every nameable shape has
 /// already been refused by name.
 fn control_not_added(index: usize) -> String {
-    tr_format!(literal = "Control string %index% could not be added to the mesh", index = index + 1)
+    tr!("cmd-reference-surface-control-string-index-could-not", index = (index + 1).to_string())
 }
 
 fn too_few_points_inside(count: usize) -> String {
-    tr_format!(
-        literal = "%count% point(s) inside the extent; a surface needs at least %minimum%",
-        count = count,
-        minimum = MINIMUM_POINTS
+    tr!(
+        "cmd-reference-surface-count-point-s-inside-extent",
+        count = count.to_string(),
+        minimum = MINIMUM_POINTS.to_string()
     )
 }
 
@@ -335,23 +328,23 @@ fn too_few_points_inside(count: usize) -> String {
 fn extent_ring(document: &crate::model::Document, id: ObjectId) -> Result<Vec<DVec2>> {
     let object = document
         .get_object(id)
-        .ok_or_else(|| anyhow::anyhow!("{}", tr!(literal = "The extent string is no longer available")))?;
+        .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-reference-surface-extent-string-no-longer-available")))?;
     let Object::Polyline { verts, closed: true, .. } = object else {
-        anyhow::bail!("{}", tr!(literal = "The extent must be a closed string"));
+        anyhow::bail!("{}", tr!("cmd-reference-surface-extent-must-closed-string"));
     };
     let mut ring: Vec<DVec2> = crate::model::geometry::tessellate_polyline_bulges(verts, true)
         .iter()
         .map(|vertex| vertex.truncate())
         .collect();
     if ring.iter().any(|vertex| !vertex.is_finite()) {
-        anyhow::bail!("{}", tr!(literal = "The extent string has non-finite coordinates"));
+        anyhow::bail!("{}", tr!("cmd-reference-surface-extent-string-has-non-finite"));
     }
     ring.dedup();
     if ring.len() > 1 && ring.first() == ring.last() {
         ring.pop();
     }
     if ring.len() < MINIMUM_POINTS {
-        anyhow::bail!("{}", tr!(literal = "The extent string needs at least three distinct vertices"));
+        anyhow::bail!("{}", tr!("cmd-reference-surface-extent-string-needs-least-three"));
     }
     Ok(ring)
 }
@@ -392,37 +385,41 @@ fn delaunay_surface_from_points(
     let surface = surface_mesh(&points, &controls, extent.as_deref(), cancelled)?;
     userspace_log!(
         "{}",
-        tr_format!(
-            literal = "Built surface %name% from %vertex_count% point(s) into %face_count% face(s), box z %low% to %high%%support%%coincident%%controls%",
-            name = name,
-            vertex_count = surface.triangulated,
-            face_count = surface.faces.len(),
+        tr!(
+            "cmd-reference-surface-built-surface-name-from-vertex",
+            name = name.to_string(),
+            vertex_count = surface.triangulated.to_string(),
+            face_count = surface.faces.len().to_string(),
             low = format!("{:.1}", surface.vertical_box.0),
             high = format!("{:.1}", surface.vertical_box.1),
-            support = if surface.support == 0 {
+            support = (if surface.support == 0 {
                 String::new()
             } else {
-                tr_format!(literal = "; %count% point(s) outside the extent shaped it as support", count = surface.support)
-            },
-            coincident = if surface.coincident == 0 {
+                tr!("cmd-reference-surface-count-point-s-outside-extent", count = surface.support.to_string())
+            })
+            .to_string(),
+            coincident = (if surface.coincident == 0 {
                 String::new()
             } else {
-                tr_format!(literal = "; %count% point(s) shared a plan position and were kept once", count = surface.coincident)
-            },
-            controls = if surface.controls == 0 {
+                tr!("cmd-reference-surface-count-point-s-shared-plan", count = surface.coincident.to_string())
+            })
+            .to_string(),
+            controls = (if surface.controls == 0 {
                 String::new()
             } else {
-                tr_format!(
-                    literal = "; %count% control string(s) with %vertices% vertex(es)%crossings%",
-                    count = surface.controls,
-                    vertices = surface.control_vertices,
-                    crossings = if surface.crossings == 0 {
+                tr!(
+                    "cmd-reference-surface-count-control-string-s-vertices",
+                    count = surface.controls.to_string(),
+                    vertices = surface.control_vertices.to_string(),
+                    crossings = (if surface.crossings == 0 {
                         String::new()
                     } else {
-                        tr_format!(literal = " meeting at %count% crossing(s)", count = surface.crossings)
-                    }
+                        format!(" {}", tr!("cmd-reference-surface-meeting-count-crossing-s", count = surface.crossings.to_string()))
+                    })
+                    .to_string()
                 )
-            }
+            })
+            .to_string()
         )
     );
     // Each pick a control took over is named, for the geologist to explain,
@@ -433,8 +430,8 @@ fn delaunay_surface_from_points(
             .iter()
             .take(OVERRIDE_LINES)
             .map(|(position, pick, control)| {
-                tr_format!(
-                    literal = "Control string overrides the pick at (%x%, %y%): pick %pick% m, control %control% m, difference %difference% m",
+                tr!(
+                    "cmd-reference-surface-control-string-overrides-pick-x",
                     x = format!("{:.3}", position.x),
                     y = format!("{:.3}", position.y),
                     pick = format!("{pick:.2}"),
@@ -445,7 +442,7 @@ fn delaunay_surface_from_points(
             .collect::<Vec<_>>()
             .join("\n");
         if surface.overridden.len() > OVERRIDE_LINES {
-            report.push_str(&tr_format!(literal = ", … and %more% more", more = surface.overridden.len() - OVERRIDE_LINES));
+            report.push_str(&tr!("cmd-reference-surface-more-more", more = (surface.overridden.len() - OVERRIDE_LINES).to_string()));
         }
         userspace_warn!("{}", report);
     }
@@ -479,7 +476,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     let mut coincident = 0usize;
     for point in points {
         if !point.is_finite() {
-            anyhow::bail!("{}", tr!(literal = "A selected point has non-finite coordinates"));
+            anyhow::bail!("{}", tr!("cmd-reference-surface-selected-point-has-non-finite"));
         }
         let before = tin.num_vertices();
         tin.insert(SurfaceVertex {
@@ -498,7 +495,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
     // of picks propped up by the corners of a box is still a line of picks,
     // and the surface it would make is interpolated from nothing.
     if !has_plan_area(&tin) {
-        anyhow::bail!("{}", tr!(literal = "The points are collinear in plan; a surface needs three that are not"));
+        anyhow::bail!("{}", tr!("cmd-reference-surface-points-collinear-plan-surface-needs"));
     }
     let triangulated = tin.num_vertices();
     let mut support = 0usize;
@@ -510,7 +507,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
         // ring's own geometry: whether an extent is usable cannot depend on
         // where the picks happen to sit.
         if self_intersects(ring, true) {
-            anyhow::bail!("{}", tr!(literal = "The extent string crosses itself in plan"));
+            anyhow::bail!("{}", tr!("cmd-reference-surface-extent-string-crosses-itself-plan"));
         }
         // A pick surveyed onto the string belongs to the ground the string
         // bounds, so the boundary counts as inside here: the kernel names
@@ -687,7 +684,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
             let (from, to) = (handles[index], handles[(index + 1) % handles.len()]);
             let through = std::mem::take(&mut ring_splits[index]);
             // Crossings were resolved above; the guard is for what they miss.
-            constrain_chain(&mut tin, from, through, to, || tr!(literal = "The extent string crosses itself in plan"))?;
+            constrain_chain(&mut tin, from, through, to, || tr!("cmd-reference-surface-extent-string-crosses-itself-plan"))?;
         }
     }
 
@@ -702,7 +699,7 @@ fn surface_mesh(points: &[DVec3], controls: &[Vec<DVec3>], extent: Option<&[DVec
         cancelled,
     )?;
     if faces.is_empty() {
-        anyhow::bail!("{}", tr!(literal = "No part of the surface falls inside the extent"));
+        anyhow::bail!("{}", tr!("cmd-reference-surface-no-part-surface-falls-inside"));
     }
     let vertical_box = vertical_extent(
         vertices.iter().fold(f64::INFINITY, |low, vertex| low.min(vertex.z)),

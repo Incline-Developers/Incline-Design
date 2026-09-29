@@ -7,7 +7,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     app::{App, jobs::JobKey, memory::MemoryReservation},
-    i18n::tr_format,
+    i18n::tr,
     model::{
         drill_hole::DrillHoleId,
         formats::csv_geophysics::{self, IndexedFile},
@@ -31,7 +31,7 @@ pub(crate) struct FileChanged;
 #[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Display for FileChanged {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&crate::i18n::tr!(literal = "The geophysics file changed since it was indexed"))
+        f.write_str(&crate::i18n::tr!("geophysics-geophysics-file-changed-since-was"))
     }
 }
 
@@ -141,10 +141,10 @@ impl<'a> App<'a> {
                 let error = format!("{error:#}");
                 userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "Downhole geophysics for '%name%' could not be linked: %error%",
-                        name = self.drill_hole_name(id),
-                        error = error.clone()
+                    tr!(
+                        "geophysics-downhole-geophysics-name-could-not",
+                        name = self.drill_hole_name(id).to_string(),
+                        error = error.clone().to_string()
                     )
                 );
                 self.well_logs.set_state(id, generation, LinkState::Failed(error));
@@ -183,10 +183,10 @@ impl<'a> App<'a> {
         };
         let bytes = link.runs_of(&dhid).map(|(_, [start, end])| end.saturating_sub(start)).sum::<u64>();
         if bytes > MAX_HOLE_BYTES {
-            let error = tr_format!(
-                literal = "%hole% has %size% MiB of geophysics rows, more than a hole is read at",
-                hole = dhid.clone(),
-                size = bytes / (1024 * 1024)
+            let error = tr!(
+                "geophysics-hole-has-size-mib-geophysics",
+                hole = dhid.clone().to_string(),
+                size = (bytes / (1024 * 1024)).to_string()
             );
             self.well_logs.finish_read(id, generation, dhid, Err(error));
             return;
@@ -216,7 +216,7 @@ impl<'a> App<'a> {
         reservation: MemoryReservation,
         runs: impl FnOnce(&GeophysicsLink, &str) -> anyhow::Result<Vec<Vec<u8>>> + Send + 'static,
     ) {
-        let label = tr_format!(literal = "Reading geophysics for %hole%", hole = dhid.clone());
+        let label = tr!("geophysics-reading-geophysics-hole", hole = dhid.clone().to_string());
         let hole = dhid.clone();
         let compute = move |_: &crate::app::jobs::CancelFlag| -> anyhow::Result<HoleLogs> {
             let _reservation = reservation;
@@ -256,7 +256,7 @@ mod native {
     use super::{FileChanged, Indexed};
     use crate::{
         app::App,
-        i18n::{tr, tr_format},
+        i18n::tr,
         model::{
             drill_hole::DrillHoleId,
             formats::csv_geophysics::{self, ColumnSource},
@@ -299,7 +299,7 @@ mod native {
                     .collect::<Vec<_>>())
             };
             let apply = move |app: &mut App<'a>, result: anyhow::Result<Vec<FileCheck>>| app.finish_link_check(id, generation, link, result);
-            self.spawn_job(tr!(literal = "Checking geophysics files"), Self::geophysics_keys(id, generation), compute, apply);
+            self.spawn_job(tr!("geophysics-checking-geophysics-files"), Self::geophysics_keys(id, generation), compute, apply);
         }
 
         fn finish_link_check(&mut self, id: DrillHoleId, generation: u64, link: Arc<GeophysicsLink>, result: anyhow::Result<Vec<FileCheck>>) {
@@ -317,11 +317,11 @@ mod native {
             }) {
                 userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "The geophysics file linked to '%name%' cannot be read at %path% (%error%); link it again from the dataset's right-click menu",
-                        name = name,
+                    tr!(
+                        "geophysics-geophysics-file-linked-name-cannot",
+                        name = name.to_string(),
                         path = file.path.display().to_string(),
-                        error = error.clone()
+                        error = error.clone().to_string()
                     )
                 );
                 let file = file.identity.name.clone();
@@ -345,10 +345,7 @@ mod native {
                 self.well_logs.set_state(id, generation, LinkState::Ready);
                 return;
             }
-            userspace_log!(
-                "{}",
-                tr_format!(literal = "The geophysics linked to '%name%' changed since it was indexed; reading it again", name = name)
-            );
+            userspace_log!("{}", tr!("geophysics-geophysics-linked-name-changed-since", name = name.to_string()));
             self.spawn_native_index(id, Some(link), tasks);
         }
 
@@ -383,7 +380,7 @@ mod native {
             };
             let current = self.geophysics_link(id);
             let generation = self.restart_geophysics(id, current.as_ref(), LinkState::Indexing);
-            let label = tr_format!(literal = "Linking geophysics to %name%", name = self.drill_hole_name(id));
+            let label = tr!("geophysics-linking-geophysics-name", name = self.drill_hole_name(id).to_string());
             let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
                 let mut done = Vec::new();
                 for task in tasks {

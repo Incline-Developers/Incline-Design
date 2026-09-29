@@ -5,7 +5,7 @@
 //! widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         SceneEntityId,
         drill_hole::{DrillHoleId, OpenDrillHoleDataset},
@@ -92,8 +92,8 @@ fn draw_body(
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Data, tr!(literal = "Data"));
-        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Log, tr!(literal = "Log"));
+        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Data, tr!("borehole-inspector-data"));
+        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Log, tr!("borehole-inspector-log"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
             // Rightmost, where a panel's close belongs; the lock sits inboard.
@@ -101,7 +101,7 @@ fn draw_body(
             // preference and the macOS check mark stay in step.
             if ui
                 .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
-                .on_hover_text(tr!(literal = "Close the inspector"))
+                .on_hover_text(tr!("borehole-inspector-close-inspector"))
                 .clicked()
             {
                 commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
@@ -110,9 +110,9 @@ fn draw_body(
             // unthemed_icon! embeds the image at compile time, so each icon
             // is named per branch rather than passed in as a value.
             let (icon, hint) = if locked {
-                (unthemed_icon!("entry_locked.svg"), tr!(literal = "Holding this hole. Click to follow the selection again."))
+                (unthemed_icon!("entry_locked.svg"), tr!("borehole-inspector-holding-hole-click-follow-selection"))
             } else {
-                (unthemed_icon!("entry_unlocked.svg"), tr!(literal = "Hold this hole while you work on the ones around it."))
+                (unthemed_icon!("entry_unlocked.svg"), tr!("borehole-inspector-hold-hole-while-you-work"))
             };
             if ui.add(egui::Button::image(icon).frame(locked)).on_hover_text(hint).clicked() {
                 editor.borehole_inspector_locked = !locked;
@@ -124,7 +124,7 @@ fn draw_body(
     let Some((dataset, hole, hole_index)) = inspected_hole(editor, datasets) else {
         ui.add_space(8.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(tr!(literal = "No hole inspected")).weak());
+            ui.label(egui::RichText::new(tr!("borehole-inspector-no-hole-inspected")).weak());
         });
         return;
     };
@@ -150,7 +150,7 @@ fn draw_body(
         BoreholeInspectorTab::Log => {
             // Where the Data tab's summary starts, so the id stays put.
             egui::Grid::new(("borehole_log_hole_id", dataset.id)).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                ui.label(tr!(literal = "Hole ID"));
+                ui.label(tr!("common-hole-id"));
                 ui.add(egui::Label::new(&hole.dhid).truncate());
                 ui.end_row();
             });
@@ -217,8 +217,8 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
 
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.label(tr!(literal = "Colour"));
-        let uniform = tr!(literal = "Uniform white");
+        ui.label(tr!("common-colour"));
+        let uniform = tr!("common-uniform-white");
         let mut chosen = dataset.color.active_field.clone();
         let before = chosen.clone();
         egui::ComboBox::from_id_salt(("borehole_log_color_field", dataset.id))
@@ -235,8 +235,8 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
     });
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.label(tr!(literal = "Strat"));
-        let guessed = tr!(literal = "Guessed by name");
+        ui.label(tr!("borehole-inspector-strat"));
+        let guessed = tr!("borehole-inspector-guessed-name");
         egui::ComboBox::from_id_salt(("borehole_log_strat_field", dataset.id))
             .selected_text(label_of(strat_choice_for(editor, dataset).as_deref(), &guessed))
             .show_ui(ui, |ui| {
@@ -257,22 +257,19 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
 /// read, or when there was never a link, since the log covers those itself.
 fn draw_geophysics_note(ui: &mut egui::Ui, view: &HoleView, dataset_id: DrillHoleId, commands: &mut Vec<UiCommand>) {
     let (weak, message, button) = match view {
-        HoleView::Link(LinkState::Checking) => (true, tr!(literal = "Checking the linked geophysics file..."), None),
-        HoleView::Link(LinkState::Indexing) => (true, tr!(literal = "Reading the geophysics file for its index; the status bar shows progress."), None),
+        HoleView::Link(LinkState::Checking) => (true, tr!("borehole-inspector-checking-linked-geophysics-file"), None),
+        HoleView::Link(LinkState::Indexing) => (true, tr!("borehole-inspector-reading-geophysics-file-its-index"), None),
         HoleView::Link(LinkState::Missing { file }) => (
             false,
-            tr_format!(literal = "%file% is not where it was linked from.", file = file),
-            Some(tr!(literal = "Link Geophysics...")),
+            tr!("borehole-inspector-file-not-where-was-linked", file = file.to_string()),
+            Some(tr!("common-link-geophysics")),
         ),
         HoleView::Link(LinkState::NeedsPick { file }) => (
             false,
-            tr_format!(
-                literal = "Pick %file% again to show its geophysics: a browser page cannot reopen a file by itself.",
-                file = file
-            ),
-            Some(tr_format!(literal = "Pick %file%...", file = file)),
+            tr!("borehole-inspector-pick-file-again-show-its", file = file.to_string()),
+            Some(tr!("borehole-inspector-pick-file", file = file.to_string())),
         ),
-        HoleView::Link(LinkState::Failed(error)) => (false, error.clone(), Some(tr!(literal = "Link Geophysics..."))),
+        HoleView::Link(LinkState::Failed(error)) => (false, error.clone(), Some(tr!("common-link-geophysics"))),
         HoleView::Failed(error) => (false, (*error).to_owned(), None),
         HoleView::Link(LinkState::Ready) | HoleView::Reading | HoleView::Wanted | HoleView::Shown(_) | HoleView::NotInFiles | HoleView::Unlinked => return,
     };

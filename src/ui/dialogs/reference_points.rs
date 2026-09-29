@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::drill_hole::{DrillField, DrillFieldKind, DrillValue, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
     ui::{
         state::{EditorState, UiCommand},
@@ -29,8 +29,16 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
         }
     }
     let holes_label = match involved.as_slice() {
-        [dataset] => tr_format!(literal = "%count% holes from '%dataset%'", count = draft.holes.len(), dataset = dataset.name.clone()),
-        involved => tr_format!(literal = "%count% holes from %datasets% datasets", count = draft.holes.len(), datasets = involved.len()),
+        [dataset] => tr!(
+            "reference-points-count-holes-from-dataset",
+            count = draft.holes.len().to_string(),
+            dataset = dataset.name.clone().to_string()
+        ),
+        involved => tr!(
+            "reference-points-count-holes-from-datasets-datasets",
+            count = draft.holes.len().to_string(),
+            datasets = involved.len().to_string()
+        ),
     };
     // Every categorical field the selected holes' datasets carry, named once
     // where two datasets log the same one.
@@ -44,16 +52,16 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
     }
     let mut open = true;
     let mut build = None;
-    DragableMenu::new("reference_points_dialog", tr!(literal = "Reference Points"))
+    DragableMenu::new("reference_points_dialog", tr!("reference-points-reference-points"))
         .open(&mut open)
         .min_width(380.0)
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             selected_source_field(
                 ui,
-                tr!(literal = "Holes"),
+                tr!("reference-points-holes"),
                 holes_label.clone(),
-                tr!(literal = "The holes the points are placed on, as selected when the dialog opened. Close the dialog to select different ones."),
+                tr!("reference-points-holes-points-placed-selected-when"),
                 220.0,
             );
             ui.add_space(4.0);
@@ -69,10 +77,10 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 .as_deref()
                 .and_then(|key| fields.iter().find(|field| field.key == key))
                 .map(|field| field.label.clone())
-                .unwrap_or_else(|| tr!(literal = "No categorical field"));
+                .unwrap_or_else(|| tr!("reference-points-no-categorical-field"));
             if MenuFieldCombo::new(
                 "reference_points_field",
-                tr!(literal = "Working section field"),
+                tr!("reference-points-working-section-field"),
                 &mut draft.field,
                 field_label,
                 fields.iter().map(|field| (Some(field.key.clone()), field.label.clone().into())),
@@ -131,7 +139,7 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     .map(|name| ReferenceTarget::Section((*name).to_owned()))
                     .or_else(|| categories.first().map(|code| ReferenceTarget::Code((*code).to_owned())));
             }
-            let value_label = draft.value.as_ref().map_or_else(|| tr!(literal = "No values"), ReferenceTarget::label);
+            let value_label = draft.value.as_ref().map_or_else(|| tr!("reference-points-no-values"), ReferenceTarget::label);
             let options = sections
                 .iter()
                 .map(|name| ReferenceTarget::Section((*name).to_owned()))
@@ -141,22 +149,20 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     (Some(target), label)
                 })
                 .collect::<Vec<_>>();
-            MenuFieldCombo::new("reference_points_value", tr!(literal = "Working section"), &mut draft.value, value_label, options).show(ui);
+            MenuFieldCombo::new("reference_points_value", tr!("reference-points-working-section"), &mut draft.value, value_label, options).show(ui);
 
             let side_label = draft.side.label();
             MenuFieldCombo::new(
                 "reference_points_side",
-                tr!(literal = "Side"),
+                tr!("reference-points-side"),
                 &mut draft.side,
                 side_label,
                 ReferenceSide::ALL.iter().map(|side| (*side, side.label().into())),
             )
             .show(ui);
 
-            ui.small(tr!(
-                literal = "One point per hole at that boundary, as a new layer. A hole holding the section twice gives its uppermost and is flagged."
-            ));
-            if ui.add(MenuButton::new(tr!(literal = "Make")).primary().enabled(draft.value.is_some())).clicked()
+            ui.small(tr!("reference-points-one-point-per-hole-boundary"));
+            if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(draft.value.is_some())).clicked()
                 && let (Some(field), Some(target)) = (draft.field.clone(), draft.value.clone())
             {
                 build = Some((field, target, draft.side));

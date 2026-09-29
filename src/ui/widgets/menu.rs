@@ -1,7 +1,7 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
 use super::shifted;
-use crate::i18n::{tr, tr_format};
+use crate::i18n::tr;
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -501,7 +501,7 @@ pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surfac
     let response = ui
         .interact(close_rect, ui.id().with("close"), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(tr!(literal = "Close"));
+        .on_hover_text(tr!("survey-close"));
     if response.hovered() {
         ui.painter()
             .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
@@ -901,8 +901,8 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             label: label.into(),
             help_text: None,
             paths,
-            empty_text: tr!(literal = "No file chosen").into(),
-            button_text: tr!(literal = "Choose...").into(),
+            empty_text: tr!("common-no-file-chosen").into(),
+            button_text: tr!("common-choose").into(),
             width: None,
         }
     }
@@ -962,7 +962,7 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
             .map(str::to_owned)
             .unwrap_or_else(|| path.to_string_lossy().into_owned())
             .into(),
-        paths => tr_format!(literal = "%count% files selected", count = paths.len()).into(),
+        paths => tr!("menu-count-files-selected", count = paths.len().to_string()).into(),
     }
 }
 

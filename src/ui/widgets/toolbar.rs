@@ -116,7 +116,7 @@ impl<'a> HatchPicker<'a> {
                 }
             })
             .response
-            .on_hover_text(format!("{}: {}", tr!(literal = "Fill type"), hatch_label(*self.selected_hatch)));
+            .on_hover_text(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
 
         let swatch_rect = egui::Rect::from_center_size(response.rect.center(), self.button_size);
 
@@ -160,10 +160,10 @@ fn hatch_picker_row(ui: &mut Ui, hatch: ToolHatch, selected_hatch: ToolHatch, co
 
 fn hatch_label(hatch: ToolHatch) -> String {
     match hatch {
-        ToolHatch::Clear => tr!(literal = "Clear"),
-        ToolHatch::Crosses => tr!(literal = "Crosses"),
-        ToolHatch::Slashes => tr!(literal = "Slashes"),
-        ToolHatch::Solid => tr!(literal = "Solid"),
+        ToolHatch::Clear => tr!("common-clear"),
+        ToolHatch::Crosses => tr!("common-crosses"),
+        ToolHatch::Slashes => tr!("common-slashes"),
+        ToolHatch::Solid => tr!("tri-type-solid-closed"),
     }
 }
 

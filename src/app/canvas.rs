@@ -1,6 +1,6 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, Object, SceneEntityId},
     ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
 };
@@ -28,7 +28,7 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|triangulation| triangulation.id == id)
                     .map(|triangulation| triangulation.name.clone())
-                    .unwrap_or_else(|| tr!(literal = "Surface"));
+                    .unwrap_or_else(|| tr!("tri-type-open-surface"));
                 self.apply_triangulation_field_pick(target, id, &name);
             }
             return;
@@ -50,7 +50,7 @@ impl<'a> App<'a> {
             {
                 let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                 self.editor.drill_pattern_boundary_id = Some(id);
-                self.editor.drill_pattern_boundary_name = tr_format!(literal = "Polyline on '%layer%'", layer = layer);
+                self.editor.drill_pattern_boundary_name = tr!("common-polyline-layer", layer = layer.to_string());
                 self.editor.drill_pattern_awaiting_shape_pick = false;
                 self.editor.viewport_pick_hover_label = None;
                 self.editor.tool_highlight_id = Some(id);
@@ -147,7 +147,7 @@ impl<'a> App<'a> {
                 self.triangulations
                     .iter()
                     .find(|triangulation| triangulation.id == id)
-                    .map(|triangulation| tr_format!(literal = "Surface | %name%", name = &triangulation.name))
+                    .map(|triangulation| tr!("canvas-surface-name", name = triangulation.name.to_string()))
             });
             if self.editor.tri_hover_handles != next_handles || self.editor.viewport_pick_hover_label != next_label {
                 self.editor.tri_hover_handles = next_handles;
@@ -175,24 +175,20 @@ impl<'a> App<'a> {
                     match object {
                         Object::Circle { radius, .. } => (
                             Some(id),
-                            Some(tr_format!(
-                                literal = "Circle | Layer: %layer% | radius %radius%",
-                                layer = layer,
-                                radius = format!("{radius:.3}")
-                            )),
+                            Some(tr!("canvas-circle-layer-layer-radius-radius", layer = layer.to_string(), radius = format!("{radius:.3}"))),
                         ),
                         _ => {
                             let count = object.string_geometry().map_or(0, |(verts, _)| verts.len());
                             (
                                 Some(id),
-                                Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = count)),
+                                Some(tr!("canvas-polyline-layer-layer-count-vertices", layer = layer.to_string(), count = count.to_string())),
                             )
                         }
                     }
                 }
-                _ => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
+                _ => (None, Some(tr!("canvas-not-selectable-choose-closed-polylin"))),
             },
-            Some(_) => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
+            Some(_) => (None, Some(tr!("canvas-not-selectable-choose-closed-polylin"))),
             None => (None, None),
         };
         if self.editor.tool_highlight_id != next_highlight || self.editor.viewport_pick_hover_label != next_label {
@@ -219,7 +215,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_cut_surface_name_input,
                     self.editor.tri_cut_surface_name_auto,
                     name,
-                    &tr!(literal = "Trimmed"),
+                    &tr!("canvas-trimmed"),
                 );
             }
             TriangulationPickTarget::CutPitTopology => {
@@ -231,7 +227,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_cut_pitshell_name_input,
                     self.editor.tri_cut_pitshell_name_auto,
                     name,
-                    &tr!(literal = "Cut"),
+                    &tr!("common-cut"),
                 );
             }
             TriangulationPickTarget::CutPitShell => {
@@ -249,7 +245,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_include_solid_name_input,
                     self.editor.tri_include_solid_name_auto,
                     name,
-                    &tr!(literal = "With Shell"),
+                    &tr!("common-shell"),
                 );
             }
             TriangulationPickTarget::IncludeShape => {

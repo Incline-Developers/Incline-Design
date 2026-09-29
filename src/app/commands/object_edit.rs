@@ -7,7 +7,7 @@
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Command, Object, ObjectId,
         object_edit::{drift_detected, validate_object},
@@ -26,17 +26,17 @@ impl<'a> App<'a> {
             return;
         }
         let Some(document) = self.workspace.active_document() else {
-            userspace_warn!("{}", tr!(literal = "Select a single design object to edit"));
+            userspace_warn!("{}", tr!("cmd-object-edit-select-single-design-object-edit"));
             return;
         };
         let Some(object) = document.get_object(id).cloned() else {
-            userspace_warn!("{}", tr!(literal = "Select a single design object to edit"));
+            userspace_warn!("{}", tr!("cmd-object-edit-select-single-design-object-edit"));
             return;
         };
         // The layer's name and colour are read once here and carried on the
         // dialog; the dialog cannot change an object's layer.
         let layer = document.layer(object.layer());
-        let layer_name = layer.map(|layer| layer.name.clone()).unwrap_or_else(|| tr!(literal = "Unassigned"));
+        let layer_name = layer.map(|layer| layer.name.clone()).unwrap_or_else(|| tr!("cmd-object-edit-unassigned"));
         let layer_rgba = layer.map_or([1.0, 1.0, 1.0, 1.0], |layer| layer.color);
         self.editor.object_edit_dialog = Some(crate::ui::dialogs::object_edit::ObjectEditDialog::new(id, object, layer_name, layer_rgba));
     }
@@ -52,7 +52,7 @@ impl<'a> App<'a> {
         if self.workspace.active_document().is_some_and(|document| document.get_object(id).is_some()) {
             return;
         }
-        userspace_warn!("{}", tr!(literal = "That object no longer exists in the document"));
+        userspace_warn!("{}", tr!("cmd-object-edit-object-no-longer-exists-document"));
         self.editor.object_edit_dialog = None;
     }
 
@@ -62,18 +62,18 @@ impl<'a> App<'a> {
     pub(crate) fn apply_object_edit(&mut self, id: ObjectId, object: Object, close: bool) {
         if object.id() != id {
             self.editor.object_edit_dialog = None;
-            userspace_warn!("{}", tr!(literal = "Object edit target changed; discarding the edit"));
+            userspace_warn!("{}", tr!("cmd-object-edit-object-edit-target-changed-discardin"));
             return;
         }
         let Some(before) = self.workspace.active_document().and_then(|document| document.get_object(id)).cloned() else {
             self.editor.object_edit_dialog = None;
-            userspace_warn!("{}", tr!(literal = "That object no longer exists in the document"));
+            userspace_warn!("{}", tr!("cmd-object-edit-object-no-longer-exists-document"));
             return;
         };
         // Something else changed this object since the dialog opened. Writing
         // the working copy back now would silently revert that edit; refuse instead.
         if self.editor.object_edit_dialog.as_ref().is_some_and(|dialog| drift_detected(&dialog.baseline, &before)) {
-            userspace_warn!("{}", tr!(literal = "This object changed since the editor opened; reopen it to edit the current version"));
+            userspace_warn!("{}", tr!("cmd-object-edit-object-changed-since-editor-opened"));
             // Closed here so that Edit reopens on the current version instead of the stale copy.
             self.editor.object_edit_dialog = None;
             return;
@@ -89,7 +89,7 @@ impl<'a> App<'a> {
             if close {
                 self.editor.object_edit_dialog = None;
             } else if let Some(dialog) = &mut self.editor.object_edit_dialog {
-                dialog.message = Some(tr!(literal = "No changes to apply"));
+                dialog.message = Some(tr!("cmd-object-edit-no-changes-apply"));
             }
             return;
         }
@@ -109,8 +109,15 @@ impl<'a> App<'a> {
             Object::Point { .. } | Object::Circle { .. } | Object::Text { .. } => None,
         };
         match vertex_count {
-            Some(count) => userspace_log!("{}", tr_format!(literal = "Edited %kind% (%count% vertices)", kind = object.kind_name(), count = count)),
-            None => userspace_log!("{}", tr_format!(literal = "Edited %kind%", kind = object.kind_name())),
+            Some(count) => userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-object-edit-edited-kind-count-vertices",
+                    kind = object.kind_name().to_string(),
+                    count = count.to_string()
+                )
+            ),
+            None => userspace_log!("{}", tr!("cmd-object-edit-edited-kind", kind = object.kind_name().to_string())),
         }
         if close {
             self.editor.object_edit_dialog = None;

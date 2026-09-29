@@ -106,14 +106,10 @@ impl<'a> Graphics<'a> {
             if let Err(error) = self.write_screenshot_png(&capture) {
                 userspace_warn!(
                     "{}",
-                    crate::i18n::tr_format!(
-                        literal = "Could not save viewport image %path%: %error%",
-                        path = path.display(),
-                        error = format!("{error:#}")
-                    )
+                    crate::i18n::tr!("screenshot-could-not-save-viewport-image", path = path.display().to_string(), error = format!("{error:#}"))
                 );
             } else {
-                userspace_log!("{}", crate::i18n::tr_format!(literal = "Saved viewport image: %path%", path = path.display()));
+                userspace_log!("{}", crate::i18n::tr!("screenshot-saved-viewport-image-path", path = path.display().to_string()));
             }
         }
 
@@ -123,23 +119,20 @@ impl<'a> Graphics<'a> {
             let callback_buffer = std::sync::Arc::clone(&buffer);
             buffer.map_async(wgpu::MapMode::Read, .., move |result| {
                 if let Err(error) = result {
-                    userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not map viewport screenshot: %error%", error = error));
+                    userspace_warn!("{}", crate::i18n::tr!("screenshot-could-not-map-viewport-screenshot", error = error.to_string()));
                     return;
                 }
                 let encoded = encode_mapped_png(&capture);
                 callback_buffer.unmap();
                 match (capture.target, encoded) {
                     (ScreenshotTarget::Browser(file_name), Ok(bytes)) => match crate::app::web_download::download(&file_name, &bytes, "image/png") {
-                        Ok(()) => userspace_log!("{}", crate::i18n::tr_format!(literal = "Downloaded viewport image: %file_name%", file_name = file_name)),
+                        Ok(()) => userspace_log!("{}", crate::i18n::tr!("screenshot-downloaded-viewport-image-file-name", file_name = file_name.to_string())),
                         Err(error) => {
-                            userspace_warn!("{}", crate::i18n::tr_format!(literal = "Viewport image download failed: %error%", error = error))
+                            userspace_warn!("{}", crate::i18n::tr!("screenshot-viewport-image-download-failed-error", error = error.to_string()))
                         }
                     },
                     (_, Err(error)) => {
-                        userspace_warn!(
-                            "{}",
-                            crate::i18n::tr_format!(literal = "Could not encode viewport image: %error%", error = format!("{error:#}"))
-                        )
+                        userspace_warn!("{}", crate::i18n::tr!("screenshot-could-not-encode-viewport-image", error = format!("{error:#}")))
                     }
                 }
             });

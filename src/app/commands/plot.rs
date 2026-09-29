@@ -68,9 +68,9 @@ impl<'a> App<'a> {
         }
         userspace_log!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Drawing scale fitted to visible data: 1:%scale%",
-                scale = crate::model::plot::format_quantity(scale, 0)
+            crate::i18n::tr!(
+                "cmd-plot-drawing-scale-fitted-visible-data",
+                scale = crate::model::plot::format_quantity(scale, 0).to_string()
             )
         );
         self.redraw_requested = true;
@@ -141,16 +141,13 @@ impl<'a> App<'a> {
             self.editor.plot_dialog = None;
             self.redraw_requested = true;
             self.spawn_job_reporting_progress(
-                crate::i18n::tr!(literal = "Composing engineering drawing…"),
+                crate::i18n::tr!("cmd-plot-composing-engineering-drawing"),
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| finish_plot_sheet(pixels, spec, layout, frame, target, cancel, progress),
                 move |_app, result: Result<PlotSheetOutcome>| match result {
                     Ok(outcome) => outcome.log(),
                     Err(error) if error.to_string() == CANCELLED => {}
-                    Err(error) => userspace_warn!(
-                        "{}",
-                        crate::i18n::tr_format!(literal = "Could not write the engineering drawing: %error%", error = format!("{error:#}"))
-                    ),
+                    Err(error) => userspace_warn!("{}", crate::i18n::tr!("cmd-plot-could-not-write-engineering-drawing", error = format!("{error:#}"))),
                 },
             );
             Ok(())
@@ -177,10 +174,7 @@ impl<'a> App<'a> {
                 });
                 match outcome {
                     Ok(outcome) => outcome.log(),
-                    Err(error) => userspace_warn!(
-                        "{}",
-                        crate::i18n::tr_format!(literal = "Could not write the engineering drawing: %error%", error = format!("{error:#}"))
-                    ),
+                    Err(error) => userspace_warn!("{}", crate::i18n::tr!("cmd-plot-could-not-write-engineering-drawing", error = format!("{error:#}"))),
                 }
             });
             self.editor.plot_dialog = None;
@@ -258,12 +252,12 @@ impl PlotSheetOutcome {
     fn log(&self) {
         userspace_log!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Saved engineering drawing: %description% (%width% × %height% px at %dpi% dpi)",
-                description = &self.description,
-                width = self.width,
-                height = self.height,
-                dpi = self.dpi
+            crate::i18n::tr!(
+                "cmd-plot-saved-engineering-drawing-descriptio",
+                description = self.description.to_string(),
+                width = self.width.to_string(),
+                height = self.height.to_string(),
+                dpi = self.dpi.to_string()
             )
         );
     }
@@ -334,7 +328,7 @@ fn sanitised_file_stem(title: &str) -> String {
         .map(|character| if character.is_alphanumeric() { character.to_ascii_lowercase() } else { '_' })
         .collect();
     let trimmed = stem.trim_matches('_').to_owned();
-    if trimmed.is_empty() { crate::i18n::tr!(literal = "Plot") } else { trimmed }
+    if trimmed.is_empty() { crate::i18n::tr!("cmd-plot-plot") } else { trimmed }
 }
 
 /// Default file name: the drawing number if there is one, otherwise the title.
@@ -344,7 +338,7 @@ pub(crate) fn plot_file_name(dialog: &PlotDialog) -> String {
     } else {
         dialog.drawing_number.trim()
     };
-    let fallback = crate::i18n::tr!(literal = "Plot");
+    let fallback = crate::i18n::tr!("cmd-plot-plot");
     let stem = sanitised_file_stem(if stem.is_empty() { &fallback } else { stem });
     format!("{stem}.png")
 }

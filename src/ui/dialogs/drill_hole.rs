@@ -1,5 +1,5 @@
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::drill_hole::{
         ColorRow, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection,
         default_category_colors, suggested_working_sections, working_section_name_problem,
@@ -38,7 +38,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .memory(|memory| memory.focused())
         .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
     let mut open = true;
-    let title = tr_format!(literal = "Drill Hole Appearance: %name%", name = dataset.name.clone());
+    let title = tr!("drill-hole-drill-hole-appearance-name", name = dataset.name.clone().to_string());
     DragableMenu::new("drill_hole_colour_dialog", title)
         .open(&mut open)
         .min_width(400.0)
@@ -72,12 +72,12 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
 pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>, host: ColorEditorHost) {
     let id = dataset.id;
     let active_label = match (dataset.color.active_field.as_deref(), dataset.color.by_working_section) {
-        (None, _) => tr!(literal = "Uniform white"),
+        (None, _) => tr!("common-uniform-white"),
         (Some(key), by_section) => dataset.dataset.field(key).map_or_else(
-            || tr!(literal = "Uniform white"),
+            || tr!("common-uniform-white"),
             |field| {
                 if by_section {
-                    tr_format!(literal = "%field% by working section", field = field.label.clone())
+                    tr!("drill-hole-field-working-section", field = field.label.clone().to_string())
                 } else {
                     field.label.clone()
                 }
@@ -85,17 +85,17 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         ),
     };
     let mut active = (dataset.color.active_field.clone(), dataset.color.by_working_section);
-    let mut field_options: Vec<((Option<String>, bool), egui::WidgetText)> = vec![((None, false), tr!(literal = "Uniform white").into())];
+    let mut field_options: Vec<((Option<String>, bool), egui::WidgetText)> = vec![((None, false), tr!("common-uniform-white").into())];
     for field in &dataset.dataset.fields {
         field_options.push(((Some(field.key.clone()), false), field.label.clone().into()));
         if matches!(field.kind, DrillFieldKind::Categorical { .. }) && dataset.color.working_sections.iter().any(|section| section.field == field.key) {
             field_options.push((
                 (Some(field.key.clone()), true),
-                tr_format!(literal = "%field% by working section", field = field.label.clone()).into(),
+                tr!("drill-hole-field-working-section", field = field.label.clone().to_string()).into(),
             ));
         }
     }
-    if MenuFieldCombo::new(("drill_hole_field", id), tr!(literal = "Field"), &mut active, active_label, field_options)
+    if MenuFieldCombo::new(("drill_hole_field", id), tr!("drill-hole-field"), &mut active, active_label, field_options)
         .show(ui)
         .changed()
     {
@@ -114,16 +114,16 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         Some(DrillFieldKind::Numeric { .. }) => 2,
         Some(DrillFieldKind::Categorical { .. }) => FOLD_SECTIONS.len(),
     };
-    fold_section(ui, host, &FOLD_SECTIONS[..shown], 0, tr!(literal = "Width"), |ui| {
+    fold_section(ui, host, &FOLD_SECTIONS[..shown], 0, tr!("drill-hole-width"), |ui| {
         let mut style = dataset.color.hole_style;
         if MenuFieldCombo::new(
             ("drill_hole_style", id),
-            tr!(literal = "Style"),
+            tr!("drill-hole-style"),
             &mut style,
             dataset.color.hole_style.label(),
             DrillHoleStyle::ALL.map(|style| (style, style.label().into())),
         )
-        .help_text(tr!(literal = "As string and discs, where intervals overlap the shortest one is drawn as the disc."))
+        .help_text(tr!("drill-hole-string-discs-where-intervals-overlap"))
         .show(ui)
         .changed()
         {
@@ -134,26 +134,24 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut scale = dataset.color.radius_scale;
                 let mut floor = dataset.color.min_pixel_diameter;
                 let mut width_changed = false;
-                MenuField::new(tr!(literal = "Of drilled diameter")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("drill-hole-drilled-diameter")).show(ui, |ui, _, _| {
                     width_changed |= ui
                         .add(
                             egui::Slider::new(&mut scale, crate::model::drill_hole::RADIUS_SCALE_RANGE)
                                 .fixed_decimals(2)
-                                .suffix(tr!(literal = "x")),
+                                .suffix(tr!("common-x")),
                         )
-                        .on_hover_text(tr!(
-                            literal = "A hole at its drilled width reads as a pipe beside the geology; a set of thousands reads as a mat."
-                        ))
+                        .on_hover_text(tr!("drill-hole-hole-its-drilled-width-reads"))
                         .changed();
                 });
-                MenuField::new(tr!(literal = "Never thinner than")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("drill-hole-never-thinner-than")).show(ui, |ui, _, _| {
                     width_changed |= ui
                         .add(
                             egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
                                 .fixed_decimals(1)
-                                .suffix(tr!(literal = " px")),
+                                .suffix(format!(" {}", tr!("drill-hole-px"))),
                         )
-                        .on_hover_text(tr!(literal = "However far the eye is, a hole is drawn at least this wide."))
+                        .on_hover_text(tr!("drill-hole-however-far-eye-hole-drawn"))
                         .changed();
                 });
                 if width_changed {
@@ -168,28 +166,25 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut disc_diameter = dataset.color.disc_diameter;
                 let mut string_pixel_width = dataset.color.string_pixel_width;
                 let mut discs_changed = false;
-                MenuField::new(tr!(literal = "Disc diameter")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("drill-hole-disc-diameter")).show(ui, |ui, _, _| {
                     discs_changed |= ui
                         .add(
                             egui::Slider::new(&mut disc_diameter, crate::model::drill_hole::DISC_DIAMETER_RANGE)
                                 .logarithmic(true)
                                 .fixed_decimals(2)
-                                .suffix(tr!(literal = " m")),
+                                .suffix(format!(" {}", tr!("common-m"))),
                         )
-                        .on_hover_text(tr!(
-                            literal =
-                                "Every interval with a value in the colour field is drawn as a disc this wide on the string. Far away it is never narrower than a few pixels."
-                        ))
+                        .on_hover_text(tr!("drill-hole-every-interval-value-colour-field"))
                         .changed();
                 });
-                MenuField::new(tr!(literal = "String width")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("drill-hole-string-width")).show(ui, |ui, _, _| {
                     discs_changed |= ui
                         .add(
                             egui::Slider::new(&mut string_pixel_width, crate::model::drill_hole::STRING_PIXEL_WIDTH_RANGE)
                                 .fixed_decimals(1)
-                                .suffix(tr!(literal = " px")),
+                                .suffix(format!(" {}", tr!("drill-hole-px"))),
                         )
-                        .on_hover_text(tr!(literal = "The hole itself is drawn as a line this wide at every zoom."))
+                        .on_hover_text(tr!("drill-hole-hole-itself-drawn-line-wide"))
                         .changed();
                 });
                 if discs_changed {
@@ -205,17 +200,17 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
 
     let Some(field) = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key)) else {
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(tr!(literal = "All rendered intervals are opaque white.")).weak());
+        ui.label(egui::RichText::new(tr!("drill-hole-all-rendered-intervals-opaque-white")).weak());
         return;
     };
 
-    fold_section(ui, host, &FOLD_SECTIONS[..shown], 1, tr!(literal = "Colour scale"), |ui| {
+    fold_section(ui, host, &FOLD_SECTIONS[..shown], 1, tr!("drill-hole-colour-scale"), |ui| {
         match &field.kind {
             DrillFieldKind::Numeric { min, max } => {
                 let mut preset = dataset.color.preset;
                 if MenuFieldCombo::new(
                     ("drill_hole_preset", id),
-                    tr!(literal = "Preset"),
+                    tr!("drill-hole-preset"),
                     &mut preset,
                     dataset.color.preset.label(),
                     DrillColorPreset::ALL.map(|preset| (preset, preset.label().into())),
@@ -227,9 +222,9 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 }
                 ui.label(
                     egui::RichText::new(if dataset.color.smooth {
-                        tr!(literal = "Smooth interpolation")
+                        tr!("drill-hole-smooth-interpolation")
                     } else {
-                        tr!(literal = "Stepped bands")
+                        tr!("drill-hole-stepped-bands")
                     })
                     .weak(),
                 );
@@ -250,7 +245,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         changed |= ui
                             .add_sized([145.0, ui.spacing().interact_size.y], egui::Slider::new(&mut stop.t, 0.0..=1.0).show_value(false))
                             .changed();
-                        if can_remove && ui.small_button(tr!(literal = "−")).clicked() {
+                        if can_remove && ui.small_button(tr!("drill-hole-text-2")).clicked() {
                             remove = Some(index);
                         }
                     });
@@ -260,7 +255,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                     changed = true;
                 }
                 ui.horizontal(|ui| {
-                    if stops.len() < MAX_DRILL_COLOR_STOPS && ui.add(MenuButton::new(tr!(literal = "Add stop"))).clicked() {
+                    if stops.len() < MAX_DRILL_COLOR_STOPS && ui.add(MenuButton::new(tr!("drill-hole-add-stop"))).clicked() {
                         let index = stops.len() / 2;
                         let left = stops[index.saturating_sub(1)];
                         let right = stops[index.min(stops.len() - 1)];
@@ -274,7 +269,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         });
                         changed = true;
                     }
-                    if ui.add(MenuButton::new(tr!(literal = "Reset preset"))).clicked() {
+                    if ui.add(MenuButton::new(tr!("drill-hole-reset-preset"))).clicked() {
                         commands.push(UiCommand::SetDrillHoleColorPreset { id, preset: dataset.color.preset });
                     }
                 });
@@ -283,13 +278,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 }
             }
             DrillFieldKind::Categorical { categories } => {
-                ui.label(
-                    egui::RichText::new(tr_format!(
-                        literal = "%count% codes. An interval with no logged value stays white.",
-                        count = categories.len()
-                    ))
-                    .weak(),
-                );
+                ui.label(egui::RichText::new(tr!("drill-hole-count-codes-interval-no-logged", count = categories.len().to_string())).weak());
                 ui.add_space(2.0);
                 let rows: Vec<ColorRow<'_>> = if dataset.color.by_working_section {
                     dataset.color.working_section_view(&field.key, categories)
@@ -305,9 +294,9 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                     .collect();
                 if !needle.is_empty() {
                     let note = if dataset.color.by_working_section {
-                        tr_format!(literal = "%shown% of %total% rows shown", shown = shown_rows.len(), total = rows.len())
+                        tr!("drill-hole-shown-total-rows-shown", shown = shown_rows.len().to_string(), total = rows.len().to_string())
                     } else {
-                        tr_format!(literal = "%shown% of %total% codes shown", shown = shown_rows.len(), total = rows.len())
+                        tr!("drill-hole-shown-total-codes-shown", shown = shown_rows.len().to_string(), total = rows.len().to_string())
                     };
                     ui.label(egui::RichText::new(note).weak());
                 }
@@ -337,9 +326,9 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 }
                 ui.add_space(2.0);
                 let reset_label = if needle.is_empty() {
-                    tr!(literal = "Reset colours")
+                    tr!("drill-hole-reset-colours")
                 } else {
-                    tr!(literal = "Reset shown colours")
+                    tr!("drill-hole-reset-shown-colours")
                 };
                 if ui.add(MenuButton::new(reset_label)).clicked() {
                     let all: Vec<String> = rows.iter().map(|row| row.key.to_string()).collect();
@@ -381,19 +370,14 @@ fn draw_working_sections(
     // Every change asked for this frame goes out as one command at the end,
     // so two in one frame neither overwrite each other nor split the undo.
     let mut edits: Vec<SectionEdit> = Vec::new();
-    fold_section(ui, host, &FOLD_SECTIONS, 2, tr!(literal = "Working sections"), |ui| {
-        ui.label(
-            egui::RichText::new(tr!(
-                literal = "A working section is a set of seams or plies mined as one unit. Colouring by it gives the whole set one colour."
-            ))
-            .weak(),
-        );
+    fold_section(ui, host, &FOLD_SECTIONS, 2, tr!("drill-hole-working-sections"), |ui| {
+        ui.label(egui::RichText::new(tr!("drill-hole-working-section-set-seams-plies")).weak());
         ui.add_space(2.0);
 
         for section in dataset.color.working_sections.iter().filter(|section| section.field == field.key) {
             MenuField::new(section.name.as_str()).show(ui, |ui, _, _| {
                 ui.label(egui::RichText::new(section.codes.join(", ")).weak());
-                if ui.small_button(tr!(literal = "−")).clicked() {
+                if ui.small_button(tr!("drill-hole-text-2")).clicked() {
                     edits.push(SectionEdit::Remove(section.name.clone()));
                 }
             });
@@ -403,7 +387,7 @@ fn draw_working_sections(
         }
     });
 
-    fold_section(ui, host, &FOLD_SECTIONS, 3, tr!(literal = "New working section"), |ui| {
+    fold_section(ui, host, &FOLD_SECTIONS, 3, tr!("drill-hole-new-working-section"), |ui| {
         // Not `ui.id()`: the dialog and the Preferences page draw from different
         // widget trees, and the draft must be the same egui memory slot either
         // way, so both windows show the one section being built.
@@ -422,7 +406,14 @@ fn draw_working_sections(
         let needle = draw_code_filter(ui, code_filter_id("section codes", dataset.id, &field.key));
         let shown: Vec<&String> = available.iter().copied().filter(|code| filter_matches(code, &needle)).collect();
         if !needle.is_empty() {
-            ui.label(egui::RichText::new(tr_format!(literal = "%shown% of %total% codes shown", shown = shown.len(), total = available.len())).weak());
+            ui.label(
+                egui::RichText::new(tr!(
+                    "drill-hole-shown-total-codes-shown",
+                    shown = shown.len().to_string(),
+                    total = available.len().to_string()
+                ))
+                .weak(),
+            );
         }
         // A tick the filter hides still counts; say so rather than add codes
         // the user cannot see.
@@ -431,7 +422,7 @@ fn draw_working_sections(
             .filter(|code| draft.codes.contains(code.as_str()) && !filter_matches(code, &needle))
             .count();
         if hidden_ticked > 0 {
-            ui.label(egui::RichText::new(tr_format!(literal = "Ticked but hidden by the filter: %count%", count = hidden_ticked)).weak());
+            ui.label(egui::RichText::new(tr!("drill-hole-ticked-but-hidden-filter-count", count = hidden_ticked.to_string())).weak());
         }
 
         let mut draw_code_row = |ui: &mut egui::Ui, code: &String| {
@@ -452,7 +443,7 @@ fn draw_working_sections(
         // codes this frame ended with: it may be one of them. Only a ticked code
         // still available goes into the new section; a stale tick left over from
         // before another section claimed it does not.
-        let name_response = MenuFieldText::new(tr!(literal = "New section name"), &mut draft.name).show(ui);
+        let name_response = MenuFieldText::new(tr!("drill-hole-new-section-name"), &mut draft.name).show(ui);
         let ticked_available: Vec<String> = available.iter().copied().filter(|code| draft.codes.contains(code.as_str())).cloned().collect();
         let name_problem = working_section_name_problem(&draft.name, &field.key, categories, &ticked_available, &dataset.color.working_sections);
         if let Some(problem) = &name_problem
@@ -461,7 +452,7 @@ fn draw_working_sections(
             ui.label(egui::RichText::new(problem.message()).weak());
         }
         let can_add = name_problem.is_none() && !ticked_available.is_empty();
-        let add_clicked = ui.add_enabled(can_add, MenuButton::new(tr!(literal = "Add working section"))).clicked();
+        let add_clicked = ui.add_enabled(can_add, MenuButton::new(tr!("drill-hole-add-working-section"))).clicked();
         // A single-line TextEdit surrenders focus the same frame it sees Enter,
         // without consuming the key - do that here so Enter both adds (when
         // valid) and never reaches the dialog's own confirm-and-close check.
@@ -576,12 +567,12 @@ fn filter_matches(code: &str, needle: &str) -> bool {
 /// lowercased.
 fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
     let mut text = ui.data_mut(|data| data.get_temp::<String>(id)).unwrap_or_default();
-    let changed = MenuField::new(tr!(literal = "Filter")).show(ui, |ui, row_height, column_width| {
+    let changed = MenuField::new(tr!("common-filter")).show(ui, |ui, row_height, column_width| {
         let before = ui.available_width();
         let mut changed = false;
         if ui
-            .add_enabled(!text.is_empty(), egui::Button::new(tr!(literal = "×")).small())
-            .on_hover_text(tr!(literal = "Clear the filter"))
+            .add_enabled(!text.is_empty(), egui::Button::new(tr!("drill-hole-text")).small())
+            .on_hover_text(tr!("drill-hole-clear-filter"))
             .clicked()
         {
             text.clear();
@@ -591,7 +582,7 @@ fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
         changed |= ui
             .add_sized(
                 [(column_width - clear_width).max(40.0), row_height],
-                egui::TextEdit::singleline(&mut text).hint_text(tr!(literal = "Part of a code")),
+                egui::TextEdit::singleline(&mut text).hint_text(tr!("drill-hole-part-code")),
             )
             .changed();
         changed
@@ -623,20 +614,20 @@ fn draw_suggested_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, fi
         return None;
     }
     let mut add: Option<Vec<WorkingSection>> = None;
-    egui::CollapsingHeader::new(tr_format!(literal = "Suggested from code names (%count%)", count = suggestions.len()))
+    egui::CollapsingHeader::new(tr!("drill-hole-suggested-from-code-names-count", count = suggestions.len().to_string()))
         .id_salt(("drill_hole_suggested_sections", dataset.id, field.key.as_str()))
         .default_open(false)
         .show(ui, |ui| {
             for suggestion in suggestions.iter() {
                 MenuField::new(suggestion.name.as_str()).show(ui, |ui, _, _| {
-                    if ui.small_button(tr!(literal = "Add")).clicked() {
+                    if ui.small_button(tr!("drill-hole-add")).clicked() {
                         add = Some(vec![suggestion.clone()]);
                     }
-                    ui.label(egui::RichText::new(tr_format!(literal = "%count% codes", count = suggestion.codes.len())).weak())
+                    ui.label(egui::RichText::new(tr!("drill-hole-count-codes", count = suggestion.codes.len().to_string())).weak())
                         .on_hover_text(suggestion.codes.join(", "));
                 });
             }
-            if ui.add(MenuButton::new(tr!(literal = "Add all"))).clicked() {
+            if ui.add(MenuButton::new(tr!("drill-hole-add-all"))).clicked() {
                 add = Some(suggestions.to_vec());
             }
         });

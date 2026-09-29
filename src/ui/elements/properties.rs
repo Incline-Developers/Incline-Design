@@ -51,11 +51,11 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, dril
                 ui.spacing_mut().interact_size.y = row_height;
                 ui.spacing_mut().button_padding.y = 0.0;
                 for (tab, label) in [
-                    (PropertyTab::Interface, tr!(literal = "Interface")),
-                    (PropertyTab::Camera, tr!(literal = "Camera")),
-                    (PropertyTab::Performance, tr!(literal = "Performance")),
-                    (PropertyTab::Developer, tr!(literal = "Developer")),
-                    (PropertyTab::Drillholes, tr!(literal = "Drillholes")),
+                    (PropertyTab::Interface, tr!("properties-interface")),
+                    (PropertyTab::Camera, tr!("properties-camera")),
+                    (PropertyTab::Performance, tr!("properties-performance")),
+                    (PropertyTab::Developer, tr!("properties-developer")),
+                    (PropertyTab::Drillholes, tr!("properties-drillholes")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
                         .selected(editor.active_property_tab == tab)
@@ -123,7 +123,7 @@ pub(crate) fn draw_selection_appearance(
         selected_types[kind] = true;
     }
     let show_headings = selected_types.into_iter().filter(|selected| *selected).count() > 1;
-    for (kind, heading) in [(0, tr!("context-polylines")), (1, tr!("context-points")), (2, tr!(literal = "Text"))] {
+    for (kind, heading) in [(0, tr!("context-polylines")), (1, tr!("context-points")), (2, tr!("common-text"))] {
         let objects: Vec<_> = objects
             .iter()
             .copied()
@@ -157,15 +157,12 @@ pub(crate) fn draw_selection_appearance(
         // The object editor needs exactly one selected design object.
         if editor.selected_handles.len() == 1
             && let [object_id] = objects.as_slice()
-            && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
+            && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("properties-edit-object")).show(ui).clicked()
         {
             commands.push(UiCommand::OpenObjectEditDialog(*object_id));
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
-        if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Move to Layer..."))
-            .show(ui)
-            .clicked()
-        {
+        if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("properties-move-layer")).show(ui).clicked() {
             let target_layer = project
                 .projects
                 .iter()
@@ -189,10 +186,10 @@ pub(crate) fn draw_selection_appearance(
     if let Some(first) = triangulations.first() {
         context_menu_fields(ui, |ui| {
             if show_headings {
-                menu::menu_section(ui, tr!(literal = "Triangulations"));
+                menu::menu_section(ui, tr!("common-triangulations"));
             }
             let mut color = rgba_to_color32(first.color);
-            if committed(&MenuFieldColor32::new(tr!(literal = "Face colour"), &mut color).show(ui)) {
+            if committed(&MenuFieldColor32::new(tr!("explorer-face-colour"), &mut color).show(ui)) {
                 for tri in triangulations {
                     commands.push(UiCommand::SetTriangulationColor(tri.id, color32_to_rgba(color)));
                 }
@@ -273,7 +270,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
     ui.spacing_mut().item_spacing.y = 0.0;
     let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
     ui.spacing_mut().item_spacing.y = spacing;
-    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!(literal = "Block model")), rect, surface);
+    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!("common-block-model")), rect, surface);
 
     let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
     let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
@@ -353,7 +350,7 @@ fn settings_section(
         let restore_clicked = ui
             .scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                ui.add_enabled(draft != restored, egui::Button::new(tr!(literal = "Restore Defaults")))
+                ui.add_enabled(draft != restored, egui::Button::new(tr!("properties-restore-defaults-2")))
                     .on_hover_text(tr!("properties-restore-defaults", heading = heading))
                     .clicked()
             })
@@ -422,13 +419,13 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         ui,
         editor,
         commands,
-        &tr!(literal = "Interface"),
+        &tr!("properties-interface"),
         |ui, draft| {
             let mut changed = false;
 
             let [r, g, b, _] = draft.renderer_background_color;
             let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
-            let response = MenuFieldColor32::new(tr!(literal = "Background"), &mut background).show(ui);
+            let response = MenuFieldColor32::new(tr!("common-background"), &mut background).show(ui);
             if response.changed() {
                 draft.renderer_background_color = [
                     byte_to_linear_rgba(background.r()),
@@ -438,10 +435,10 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
                 ];
             }
             changed |= committed(&response);
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Dark mode"), &mut draft.dark_mode).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Borehole inspector"), &mut draft.show_borehole_inspector).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-dark-mode"), &mut draft.dark_mode).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-show-console"), &mut draft.show_console).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-borehole-inspector"), &mut draft.show_borehole_inspector).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-panel-chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(
                 &MenuFieldF64::new(tr!("preferences-ui-size"), &mut draft.ui_size_percent, 50.0..=200.0)
                     .suffix("%")
@@ -450,8 +447,8 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
                     .show(ui)
                     .on_hover_text(tr!("preferences-ui-size-help")),
             );
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
             changed
         },
         Some(reset_interface_defaults),
@@ -463,52 +460,52 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         ui,
         editor,
         commands,
-        &tr!(literal = "Camera"),
+        &tr!("properties-camera"),
         |ui, draft| {
             let mut changed = false;
-            CollapsibleSection::new("camera_plan_mode", tr!(literal = "Plan Mode")).default_open(true).show(ui, |ui| {
+            CollapsibleSection::new("camera_plan_mode", tr!("properties-plan-mode")).default_open(true).show(ui, |ui| {
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Orbit sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                    &MenuFieldF64::new(tr!("properties-orbit-sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Zoom sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                    &MenuFieldF64::new(tr!("properties-zoom-sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
-                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert vertical"), &mut draft.plan_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!(literal = "Zoom to cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
             });
 
             ui.add_space(4.0);
-            CollapsibleSection::new("camera_fly_mode", tr!(literal = "Fly Mode")).show(ui, |ui| {
+            CollapsibleSection::new("camera_fly_mode", tr!("common-fly-mode")).show(ui, |ui| {
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Field of view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
-                        .suffix(tr!(literal = "°"))
+                    &MenuFieldF64::new(tr!("properties-field-view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
+                        .suffix(tr!("common-text-2"))
                         .show(ui),
                 );
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Look sensitivity"), &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
+                    &MenuFieldF64::new(tr!("properties-look-sensitivity"), &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
-                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert vertical"), &mut draft.fly_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert horizontal"), &mut draft.fly_invert_horizontal_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.fly_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.fly_invert_horizontal_look).show(ui));
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Near clip limit"), &mut draft.fly_near_clip_limit, 0.01..=100.0)
+                    &MenuFieldF64::new(tr!("properties-near-clip-limit"), &mut draft.fly_near_clip_limit, 0.01..=100.0)
                         .speed(0.01)
-                        .suffix(tr!(literal = "m"))
+                        .suffix(tr!("common-m"))
                         .show(ui),
                 );
                 changed |= committed(
-                    &MenuFieldF64::new(tr!(literal = "Max clip span"), &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
+                    &MenuFieldF64::new(tr!("properties-max-clip-span"), &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
                         .speed(100.0)
-                        .suffix(tr!(literal = "m"))
+                        .suffix(tr!("common-m"))
                         .show(ui),
                 );
             });
@@ -526,54 +523,48 @@ fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, comman
         ui,
         editor,
         commands,
-        &tr!(literal = "Performance"),
+        &tr!("properties-performance"),
         |ui, draft| {
             let mut changed = false;
             changed |= committed(
-                &MenuFieldU32::new(tr!(literal = "Snap polling"), &mut draft.snap_poll_rate, 5..=1000)
-                    .suffix(tr!(literal = " Hz"))
+                &MenuFieldU32::new(tr!("properties-snap-polling"), &mut draft.snap_poll_rate, 5..=1000)
+                    .suffix(format!(" {}", tr!("properties-hz")))
                     .show(ui),
             );
             if vsync_switchable {
                 changed |= committed(
-                    &MenuFieldBool::new(tr!(literal = "Vertical sync"), &mut draft.vsync_enabled)
-                        .help_text(tr!(
-                            literal = "Presents in step with the display: no tearing, and the display sets the frame rate. Off, frames present as soon as they are drawn and the cap below applies."
-                        ))
+                    &MenuFieldBool::new(tr!("properties-vertical-sync"), &mut draft.vsync_enabled)
+                        .help_text(tr!("properties-presents-step-display-no-tearing"))
                         .show(ui),
                 );
             }
             if !draft.vsync_enabled {
                 changed |= committed(
-                    &MenuFieldU32::new(tr!(literal = "Frame rate cap"), &mut draft.frame_rate_cap, 20..=1000)
-                        .suffix(tr!(literal = " FPS"))
+                    &MenuFieldU32::new(tr!("properties-frame-rate-cap"), &mut draft.frame_rate_cap, 20..=1000)
+                        .suffix(format!(" {}", tr!("properties-fps")))
                         .show(ui),
                 );
             }
             changed |= committed(
-                &MenuFieldU32::new(tr!(literal = "Cap while resizing"), &mut draft.resize_frame_rate_cap, 20..=1000)
-                    .suffix(tr!(literal = " FPS"))
+                &MenuFieldU32::new(tr!("properties-cap-while-resizing"), &mut draft.resize_frame_rate_cap, 20..=1000)
+                    .suffix(format!(" {}", tr!("properties-fps")))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldU32::new(tr!(literal = "Block model downscale"), &mut draft.block_model_interaction_resolution_divisor, 1..=64)
-                    .suffix(tr!(literal = "x"))
+                &MenuFieldU32::new(tr!("properties-block-model-downscale"), &mut draft.block_model_interaction_resolution_divisor, 1..=64)
+                    .suffix(tr!("common-x"))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Reflective block edges"), &mut draft.show_block_model_boundary_highlights)
-                    .help_text(tr!(
-                        literal = "Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work."
-                    ))
+                &MenuFieldBool::new(tr!("properties-reflective-block-edges"), &mut draft.show_block_model_boundary_highlights)
+                    .help_text(tr!("properties-adds-view-dependent-rim-highlight"))
                     .show(ui),
             );
             changed |= committed(
-            &MenuFieldBool::new(tr!(literal = "Downscale rasters"), &mut draft.downscale_raster_previews)
-                .help_text(tr!(
-                    literal = "Limits newly loaded GeoTIFF previews to 4096 pixels on their longest side. Disable to use full resolution up to the GPU's texture limit, which uses more memory."
-                ))
-                .show(ui),
-        );
+                &MenuFieldBool::new(tr!("properties-downscale-rasters"), &mut draft.downscale_raster_previews)
+                    .help_text(tr!("properties-limits-newly-loaded-geotiff-previews"))
+                    .show(ui),
+            );
             changed
         },
         Some(reset_performance_defaults),
@@ -585,27 +576,23 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         ui,
         editor,
         commands,
-        &tr!(literal = "Developer"),
+        &tr!("properties-developer"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "Frame counter"), &mut draft.frame_counter_enabled).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!("properties-frame-counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
-                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
+                &MenuFieldBool::new(tr!("properties-camera-clip-planes"), &mut draft.debug_clip_planes)
+                    .help_text(tr!("properties-shows-live-near-far-projection"))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Surface chunk debug view"), &mut draft.debug_surface_chunks)
-                    .help_text(tr!(
-                        literal = "Colours each surface chunk, outlines the box it is frustum-culled by, and shows the faces drawn last frame against the visible total in the status bar."
-                    ))
+                &MenuFieldBool::new(tr!("properties-surface-chunk-debug-view"), &mut draft.debug_surface_chunks)
+                    .help_text(tr!("properties-colours-each-surface-chunk-outlines"))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Point cloud chunk debug view"), &mut draft.debug_point_cloud_chunks)
-                    .help_text(tr!(
-                        literal = "Colours each point-cloud chunk, outlines the box it is frustum-culled by, and shows the points drawn last frame against the level-of-detail target and the visible total in the status bar."
-                    ))
+                &MenuFieldBool::new(tr!("properties-point-cloud-chunk-debug-view"), &mut draft.debug_point_cloud_chunks)
+                    .help_text(tr!("properties-colours-each-point-cloud-chunk"))
                     .show(ui),
             );
             changed
@@ -615,7 +602,7 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
 }
 
 fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
-    menu::menu_section(ui, tr!(literal = "Drillholes"));
+    menu::menu_section(ui, tr!("properties-drillholes"));
     let loaded: Vec<&OpenDrillHoleDataset> = drill_holes.iter().filter(|dataset| dataset.state.loaded).collect();
     let Some(current) = loaded
         .iter()
@@ -623,13 +610,13 @@ fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_ho
         .or_else(|| loaded.first())
         .copied()
     else {
-        ui.label(egui::RichText::new(tr!(literal = "No drillhole datasets are open.")).weak());
+        ui.label(egui::RichText::new(tr!("properties-no-drillhole-datasets-open")).weak());
         return;
     };
     editor.preferences_drill_hole = Some(current.id);
     MenuFieldCombo::new(
         "preferences_drill_hole",
-        tr!(literal = "Dataset"),
+        tr!("properties-dataset"),
         &mut editor.preferences_drill_hole,
         current.name.clone(),
         loaded.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
@@ -662,10 +649,10 @@ pub(crate) fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 pub(crate) fn fill_style_label(style: FillStyle) -> String {
     match style {
-        FillStyle::Clear => tr!(literal = "Clear"),
-        FillStyle::Crosses => tr!(literal = "Crosses"),
-        FillStyle::Slashes => tr!(literal = "Slashes"),
-        FillStyle::Solid => tr!(literal = "Solid"),
+        FillStyle::Clear => tr!("common-clear"),
+        FillStyle::Crosses => tr!("common-crosses"),
+        FillStyle::Slashes => tr!("common-slashes"),
+        FillStyle::Solid => tr!("tri-type-solid-closed"),
     }
 }
 
@@ -681,7 +668,7 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
     let mut color32 = rgba_to_color32(first_color);
     let colour_label = match context.objects.first().and_then(|&id| document.get_object(id)) {
         Some(crate::model::Object::Text { .. }) => tr!("context-text-colour"),
-        _ => tr!(literal = "Line colour"),
+        _ => tr!("properties-line-colour"),
     };
     let response = MenuFieldColor32::new(colour_label, &mut color32).show(ui);
     if committed(&response) {
@@ -707,12 +694,12 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         .iter()
         .any(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })));
     if any_openable {
-        let closed_label = tr!(literal = "Closed");
-        let open_label = tr!(literal = "Open");
+        let closed_label = tr!("common-closed");
+        let open_label = tr!("common-open");
         let mut closed = first_closed;
         MenuFieldCombo::new(
             "design_shape",
-            tr!(literal = "Shape"),
+            tr!("common-shape"),
             &mut closed,
             if first_closed { closed_label.clone() } else { open_label.clone() },
             [(true, closed_label.into()), (false, open_label.into())],
@@ -728,7 +715,7 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
     let mut fill = first_fill;
     MenuFieldCombo::new(
         "design_fill",
-        tr!(literal = "Fill"),
+        tr!("common-fill"),
         &mut fill,
         fill_style_label(first_fill),
         [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
@@ -746,10 +733,7 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         editor.design_line_weight_input = Some((context.polylines.clone(), first_line_weight));
     }
     if let Some((_, line_weight)) = editor.design_line_weight_input.as_mut() {
-        let response = MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0)
-            .width(FIELD_WIDTH)
-            .speed(0.1)
-            .show(ui);
+        let response = MenuFieldF32::new(tr!("common-line-weight"), line_weight, 0.1..=20.0).width(FIELD_WIDTH).speed(0.1).show(ui);
         let line_weight = *line_weight;
         if committed(&response) {
             commands.push(UiCommand::BatchSetPolylineLineWeight(context.polylines.clone(), line_weight));
