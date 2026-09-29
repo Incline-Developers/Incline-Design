@@ -714,7 +714,13 @@ pub(crate) fn startup_log() {
             userspace_log!("{}", tr!("logging-operating-system-gnu-linux"));
             userspace_log!(
                 "{}",
-                tr!("logging-desktop-session-xdg-session-type", session = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")), desktop = format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP")), wayland = format!("{:?}", std::env::var_os("WAYLAND_DISPLAY")), display = format!("{:?}", std::env::var_os("DISPLAY")))
+                tr!(
+                    "logging-desktop-session-xdg-session-type",
+                    session = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")),
+                    desktop = format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP")),
+                    wayland = format!("{:?}", std::env::var_os("WAYLAND_DISPLAY")),
+                    display = format!("{:?}", std::env::var_os("DISPLAY"))
+                )
             );
         }
 
