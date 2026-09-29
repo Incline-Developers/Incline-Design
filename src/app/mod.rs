@@ -1678,6 +1678,7 @@ impl<'a> App<'a> {
             matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
             project.project.metadata.name.hash(&mut hasher);
             project.project.metadata.coordinate_reference_system.hash(&mut hasher);
+            project.project.metadata.modelling.hash_into(&mut hasher);
             project.lossy_save_warnings.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
@@ -1941,6 +1942,7 @@ impl<'a> App<'a> {
             .active_project()
             .map(|p| p.project.metadata.coordinate_reference_system.clone())
             .unwrap_or_default();
+        let modelling = self.workspace.active_project().map(|p| p.project.metadata.modelling).unwrap_or_default();
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
         // A section's item membership can stay byte-identical while its
         // folder list changes - a folder created and left empty, say - so
@@ -2006,6 +2008,7 @@ impl<'a> App<'a> {
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             coordinate_reference_system,
+            modelling,
             active_triangulation_for_menu,
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });

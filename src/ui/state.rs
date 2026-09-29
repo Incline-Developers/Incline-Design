@@ -3469,6 +3469,9 @@ pub(crate) enum UiCommand {
     /// The project's coordinate system, in its stored spelling; empty clears
     /// it.
     SetProjectCoordinateSystem(String),
+    /// The project's modelling settings, whole; the dialog sends them only
+    /// when valid.
+    SetModellingSettings(crate::model::project::ModellingSettings),
     /// One point per hole at the chosen boundary of a working section, as a
     /// new layer, on the holes the command was opened on.
     BuildReferencePoints {
@@ -4017,9 +4020,10 @@ impl UiCommand {
                 tr!("common-build-surface"),
                 match extent {
                     Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
-                    None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                    None => tr!("state-points-controls-outline", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
+            Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
             Self::SetProjectCoordinateSystem(stored) => report(
                 tr!("state-set-project-coordinate-system"),
                 if stored.is_empty() { tr!("common-none") } else { stored.clone() },
@@ -4339,6 +4343,8 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// The active project's coordinate system as stored; empty when unset.
     pub(crate) coordinate_reference_system: String,
+    /// The active project's modelling settings; the defaults without one.
+    pub(crate) modelling: crate::model::project::ModellingSettings,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
     /// Every explorer folder, across every section.

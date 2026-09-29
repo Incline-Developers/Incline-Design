@@ -36,7 +36,7 @@ use crate::{
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
         progress::Phase,
-        project::{self, ProjectFile, ProjectMetadata},
+        project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
         triangulation::{LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
     },
@@ -60,6 +60,10 @@ const META_LAYER: &str = "incline:layer";
 /// has no folders, so a project without folders writes byte for byte as
 /// before.
 const META_FOLDERS: &str = "incline:folders";
+/// The project's modelling settings, on the OMF project record; omitted
+/// while they are the defaults, so such a project writes byte for byte as
+/// before they existed.
+const META_MODELLING: &str = "incline:modelling";
 /// A layer's or item's folder membership: the name of the folder in its
 /// own section, absent when the member is at the section root.
 const META_FOLDER: &str = "incline:folder";
@@ -237,6 +241,9 @@ pub(crate) struct ImportBundle {
     /// per-element membership below always resolves against it, and grown by
     /// `ensure` for a name the project record did not list.
     pub(crate) folders: FolderRegistry,
+    /// The project record's modelling settings; the defaults when it has
+    /// none, or none that can be read.
+    pub(crate) modelling: ModellingSettings,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -444,6 +451,13 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
             }
         }
         project.metadata.insert(META_FOLDERS.to_owned(), Value::Object(sections));
+    }
+    // Beside the coordinate system, from the same place.
+    if let Some(design) = snapshot.designs.as_ref()
+        && design.metadata.modelling != ModellingSettings::default()
+    {
+        let settings = serde_json::to_value(design.metadata.modelling).context("write modelling settings")?;
+        project.metadata.insert(META_MODELLING.to_owned(), settings);
     }
     let (output, _warnings) = writer.finish(project).context("finish project")?;
     progress.finish();
@@ -1786,7 +1800,20 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
             }
         }
     }
-    let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
+    // Settings that fail to read, or to validate, are dropped for the
+    // defaults and said so, never half applied.
+    if let Some(value) = project.metadata.get(META_MODELLING) {
+        match ModellingSettings::deserialize(value).ok().filter(|settings| settings.problem().is_none()) {
+            Some(settings) => bundle.modelling = settings,
+            None => bundle.warnings.push(tr!("omf-modelling-settings-unreadable")),
+        }
+    }
+    let unsupported_project_metadata = project
+        .metadata
+        .keys()
+        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_MODELLING)
+        .cloned()
+        .collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
         bundle
             .warnings
@@ -1878,6 +1905,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name: file_stem(self.source_name),
                     coordinate_reference_system: self.project_crs.clone(),
                     units: self.project_units.clone(),
+                    ..Default::default()
                 },
                 // The bundle's registry is the single source of truth for
                 // membership; a decoded `ProjectFile` never carries its own.
@@ -2386,6 +2414,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 name: element_name(element).to_owned(),
                 coordinate_reference_system: self.project_crs.clone(),
                 units: self.project_units.clone(),
+                ..Default::default()
             },
             // The bundle's registry is the single source of truth for
             // membership; a decoded `ProjectFile` never carries its own.

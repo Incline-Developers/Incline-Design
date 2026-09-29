@@ -247,7 +247,7 @@ pub(crate) enum ProjectPersistence {
     BrowserRecord(ProjectId),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectMetadata {
     pub(crate) name: String,
@@ -255,6 +255,128 @@ pub(crate) struct ProjectMetadata {
     pub(crate) coordinate_reference_system: String,
     #[serde(default)]
     pub(crate) units: String,
+    /// Left out while it holds the defaults, so a project that never changed
+    /// them writes and reads as it did before they existed.
+    #[serde(default, skip_serializing_if = "ModellingSettings::is_default")]
+    pub(crate) modelling: ModellingSettings,
+}
+
+/// How Build Surface draws its grid through the points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SurfaceMethod {
+    /// The thin plate spline, exact through every point.
+    #[default]
+    ThinPlateSpline,
+    /// The same spline fitted in a plan frame stretched across a fold axis.
+    AnisotropicThinPlateSpline,
+    /// The stretched spline along the fold axis the points inside the
+    /// domain show, or the exact spline where they show no clear one.
+    AutoAxis,
+}
+
+/// The Modelling branch's project-level settings for Build Surface. The
+/// defaults build the exact spline.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ModellingSettings {
+    pub(crate) surface_method: SurfaceMethod,
+    /// Pairs of points closer than this in plan, in metres, and steeper than
+    /// `steep_degrees` are named in a build's warning; by default the grid
+    /// spacing.
+    pub(crate) steep_distance: f64,
+    pub(crate) steep_degrees: f64,
+    /// The fold axis for the anisotropic method, in degrees clockwise from
+    /// grid north; an axis, so 0 and 180 are one.
+    pub(crate) axis_azimuth: f64,
+    /// How many times farther a point reaches along the axis than across
+    /// it; 1 is no stretch.
+    pub(crate) axis_ratio: f64,
+}
+
+impl ModellingSettings {
+    /// The largest stretch offered. Past it the stretched frame squeezes
+    /// points along the axis so close, against the spread across it, that
+    /// the spline's system loses digits, and no fold drilled closer across
+    /// its axis than along it by more than that is expected.
+    pub(crate) const MAX_AXIS_RATIO: f64 = 20.0;
+
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub(crate) fn hash_into(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.surface_method.hash(hasher);
+        for value in [self.steep_distance, self.steep_degrees, self.axis_azimuth, self.axis_ratio] {
+            value.to_bits().hash(hasher);
+        }
+    }
+
+    /// Why these settings cannot be built with, or `None` when they can.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !(self.steep_distance.is_finite() && self.steep_distance > 0.0) {
+            return Some(tr!("project-steep-pair-distance-positive"));
+        }
+        if !(self.steep_degrees.is_finite() && self.steep_degrees > 0.0 && self.steep_degrees <= 90.0) {
+            return Some(tr!("project-steep-pair-angle-range"));
+        }
+        if !(self.axis_azimuth.is_finite() && (0.0..=360.0).contains(&self.axis_azimuth)) {
+            return Some(tr!("project-fold-axis-direction-range"));
+        }
+        if !(self.axis_ratio.is_finite() && (1.0..=Self::MAX_AXIS_RATIO).contains(&self.axis_ratio)) {
+            return Some(tr!("project-stretch-ratio-range", max = Self::MAX_AXIS_RATIO.to_string()));
+        }
+        None
+    }
+}
+
+impl ModellingSettings {
+    /// The method as the run record and the Build Surface dialog name it,
+    /// with the axis and the ratio when they apply.
+    pub(crate) fn method_description(&self) -> String {
+        match self.surface_method {
+            SurfaceMethod::ThinPlateSpline => tr!("project-thin-plate-spline-exact"),
+            SurfaceMethod::AnisotropicThinPlateSpline => tr!(
+                "project-anisotropic-thin-plate-spline",
+                azimuth = trimmed(self.axis_azimuth, 1),
+                ratio = trimmed(self.axis_ratio, 2)
+            ),
+            SurfaceMethod::AutoAxis => tr!("project-auto-axis-thin-plate-spline"),
+        }
+    }
+
+    /// Every setting in one line, for the Build Surface dialog and the log.
+    pub(crate) fn summary(&self) -> String {
+        tr!(
+            "project-method-steep-pairs-under",
+            method = self.method_description(),
+            distance = trimmed(self.steep_distance, 2),
+            degrees = trimmed(self.steep_degrees, 1)
+        )
+    }
+}
+
+/// `value` to at most `decimals` places, without trailing zeros.
+fn trimmed(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
+}
+
+impl Default for ModellingSettings {
+    fn default() -> Self {
+        Self {
+            surface_method: SurfaceMethod::ThinPlateSpline,
+            steep_distance: 5.0,
+            steep_degrees: 80.0,
+            axis_azimuth: 0.0,
+            axis_ratio: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -363,6 +485,7 @@ impl OpenProject {
         self.project.metadata.name.hash(&mut hasher);
         self.project.metadata.coordinate_reference_system.hash(&mut hasher);
         self.project.metadata.units.hash(&mut hasher);
+        self.project.metadata.modelling.hash_into(&mut hasher);
         self.content.epoch().hash(&mut hasher);
         // Folder names, so an empty folder still counts as unsaved work.
         self.project.folders.hash_into(&mut hasher);

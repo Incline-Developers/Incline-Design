@@ -124,6 +124,7 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferenceSurface { .. }
                 | UiCommand::OpenModellingSettings
                 | UiCommand::SetProjectCoordinateSystem(_)
+                | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
         );
@@ -625,6 +626,22 @@ impl<'a> App<'a> {
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
             UiCommand::OpenModellingSettings => {
                 self.editor.show_modelling_settings = true;
+                Ok(())
+            }
+            UiCommand::SetModellingSettings(settings) => {
+                if let Some(problem) = settings.problem() {
+                    anyhow::bail!("{problem}");
+                }
+                let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                    let metadata = &mut project.project.metadata;
+                    let changed = metadata.modelling != settings;
+                    metadata.modelling = settings;
+                    changed
+                });
+                if changed {
+                    self.touch_active_project_content();
+                    userspace_log!("{}", tr!("cmd-commands-modelling-settings-set-settings", settings = settings.summary()));
+                }
                 Ok(())
             }
             UiCommand::SetProjectCoordinateSystem(stored) => {

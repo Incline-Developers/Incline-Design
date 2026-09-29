@@ -443,6 +443,7 @@ cmd-slice-needs-triangulation = Select one loaded triangulation before slicing i
 cmd-commands-select-one-loaded-triangulation-one = Select one loaded triangulation and one closed polyline before clipping
 cmd-commands-select-one-more-objects-before = Select one or more objects before setting { $axis }
 cmd-commands-sliced = Sliced
+cmd-commands-modelling-settings-set-settings = Modelling settings set. { $settings }
 cmd-contours-contour-generation-failed-error = Contour generation failed: { $error }
 cmd-contours-discarded-layer-exists = Contours for '{ $name }' were discarded: layer '{ $layer_name }' now exists
 cmd-contours-discarded-project-closed = Contours for '{ $name }' were discarded: the project was closed
@@ -705,8 +706,7 @@ cmd-raster-loader-disconnected = Raster loader disconnected for { $path }
 cmd-raster-undraped = Undraped rasters from { $count } triangulation(s)
 cmd-reference-surface-build-surface-failed-error = Build Surface failed: { $error }
 cmd-reference-surface-building-surface = Building surface…
-cmd-reference-surface-built-surface-name-from-vertex = Built surface { $name } from { $vertex_count } point(s) into { $face_count } face(s), box z { $low } to { $high }{ $support }{ $coincident }{ $controls }
-cmd-reference-surface-control-string-index-could-not = Control string { $index } could not be added to the mesh
+cmd-reference-surface-built-surface-name-inside-grid = Built surface { $name } on { $inside } grid node(s) inside the extent into { $vertex_count } node(s) and { $face_count } face(s), box z { $low } to { $high }{ $support }{ $controls }
 cmd-reference-surface-control-string-index-crosses-itself = Control string { $index } crosses itself in plan
 cmd-reference-surface-control-string-index-doubles-back = Control string { $index } doubles back on itself in plan
 cmd-reference-surface-control-string-index-ends-where = Control string { $index } ends where it starts; close it to use it as a mask
@@ -717,12 +717,10 @@ cmd-reference-surface-control-string-index-runs-along = Control string { $index 
 cmd-reference-surface-control-string-overrides-pick-x = Control string overrides the pick at ({ $x }, { $y }): pick { $pick } m, control { $control } m, difference { $difference } m
 cmd-reference-surface-control-strings-b-disagree-x = Control strings { $a } and { $b } disagree at ({ $x }, { $y }): { $za } m against { $zb } m, { $difference } m apart
 cmd-reference-surface-control-strings-b-run-along = Control strings { $a } and { $b } run along each other in plan; that is not supported yet
-cmd-reference-surface-count-control-string-s-vertices = ; { $count } control string(s) with { $vertices } vertex(es){ $crossings }
+cmd-reference-surface-count-control-string-s-entered = ; { $count } control string(s) entered as { $points } point(s){ $crossings }
 cmd-reference-surface-count-point-s-inside-extent = { $count } point(s) inside the extent; a surface needs at least { $minimum }
 cmd-reference-surface-count-point-s-outside-extent = ; { $count } point(s) outside the extent shaped it as support
 cmd-reference-surface-count-point-s-selected-surface = { $count } point(s) selected; a surface needs at least { $minimum }
-cmd-reference-surface-count-point-s-shared-plan = ; { $count } point(s) shared a plan position and were kept once
-cmd-reference-surface-delaunay-insert-failed-error = Delaunay insert failed: { $error }
 cmd-reference-surface-extent-must-closed-string = The extent must be a closed string
 cmd-reference-surface-extent-string-crosses-itself-plan = The extent string crosses itself in plan
 cmd-reference-surface-extent-string-has-non-finite = The extent string has non-finite coordinates
@@ -730,13 +728,21 @@ cmd-reference-surface-extent-string-needs-least-three = The extent string needs 
 cmd-reference-surface-extent-string-no-longer-available = The extent string is no longer available
 cmd-reference-surface-meeting-count-crossing-s = meeting at { $count } crossing(s)
 cmd-reference-surface-and-more = , … and { $more } more
-cmd-reference-surface-no-mask-selected-surface-unclipped = No mask selected; the surface is unclipped
+cmd-reference-surface-no-mask-selected-surface-outline = No mask selected; the surface is clipped to the points' outline plus { $buffer } m
 cmd-reference-surface-no-part-surface-falls-inside = No part of the surface falls inside the extent
 cmd-reference-surface-open-project-before-building-surface = Open a project before building a surface
-cmd-reference-surface-points-collinear-plan-surface-needs = The points are collinear in plan; a surface needs three that are not
 cmd-reference-surface-select-exactly-one-closed-string = Select exactly one closed string to clip the surface to
 cmd-reference-surface-selected-point-has-non-finite = A selected point has non-finite coordinates
 cmd-reference-surface-selected-points-span-count-layers = The selected points span { $count } layers; the surface is placed under { $section }
+cmd-reference-surface-control-string-index-has-two = Control string { $index } has two vertices within { $distance } m of ({ $x }, { $y }) in plan at different heights
+cmd-reference-surface-run-record-used-point = Run record: { $used } point(s) used of { $picks } pick(s) given, { $merged } merged, { $left_out } under control strings left out ({ $overridden } at another height); { $method }, { $spacing } m spacing; by { $author } on { $date }
+cmd-reference-surface-curvature-contrast-clear-most = curvature contrast { $contrast } (clear at { $most } or less), sag { $sag } m across the domain's equivalent diameter of { $width } m (clear at { $least } m or more), { $holes } holes per wavelength (clear at { $gate } or more)
+cmd-reference-surface-none = none
+cmd-reference-surface-method-axis-azimuth-degrees = { $method }, axis { $azimuth } degrees from grid north, ratio { $ratio }; { $decided }
+cmd-reference-surface-method-no-clear-axis = { $method }, no clear axis, ratio 1; { $decided }
+cmd-reference-surface-count-pair-s-points-closer = { $count } pair(s) of points closer than { $spacing } m in plan are steeper than { $degrees } degrees; the grid cannot follow them without ripples:
+cmd-reference-surface-steep-pair = ({ $ax }, { $ay }, { $az }) and ({ $bx }, { $by }, { $bz }): { $distance } m apart, { $rise } m in height, { $slope } degrees
+cmd-reference-surface-surface-could-not-cut = The surface could not be cut along the extent near ({ $x }, { $y })
 cmd-relimit-click-missed = Relimit: click did not hit any object (nothing under cursor)
 cmd-relimit-click-ignored = Relimit: click ignored, tool is not currently waiting for a target pick
 cmd-relimit-clicked-source-line = Relimit: clicked the source line itself, pick a different line
@@ -1500,6 +1506,20 @@ modelling-settings-crs-help = The coordinate system every point and surface in t
 modelling-settings-modelling-settings = Modelling Settings
 modelling-settings-not-set = Not set
 modelling-settings-survey-datum = Survey datum
+modelling-settings-auto-axis-thin-plate-spline = Auto-axis thin plate spline
+modelling-settings-auto-axis-note = The mask must hold one straight fold; draw one per fold or limb. The axis is read from the points inside it and the surface stretched 4 times along it; with no clear axis, no stretch.
+modelling-settings-thin-plate-spline-exact = Thin plate spline, exact
+modelling-settings-anisotropic-thin-plate-spline = Anisotropic thin plate spline
+modelling-settings-surface-method = Surface method
+modelling-settings-hermite-dips = Hermite with dips (needs dip measurements)
+modelling-settings-steep-pair-distance = Steep-pair distance
+modelling-settings-steep-pair-distance-help = Pairs of points closer than this in plan, and steeper than the angle below, are named when a build succeeds. Never refused or repaired.
+modelling-settings-steep-pair-angle = Steep-pair angle
+modelling-settings-fold-axis-direction = Fold axis direction
+modelling-settings-fold-axis-direction-help = The fold axis, in degrees clockwise from grid north. An axis, so 0 and 180 are the same.
+modelling-settings-stretch-ratio = Stretch ratio
+modelling-settings-stretch-ratio-help = How many times farther the surface reaches along the axis than across it. 1 is no stretch.
+modelling-settings-surface-help = How Build Surface draws its grid. Project-level settings, saved with the project.
 
 ## Object strings
 
@@ -1549,6 +1569,7 @@ omf-project-author-not-retained = Project author is not retained
 omf-project-description-not-retained = Project description is not retained
 omf-unsupported-metadata-keys = Project has unsupported metadata keys: { $keys }
 omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an older layout ({ $names }); import it again from its source files
+omf-modelling-settings-unreadable = Project modelling settings could not be read; the defaults are used
 
 ## Plot strings
 
@@ -1663,6 +1684,14 @@ progress-task-finished = { $task }: Finished
 ## Project strings
 
 project-item = Item
+project-steep-pair-distance-positive = The steep-pair distance must be a positive number of metres
+project-steep-pair-angle-range = The steep-pair angle must be more than 0 and at most 90 degrees
+project-fold-axis-direction-range = The fold axis direction must be from 0 to 360 degrees
+project-stretch-ratio-range = The stretch ratio must be from 1 to { $max }
+project-thin-plate-spline-exact = thin plate spline, exact
+project-anisotropic-thin-plate-spline = anisotropic thin plate spline, axis { $azimuth } degrees, ratio { $ratio }
+project-auto-axis-thin-plate-spline = auto-axis thin plate spline
+project-method-steep-pairs-under = Method: { $method } · steep pairs under { $distance } m steeper than { $degrees } degrees
 
 ## Properties strings
 
@@ -1732,7 +1761,8 @@ reference-surface-points-outside-extent-still-shape = Points outside the extent 
 reference-surface-points-surface-built-from-selected = The points the surface is built from, as selected when the dialog opened. Close the dialog to select different ones.
 reference-surface-extent-help = The selected closed string the finished surface is clipped to; points outside it still shape the surface.
 reference-surface-selected-open-strings-surface-made = The selected open strings the surface is made to pass through, as selected when the dialog opened. Close the dialog to select different ones.
-reference-surface-triangulates-selected-points-plan-in = Triangulates the selected points in plan into a new surface. Each build adds a surface.
+reference-surface-grids-selected-points-plan-into = Grids the selected points in plan into a new surface. Each build adds a surface.
+reference-surface-change-these-under-modelling-settings = Change these under Modelling, Settings
 
 ## Screenshot strings
 
@@ -1780,7 +1810,7 @@ state-count-object-s-layer = { $count } object(s) · { $layer }
 state-count-object-s-weight = { $count } object(s) · { $weight }
 state-count-object-s-z-elevation = { $count } object(s) · Z { $elevation }
 state-points-controls-clipped = { $count } point(s) · { $controls } control string(s) · clipped to the extent string
-state-points-controls-unclipped = { $count } point(s) · { $controls } control string(s) · unclipped
+state-points-controls-outline = { $count } point(s) · { $controls } control string(s) · clipped to the points' outline
 state-create-collection = Create Collection
 state-create-point-cloud-tin = Create Point Cloud TIN
 state-create-project = Create Project
@@ -1880,6 +1910,7 @@ state-set-entity-lock = Set Entity Lock
 state-set-grid = Set Grid
 state-set-layer-lock = Set Layer Lock
 state-set-line-weight = Set Line Weight
+state-set-modelling-settings = Set Modelling Settings
 state-set-object-colour = Set Object Colour
 state-set-object-fill = Set Object Fill
 state-set-point-visibility = Set Point Visibility

@@ -235,6 +235,7 @@ impl<'a> App<'a> {
             rasters,
             warnings: _,
             folders,
+            modelling,
         } = bundle;
 
         let mut design = project::new_empty(path.clone());
@@ -243,6 +244,7 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
+        design.metadata.modelling = modelling;
         // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
@@ -401,6 +403,9 @@ impl<'a> App<'a> {
                 rasters,
                 warnings: _,
                 folders,
+                // A merge brings data in, not the other project's way of
+                // modelling it: the target keeps its own settings.
+                modelling: _,
             } = bundle;
 
             if let Some(project) = self.workspace.active_project_mut() {

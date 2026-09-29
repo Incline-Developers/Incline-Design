@@ -27,6 +27,15 @@ pub(crate) mod point_features;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+// Build Surface grids through `rbf_spans`, so the two splines' own grid
+// calls, the whole-box `Lattice` and `Dip` have no caller. rbf.rs allows
+// that itself outside test builds.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) mod rbf;
+#[allow(dead_code)]
+pub(crate) mod rbf_anisotropic;
+pub(crate) mod rbf_autoaxis;
+pub(crate) mod rbf_spans;
 pub(crate) mod spatial;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
