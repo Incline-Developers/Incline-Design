@@ -1,8 +1,8 @@
 //! Docked panel on the window's right edge, showing everything known about
 //! the currently inspected hole.
 //!
-//! Has a Data tab (property grid) and a Log tab (strip log); the Log tab's
-//! widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
+//! Has a Data tab (summary and interval table) and a Log tab (strip log);
+//! the Log tab's widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
 
 use crate::{
     i18n::tr,
@@ -15,7 +15,11 @@ use crate::{
         EditorState,
         state::{BoreholeInspectorTab, UiCommand, ViewToggle},
         themed_icon, unthemed_icon,
-        widgets::viewport::DrillHoleProperties,
+        widgets::{
+            collapsible_section::CollapsibleSection,
+            menu::{self, MenuButton, MenuFieldCombo},
+            viewport::DrillHoleProperties,
+        },
     },
 };
 
@@ -26,6 +30,8 @@ pub(crate) const PANEL_ID: &str = "borehole_inspector_panel";
 /// Default width: room for a two-column property grid, and for the Log tab's
 /// density, strat and gamma columns at their narrowest beside the hole.
 const DEFAULT_WIDTH: f32 = 360.0;
+/// Space between the panel's edge and its contents.
+const BODY_MARGIN: f32 = 8.0;
 /// Narrowest width before rows would rather truncate than shrink further.
 const MIN_WIDTH: f32 = 200.0;
 /// Widest, so the Log tab's strip log fits every column at full width
@@ -68,10 +74,12 @@ pub(crate) fn draw_borehole_inspector(
             let mut body_ui = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("borehole_inspector_body")
-                    .max_rect(body)
+                    .max_rect(body.shrink2(egui::vec2(BODY_MARGIN, BODY_MARGIN * 0.75)))
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             body_ui.set_clip_rect(body.intersect(ui.clip_rect()));
+            // The same controls the floating menus and settings pages use.
+            menu::apply_menu_style(&mut body_ui, surface);
             draw_body(&mut body_ui, editor, datasets, well_logs, commands);
         })
         .response
@@ -80,8 +88,8 @@ pub(crate) fn draw_borehole_inspector(
 
 /// The panel's contents, drawn into the clipped child ui the caller sized.
 ///
-/// The tab strip and dataset name sit outside the Data tab's scroll area,
-/// so neither scrolls out of view.
+/// The tab strip and hole name sit above the tab's sections, so neither
+/// scrolls or folds out of view.
 fn draw_body(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -89,13 +97,98 @@ fn draw_body(
     well_logs: &crate::model::geophysics::GeophysicsSession,
     commands: &mut Vec<UiCommand>,
 ) {
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    draw_tab_strip(ui, editor, commands);
+
+    let Some((dataset, hole, hole_index)) = inspected_hole(editor, datasets) else {
         ui.add_space(8.0);
-        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Data, tr!("borehole-inspector-data"));
-        ui.selectable_value(&mut editor.borehole_inspector_tab, BoreholeInspectorTab::Log, tr!("borehole-inspector-log"));
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(tr!("borehole-inspector-no-hole-inspected")).weak());
+        });
+        return;
+    };
+
+    // Named once for both tabs: the hole, then the dataset it belongs to.
+    ui.add(egui::Label::new(egui::RichText::new(&hole.dhid).strong()).truncate());
+    ui.add(egui::Label::new(egui::RichText::new(dataset.name.clone()).weak()).truncate());
+    ui.add_space(2.0);
+
+    match editor.borehole_inspector_tab {
+        BoreholeInspectorTab::Data => {
+            // Columns come from the dataset, so every hole shows the same.
+            let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
+            CollapsibleSection::new("borehole_inspector_summary", tr!("borehole-inspector-summary"))
+                .default_open(true)
+                .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
+            if !hole.intervals.is_empty() {
+                ui.add_space(4.0);
+                CollapsibleSection::new("borehole_inspector_intervals", tr!("viewport-interval-data"))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        // The table scrolls to fit what the panel has left,
+                        // less the section's own bottom margin.
+                        let max_height = (ui.available_height() - 12.0).max(0.0);
+                        ui.push_id((dataset.id, hole_index), |ui| properties.show_intervals(ui, max_height));
+                    });
+            }
+        }
+        BoreholeInspectorTab::Log => {
+            CollapsibleSection::new("borehole_inspector_log_display", tr!("borehole-inspector-display"))
+                .default_open(true)
+                .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
+            ui.add_space(4.0);
+            // Matched on the hole id exactly as the dataset spells it.
+            let view = well_logs.view(dataset, &hole.dhid);
+            if matches!(view, HoleView::Wanted) {
+                commands.push(UiCommand::ReadHoleGeophysics {
+                    dataset: dataset.id,
+                    dhid: hole.dhid.clone(),
+                });
+            }
+            let index = dataset.geophysics.as_deref();
+            let (logs, linked, reading) = match view {
+                HoleView::Shown(logs) => (Some(logs), true, None),
+                HoleView::NotInFiles => (None, true, None),
+                // Laid out from the index, so the readings only fill in.
+                HoleView::Wanted | HoleView::Reading => (None, true, index.map(|link| link.kinds_of(&hole.dhid))),
+                _ => (None, false, None),
+            };
+            // Only until shown: the index counts a stray reading the read
+            // leaves out.
+            let logged = matches!(view, HoleView::Wanted | HoleView::Reading)
+                .then(|| index.and_then(|link| link.depths_of(&hole.dhid)))
+                .flatten();
+            draw_geophysics_note(ui, &view, dataset.id, commands);
+            // The log's wheel zooms rather than scrolling an enclosing area,
+            // so it takes the rest of the panel instead of sitting in one.
+            let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+                .strat_field(strat_choice_for(editor, dataset))
+                .well_logs(logs, linked)
+                .reading(reading)
+                .logged_depths(logged)
+                .well_log_style(editor.well_log_style)
+                .show(ui);
+            if let Some(style) = saved {
+                commands.push(UiCommand::SetWellLogStyle(style));
+            }
+        }
+    }
+}
+
+/// The Data and Log tabs as a pair of held-down buttons, with the lock and
+/// close at the far end of the same row.
+fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (tab, label) in [
+            (BoreholeInspectorTab::Data, tr!("borehole-inspector-data")),
+            (BoreholeInspectorTab::Log, tr!("borehole-inspector-log")),
+        ] {
+            if ui.add(MenuButton::new(label).selected(editor.borehole_inspector_tab == tab)).clicked() {
+                editor.borehole_inspector_tab = tab;
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(8.0);
+            ui.spacing_mut().item_spacing.x = 4.0;
             // Rightmost, where a panel's close belongs; the lock sits inboard.
             // The same switch the View and Geology menus throw, so the stored
             // preference and the macOS check mark stay in step.
@@ -120,76 +213,6 @@ fn draw_body(
         });
     });
     ui.add_space(4.0);
-
-    let Some((dataset, hole, hole_index)) = inspected_hole(editor, datasets) else {
-        ui.add_space(8.0);
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(tr!("borehole-inspector-no-hole-inspected")).weak());
-        });
-        return;
-    };
-
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.add(egui::Label::new(egui::RichText::new(dataset.name.clone()).strong().color(ui.visuals().weak_text_color())).truncate());
-    });
-    ui.add_space(4.0);
-
-    match editor.borehole_inspector_tab {
-        BoreholeInspectorTab::Data => {
-            // The interval table scrolls to fit; the Log tab must not, since
-            // its wheel zooms rather than scrolling an enclosing area.
-            let list_height = (ui.available_height() - 8.0).max(120.0);
-            ui.push_id((dataset.id, hole_index), |ui| {
-                // Columns come from the dataset, so every hole shows the same.
-                DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields)
-                    .max_list_height(list_height)
-                    .show(ui);
-            });
-        }
-        BoreholeInspectorTab::Log => {
-            // Where the Data tab's summary starts, so the id stays put.
-            egui::Grid::new(("borehole_log_hole_id", dataset.id)).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                ui.label(tr!("common-hole-id"));
-                ui.add(egui::Label::new(&hole.dhid).truncate());
-                ui.end_row();
-            });
-            ui.add_space(4.0);
-            draw_log_field_pickers(ui, editor, dataset, commands);
-            // Matched on the hole id exactly as the dataset spells it.
-            let view = well_logs.view(dataset, &hole.dhid);
-            if matches!(view, HoleView::Wanted) {
-                commands.push(UiCommand::ReadHoleGeophysics {
-                    dataset: dataset.id,
-                    dhid: hole.dhid.clone(),
-                });
-            }
-            let index = dataset.geophysics.as_deref();
-            let (logs, linked, reading) = match view {
-                HoleView::Shown(logs) => (Some(logs), true, None),
-                HoleView::NotInFiles => (None, true, None),
-                // Laid out from the index, so the readings only fill in.
-                HoleView::Wanted | HoleView::Reading => (None, true, index.map(|link| link.kinds_of(&hole.dhid))),
-                _ => (None, false, None),
-            };
-            // Only until shown: the index counts a stray reading the read
-            // leaves out.
-            let logged = matches!(view, HoleView::Wanted | HoleView::Reading)
-                .then(|| index.and_then(|link| link.depths_of(&hole.dhid)))
-                .flatten();
-            draw_geophysics_note(ui, &view, dataset.id, commands);
-            let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
-                .strat_field(strat_choice_for(editor, dataset))
-                .well_logs(logs, linked)
-                .reading(reading)
-                .logged_depths(logged)
-                .well_log_style(editor.well_log_style)
-                .show(ui);
-            if let Some(style) = saved {
-                commands.push(UiCommand::SetWellLogStyle(style));
-            }
-        }
-    }
 }
 
 /// The strat field chosen for this dataset: the two conditions the log itself
@@ -215,41 +238,33 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
             .map_or_else(|| fallback.to_owned(), |field| field.label.clone())
     };
 
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.label(tr!("common-colour"));
-        let uniform = tr!("common-uniform-white");
-        let mut chosen = dataset.color.active_field.clone();
-        let before = chosen.clone();
-        egui::ComboBox::from_id_salt(("borehole_log_color_field", dataset.id))
-            .selected_text(label_of(chosen.as_deref(), &uniform))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen, None, uniform.clone());
-                for field in fields {
-                    ui.selectable_value(&mut chosen, Some(field.key.clone()), field.label.clone());
-                }
-            });
-        if chosen != before {
-            commands.push(UiCommand::SetDrillHoleColorField { id: dataset.id, field: chosen });
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.label(tr!("borehole-inspector-strat"));
-        let guessed = tr!("borehole-inspector-guessed-name");
-        egui::ComboBox::from_id_salt(("borehole_log_strat_field", dataset.id))
-            .selected_text(label_of(strat_choice_for(editor, dataset).as_deref(), &guessed))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut editor.borehole_log_strat_field, None, guessed.clone());
-                for field in fields
-                    .iter()
-                    .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
-                {
-                    ui.selectable_value(&mut editor.borehole_log_strat_field, Some((dataset.id, field.key.clone())), field.label.clone());
-                }
-            });
-    });
-    ui.add_space(4.0);
+    let uniform = tr!("common-uniform-white");
+    let mut chosen = dataset.color.active_field.clone();
+    let selected = label_of(chosen.as_deref(), &uniform);
+    let options = std::iter::once((None, uniform.into())).chain(fields.iter().map(|field| (Some(field.key.clone()), field.label.clone().into())));
+    if MenuFieldCombo::new(("borehole_log_color_field", dataset.id), tr!("common-colour"), &mut chosen, selected, options)
+        .show(ui)
+        .changed()
+    {
+        commands.push(UiCommand::SetDrillHoleColorField { id: dataset.id, field: chosen });
+    }
+
+    let guessed = tr!("borehole-inspector-guessed-name");
+    let selected = label_of(strat_choice_for(editor, dataset).as_deref(), &guessed);
+    let options = std::iter::once((None, guessed.into())).chain(
+        fields
+            .iter()
+            .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
+            .map(|field| (Some((dataset.id, field.key.clone())), field.label.clone().into())),
+    );
+    MenuFieldCombo::new(
+        ("borehole_log_strat_field", dataset.id),
+        tr!("borehole-inspector-strat"),
+        &mut editor.borehole_log_strat_field,
+        selected,
+        options,
+    )
+    .show(ui);
 }
 
 /// A short note above the log for the states between a link existing and its
@@ -274,21 +289,16 @@ fn draw_geophysics_note(ui: &mut egui::Ui, view: &HoleView, dataset_id: DrillHol
         HoleView::Link(LinkState::Ready) | HoleView::Reading | HoleView::Wanted | HoleView::Shown(_) | HoleView::NotInFiles | HoleView::Unlinked => return,
     };
 
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        let mut text = egui::RichText::new(message);
-        if weak {
-            text = text.weak();
-        }
-        ui.add(egui::Label::new(text).wrap());
-        if let Some(label) = button
-            && ui
-                .add(egui::Button::new(label).small().corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
-                .clicked()
-        {
-            commands.push(UiCommand::LinkGeophysics(dataset_id));
-        }
-    });
+    let mut text = egui::RichText::new(message);
+    if weak {
+        text = text.weak();
+    }
+    ui.add(egui::Label::new(text).wrap());
+    if let Some(label) = button
+        && ui.add(MenuButton::new(label)).clicked()
+    {
+        commands.push(UiCommand::LinkGeophysics(dataset_id));
+    }
     ui.add_space(4.0);
 }
 

@@ -1417,12 +1417,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             width,
         } = self;
         let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let widest_text = std::iter::once(selected_text.text())
-            .chain(options.iter().map(|(_, text)| text.text()))
-            .map(|text| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x)
-            .fold(0.0, f32::max);
-        let natural_control_width =
-            (widest_text + ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
+        let text_width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
+        let selected_needs = text_width(selected_text.text()) + chrome;
+        let widest_text = options.iter().map(|(_, text)| text_width(text.text())).fold(0.0, f32::max);
+        let natural_control_width = (widest_text + chrome).max(selected_needs).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
         menu_field_row(ui, label, help_text, |ui, _, column_width| {
             let width = width.unwrap_or(column_width).max(natural_control_width);
             let selected_tooltip = selected_text.text().to_owned();
@@ -1436,8 +1435,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                         selection_changed |= ui.selectable_value(value, option, text).changed();
                     }
                 })
-                .response
-                .on_hover_text(selected_tooltip);
+                .response;
+            // Only a value the box cuts short is worth repeating on hover.
+            if selected_needs > width + 0.5 {
+                response = response.on_hover_text(selected_tooltip);
+            }
             if selection_changed {
                 response.mark_changed();
             }

@@ -378,6 +378,7 @@ block-model-z = Z
 borehole-inspector-checking-linked-geophysics-file = Checking the linked geophysics file...
 borehole-inspector-close-inspector = Close the inspector
 borehole-inspector-data = Data
+borehole-inspector-display = Display
 borehole-inspector-file-not-where-was-linked = { $file } is not where it was linked from.
 borehole-inspector-guessed-name = Guessed by name
 borehole-inspector-hold-hole-while-you-work = Hold this hole while you work on the ones around it.
@@ -388,6 +389,7 @@ borehole-inspector-pick-file = Pick { $file }...
 borehole-inspector-pick-file-again-show-its = Pick { $file } again to show its geophysics: a browser page cannot reopen a file by itself.
 borehole-inspector-reading-geophysics-file-its-index = Reading the geophysics file for its index; the status bar shows progress.
 borehole-inspector-strat = Strat
+borehole-inspector-summary = Summary
 
 ## Canvas strings
 
@@ -1013,6 +1015,9 @@ csv-geophysics-run-count-mismatch = Read { $read } run(s) of { $hole }, the link
 csv-geophysics-rows-geophysics-row-s-count = { $rows } geophysics row(s) for { $count } hole(s) the dataset does not define are not linked: { $holes }
 csv-geophysics-rows-readings-would-need-samples = { $rows } readings would need { $samples } samples
 csv-geophysics-run-hole-curve-was-not = A run of { $hole } { $curve } was not kept ({ $reason })
+
+data-table-copy-selection = Copy selection
+data-table-copy-table = Copy table
 
 ## Drill strings
 
@@ -2157,8 +2162,6 @@ viewport-choose-variable = Choose a variable
 viewport-click-edit-color-right-click = Click to edit color; right-click to remove
 viewport-click-type-boundary-s-value = Click to type this boundary's value
 viewport-colour-mapping = Colour mapping
-viewport-copy-selection = Copy selection
-viewport-copy-table = Copy table
 viewport-count-categories = { $count } categories
 viewport-count-category = { $count } category
 viewport-depth-m-hole-end = { $depth } m hole end
