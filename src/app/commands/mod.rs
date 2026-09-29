@@ -1067,6 +1067,16 @@ impl<'a> App<'a> {
                 };
                 self.editor.point_cloud_tin_open = true;
                 self.editor.point_cloud_tin_cloud_id = Some(cloud_id);
+                self.editor.point_cloud_tin_ground_count = self
+                    .point_clouds
+                    .iter()
+                    .find(|cloud| cloud.id == cloud_id)
+                    .and_then(|cloud| cloud.classifications.as_deref())
+                    .map(|codes| {
+                        use rayon::prelude::*;
+                        let ground = codes.par_iter().filter(|&&code| code == crate::model::point_cloud::CLASS_GROUND).count();
+                        (cloud_id, ground)
+                    });
                 // Keep any name the user already typed; otherwise restore the
                 // default rather than opening with an empty, un-runnable field.
                 if self.editor.point_cloud_tin_name_input.trim().is_empty() {
