@@ -3,7 +3,7 @@ use crate::{i18n::tr_format, userspace_log};
 
 /// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
 /// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
-pub(super) fn make_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+pub(super) fn make_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -114,9 +114,13 @@ impl<'a> Graphics<'a> {
         userspace_log!(
             "{}",
             tr_format!(
-                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
+                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_storage_buffers_per_shader_stage=%max_storage_buffers_per_shader_stage%, max_uniform_buffer_binding_size=%max_uniform_buffer_binding_size% KiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
                 max_buffer_size = required_limits.max_buffer_size / (1024 * 1024),
                 max_storage_buffer_binding_size = required_limits.max_storage_buffer_binding_size / (1024 * 1024),
+                // The adapter's own two, not what was asked for: a stage that
+                // binds no storage buffer is why the selection is a uniform.
+                max_storage_buffers_per_shader_stage = adapter_limits.max_storage_buffers_per_shader_stage,
+                max_uniform_buffer_binding_size = adapter_limits.max_uniform_buffer_binding_size / 1024,
                 max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d,
                 max_bind_groups = adapter_limits.max_bind_groups
             )
@@ -587,6 +591,8 @@ impl<'a> Graphics<'a> {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
         })];
+        // Built now because the drill pipeline layout borrows its own.
+        let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
         #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
@@ -603,6 +609,7 @@ impl<'a> Graphics<'a> {
                 point_cloud_style: &point_cloud_style_bind_group_layout,
                 block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
+                drill_selection: drill_hole_gpu.selection_layout(),
             },
             scene_format,
             sample_count,
@@ -872,7 +879,7 @@ impl<'a> Graphics<'a> {
             static_strokes: StaticStrokeCache::default(),
             block_model_gpu: BlockModelGpuCache::default(),
             point_cloud_gpu: PointCloudGpuCache::default(),
-            drill_hole_gpu: DrillHoleGpuCache::default(),
+            drill_hole_gpu,
             design_point_gpu,
             raster_gpu: RasterGpuCache::default(),
             surface_render_stats: Default::default(),

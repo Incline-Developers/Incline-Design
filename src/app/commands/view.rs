@@ -128,6 +128,7 @@ impl<'a> App<'a> {
         match option {
             ViewToggle::Console => preferences.show_console = value,
             ViewToggle::DarkMode => preferences.dark_mode = value,
+            ViewToggle::BoreholeInspector => preferences.show_borehole_inspector = value,
         }
         self.apply_preferences(preferences)
     }
@@ -143,9 +144,18 @@ impl<'a> App<'a> {
         self.apply_preferences(preferences)
     }
 
+    /// Change the borehole log's trace colours or scales, routed through the
+    /// preferences the same way [`Self::set_language`] is.
+    pub(crate) fn set_well_log_style(&mut self, style: crate::ui::widgets::log_traces::WellLogStyle) -> anyhow::Result<()> {
+        let mut preferences = self.editor.current_preferences();
+        preferences.well_log_style = style;
+        self.apply_preferences(preferences)
+    }
+
     pub(crate) fn apply_preferences(&mut self, mut preferences: crate::ui::state::PreferencesDraft) -> anyhow::Result<()> {
         // Clamp once, up front, so the saved config, the applied editor state
         // and the retained draft cannot diverge.
+        preferences.well_log_style = preferences.well_log_style.sanitized();
         preferences.ui_size_percent = crate::app::io::finite_clamped(preferences.ui_size_percent, 50.0, 200.0, crate::app::io::default_ui_size_percent());
         preferences.snap_poll_rate = preferences.snap_poll_rate.clamp(5, 1000);
         preferences.frame_rate_cap = preferences.frame_rate_cap.clamp(20, 1000);
@@ -160,16 +170,15 @@ impl<'a> App<'a> {
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
 
-        crate::app::io::save_config(&config_from(
-            &preferences,
-            self.editor.workspace_order,
-            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
-            self.editor.survey.definitions.clone(),
-            self.editor.survey.local_system.clone(),
-        ))?;
-
+        // Apply to the editor before attempting to save. A save failure must
+        // not leave the editor holding a stale style: a widget whose draft no
+        // longer matches `self.editor.*` re-sends this command every frame,
+        // so a persistent save error would otherwise repeat forever instead
+        // of being reported once below.
+        self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
+        self.editor.show_borehole_inspector = preferences.show_borehole_inspector;
         self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
@@ -230,6 +239,18 @@ impl<'a> App<'a> {
             preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
+
+        // Saved last: the editor already holds the new preferences above, so
+        // a failure here is reported once by the caller and does not leave
+        // the draft and the editor disagreeing.
+        crate::app::io::save_config(&config_from(
+            &preferences,
+            self.editor.workspace_order,
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
+        ))?;
+
         Ok(())
     }
 
@@ -323,8 +344,10 @@ pub(crate) fn config_from(
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
+        well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
+        show_borehole_inspector: preferences.show_borehole_inspector,
         panel_chrome: preferences.panel_chrome,
         ui_size_percent: preferences.ui_size_percent,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,

@@ -33,6 +33,7 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
+        drill_hole::DrillHoleId,
         formats::{self, MeshFormat},
         project::{self, OpenProject},
         triangulation::TriangulationId,
@@ -141,10 +142,20 @@ pub(crate) enum FileDialogAction {
     ImportRaster(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     SetImportSourcePaths { kind: DataMenu, paths: Vec<PathBuf> },
+    /// Link the geophysics CSVs at `paths` to a drillhole dataset.
+    #[cfg(not(target_arch = "wasm32"))]
+    LinkGeophysics { dataset: DrillHoleId, paths: Vec<PathBuf> },
+    /// Link picked geophysics CSVs to a drillhole dataset, or give a saved
+    /// link its files again this session.
+    #[cfg(target_arch = "wasm32")]
+    WebLinkGeophysics { dataset: DrillHoleId, files: Vec<web_sys::File> },
     #[cfg(target_arch = "wasm32")]
     WebSetImportSourceFiles {
         kind: DataMenu,
         files: Vec<std::result::Result<crate::model::input::InputFile, String>>,
+        /// A drillhole CSV bundle's picked files whose heads read; empty
+        /// for any other kind, which is read whole.
+        picked_files: Vec<web_sys::File>,
     },
     /// Export a layer from the project that owned it when the chooser opened.
     #[cfg(not(target_arch = "wasm32"))]
@@ -158,6 +169,8 @@ pub(crate) enum FileDialogAction {
     ExportTriangulation { id: TriangulationId, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportBlockModelCsv { id: BlockModelId, path: PathBuf },
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportDrillHoleCsv { id: DrillHoleId, path: PathBuf },
     /// Save one open project under a new path.
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs { project_runtime_id: u32, path: PathBuf },
@@ -182,6 +195,8 @@ pub(crate) enum FileDialogAction {
     },
     #[cfg(target_arch = "wasm32")]
     WebDownloadBlockModelCsv { id: BlockModelId, file_name: String, close_after: bool },
+    #[cfg(target_arch = "wasm32")]
+    WebDownloadDrillHoleCsv { id: DrillHoleId, stem: String },
     #[cfg(target_arch = "wasm32")]
     WebViewportImage(String),
 }
@@ -567,6 +582,16 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::LinkGeophysics { dataset, paths } => {
+                self.link_geophysics_paths(dataset, paths);
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebLinkGeophysics { dataset, files } => {
+                self.link_geophysics_files(dataset, files);
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SetImportSourcePaths { kind, paths } => {
                 self.editor.import_source_menu = kind;
                 self.editor.import_source_paths = paths;
@@ -594,7 +619,7 @@ impl<'a> App<'a> {
                     for path in &self.editor.import_source_paths {
                         match crate::model::formats::csv_drill_hole::preview_path(path) {
                             Ok(preview) => {
-                                let mapping = crate::model::formats::csv_drill_hole::unassigned_mapping(path.clone(), &preview);
+                                let mapping = crate::model::formats::csv_drill_hole::initial_mapping(path.clone(), &preview);
                                 self.editor.import_drill_csv.push((mapping, preview));
                             }
                             Err(error) => {
@@ -608,7 +633,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebSetImportSourceFiles { kind, files } => {
+            FileDialogAction::WebSetImportSourceFiles { kind, files, picked_files } => {
                 let mut accepted = Vec::new();
                 for file in files {
                     match file {
@@ -641,7 +666,7 @@ impl<'a> App<'a> {
                         match crate::model::formats::csv_drill_hole::preview(&file.bytes) {
                             Ok(preview) => {
                                 let path = PathBuf::from(&file.source.name);
-                                let mapping = crate::model::formats::csv_drill_hole::unassigned_mapping(path, &preview);
+                                let mapping = crate::model::formats::csv_drill_hole::initial_mapping(path, &preview);
                                 self.editor.import_drill_csv.push((mapping, preview));
                             }
                             Err(error) => {
@@ -651,8 +676,13 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    // The import reads the picked files, not the previews.
+                    self.web_import_files = None;
+                    self.web_import_picked_files = Some(picked_files);
+                } else {
+                    self.web_import_picked_files = None;
+                    self.web_import_files = Some((kind, accepted));
                 }
-                self.web_import_files = Some((kind, accepted));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -702,6 +732,8 @@ impl<'a> App<'a> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportBlockModelCsv { id, path } => self.export_block_model_csv_to_path(id, path),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportDrillHoleCsv { id, path } => self.export_drill_hole_csv_to_path(id, path),
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SaveProjectAs { project_runtime_id, path } => {
                 if self.project_revert_is_pending(project_runtime_id) {
@@ -823,6 +855,41 @@ impl<'a> App<'a> {
                         Err(error) => {
                             userspace_warn!("{}", tr_format!(literal = "Triangulation download encoding failed: %error%", error = format!("{error:#}")))
                         }
+                    },
+                );
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebDownloadDrillHoleCsv { id, stem } => {
+                let dataset = self
+                    .drill_holes
+                    .iter()
+                    .find(|item| item.id == id)
+                    .context("The selected drillhole dataset is no longer loaded")?;
+                let snapshot = dataset.clone();
+                self.spawn_job(
+                    tr_format!(literal = "Exporting %name%…", name = stem.clone()),
+                    // Anonymous, not keyed on the dataset: the bytes are already
+                    // copied, so unloading the source must not cancel the write.
+                    vec![crate::app::jobs::JobKey::Anonymous],
+                    move |cancel| {
+                        if cancel.is_cancelled() {
+                            anyhow::bail!("Cancelled");
+                        }
+                        let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
+                            unreachable!()
+                        };
+                        Ok(crate::model::formats::csv_drill_hole::write_bundle(&item.dataset))
+                    },
+                    move |_app, result| match result {
+                        // Three downloads, since a browser saves one file at a
+                        // time and a bundle is three tables.
+                        Ok(bundle) => {
+                            for (suffix, text) in [("collars", bundle.collars), ("survey", bundle.survey), ("intervals", bundle.intervals)] {
+                                Self::trigger_browser_download(format!("{stem}_{suffix}.csv"), text.into_bytes(), "text/csv", "drillhole CSV");
+                            }
+                        }
+                        Err(error) => userspace_warn!("{}", tr_format!(literal = "Drillhole CSV export failed: %error%", error = format!("{error:#}"))),
                     },
                 );
                 Ok(())
@@ -1372,9 +1439,17 @@ impl<'a> App<'a> {
         Ok(selected)
     }
 
+    /// Take the files picked for the drillhole CSV bundle being mapped.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn take_web_import_picked_files(&mut self) -> Vec<web_sys::File> {
+        self.web_import_picked_files.take().unwrap_or_default()
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn clear_browser_import_selection(&mut self, kind: DataMenu) {
-        if self.web_import_files.as_ref().is_some_and(|(stored_kind, _)| *stored_kind == kind) {
+        if kind == DataMenu::CsvDrillHole {
+            self.web_import_picked_files = None;
+        } else if self.web_import_files.as_ref().is_some_and(|(stored_kind, _)| *stored_kind == kind) {
             self.web_import_files = None;
         }
     }
@@ -1436,11 +1511,27 @@ impl<'a> App<'a> {
             } else {
                 dialog.pick_files().await?
             };
-            let mut files = Vec::with_capacity(handles.len());
-            for handle in handles {
-                files.push(crate::model::input::read_browser_handle(handle).await);
-            }
-            Some(FileDialogAction::WebSetImportSourceFiles { kind, files })
+            let (files, picked_files) = if kind == DataMenu::CsvDrillHole {
+                // A bundle's geophysics file runs to gigabytes: only the
+                // head is read here, for the mapping preview. The `File`
+                // handles are kept so importing can read a table whole, or
+                // stream a geophysics file, once a role is chosen for each.
+                let picked: Vec<web_sys::File> = handles.iter().map(|handle| handle.inner().clone()).collect();
+                let mut previews = Vec::with_capacity(picked.len());
+                for file in &picked {
+                    previews.push(crate::model::input::read_browser_head(file, crate::model::formats::csv_drill_hole::PREVIEW_HEAD_BYTES + 1).await);
+                }
+                // The files whose heads read, in step with the mapping.
+                let picked_files = picked.into_iter().zip(&previews).filter_map(|(file, preview)| preview.is_ok().then_some(file)).collect();
+                (previews, picked_files)
+            } else {
+                let mut files = Vec::with_capacity(handles.len());
+                for handle in handles {
+                    files.push(crate::model::input::read_browser_handle(handle).await);
+                }
+                (files, Vec::new())
+            };
+            Some(FileDialogAction::WebSetImportSourceFiles { kind, files, picked_files })
         });
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
@@ -1464,6 +1555,40 @@ impl<'a> App<'a> {
                 dialog.pick_files().await?.into_iter().map(FileHandleExt::into_path).collect()
             };
             Some(FileDialogAction::SetImportSourcePaths { kind, paths })
+        });
+    }
+
+    /// Ask for geophysics files to link to a dataset, replacing any link it
+    /// has. Several are linked in name order, `_2` before `_10`.
+    pub(crate) fn choose_geophysics_file(&mut self, id: DrillHoleId) {
+        if self.known_holes(id).is_none() {
+            userspace_warn!("{}", tr!(literal = "Load the drillhole dataset before linking geophysics to it"));
+            return;
+        }
+        let filter = tr!(literal = "Downhole geophysics CSV");
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let mut paths: Vec<PathBuf> = AsyncFileDialog::new()
+                .add_filter(filter, &["csv"])
+                .pick_files()
+                .await?
+                .into_iter()
+                .map(FileHandleExt::into_path)
+                .collect();
+            paths.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&file_name(a), &file_name(b)));
+            Some(FileDialogAction::LinkGeophysics { dataset: id, paths })
+        });
+        #[cfg(target_arch = "wasm32")]
+        self.spawn_file_dialog(async move {
+            let mut files: Vec<web_sys::File> = AsyncFileDialog::new()
+                .add_filter(filter, &["csv"])
+                .pick_files()
+                .await?
+                .into_iter()
+                .map(|handle| handle.inner().clone())
+                .collect();
+            files.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&a.name(), &b.name()));
+            Some(FileDialogAction::WebLinkGeophysics { dataset: id, files })
         });
     }
 
@@ -1530,6 +1655,82 @@ impl<'a> App<'a> {
                 .into_path();
             Some(FileDialogAction::ExportBlockModelCsv { id, path })
         });
+    }
+
+    pub(crate) fn choose_export_drill_hole_csv(&mut self, id: DrillHoleId) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            userspace_warn!("{}", tr!(literal = "The selected drillhole dataset is no longer loaded"));
+            return;
+        };
+        let stem = Path::new(&dataset.name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("drillholes")
+            .trim_end_matches("_collars")
+            .to_owned();
+        #[cfg(target_arch = "wasm32")]
+        self.start_browser_export(FileDialogAction::WebDownloadDrillHoleCsv { id, stem });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let default_name = format!("{stem}_collars.csv");
+            self.spawn_file_dialog(async move {
+                let path = AsyncFileDialog::new()
+                    .add_filter("CSV drillhole bundle", &["csv"])
+                    .set_file_name(&default_name)
+                    .save_file()
+                    .await?
+                    .into_path();
+                Some(FileDialogAction::ExportDrillHoleCsv { id, path })
+            });
+        }
+    }
+
+    /// The three tables are written beside the name that was chosen, since a
+    /// bundle is one dataset and a reader expects its parts together.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_drill_hole_csv_to_path(&mut self, id: DrillHoleId, path: PathBuf) -> Result<()> {
+        let dataset = self
+            .drill_holes
+            .iter()
+            .find(|item| item.id == id)
+            .context("The selected drillhole dataset is no longer loaded")?;
+        let snapshot = dataset.clone();
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.trim_end_matches("_collars").to_owned())
+            .unwrap_or_else(|| "drillholes".to_owned());
+        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let display = directory.clone();
+        self.spawn_job(
+            tr_format!(literal = "Exporting %name%…", name = stem.clone()),
+            // Anonymous, not keyed on the dataset: the bytes are already
+            // copied, so unloading the source must not cancel the write.
+            vec![crate::app::jobs::JobKey::Anonymous],
+            move |cancel| {
+                if cancel.is_cancelled() {
+                    anyhow::bail!("Cancelled");
+                }
+                let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
+                    unreachable!()
+                };
+                let bundle = crate::model::formats::csv_drill_hole::write_bundle(&item.dataset);
+                for (suffix, text) in [("collars", &bundle.collars), ("survey", &bundle.survey), ("intervals", &bundle.intervals)] {
+                    let path = directory.join(format!("{stem}_{suffix}.csv"));
+                    crate::model::atomic_file::write_atomic(&path, |file| {
+                        use std::io::Write as _;
+                        file.write_all(text.as_bytes()).map_err(anyhow::Error::new)
+                    })?;
+                }
+                Ok(())
+            },
+            move |_app, result| match result {
+                Ok(()) => userspace_log!("{}", tr_format!(literal = "Exported three drillhole CSVs to %path%", path = display.display())),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "Drillhole CSV export failed: %error%", error = format!("{error:#}"))),
+            },
+        );
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2481,6 +2682,9 @@ impl<'a> App<'a> {
             };
             if was_active {
                 app.history.activate(new_runtime_id);
+                // Loads started for the project as it was belong to the old
+                // runtime id.
+                app.cancel_drill_hole_loads_for_other_projects();
                 app.editor.active_layer = active_layer_local_id.and_then(|local_id| {
                     app.workspace.projects[index]
                         .project
@@ -2609,6 +2813,8 @@ impl<'a> App<'a> {
             Some(active) if active > index => self.workspace.active_index = Some(active - 1),
             _ => {}
         }
+        // The closed project's drillhole loads stop here, with a line each.
+        self.cancel_drill_hole_loads_for_other_projects();
         if was_active {
             self.history.deactivate();
             self.clear_editor_transient_state();

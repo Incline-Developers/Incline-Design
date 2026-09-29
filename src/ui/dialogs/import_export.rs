@@ -5,10 +5,11 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
+        drill_hole::DrillHoleId,
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileRole},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
@@ -277,6 +278,9 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!(literal = "Block Models")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
         });
+        ExplorerHeader::new(egui::Id::new("export_drill_holes_section"), tr!(literal = "Drill Holes")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
+        });
     });
 }
 
@@ -310,6 +314,7 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         DataMenu::Stl => draw_export_mesh(ui, editor, project, &tr!(literal = "Export STL")),
         DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!(literal = "Export PLY")),
         DataMenu::CsvBlockModel => draw_export_csv_block_model(ui, editor, project),
+        DataMenu::CsvDrillHole => draw_export_csv_drill_holes(ui, editor, project),
         _ => {}
     });
 }
@@ -526,6 +531,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                             CsvDrillFileRole::Survey,
                             CsvDrillFileRole::Interval,
                             CsvDrillFileRole::ExplicitSegments,
+                            CsvDrillFileRole::Geophysics,
                         ] {
                             ui.selectable_value(&mut mapping.role, role, file_role_label(role));
                         }
@@ -545,7 +551,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                 ui.weak(tr!(literal = "Unmapped"));
                             } else {
                                 let selected = &mut mapping.columns[column];
-                                egui::ComboBox::from_id_salt(("column", column))
+                                let combo = egui::ComboBox::from_id_salt(("column", column))
                                     .selected_text(column_role_label(selected))
                                     .width(115.0)
                                     .show_ui(ui, |ui| {
@@ -554,6 +560,9 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                             ui.selectable_value(selected, column_role, label);
                                         }
                                     });
+                                if let Some(help) = column_role_help(mapping.role, selected) {
+                                    combo.response.on_hover_text(help);
+                                }
                             }
                         });
                     }
@@ -568,6 +577,11 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
             });
         }
     });
+    if geophysics_without_holes(&editor.import_drill_csv) {
+        ui.weak(tr!(
+            literal = "Add the collar file (or an explicit-segments file): downhole geophysics attaches to the holes it defines."
+        ));
+    }
 }
 
 fn file_role_label(role: CsvDrillFileRole) -> String {
@@ -577,6 +591,7 @@ fn file_role_label(role: CsvDrillFileRole) -> String {
         CsvDrillFileRole::Survey => tr!(literal = "Survey"),
         CsvDrillFileRole::Interval => tr!(literal = "Interval"),
         CsvDrillFileRole::ExplicitSegments => tr!(literal = "Explicit segments"),
+        CsvDrillFileRole::Geophysics => tr!(literal = "Downhole geophysics"),
     }
 }
 
@@ -590,6 +605,7 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::Depth => tr!(literal = "Depth"),
         CsvDrillColumnRole::Azimuth => tr!(literal = "Azimuth"),
         CsvDrillColumnRole::Dip => tr!(literal = "Dip"),
+        CsvDrillColumnRole::Inclination => tr!(literal = "Inclination"),
         CsvDrillColumnRole::From => "FROM".to_owned(),
         CsvDrillColumnRole::To => "TO".to_owned(),
         CsvDrillColumnRole::StartEast => tr!(literal = "Start X"),
@@ -599,7 +615,27 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::EndNorth => tr!(literal = "End Y"),
         CsvDrillColumnRole::EndElevation => tr!(literal = "End Z"),
         CsvDrillColumnRole::Diameter => tr!(literal = "Diameter"),
+        CsvDrillColumnRole::Gamma => tr!(literal = "Gamma (API)"),
+        CsvDrillColumnRole::LongDensity => tr!(literal = "Long-spaced density (g/cc)"),
+        CsvDrillColumnRole::ShortDensity => tr!(literal = "Short-spaced density (g/cc)"),
         CsvDrillColumnRole::Attribute(_) => tr!(literal = "Attribute"),
+    }
+}
+
+/// Hover help for a geophysics column's unit convention, `None` elsewhere.
+fn column_role_help(file: CsvDrillFileRole, column: &CsvDrillColumnRole) -> Option<String> {
+    if file != CsvDrillFileRole::Geophysics {
+        return None;
+    }
+    match column {
+        CsvDrillColumnRole::Depth => Some(tr!(
+            literal = "Measured depth down the hole, read as metres. Incline converts no units: the database that exported the file sets them."
+        )),
+        CsvDrillColumnRole::Gamma => Some(tr!(literal = "Natural gamma, read as API units, as exported.")),
+        CsvDrillColumnRole::LongDensity | CsvDrillColumnRole::ShortDensity => Some(tr!(
+            literal = "Density, read as g/cc, as exported. A curve whose median is not between 0.5 and 5 g/cc is left out of the import with a warning, its unit looking wrong."
+        )),
+        _ => None,
     }
 }
 
@@ -620,6 +656,7 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::Elevation,
             CsvDrillColumnRole::Azimuth,
             CsvDrillColumnRole::Dip,
+            CsvDrillColumnRole::Inclination,
         ]),
         CsvDrillFileRole::Interval => roles.extend([CsvDrillColumnRole::From, CsvDrillColumnRole::To, CsvDrillColumnRole::Attribute(header.to_owned())]),
         CsvDrillFileRole::ExplicitSegments => roles.extend([
@@ -633,6 +670,12 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::EndElevation,
             CsvDrillColumnRole::Diameter,
             CsvDrillColumnRole::Attribute(header.to_owned()),
+        ]),
+        CsvDrillFileRole::Geophysics => roles.extend([
+            CsvDrillColumnRole::Depth,
+            CsvDrillColumnRole::Gamma,
+            CsvDrillColumnRole::LongDensity,
+            CsvDrillColumnRole::ShortDensity,
         ]),
     }
     roles
@@ -661,6 +704,15 @@ fn draw_export_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.heading(tr!(literal = "Export CSV Block Model"));
     ensure_export_block_model(editor, project);
     block_model_combo(ui, "csv_export_block_model", &tr!(literal = "Block model:"), project, &mut editor.export_block_model);
+}
+
+fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    ui.heading(tr!(literal = "Export CSV Drillholes"));
+    ensure_export_drill_hole(editor, project);
+    drill_hole_combo(ui, "csv_export_drill_hole", &tr!(literal = "Dataset:"), project, &mut editor.export_drill_hole);
+    ui.small(tr!(
+        literal = "Writes three files beside the name you choose: collars, survey and intervals, in the columns this dialog imports."
+    ));
 }
 
 fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<LayerId>) {
@@ -757,6 +809,9 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::CsvBlockModel => {
             editor.export_block_model = first_loaded_block_model(project);
         }
+        DataMenu::CsvDrillHole => {
+            editor.export_drill_hole = first_loaded_drill_hole(project);
+        }
         _ => {}
     }
 }
@@ -779,10 +834,43 @@ fn ensure_export_triangulation(editor: &mut EditorState, project: &UiProjectView
     }
 }
 
+fn ensure_export_drill_hole(editor: &mut EditorState, project: &UiProjectView) {
+    if !has_loaded_drill_hole(project, editor.export_drill_hole) {
+        editor.export_drill_hole = first_loaded_drill_hole(project);
+    }
+}
+
+fn drill_hole_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<DrillHoleId>) {
+    let label = selected
+        .and_then(|id| project.drill_holes.iter().find(|entry| entry.id == id && entry.is_loaded))
+        .map(|entry| entry.name.clone())
+        .unwrap_or_else(|| tr!(literal = "Choose a loaded dataset"));
+    MenuFieldCombo::new(
+        id,
+        field_label,
+        selected,
+        label,
+        project
+            .drill_holes
+            .iter()
+            .filter(|entry| entry.is_loaded)
+            .map(|entry| (Some(entry.id), entry.name.clone().into())),
+    )
+    .width(FIELD_WIDTH)
+    .show(ui);
+}
+
 fn ensure_export_block_model(editor: &mut EditorState, project: &UiProjectView) {
     if !has_loaded_block_model(project, editor.export_block_model) {
         editor.export_block_model = first_loaded_block_model(project);
     }
+}
+
+/// True when the bundle carries a downhole-geophysics file but no file the
+/// holes it should attach to could be named after (no collar, no
+/// explicit-segments file).
+fn geophysics_without_holes(files: &[(CsvDrillFileMapping, CsvDrillPreview)]) -> bool {
+    files.iter().any(|(mapping, _)| mapping.role == CsvDrillFileRole::Geophysics) && bundle_anchor(files.iter().map(|(mapping, _)| mapping)).is_none()
 }
 
 fn import_command(editor: &EditorState) -> Option<UiCommand> {
@@ -805,12 +893,12 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
         DataMenu::CsvDrillHole
             if editor.import_csv_error.is_none()
                 && !editor.import_drill_csv.is_empty()
-                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned) =>
+                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned)
+                && !geophysics_without_holes(&editor.import_drill_csv) =>
         {
-            let name = editor
-                .import_drill_csv
-                .first()?
-                .0
+            let anchor = bundle_anchor(editor.import_drill_csv.iter().map(|(mapping, _)| mapping));
+            let name = anchor
+                .or_else(|| editor.import_drill_csv.first().map(|(mapping, _)| mapping))?
                 .path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
@@ -841,6 +929,7 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
             editor.export_triangulation.map(|id| UiCommand::ExportTriangulationAs(id, format))
         }
         DataMenu::CsvBlockModel => editor.export_block_model.map(UiCommand::ExportBlockModelCsv),
+        DataMenu::CsvDrillHole => editor.export_drill_hole.map(UiCommand::ExportDrillHoleCsv),
         _ => None,
     }
 }
@@ -874,7 +963,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole
     )
 }
 
@@ -892,6 +981,10 @@ fn active_project(project: &UiProjectView) -> Option<u32> {
 
 fn first_loaded_triangulation(project: &UiProjectView) -> Option<TriangulationId> {
     project.triangulations.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
+}
+
+fn first_loaded_drill_hole(project: &UiProjectView) -> Option<DrillHoleId> {
+    project.drill_holes.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
 }
 
 fn first_loaded_block_model(project: &UiProjectView) -> Option<BlockModelId> {
@@ -913,6 +1006,10 @@ fn has_project(project: &UiProjectView, selected: Option<u32>) -> bool {
 
 fn has_loaded_triangulation(project: &UiProjectView, selected: Option<TriangulationId>) -> bool {
     selected.is_some_and(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == id))
+}
+
+fn has_loaded_drill_hole(project: &UiProjectView, selected: Option<DrillHoleId>) -> bool {
+    selected.is_some_and(|id| project.drill_holes.iter().any(|entry| entry.is_loaded && entry.id == id))
 }
 
 fn has_loaded_block_model(project: &UiProjectView, selected: Option<BlockModelId>) -> bool {

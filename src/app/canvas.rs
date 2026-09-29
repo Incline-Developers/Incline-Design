@@ -323,9 +323,9 @@ impl<'a> App<'a> {
             if let Some(pick) = pending_selection_click {
                 let world = pick.world;
                 let handle = pick.entity;
-                // Drill & Blast selects the hole the cursor was over, where
-                // production selects the dataset holding it.
-                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
+                // A click takes the one hole the cursor was over, in every
+                // workspace. Selecting a dataset whole is the explorer's job.
+                let hole = pick.hole;
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
@@ -351,6 +351,14 @@ impl<'a> App<'a> {
                 match hole {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
+                }
+                // A click that dropped its hit must not park the panel on it.
+                let still_selected = match hole {
+                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
+                    None => self.editor.selected_handles.contains(&handle),
+                };
+                if still_selected {
+                    self.editor.show_picked_hole(hole);
                 }
                 // A drape has no geometry of its own - it is painted onto the
                 // surface - so the click that lands on the surface lands on
@@ -428,17 +436,35 @@ impl<'a> App<'a> {
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
         });
+        // Holes ride the same box, taken by their collars: they are not
+        // rendered geometry the picker walks, so `enclosed` never holds one,
+        // and Move takes none because it marquees only what it can move.
+        let holes = self
+            .graphics
+            .as_ref()
+            .filter(|_| !objects_only)
+            .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .unwrap_or_default();
         if self.modifiers.shift_key() {
             for handle in enclosed {
                 if !self.editor.selected_handles.remove(&handle) {
                     self.editor.selected_handles.insert(handle);
                 }
             }
+            for hole in holes {
+                if !self.editor.selected_drill_holes.remove(&hole) {
+                    self.editor.selected_drill_holes.insert(hole);
+                }
+            }
         } else {
             if !self.modifiers.control_key() {
                 self.editor.selected_handles.clear();
+                // Cleared with the handles, or a box over empty ground would
+                // leave the previous box's holes selected.
+                self.editor.selected_drill_holes.clear();
             }
             self.editor.selected_handles.extend(enclosed);
+            self.editor.selected_drill_holes.extend(holes);
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;

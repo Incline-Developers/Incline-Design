@@ -651,6 +651,7 @@ impl<'a> Graphics<'a> {
             &view_proj,
             screen,
             threshold_px,
+            self.drill_hole_gpu.disc_spans(),
         )
         .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
@@ -881,6 +882,47 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The holes a selection rectangle takes outside Drill & Blast, judged by
+    /// the collar alone: crossing and window selection agree, a point being
+    /// inside or out, and a hole whose trace crosses the box while its collar
+    /// sits outside is not taken.
+    pub(crate) fn drill_hole_collars_in_screen_rect(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<DrillHoleRef> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let mut hits = Vec::new();
+
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+                let collar = hole.collar_position();
+                // A collar the section cut away is not on screen to drag over.
+                if !self.slab_contains(collar) {
+                    continue;
+                }
+                // Behind the camera there is no screen point to test.
+                let Some(point) = crate::rendering::pick::world_to_screen(&view_proj, collar, screen) else {
+                    continue;
+                };
+                if rect.contains(point) {
+                    hits.push(DrillHoleRef { dataset: dataset.id, hole: index });
+                }
+            }
+        }
+
+        hits
+    }
+
     /// The tie-in connectors a Drill & Blast selection rectangle takes.
     ///
     /// Crossing selection accepts a connector that touches the box; window
@@ -967,8 +1009,19 @@ impl<'a> Graphics<'a> {
         {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit =
-                SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit = SceneQuery::nearest_drill_hole(
+                drill_holes,
+                hidden,
+                frozen,
+                ray_origin,
+                direction,
+                self.camera.forward(),
+                &view_proj,
+                screen,
+                0.0,
+                self.drill_hole_gpu.disc_spans(),
+            )
+            .map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected

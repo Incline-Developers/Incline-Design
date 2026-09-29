@@ -460,7 +460,8 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
+        // Also under Drillholes; here so every workspace can close it.
+        for toggle in [ViewToggle::Console, ViewToggle::BoreholeInspector, ViewToggle::DarkMode] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
@@ -603,6 +604,33 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     .clicked()
                 {
                     commands.push(UiCommand::OpenCreateBlockModel);
+                    ui.close();
+                }
+            });
+
+            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+                // A switch onto the same setting the Interface preferences tab
+                // holds, like the View menu's toggles above.
+                if ContextMenuAction::new(ViewToggle::BoreholeInspector.label())
+                    .checked(ViewToggle::BoreholeInspector.get(editor))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
+                    ui.close();
+                }
+                // Select first, then act: placed on the holes selected at open.
+                let can_build_points = editor.selection_counts.reference_holes > 0;
+                if ContextMenuAction::new(tr!(literal = "Reference Points...")).enabled(can_build_points).show(ui).clicked() {
+                    commands.push(UiCommand::OpenReferencePoints);
+                    ui.close();
+                }
+                // Select first, then act: the surface is built from the points
+                // that are selected when it opens, not from a layer picked
+                // inside the dialog.
+                let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
+                if ContextMenuAction::new(tr!(literal = "Build Surface...")).enabled(can_build_surface).show(ui).clicked() {
+                    commands.push(UiCommand::OpenReferenceSurface);
                     ui.close();
                 }
             });
