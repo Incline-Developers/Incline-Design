@@ -124,7 +124,8 @@ pub(crate) struct OpenTriangulation {
     pub(crate) cull_back_faces: bool,
     /// Draw this mesh's edges whether or not it is selected. Set for the dig
     /// blocks a flitch is cut into, whose seams are the only thing telling one
-    /// block from the next.
+    /// block from the next. Their `edges` are that outline, not every triangle
+    /// side, so the renderer draws the list rather than a shader wireframe.
     pub(crate) always_show_edges: bool,
     /// Scene-Z range to shade this surface across, as a greyscale ramp over
     /// its own colour. Runtime only, for the Blasting step's plan view, where

@@ -1326,7 +1326,7 @@ impl TriangulationGpuCache {
         // With fragment barycentrics the surface shader draws its own edges and
         // the instanced edge chunks are never built: on a dense surface they
         // cost six vertices per edge, several times the surface itself.
-        let shader_wireframe = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
+        let barycentrics = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
         let loaded: HashSet<_> = triangulations.iter().chain(solid_preview).filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
         for triangulation in triangulations.iter().chain(solid_preview) {
@@ -1355,6 +1355,10 @@ impl TriangulationGpuCache {
             // and so does a mesh that asks for them - a dig block's seam is the
             // only thing separating it from the block beside it.
             let show_edges = selected || editor.topology_wireframes_enabled || triangulation.always_show_edges;
+            // The shader draws every triangle side, which is only this mesh's
+            // edge list when that list is all of them. A dig block's is its
+            // outline alone, so it keeps the instanced edges.
+            let shader_wireframe = barycentrics && !triangulation.always_show_edges;
             let edge_width = if show_edges {
                 (triangulation.line_weight.unwrap_or(1.0) * scale_factor).max(1.0)
             } else {
