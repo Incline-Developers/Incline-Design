@@ -50,7 +50,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
-    pub(crate) show_borehole_inspector: bool,
     pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
     pub(crate) show_world_axis_gizmo: bool,
@@ -94,7 +93,6 @@ impl Default for PreferencesDraft {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
@@ -1139,7 +1137,9 @@ pub(crate) struct EditorState {
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
     pub(crate) show_console: bool,
-    /// Show the Borehole Inspector panel.
+    /// Show the Borehole Inspector panel. Only the Geology workspace draws it.
+    /// A per-session view switch like the others on the viewport bar: not
+    /// saved, and off at every launch.
     pub(crate) show_borehole_inspector: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
@@ -2335,7 +2335,6 @@ impl EditorState {
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
-            show_borehole_inspector: self.show_borehole_inspector,
             panel_chrome: self.panel_chrome,
             ui_size_percent: self.ui_size_percent,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
@@ -2392,7 +2391,7 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            show_borehole_inspector: crate::app::io::default_show_borehole_inspector(),
+            show_borehole_inspector: false,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),
@@ -3130,13 +3129,12 @@ impl ToolHatch {
 
 /// One of the view preferences the View menu switches on and off.
 ///
-/// The menu carries the few that are reached often enough to want a row of
-/// their own; the whole set stays in the Interface preferences tab.
+/// The View menu carries the few that are reached often enough to want a row
+/// of their own; the whole set stays in the Interface preferences tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
-    BoreholeInspector,
 }
 
 impl ViewToggle {
@@ -3144,7 +3142,6 @@ impl ViewToggle {
         match self {
             Self::Console => tr!("state-show-console"),
             Self::DarkMode => tr!("state-dark-mode"),
-            Self::BoreholeInspector => tr!("common-borehole-inspector"),
         }
     }
 
@@ -3155,7 +3152,6 @@ impl ViewToggle {
         match self {
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
-            Self::BoreholeInspector => editor.show_borehole_inspector,
         }
     }
 }

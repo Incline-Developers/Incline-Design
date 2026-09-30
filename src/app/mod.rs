@@ -563,10 +563,7 @@ impl<'a> Default for App<'a> {
 impl<'a> App<'a> {
     #[cfg(target_os = "macos")]
     fn handle_mac_menu_action(&mut self, action: crate::mac::MacMenuAction) {
-        use crate::{
-            mac::MacMenuAction,
-            ui::state::{UiCommand, ViewToggle},
-        };
+        use crate::{mac::MacMenuAction, ui::state::UiCommand};
 
         let active_project_id = self.workspace.active_project().map(|project| project.runtime_id);
         let command = match action {
@@ -619,9 +616,6 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
-            // Named rather than indexed: this switch is a Drillholes menu row
-            // of its own, not one of the View menu's.
-            MacMenuAction::ToggleBoreholeInspector => Some(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector)),
         };
 
         if let Some(command) = command {
@@ -692,7 +686,6 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
-        self.editor.show_borehole_inspector = config.show_borehole_inspector;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;

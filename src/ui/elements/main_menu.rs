@@ -460,8 +460,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        // Also under Drillholes; here so every workspace can close it.
-        for toggle in [ViewToggle::Console, ViewToggle::BoreholeInspector, ViewToggle::DarkMode] {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
@@ -605,16 +604,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             });
 
             MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
-                // A switch onto the same setting the Interface preferences tab
-                // holds, like the View menu's toggles above.
-                if ContextMenuAction::new(ViewToggle::BoreholeInspector.label())
-                    .checked(ViewToggle::BoreholeInspector.get(editor))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
-                    ui.close();
-                }
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
                 if ContextMenuAction::new(tr!("common-reference-points")).enabled(can_build_points).show(ui).clicked() {

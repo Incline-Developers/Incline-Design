@@ -572,14 +572,7 @@ impl<'a> App<'a> {
     pub(crate) fn inspect_drill_hole(&mut self, hole: DrillHoleRef) -> Result<()> {
         self.editor.inspected_hole = Some(hole);
         self.redraw_requested = true;
-        // The one switch, shared with the menu and the Interface tab.
-        if !self.editor.show_borehole_inspector
-            && let Err(error) = self.toggle_view_option(crate::ui::state::ViewToggle::BoreholeInspector)
-        {
-            // A setting that will not save must not hold the panel shut.
-            self.editor.show_borehole_inspector = true;
-            userspace_warn!("{}", tr!("cmd-drill-hole-opened-borehole-inspector-but-could", error = error.to_string()));
-        }
+        self.editor.show_borehole_inspector = true;
         Ok(())
     }
 }
