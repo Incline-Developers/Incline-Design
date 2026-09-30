@@ -1361,7 +1361,11 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
             return Err(format!("invalid material shares on ground source {}", source.id.0));
         }
     }
-    let referable: BTreeSet<_> = ground_ids.iter().copied().chain(horizon.into_iter().flat_map(|full| full.ground.iter().map(|source| source.id))).collect();
+    let referable: BTreeSet<_> = ground_ids
+        .iter()
+        .copied()
+        .chain(horizon.into_iter().flat_map(|full| full.ground.iter().map(|source| source.id)))
+        .collect();
     let loaders: BTreeSet<_> = input.loaders.iter().map(|loader| loader.id).collect();
     if loaders.len() != input.loaders.len() {
         return Err("duplicate loader".into());
