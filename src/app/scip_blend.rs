@@ -1,4 +1,5 @@
-//! The SCIP solve of one owned blended model, run on a compute-pool worker.
+//! The SCIP solve of one owned blended model, run inside the solver process
+//! (see [`super::solver_process`]).
 //!
 //! [`execute_scip_blend`] validates the input, builds the model, solves it,
 //! extracts owned rows and runs the independent replay, polling cancellation
@@ -10,7 +11,8 @@
 //! model, pointer or solution wrapper leaves it; only owned, replayed rows
 //! do. Run Period and Run All Periods reach it through
 //! [`crate::app::schedule_run`], which owns the job, currentness and
-//! publication.
+//! publication, and [`super::solver_process`], which runs it in a child
+//! process and has the app replay what comes back.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -46,7 +48,7 @@ use crate::model::schedule::{
     result::{BoundSource, DayByDayRole, DayByDaySummary},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ScipRunIdentity {
     pub(crate) run_id: u64,
     pub(crate) inputs: ScheduleRunInputs,
@@ -63,7 +65,7 @@ pub(crate) struct ScipRunIdentity {
     pub(crate) semantic: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ScipSolveOptions {
     pub(crate) time_limit: Option<Duration>,
     pub(crate) relative_gap: Option<f64>,
@@ -80,7 +82,7 @@ impl Default for ScipSolveOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ScipTermination {
     Optimal,
     FeasibleLimit,
@@ -93,7 +95,7 @@ pub(crate) enum ScipTermination {
     BackendFailure,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ScipPhaseTimings {
     pub(crate) input_validation: Duration,
     pub(crate) formulation: Duration,
@@ -133,7 +135,7 @@ pub(crate) struct ScipCompletion {
 }
 
 impl ScipCompletion {
-    fn new(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>) -> Self {
+    pub(crate) fn new(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>) -> Self {
         Self {
             identity,
             options,
@@ -161,7 +163,7 @@ impl ScipCompletion {
         }
     }
 
-    fn stop(&mut self, reason: ScipTermination, diagnostic: impl Into<String>) {
+    pub(crate) fn stop(&mut self, reason: ScipTermination, diagnostic: impl Into<String>) {
         self.termination = reason;
         self.diagnostic = Some(diagnostic.into());
         self.solution = None;
@@ -174,6 +176,163 @@ impl ScipCompletion {
             && self.solution.is_some()
             && self.replay.as_ref().is_some_and(|report| report.is_valid())
     }
+
+    /// What the solver process sends back for this completion.
+    pub(crate) fn report(&self) -> ReportedCompletion {
+        let issues = |pick: fn(&ReplayReport) -> &Vec<String>| self.replay.as_deref().map(pick).cloned().unwrap_or_default();
+        ReportedCompletion {
+            termination: self.termination,
+            backend_status: self.backend_status.map(StatusName),
+            diagnostic: self.diagnostic.clone(),
+            solution: self.solution.as_deref().cloned(),
+            replay_issues: issues(|report| &report.issues),
+            replay_grade_issues: issues(|report| &report.grade_issues),
+            published_objective: self.published_objective,
+            raw_objective: self.raw_objective,
+            primary_bound: self.primary_bound,
+            primary_gap: self.primary_gap,
+            bound_source: self.bound_source,
+            adjustments: self.adjustments,
+            sizes: self.sizes,
+            timings: self.timings,
+            diagnostics: self.diagnostics.clone(),
+            solver_limit_overshoot: self.solver_limit_overshoot,
+            backend_version: self.backend_version.clone(),
+            event_callbacks: self.event_callbacks,
+            interrupt_calls: self.interrupt_calls,
+            day_by_day: self.day_by_day.clone(),
+        }
+    }
+
+    /// Rebuild a completion the solver process reported, replaying its
+    /// schedule again here rather than taking the process's word for it: the
+    /// process is the part of the app a native fault can corrupt, so what it
+    /// says is checked like any other solver claim.
+    pub(crate) fn from_report(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>, report: ReportedCompletion, cancel: &CancelFlag) -> Self {
+        let mut out = Self::new(identity, options, input);
+        out.termination = report.termination;
+        out.backend_status = report.backend_status.map(|status| status.0);
+        out.diagnostic = report.diagnostic;
+        out.raw_objective = report.raw_objective;
+        out.primary_bound = report.primary_bound;
+        out.primary_gap = report.primary_gap;
+        out.bound_source = report.bound_source;
+        out.adjustments = report.adjustments;
+        out.sizes = report.sizes;
+        out.timings = report.timings;
+        out.diagnostics = report.diagnostics;
+        out.solver_limit_overshoot = report.solver_limit_overshoot;
+        out.backend_version = report.backend_version;
+        out.event_callbacks = report.event_callbacks;
+        out.interrupt_calls = report.interrupt_calls;
+        out.day_by_day = report.day_by_day;
+        let Some(solution) = report.solution else {
+            // Nothing to publish; the process's replay findings are kept only
+            // to explain why.
+            if !report.replay_issues.is_empty() || !report.replay_grade_issues.is_empty() {
+                out.replay = Some(Arc::new(ReplayReport {
+                    issues: report.replay_issues,
+                    grade_issues: report.replay_grade_issues,
+                    ..ReplayReport::default()
+                }));
+            }
+            return out;
+        };
+        let started = Instant::now();
+        let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
+        out.timings.replay += started.elapsed();
+        let Some(checked) = checked else {
+            out.stop(ScipTermination::Cancelled, "cancelled during replay");
+            return out;
+        };
+        let replayed = checked.replayed_objective;
+        let slack = checked.boundary_value_slack;
+        let valid = checked.is_valid();
+        out.replay = Some(Arc::new(checked));
+        if !valid {
+            out.stop(ScipTermination::ValidationFailure, "independent blended replay rejected the solver process's schedule");
+            return out;
+        }
+        let claimed = report.published_objective.unwrap_or(f64::NAN);
+        let agrees = (claimed - replayed).abs() <= REPORT_AGREEMENT * replayed.abs().max(1.0);
+        if !agrees {
+            out.stop(
+                ScipTermination::ValidationFailure,
+                format!("the solver process reported a schedule worth {claimed}, which replays to {replayed}"),
+            );
+            return out;
+        }
+        if let Some(bound) = out.primary_bound
+            && let Some(problem) = exceeds_bound(replayed - slack, bound)
+        {
+            out.stop(ScipTermination::ValidationFailure, problem);
+            return out;
+        }
+        out.published_objective = Some(replayed);
+        out.solution = Some(Arc::new(solution));
+        out
+    }
+}
+
+/// How closely the app's replay must agree with the value the solver
+/// process's replay found. Both run the same code on the same numbers - JSON
+/// carries every `f64` exactly - so any real difference means the process
+/// sent something other than what it replayed.
+const REPORT_AGREEMENT: f64 = 1e-9;
+
+/// A [`ScipCompletion`] as the solver process reports it (see
+/// [`super::solver_process`]): the input stays with the app, which sent it,
+/// and the replay is repeated by the app, so only its findings travel, to
+/// explain a schedule that was not published.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct ReportedCompletion {
+    termination: ScipTermination,
+    backend_status: Option<StatusName>,
+    diagnostic: Option<String>,
+    solution: Option<BlendSolution>,
+    replay_issues: Vec<String>,
+    replay_grade_issues: Vec<String>,
+    published_objective: Option<f64>,
+    raw_objective: Option<f64>,
+    primary_bound: Option<f64>,
+    primary_gap: Option<f64>,
+    bound_source: BoundSource,
+    adjustments: Option<ExtractionAdjustments>,
+    sizes: BlendSizes,
+    timings: ScipPhaseTimings,
+    diagnostics: crate::model::schedule::result::SolveDiagnostics,
+    solver_limit_overshoot: Option<Duration>,
+    backend_version: String,
+    event_callbacks: u64,
+    interrupt_calls: u64,
+    day_by_day: Option<DayByDaySummary>,
+}
+
+/// russcip's status, which has no serde support of its own.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StatusName(#[serde(with = "StatusDef")] Status);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(remote = "Status")]
+enum StatusDef {
+    Unknown,
+    UserInterrupt,
+    NodeLimit,
+    TotalNodeLimit,
+    StallNodeLimit,
+    TimeLimit,
+    MemoryLimit,
+    GapLimit,
+    PrimalLimit,
+    DualLimit,
+    SolutionLimit,
+    BestSolutionLimit,
+    RestartLimit,
+    Optimal,
+    Infeasible,
+    Unbounded,
+    Inforunbd,
+    Terminate,
 }
 
 /// Observable worker phase for developer lifecycle checks. SCIP objects are
@@ -195,7 +354,7 @@ impl ScipActivity {
     }
 }
 
-/// Runs on one existing compute-pool worker. No SCIP model, pointer or
+/// Runs on one thread, the solver process's main one. No SCIP model, pointer or
 /// solution wrapper leaves this function; only owned, replayed rows do.
 ///
 /// `early` is handed the day-by-day schedule, completed as a publishable

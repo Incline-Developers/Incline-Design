@@ -224,7 +224,7 @@ pub(crate) enum SolveQuality {
 }
 
 /// Solver observations, not independent feasibility or optimality claims.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SolveDiagnostics {
     /// SCIP elapsed solve time at its first solution event; replay occurs later.
     pub(crate) first_incumbent_s: Option<f64>,
@@ -256,7 +256,7 @@ pub(crate) struct SolveDiagnostics {
 /// The day-by-day start of a long horizon: each day solved with a look-ahead,
 /// the kept days stitched and replayed against the whole horizon, then used
 /// to seed the whole-horizon solve.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DayByDaySummary {
     pub(crate) windows: usize,
     pub(crate) seconds: f64,
@@ -268,7 +268,7 @@ pub(crate) struct DayByDaySummary {
 }
 
 /// What became of the stitched day-by-day schedule.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DayByDayRole {
     /// It seeded the whole-horizon solve, whose schedule is the one
     /// published.
@@ -288,7 +288,7 @@ pub(crate) enum DayByDayRole {
 }
 
 /// Which solve proved a published bound.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum BoundSource {
     /// SCIP's own dual bound on the model.
     #[default]

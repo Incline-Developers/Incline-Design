@@ -26,7 +26,7 @@ use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, task_a
 use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MovementRow {
     pub(crate) candidate: usize,
     pub(crate) interval: usize,
@@ -35,7 +35,7 @@ pub(crate) struct MovementRow {
 }
 
 /// One chunk's published state in one interval.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ChunkRow {
     pub(crate) pile: StockpileId,
     pub(crate) chunk: usize,
@@ -53,9 +53,10 @@ pub(crate) struct ChunkRow {
 }
 
 /// The extracted schedule, as published for replay.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BlendSolution {
     pub(crate) movements: Vec<MovementRow>,
+    #[serde(with = "pairs")]
     pub(crate) durations: BTreeMap<(usize, usize), f64>,
     /// Empty for unchunked piles.
     pub(crate) chunks: Vec<ChunkRow>,
@@ -66,7 +67,22 @@ pub(crate) struct BlendSolution {
     pub(crate) adjustments: ExtractionAdjustments,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// A map as a list of pairs, for keys JSON cannot hold as object keys.
+mod pairs {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<K: Serialize, V: Serialize, S: Serializer>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(map)
+    }
+
+    pub(super) fn deserialize<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error> {
+        Ok(Vec::<(K, V)>::deserialize(deserializer)?.into_iter().collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExtractionAdjustments {
     pub(crate) movement_count: usize,
     pub(crate) movement_total_t: f64,

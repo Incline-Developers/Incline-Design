@@ -83,7 +83,7 @@ impl<V> BlendColumns<V> {
 }
 
 /// Sizes recorded for the benchmark table.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BlendSizes {
     pub(crate) variables: usize,
     pub(crate) binaries: usize,

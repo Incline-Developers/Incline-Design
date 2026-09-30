@@ -21,6 +21,8 @@ do not change model semantics; shortening the horizon past a held result does.
 The existing solver-thread interrupt handler and seeded-mode workaround remain.
 A horizon longer than one day-by-day window is first solved a day at a time;
 see [Day-by-day start](#day-by-day-start-for-long-horizons).
+The solve itself runs in a child process of the app; see
+[Solver process](#solver-process).
 
 ## Resolution and event capacity
 
@@ -397,6 +399,8 @@ with AMD instead. The same fixture then completed five runs out of five.
 With the option set to METIS explicitly, it hung. The four chunk fixtures over
 96 h reached the same proven optima as before. The ordering affects only how
 Ipopt factorises, not what any solve means. MPEC stays off in seeded solves.
+A fault of this kind is why the solve now runs in its own process: the next
+one ends a run, not the app.
 
 Two exact changes came with this:
 
@@ -528,3 +532,52 @@ probe, the whole-horizon model written by SCIP and relaxed by HiGHS, took
 two minutes sooner than SCIP's root LP. Its day-by-day schedule sat 0.11%
 below the final bound, above the default 0.01% gap target, so it would still
 run the whole-horizon solve.
+
+## Solver process
+
+SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,
+such as the METIS heap corruption above, is not a panic the job queue can
+catch. Inside the app it took the whole app down, unsaved edits included. So
+Run Period and Run All Periods now solve in a second copy of the app's own
+binary, started as `incline-design --schedule-solver`
+(`src/app/solver_process.rs`). Capture and publication stay in the app.
+
+- The app writes the captured input, run identity and options to the
+  process's stdin as one line of JSON. The process runs the same solve as
+  before, day-by-day windows and relaxation bound included. It writes back
+  log records, the day-by-day schedule when there is one, and the finished
+  run, one framed JSON line each. JSON carries every `f64` exactly
+  (`serde_json`'s `float_roundtrip`), and maps with tuple keys travel as
+  lists of pairs.
+- The app replays every schedule the process sends, early or final, itself.
+  It publishes only if that replay passes, agrees with the process's value
+  to 1e-9 relative, and stays under the reported bound. A process whose
+  memory a fault had corrupted cannot publish what it did not solve. The
+  process's own replay findings travel only to explain an unpublished run.
+- Anything a native library prints to stdout, such as SCIP's log under
+  `INCLINE_SCIP_LOG`, is told apart from messages by the frame and logged.
+  stderr is logged too, and its last lines are logged again when the process
+  dies.
+- Cancel or Stop kills the process. On the competition week, a cancel
+  4 s in returned 11 ms after the request. A process whose app has gone
+  sees its stdin close, stops its solve, and aborts if that has not finished
+  within 30 s.
+- A process that ends without an answer fails the run with "The solver
+  stopped unexpectedly (signal …)". A schedule already shown early stays,
+  as it does when the whole-horizon solve fails.
+
+Checked on the fixtures against the same solve run in the app, 40 s budget:
+
+| fixture | solver process | in the app |
+|---|---|---|
+| graded, 96 h | optimal, 24,000, relaxation bound, 0.42 s | same, 0.40 s |
+| competition, 72 h (30 s) | 13,500 against 18,300 at the limit | same |
+| competition, 168 h | early 31,500 at 20 s, final 31,500 against 36,300 | same |
+
+A stand-in process that aborted after reading its request was reported as
+signal 6 with its stderr, and the app carried on. The process adds tens of
+milliseconds for starting up and moving data. Not yet checked: the app itself
+running DreamLand through the process, and Windows and macOS. There,
+`current_exe` and pipe handling are standard library, and a debug Windows build
+starts the process with `CREATE_NO_WINDOW`.
+

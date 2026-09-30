@@ -89,7 +89,7 @@ use crate::model::schedule::optimisation::{
 
 /// A blended pile: opening lots already combined by tonnes and contained
 /// quantity, because a blend has no ordered lots to preserve.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BlendPile {
     pub(crate) id: StockpileId,
     pub(crate) capacity_t: f64,
@@ -178,7 +178,7 @@ impl BlendPile {
 }
 
 /// One end of a grade interval, in mass fraction.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeEndpoint {
     pub(crate) value: f64,
     /// Whether the boundary value itself satisfies the test. Carried, never
@@ -192,7 +192,7 @@ pub(crate) struct GradeEndpoint {
 /// Both an authored bound and its negation are one of these, which is what
 /// lets a *truth* indicator be built for a condition rather than merely a
 /// permission; see [`GradeBound`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeHalfSpace {
     pub(crate) grade: usize,
     /// `true` for `blend >= value` (or `>` when exclusive), `false` for
@@ -240,7 +240,7 @@ impl GradeHalfSpace {
 /// `60 < Fe < 70` is one of these with two exclusive endpoints; `Fe >= 60` is
 /// one with a lower endpoint only. Nothing here widens an interval or makes
 /// an endpoint inclusive.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeBound {
     pub(crate) grade: usize,
     pub(crate) lower: Option<GradeEndpoint>,
@@ -279,7 +279,7 @@ impl GradeBound {
 ///
 /// An empty bound list is a rule that permits on identity alone, which is a
 /// predicate that is always true rather than a rule with no effect.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradePredicate {
     /// Which authored rule this came from, so an explanation can name it and
     /// so two rules that happen to be numerically identical stay two
@@ -317,7 +317,7 @@ impl GradePredicate {
 /// that is the whole point of the structure. `Fe <= 55` and `Fe >= 65` into
 /// one destination admit 50 and 70 and must not admit 60; a single widened
 /// range `Fe <= 55 or... <= 70` would admit it. Two rules are two statements.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeQualification {
     pub(crate) loader: LoaderId,
     pub(crate) pile: StockpileId,
@@ -329,7 +329,7 @@ pub(crate) struct GradeQualification {
 
 /// Minimum-only fixture contract retained for the older developer scenarios.
 /// Real-project capture emits [`GradeQualification`] instead.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeLimit {
     pub(crate) destination: DestinationId,
     pub(crate) grade: usize,
@@ -366,7 +366,7 @@ impl GradeQualification {
 /// an otherwise matching rule applies. The model uses inward reward permission
 /// and outward cost-escape permission rather than two-sided truth indicators,
 /// so near-boundary blends remain feasible and are priced conservatively.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ConditionalValue {
     /// Index into [`BlendInput::movements`].
     pub(crate) candidate: usize,
@@ -406,7 +406,7 @@ impl ConditionalValue {
 /// contract from the accepted `OptimisationInput`: its stockpile semantics
 /// differ, so reusing the same type would invite comparing objectives that do
 /// not measure the same thing.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BlendInput {
     pub(crate) intervals: Vec<Interval>,
     pub(crate) segments_per_interval: usize,

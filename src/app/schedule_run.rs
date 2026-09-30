@@ -314,7 +314,8 @@ impl crate::app::App<'_> {
             commands::schedule_capture,
             jobs::JobKey,
             schedule_publish::{PublishMeta, publish},
-            scip_blend::{ScipActivity, ScipRunIdentity, ScipSolveOptions, execute_scip_blend},
+            scip_blend::{ScipRunIdentity, ScipSolveOptions},
+            solver_process,
         };
 
         // Validate the lightweight Schedule Setup stages as part of the run.
@@ -455,7 +456,7 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                let completion = execute_scip_blend(Arc::clone(&input), identity, options, cancel, &ScipActivity::default(), &early);
+                let completion = solver_process::solve(Arc::clone(&input), identity, options, cancel, &early);
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }

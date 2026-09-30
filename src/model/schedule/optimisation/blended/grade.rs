@@ -32,7 +32,7 @@ use crate::model::{ReserveAggregation, ReserveField, ReserveFieldId, schedule::o
 /// The unit a grade column is expressed in, and therefore the conversion to a
 /// dimensionless mass fraction. Stated explicitly: nothing in the project
 /// metadata records whether "Fe" means 0.62 or 62.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum GradeBasis {
     /// Already a mass fraction in `0..=1`.
     Fraction,
@@ -101,7 +101,7 @@ impl GradeRejection {
 }
 
 /// One grade the blended experiment tracks.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeField {
     pub(crate) field: ReserveFieldId,
     pub(crate) name: String,
@@ -158,7 +158,7 @@ impl GradeField {
 /// reach a blended pile must have a value for every tracked grade - the
 /// builder refuses rather than defaulting, because a defaulted zero would
 /// quietly dilute a blend and a defaulted mean would invent metal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeTable {
     pub(crate) fields: Vec<GradeField>,
     values: BTreeMap<MaterialId, Vec<f64>>,
