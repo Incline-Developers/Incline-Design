@@ -8,17 +8,17 @@ use crate::{
     i18n::tr,
     model::{
         SceneEntityId,
-        drill_hole::{DrillHoleId, OpenDrillHoleDataset},
+        drill_hole::{DrillHoleId, OpenDrillHoleDataset, RenameScope},
         geophysics::{HoleView, LinkState},
     },
     ui::{
         EditorState,
-        state::{BoreholeInspectorTab, UiCommand},
+        state::{BoreholeInspectorTab, SeamRenameDraft, UiCommand},
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
             menu::{self, MenuButton, MenuFieldCombo},
-            viewport::DrillHoleProperties,
+            viewport::{DrillHoleProperties, SeamRename},
         },
     },
 };
@@ -160,15 +160,18 @@ fn draw_body(
             draw_geophysics_note(ui, &view, dataset.id, commands);
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
-            let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            let output = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
                 .strat_field(strat_choice_for(editor, dataset))
                 .well_logs(logs, linked)
                 .reading(reading)
                 .logged_depths(logged)
                 .well_log_style(editor.well_log_style)
                 .show(ui);
-            if let Some(style) = saved {
+            if let Some(style) = output.saved {
                 commands.push(UiCommand::SetWellLogStyle(style));
+            }
+            if let Some(rename) = output.rename {
+                editor.seam_rename_dialog = Some(seam_rename_draft(dataset, hole_index, rename));
             }
         }
     }
@@ -299,6 +302,34 @@ fn draw_geophysics_note(ui: &mut egui::Ui, view: &HoleView, dataset_id: DrillHol
         commands.push(UiCommand::LinkGeophysics(dataset_id));
     }
     ui.add_space(4.0);
+}
+
+/// The rename dialog's opening state for a seam picked in the log: its
+/// reach counted once, here, rather than every frame the dialog is up.
+fn seam_rename_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, rename: SeamRename) -> SeamRenameDraft {
+    let scope = if rename.every_hole { RenameScope::Set } else { RenameScope::Hole(hole_index) };
+    let reached = dataset
+        .dataset
+        .intervals_named(&rename.field, &rename.name, scope)
+        .map(|((hole, _), _, _)| hole)
+        .collect::<Vec<_>>();
+    let mut holes = reached.clone();
+    holes.dedup();
+    let place = match scope {
+        RenameScope::Set => dataset.name.clone(),
+        RenameScope::Hole(index) => dataset.dataset.holes.get(index).map(|hole| hole.dhid.clone()).unwrap_or_default(),
+    };
+    SeamRenameDraft {
+        dataset: dataset.id,
+        scope,
+        field: rename.field,
+        to: rename.name.clone(),
+        from: rename.name,
+        place,
+        intervals: reached.len(),
+        holes: holes.len(),
+        reason: String::new(),
+    }
 }
 
 /// Resolve the currently inspected hole to its dataset, the hole itself, and

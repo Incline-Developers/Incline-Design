@@ -1945,6 +1945,21 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// Apply a set of interval corrections, or withdraw them when `apply` is
+    /// false. The dataset's revision carries the new values to its colours.
+    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[(usize, usize)], records: &[drill_hole::Correction], apply: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        if apply {
+            data.apply_corrections(targets, records);
+        } else {
+            data.withdraw_corrections(targets, records);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     fn insert_item(&mut self, index: usize, item: OpenItem) {
         let handle = item.item_ref();
         match item {
@@ -2132,6 +2147,15 @@ pub(crate) enum Command {
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
     },
+    /// Propose corrections to drill-hole intervals: applying writes each
+    /// interpreted value and appends its record, reverting puts the value
+    /// back and withdraws the record.
+    CorrectIntervals {
+        dataset: drill_hole::DrillHoleId,
+        /// Hole and interval index of each record's interval, in step.
+        targets: Vec<(usize, usize)>,
+        records: Vec<drill_hole::Correction>,
+    },
     /// Add a complete project item. While the item is present, `added` is
     /// `None`; undo lifts it back into the command so redo can restore the
     /// exact same data and explorer position without cloning it.
@@ -2219,6 +2243,15 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
+                Command::CorrectIntervals { targets, records, .. } => {
+                    targets.len() * size_of::<(usize, usize)>()
+                        + records
+                            .iter()
+                            .map(|record| {
+                                size_of::<drill_hole::Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len()
+                            })
+                            .fold(0usize, usize::saturating_add)
+                }
                 Command::MoveCollars { originals, .. } | Command::RotateCollars { originals, .. } => originals
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
@@ -2316,9 +2349,11 @@ impl Command {
         match self {
             Self::Archived { items, .. } => into.extend(items.iter().copied()),
             Self::SetItemStyle { item, before, after } if (if undo { before } else { after }).loaded() => into.push(*item),
-            Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::SetInitiation { dataset, .. } => {
-                into.push(ItemRef::DrillHole(*dataset))
-            }
+            Self::MoveCollars { dataset, .. }
+            | Self::RotateCollars { dataset, .. }
+            | Self::SetTieIns { dataset, .. }
+            | Self::SetInitiation { dataset, .. }
+            | Self::CorrectIntervals { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
             Self::Batch(commands) => {
@@ -2356,7 +2391,11 @@ impl Command {
                     }
                 }
             }
-            Command::MoveCollars { dataset, .. } | Command::RotateCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
+            Command::MoveCollars { dataset, .. }
+            | Command::RotateCollars { dataset, .. }
+            | Command::SetTieIns { dataset, .. }
+            | Command::SetInitiation { dataset, .. }
+            | Command::CorrectIntervals { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
                     into.push(item);
@@ -2509,6 +2548,7 @@ impl Command {
             Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, true),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
                     debug_assert_eq!(added_item.item_ref(), *item);
@@ -2657,6 +2697,7 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, false),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
                     *index = taken_index;

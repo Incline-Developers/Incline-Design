@@ -1246,6 +1246,16 @@ const STRAT_LABEL_INK: egui::Color32 = egui::Color32::WHITE;
 /// The halo under a strat run's code.
 const STRAT_LABEL_HALO: egui::Color32 = egui::Color32::from_black_alpha(210);
 
+/// How far seam names grow past the small style as the log zooms in.
+const STRAT_LABEL_GROWTH: f32 = 1.6;
+
+/// Zoom, in points per metre of hole, below which seam names stay at the
+/// small style (about a 200 m hole shown whole)...
+const STRAT_LABEL_GROW_FROM: f32 = 3.0;
+
+/// ...and at which they reach their full growth (about a 45 m window).
+const STRAT_LABEL_GROW_TO: f32 = 12.0;
+
 /// The outline laid behind overlay text, in its colour.
 #[derive(Clone, Copy)]
 enum Outline {
@@ -2013,12 +2023,11 @@ impl<'a> BoreholeLog<'a> {
 
     /// Draw the log into what the panel has left. Nothing here may report a
     /// width larger than the panel gave it, or the log would slide the scene.
-    /// Returns a trace style the reader finished editing, for the caller to
-    /// save.
-    pub(crate) fn show(self, ui: &mut egui::Ui) -> Option<WellLogStyle> {
+    /// Returns what the reader asked for, for the caller to act on.
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> LogOutput {
         let Some(hole) = self.depth_range() else {
             ui.weak(tr!("viewport-hole-has-no-trace-draw"));
-            return None;
+            return LogOutput::default();
         };
 
         // The bearing and depth window live in egui's own per-id memory.
@@ -2026,6 +2035,7 @@ impl<'a> BoreholeLog<'a> {
         let view_id = self.id.with("depth_view");
         let squeeze_id = self.id.with("squeeze");
         let menu_id = self.id.with("trace_menu");
+        let seam_menu_id = self.id.with("seam_menu");
         let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
         let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
@@ -2089,24 +2099,48 @@ impl<'a> BoreholeLog<'a> {
             view = hole;
         }
 
-        // A right-click over a trace column opens that column's own menu,
-        // anywhere else the squeeze menu. Which one is settled at the click
-        // and held while the menu stays open, with the style being edited.
+        // A right-click over a seam in the strat column opens the seam's
+        // menu, over a trace column that column's own, anywhere else the
+        // squeeze menu. Which one is settled at the click and held while the
+        // menu stays open, with the style being edited.
         if handle.secondary_clicked() {
-            let menu = handle
-                .interact_pointer_pos()
+            let pointer = handle.interact_pointer_pos();
+            let seam = pointer
+                .zip(lanes.strat.zip(strat_field))
+                .filter(|(pointer, (strat, _))| strat.contains(*pointer))
+                .and_then(|(pointer, (_, field))| self.seam_at(field, depth_at(plot, view, pointer.y)).map(|name| SeamMenu { field: field.key.clone(), name }));
+            let menu = pointer
+                .filter(|_| seam.is_none())
                 .and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
                 .map(|traces| TraceMenu {
                     column: traces.column,
                     draft: self.well_log_style,
                     custom: log_traces::column_range(&self.well_log_style, &traces),
                 });
-            ui.data_mut(|data| data.insert_temp(menu_id, menu));
+            ui.data_mut(|data| {
+                data.insert_temp(menu_id, menu);
+                data.insert_temp(seam_menu_id, seam);
+            });
         }
-        let mut saved = None;
+        let mut output = LogOutput::default();
         let stored = ui.data(|data| data.get_temp::<Option<TraceMenu>>(menu_id)).flatten();
         let open = stored.and_then(|menu| column_traces(menu.column, density, gamma).map(|traces| (menu, traces)));
-        let menu = if let Some((mut menu, traces)) = open {
+        let seam = ui.data(|data| data.get_temp::<Option<SeamMenu>>(seam_menu_id)).flatten();
+        let menu = if let Some(seam) = seam {
+            context_menu_popup(&handle, seam.name.clone(), |ui| {
+                for (label, every_hole) in [(tr!("viewport-rename-seam-in-this-hole"), false), (tr!("viewport-rename-seam-in-every-hole"), true)] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        output.rename = Some(SeamRename {
+                            field: seam.field.clone(),
+                            name: seam.name.clone(),
+                            every_hole,
+                        });
+                        ui.close();
+                    }
+                }
+            });
+            None
+        } else if let Some((mut menu, traces)) = open {
             let auto = log_traces::auto_range(menu.column, &traces);
             let shown = context_menu_popup_with_fields(&handle, log_traces::menu_title(menu.column), |ui| {
                 log_traces::menu(ui, menu.column, &mut menu.draft, &mut menu.custom, auto);
@@ -2118,7 +2152,7 @@ impl<'a> BoreholeLog<'a> {
                 // colour wheel saves once, on release.
                 menu.draft = menu.draft.sanitized();
                 if menu.draft != self.well_log_style && !ui.input(|input| input.pointer.any_down()) {
-                    saved = Some(menu.draft);
+                    output.saved = Some(menu.draft);
                 }
                 menu
             })
@@ -2196,7 +2230,7 @@ impl<'a> BoreholeLog<'a> {
         let (top, bottom) = view;
         if !plot.is_positive() {
             draw_azimuth_compass(ui, &painter, compass, azimuth);
-            return saved;
+            return output;
         }
         self.draw_scale(ui, &painter, plot, columns, top, bottom);
         if let (Some(strat), Some(field)) = (lanes.strat, strat_field) {
@@ -2230,7 +2264,7 @@ impl<'a> BoreholeLog<'a> {
         );
         draw_trace_notes(ui, &painter, area, notes, line_height);
         draw_azimuth_compass(ui, &painter, compass, azimuth);
-        saved
+        output
     }
 
     /// The density and gamma columns: as read, or laid out ahead while the
@@ -2395,6 +2429,21 @@ impl<'a> BoreholeLog<'a> {
             })
     }
 
+    /// The seam name the strat column shows at `depth`, exactly as the
+    /// interval holds it: the first interval down the hole covering the
+    /// depth, as [`Self::lithology_runs`] draws it.
+    fn seam_at(&self, field: &crate::model::drill_hole::DrillField, depth: f64) -> Option<String> {
+        self.hole
+            .intervals
+            .iter()
+            .filter(|interval| interval.from <= depth && depth < interval.to)
+            .min_by(|a, b| a.from.total_cmp(&b.from))
+            .and_then(|interval| match interval.values.get(&field.key) {
+                Some(crate::model::drill_hole::DrillValue::Category(name)) if !name.trim().is_empty() => Some(name.clone()),
+                _ => None,
+            })
+    }
+
     /// Consecutive intervals reading the same lithology, merged into one
     /// run, so forty abutting records of the same rock draw as one bed.
     fn lithology_runs(&self, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
@@ -2433,7 +2482,31 @@ impl<'a> BoreholeLog<'a> {
     fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) {
         let visuals = ui.visuals();
         let font = egui::TextStyle::Small.resolve(ui.style());
-        for (from, to, value) in self.lithology_runs(field, top, bottom) {
+        let runs = self.lithology_runs(field, top, bottom);
+        // Every seam name in view shares one size, set by the zoom rather
+        // than by each block, so a thick and a thin seam read alike: the
+        // small style over the whole hole, growing to a ceiling as the view
+        // closes in, and never so big that the widest name overflows the
+        // column. A name too long even at the small style gets an ellipsis.
+        let room = strat.width() - 4.0;
+        let widest = runs
+            .iter()
+            .filter_map(|(_, _, value)| value.as_ref())
+            .map(|code| painter.layout_no_wrap(code.clone(), font.clone(), STRAT_LABEL_INK).size().x)
+            .fold(0.0_f32, f32::max);
+        let points_per_metre = strat.height() / ((bottom - top) as f32).max(f32::EPSILON);
+        let zoom = ((points_per_metre - STRAT_LABEL_GROW_FROM) / (STRAT_LABEL_GROW_TO - STRAT_LABEL_GROW_FROM)).clamp(0.0, 1.0);
+        let size = (font.size * (1.0 + (STRAT_LABEL_GROWTH - 1.0) * zoom))
+            .min(font.size * room / widest.max(1.0))
+            .max(font.size);
+        let label_font = egui::FontId::new(size, font.family.clone());
+        // The bottom of the last seam name drawn, so a thin seam's name that
+        // would land on its neighbour's is left out rather than stacked.
+        let mut named_to = f32::NEG_INFINITY;
+        // Names go on after every block, so a name taller than its seam runs
+        // over the neighbouring blocks instead of being cut by them.
+        let mut names = Vec::new();
+        for (from, to, value) in runs {
             let block = egui::Rect::from_x_y_ranges(strat.x_range(), Self::y_at(strat, top, bottom, from)..=Self::y_at(strat, top, bottom, to));
             if block.height() <= 0.0 {
                 continue;
@@ -2453,18 +2526,29 @@ impl<'a> BoreholeLog<'a> {
                 }
             };
             painter.rect_stroke(block, 0.0, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.45)), egui::StrokeKind::Inside);
-            // Only drawn once its galley is measured to fit; a squeezed
-            // strat column goes quiet rather than spilling onto the hole.
-            if block.height() >= font.size + 3.0 {
+            // Centred even on a block thinner than the text, so a thin seam
+            // is still named, but kept inside the column, clear of its heading.
+            if let Some(outline) = outline {
+                let mut galley = painter.layout_no_wrap(label.clone(), label_font.clone(), ink);
+                if galley.size().x > room {
+                    galley = elided(painter, label, label_font.clone(), ink, room);
+                }
+                let mut origin = block.center() - 0.5 * galley.size();
+                origin.y = origin.y.min(strat.bottom() - galley.size().y).max(strat.top());
+                if origin.y >= named_to + 1.0 {
+                    named_to = origin.y + galley.size().y;
+                    names.push((origin, galley, outline));
+                }
+            } else if block.height() >= font.size + 3.0 {
+                // An unlogged run's note is quiet: shown only where it fits.
                 let galley = painter.layout_no_wrap(label, font.clone(), ink);
                 if galley.size().x <= block.width() - 2.0 {
-                    let origin = block.center() - 0.5 * galley.size();
-                    match outline {
-                        Some(outline) => outlined_galley(painter, origin, egui::Align2::LEFT_TOP, galley, ink, outline),
-                        None => painter.galley(origin, galley, egui::Color32::PLACEHOLDER),
-                    }
+                    painter.galley(block.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
                 }
             }
+        }
+        for (origin, galley, outline) in names {
+            outlined_galley(painter, origin, egui::Align2::LEFT_TOP, galley, STRAT_LABEL_INK, outline);
         }
         // Elided to the column's own width, or a field named at length
         // would write itself across the top of the hole beside it.
@@ -2983,6 +3067,31 @@ fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumn
         track: (rest - strat - density - gamma - gaps).max(track_min),
         gamma,
     }
+}
+
+/// What the reader asked of the log this frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LogOutput {
+    /// A trace style the reader finished editing, to save.
+    pub(crate) saved: Option<WellLogStyle>,
+    /// A seam the reader chose to rename.
+    pub(crate) rename: Option<SeamRename>,
+}
+
+/// A seam picked from the strat column's menu: the field and name it is
+/// read from, and whether every hole of the set is meant or only this one.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SeamRename {
+    pub(crate) field: String,
+    pub(crate) name: String,
+    pub(crate) every_hole: bool,
+}
+
+/// The seam menu while it is open: the seam right-clicked in the strat column.
+#[derive(Clone, PartialEq, Debug)]
+struct SeamMenu {
+    field: String,
+    name: String,
 }
 
 /// A trace column's right-click menu while it is open: the column, the

@@ -127,6 +127,7 @@ impl<'a> App<'a> {
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RenameSeam { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -706,6 +707,17 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleCategoryColors { id, categories } => {
                 self.set_drill_hole_category_colors(id, categories);
+                Ok(())
+            }
+            UiCommand::RenameSeam {
+                dataset,
+                field,
+                from,
+                to,
+                scope,
+                reason,
+            } => {
+                self.rename_seam(dataset, field, from, to, scope, reason);
                 Ok(())
             }
             UiCommand::SetDrillHoleWorkingSections { id, sections } => {

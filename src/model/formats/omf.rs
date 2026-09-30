@@ -81,6 +81,11 @@ const META_RENDER_RANGES: &str = "incline:render_ranges";
 /// Where each hole's orientation came from, keyed like the render ranges and
 /// written only for holes whose source is known.
 const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
+/// As-logged values of corrected intervals, keyed like the render ranges: per
+/// hole, pairs of interval index and what the site sent.
+const META_LOGGED_INTERVALS: &str = "incline:logged_intervals";
+/// The dataset's correction records, whatever their status.
+const META_CORRECTIONS: &str = "incline:corrections";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
@@ -1298,6 +1303,25 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !orientation_sources.is_empty() {
         put(&mut element, META_ORIENTATION_SOURCES, Value::Object(orientation_sources));
     }
+    let logged_intervals = holes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hole)| {
+            let pairs = hole
+                .intervals
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, interval)| interval.logged.as_ref().map(|logged| json!([slot, logged])))
+                .collect::<Vec<_>>();
+            (!pairs.is_empty()).then(|| (index.to_string(), Value::Array(pairs)))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    if !logged_intervals.is_empty() {
+        put(&mut element, META_LOGGED_INTERVALS, Value::Object(logged_intervals));
+    }
+    if !open.dataset.corrections.is_empty() {
+        put(&mut element, META_CORRECTIONS, serde_json::to_value(&open.dataset.corrections)?);
+    }
     Ok(Some(element))
 }
 
@@ -2255,6 +2279,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_ID,
             META_RENDER_RANGES,
             META_ORIENTATION_SOURCES,
+            META_LOGGED_INTERVALS,
+            META_CORRECTIONS,
             META_TIE_INS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
@@ -3183,10 +3209,31 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
+        if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS).and_then(Value::as_object) {
+            for (index, pairs) in logged {
+                let (Some(hole), Some(pairs)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), pairs.as_array()) else {
+                    continue;
+                };
+                for pair in pairs {
+                    if let Ok((slot, logged)) = <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair)
+                        && let Some(interval) = hole.intervals.get_mut(slot)
+                    {
+                        interval.logged = Some(logged);
+                    }
+                }
+            }
+        }
         if holes.is_empty() {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
+        if let Some(corrections) = element
+            .metadata
+            .get(META_CORRECTIONS)
+            .and_then(|value| Vec::<crate::model::drill_hole::Correction>::deserialize(value).ok())
+        {
+            dataset.corrections = corrections;
+        }
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
         if let Some(value) = element.metadata.get(META_TIE_INS)

@@ -6,9 +6,9 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillHoleStyle,
-            LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter,
-            clamp_string_pixel_width,
+            CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource,
+            DrillHoleStyle, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, TraceStation, WIDE_CATEGORY_FIELD_HINT,
+            clamp_disc_diameter, clamp_string_pixel_width,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -447,6 +447,42 @@ impl<'a> App<'a> {
         // stop's is, so no NaN reaches the shader.
         let categories = categories.into_iter().filter(|category| category.color.iter().all(|value| value.is_finite())).collect();
         self.set_drill_hole_color(id, |_, color| color.set_categories(categories));
+    }
+
+    /// Rename a seam in one hole or the whole set, proposing one value
+    /// correction per interval renamed as a single undo step, with the seam's
+    /// colour carried to its new name. The records carry no author yet: the
+    /// project holds no current author to name.
+    pub(crate) fn rename_seam(&mut self, id: DrillHoleId, field: String, from: String, to: String, scope: RenameScope, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        if let Some(section) = crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, &to) {
+            let reason = crate::model::drill_hole::SectionProblem::NameIsCode.message();
+            userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = section.name.clone(), reason = reason));
+            return;
+        }
+        let note = CorrectionNote {
+            author: String::new(),
+            date: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            reason,
+        };
+        let (targets, records): (Vec<_>, Vec<_>) = dataset.dataset.rename_corrections(&field, &from, &to, scope, &note).into_iter().unzip();
+        if records.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-no-interval-holds-seam", name = from));
+            return;
+        }
+        let count = records.len();
+        let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
+        commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
+            ItemStyle::DrillHole { loaded, mut color } => {
+                color.carry_category_color(&field, &from, &to);
+                ItemStyle::DrillHole { loaded, color }
+            }
+            other => other,
+        }));
+        self.execute_edit(Command::Batch(commands));
+        userspace_log!("{}", tr!("cmd-drill-hole-seam-renamed", from = from, to = to, count = count.to_string()));
     }
 
     pub(crate) fn set_drill_hole_working_sections(&mut self, id: DrillHoleId, sections: Vec<crate::model::drill_hole::WorkingSection>) {

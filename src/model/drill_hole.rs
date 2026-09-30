@@ -139,6 +139,70 @@ impl DrillInterval {
     }
 }
 
+/// What a correction does to an interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionKind {
+    /// A code or a name changes.
+    Value,
+    /// A from or a to moves.
+    Boundary,
+    /// An interval is added where nothing was logged.
+    Insertion,
+}
+
+/// Where a correction stands on its way back to the site's database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionStatus {
+    Proposed,
+    Approved,
+    Denied,
+    Sent,
+    Confirmed,
+    Flagged,
+}
+
+/// One change to one interval of one hole, kept whatever is decided about it.
+/// The interval is named by its hole and its as-logged from and to, which a
+/// correction never moves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Correction {
+    pub(crate) hole: String,
+    pub(crate) logged_from: f64,
+    pub(crate) logged_to: f64,
+    pub(crate) kind: CorrectionKind,
+    pub(crate) field: String,
+    pub(crate) before: Option<DrillValue>,
+    pub(crate) after: Option<DrillValue>,
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+    pub(crate) status: CorrectionStatus,
+    /// Filled when a decision is made; empty until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decided: Option<String>,
+}
+
+/// Which holes a seam rename reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenameScope {
+    /// The hole at this index.
+    Hole(usize),
+    /// Every hole of the set.
+    Set,
+}
+
+/// Who proposed a correction, when and why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CorrectionNote {
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+}
+
 /// One surface connector: the delay laid between two holes, and which way the
 /// round travels over it.
 ///
@@ -773,6 +837,9 @@ pub(crate) struct DrillHoleDataset {
     /// Holes the round can start at. One initiation per collar, with any
     /// number of collars participating in the same firing graph.
     pub(crate) initiations: Vec<Initiation>,
+    /// Every correction proposed against the set, oldest first. Append-only:
+    /// only undoing the edit that made one takes it back out.
+    pub(crate) corrections: Vec<Correction>,
 }
 
 impl DrillHoleDataset {
@@ -790,6 +857,7 @@ impl DrillHoleDataset {
             hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
+            corrections: Vec::new(),
         };
         // The one gate every importer and project load passes through, so the
         // boxes cannot fall out of step with the traces.
@@ -840,6 +908,94 @@ impl DrillHoleDataset {
             }
         }
         times
+    }
+
+    /// Every interval holding `name` in `field` within `scope`, with its hole
+    /// and interval index. An interval missing a depth is left out: it is
+    /// never drawn, and its record could not be saved.
+    pub(crate) fn intervals_named<'a>(&'a self, field: &'a str, name: &str, scope: RenameScope) -> impl Iterator<Item = ((usize, usize), &'a DrillHole, &'a DrillInterval)> + 'a {
+        let holes: Box<dyn Iterator<Item = (usize, &DrillHole)>> = match scope {
+            RenameScope::Hole(index) => Box::new(self.holes.get(index).map(|hole| (index, hole)).into_iter()),
+            RenameScope::Set => Box::new(self.holes.iter().enumerate()),
+        };
+        let wanted = DrillValue::Category(name.to_owned());
+        holes.flat_map(move |(hole_index, hole)| {
+            let wanted = wanted.clone();
+            hole.intervals
+                .iter()
+                .enumerate()
+                .filter(move |(_, interval)| interval.from.is_finite() && interval.to.is_finite() && interval.values.get(field) == Some(&wanted))
+                .map(move |(interval_index, interval)| ((hole_index, interval_index), hole, interval))
+        })
+    }
+
+    /// The value corrections renaming `from` to `to` in `field`, one per
+    /// interval carrying `from` within `scope`, each paired with its hole and
+    /// interval index. Nothing is changed here; the edit is the caller's.
+    pub(crate) fn rename_corrections(&self, field: &str, from: &str, to: &str, scope: RenameScope, note: &CorrectionNote) -> Vec<((usize, usize), Correction)> {
+        if from == to {
+            return Vec::new();
+        }
+        self.intervals_named(field, from, scope)
+            .map(|(target, hole, interval)| {
+                let (logged_from, logged_to, _) = interval.logged();
+                let record = Correction {
+                    hole: hole.dhid.clone(),
+                    logged_from,
+                    logged_to,
+                    kind: CorrectionKind::Value,
+                    field: field.to_owned(),
+                    before: Some(DrillValue::Category(from.to_owned())),
+                    after: Some(DrillValue::Category(to.to_owned())),
+                    author: note.author.clone(),
+                    date: note.date.clone(),
+                    reason: note.reason.clone(),
+                    status: CorrectionStatus::Proposed,
+                    approver: None,
+                    decision: None,
+                    decided: None,
+                };
+                (target, record)
+            })
+            .collect()
+    }
+
+    /// Write each value correction's `after` as its interval's interpreted
+    /// value and append its record. The as-logged interval is kept aside the
+    /// first time anything parts the two, and is never written after that.
+    pub(crate) fn apply_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
+        for (&(hole, interval), record) in targets.iter().zip(records) {
+            let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) else {
+                continue;
+            };
+            if interval.logged.is_none() {
+                interval.logged = Some(LoggedInterval {
+                    from: interval.from,
+                    to: interval.to,
+                    values: interval.values.clone(),
+                });
+            }
+            set_value(&mut interval.values, &record.field, record.after.as_ref());
+            self.corrections.push(record.clone());
+        }
+        self.fields = collect_fields(&self.holes);
+    }
+
+    /// Undo [`Self::apply_corrections`]: the `before` values go back and the
+    /// records are withdrawn, latest first.
+    pub(crate) fn withdraw_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
+        for (&(hole, interval), record) in targets.iter().zip(records).rev() {
+            if let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) {
+                set_value(&mut interval.values, &record.field, record.before.as_ref());
+                if !interval.is_corrected() {
+                    interval.logged = None;
+                }
+            }
+            if let Some(position) = self.corrections.iter().rposition(|kept| kept == record) {
+                self.corrections.remove(position);
+            }
+        }
+        self.fields = collect_fields(&self.holes);
     }
 
     /// The ties as a file holds them, keyed by hole name.
@@ -969,6 +1125,11 @@ impl DrillHoleDataset {
             + self.hole_boxes.len() * size_of::<WorldBox>()
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self
+                .corrections
+                .iter()
+                .map(|record| size_of::<Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len())
+                .fold(0usize, usize::saturating_add)
             + self
                 .fields
                 .iter()
@@ -1211,6 +1372,14 @@ pub(crate) struct DroppedSection {
 /// Case-blind comparison of two names, without allocating.
 fn same_name(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// The working section of `field` named like `code` without holding it: a
+/// code renamed to `code` would cost that section its name on the next open.
+pub(crate) fn section_named_apart<'a>(sections: &'a [WorkingSection], field: &str, code: &str) -> Option<&'a WorkingSection> {
+    sections
+        .iter()
+        .find(|section| section.field == field && same_name(&section.name, code) && !section.codes.iter().any(|held| held == code))
 }
 
 /// What stops `name` naming a new working section of `field` holding
@@ -1614,6 +1783,22 @@ impl DrillColorState {
         self.categories = CategoryTable::new(categories);
     }
 
+    /// Give `to` the colour `from` has in `field`, when `field` is the one
+    /// coloured by and `to` has none of its own, so a renamed code keeps its
+    /// look. Returns whether anything changed.
+    pub(crate) fn carry_category_color(&mut self, field: &str, from: &str, to: &str) -> bool {
+        if self.active_field.as_deref() != Some(field) || self.category_color(to).is_some() {
+            return false;
+        }
+        let Some(color) = self.category_color(from) else {
+            return false;
+        };
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        table.push(DrillCategoryColor { value: to.to_owned(), color });
+        self.set_categories(table);
+        true
+    }
+
     /// Give every code in `field`, and every working section of it, a
     /// colour, keeping every colour already chosen, and return how many of
     /// the field's codes were filled in; section names are not counted.
@@ -1802,6 +1987,18 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
     let dip = dip_degrees.to_radians();
     let horizontal = distance * dip.cos();
     origin + DVec3::new(horizontal * azimuth.sin(), horizontal * azimuth.cos(), distance * dip.sin())
+}
+
+/// Set `key` to `value`, or leave it unrecorded when there is none.
+fn set_value(values: &mut BTreeMap<String, DrillValue>, key: &str, value: Option<&DrillValue>) {
+    match value {
+        Some(value) => {
+            values.insert(key.to_owned(), value.clone());
+        }
+        None => {
+            values.remove(key);
+        }
+    }
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {

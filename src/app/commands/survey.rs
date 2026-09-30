@@ -478,7 +478,15 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                     interval.from *= transform.length_scale();
                     interval.to *= transform.length_scale();
                     ensure!(interval.from.is_finite() && interval.to.is_finite(), "{}", tr!("survey-invalid-transform"));
+                    if let Some(logged) = &mut interval.logged {
+                        logged.from *= transform.length_scale();
+                        logged.to *= transform.length_scale();
+                    }
                 }
+            }
+            for record in &mut dataset.corrections {
+                record.logged_from *= transform.length_scale();
+                record.logged_to *= transform.length_scale();
             }
             // Rebuilt rather than reconstructed through `DrillHoleDataset::new`,
             // which sorts the holes: the ties and initiations beside them name

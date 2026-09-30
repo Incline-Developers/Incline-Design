@@ -1744,6 +1744,8 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    /// The rename seam dialog's seam and entries while it is open.
+    pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The Modelling branch's settings dialog: the datum the model is built in.
     pub(crate) show_modelling_settings: bool,
     pub(crate) block_model_create_open: bool,
@@ -2079,6 +2081,7 @@ impl EditorState {
             || self.new_delay_product_open
             || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
+            || self.seam_rename_dialog.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -2326,6 +2329,7 @@ impl EditorState {
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
+        self.seam_rename_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -2702,6 +2706,7 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            seam_rename_dialog: None,
             show_modelling_settings: false,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
@@ -3515,6 +3520,15 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
     },
+    /// Rename a seam, proposing one value correction per interval renamed.
+    RenameSeam {
+        dataset: DrillHoleId,
+        field: String,
+        from: String,
+        to: String,
+        scope: crate::model::drill_hole::RenameScope,
+        reason: String,
+    },
     /// Replace a dataset's working sections, every field's, as one undo step.
     SetDrillHoleWorkingSections {
         id: DrillHoleId,
@@ -4012,6 +4026,7 @@ impl UiCommand {
             Self::BuildReferencePoints { holes, target, side, .. } => {
                 report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
             }
+            Self::RenameSeam { from, to, .. } => report(tr!("state-rename-seam"), tr!("state-rename-seam-from-to", from = from.clone(), to = to.clone())),
             Self::BuildReferenceSurface { points, controls, extent } => report(
                 tr!("common-build-surface"),
                 match extent {
@@ -4584,6 +4599,23 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points_label: String,
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
+}
+
+/// What the rename seam dialog holds while open: the seam, where it was
+/// picked, how widely it is renamed, and what has been typed. The counts are
+/// taken when it opens; the rename recounts when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct SeamRenameDraft {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) scope: crate::model::drill_hole::RenameScope,
+    pub(crate) field: String,
+    pub(crate) from: String,
+    /// The hole named in the dialog: the one picked, or the set's name.
+    pub(crate) place: String,
+    pub(crate) intervals: usize,
+    pub(crate) holes: usize,
+    pub(crate) to: String,
+    pub(crate) reason: String,
 }
 
 /// What the reference points dialog holds while open: the holes it was
