@@ -380,8 +380,9 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern and Survey's reading of a classified
-/// cloud are the only such runs so far - see [`draw_blast_view_tools`] and
+/// Blast's reviews of the fired pattern, Geology's borehole inspector and
+/// Survey's reading of a classified cloud are the only such runs so far - see
+/// [`draw_blast_view_tools`], [`draw_geology_view_tools`] and
 /// [`draw_survey_view_tools`]; production adds nothing here, its own tools
 /// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
@@ -397,7 +398,36 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
             divider(ui, side);
             draw_survey_view_tools(ui, editor, commands, side);
         }
+        Workspace::Geology => {
+            divider(ui, side);
+            draw_geology_view_tools(ui, editor, side);
+        }
         _ => {}
+    }
+}
+
+/// Geology's switch for the borehole inspector, the panel down the right edge
+/// that only this workspace shows.
+///
+/// Always available, like Survey's run: the panel says for itself when no
+/// hole is inspected. Per-session and unsaved, like the display switches.
+fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+    let shown = editor.show_borehole_inspector;
+    let inspector = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("borehole_inspector.svg")),
+            if shown {
+                tr!("viewport-bar-hide-borehole-inspector")
+            } else {
+                tr!("viewport-bar-show-borehole-inspector")
+            },
+        )
+        .id_salt("borehole_inspector")
+        .button_side(side)
+        .selected(shown),
+    );
+    if inspector.clicked() {
+        editor.show_borehole_inspector = !shown;
     }
 }
 

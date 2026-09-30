@@ -121,7 +121,9 @@ pub(crate) fn draw_right_click_context(
         // its whole dataset, which is what the selection names.
         let context_hole = editor.canvas_context_menu_hole;
         if context_hole.is_some() || selected_drill_hole.is_some() {
+            // The inspector is Geology's panel, so only Geology offers it.
             if let Some(hole) = context_hole
+                && editor.active_workspace == crate::ui::state::Workspace::Geology
                 && ContextMenuAction::new(tr!("common-borehole-inspector")).show(ui).clicked()
             {
                 commands.push(UiCommand::InspectDrillHole(hole));
