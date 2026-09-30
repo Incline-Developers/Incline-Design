@@ -13,7 +13,7 @@ use crate::{
     },
     ui::{
         EditorState,
-        state::{BoreholeInspectorTab, UiCommand, ViewToggle},
+        state::{BoreholeInspectorTab, UiCommand},
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
@@ -97,7 +97,7 @@ fn draw_body(
     well_logs: &crate::model::geophysics::GeophysicsSession,
     commands: &mut Vec<UiCommand>,
 ) {
-    draw_tab_strip(ui, editor, commands);
+    draw_tab_strip(ui, editor);
 
     let Some((dataset, hole, hole_index)) = inspected_hole(editor, datasets) else {
         ui.add_space(8.0);
@@ -176,7 +176,7 @@ fn draw_body(
 
 /// The Data and Log tabs as a pair of held-down buttons, with the lock and
 /// close at the far end of the same row.
-fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (tab, label) in [
@@ -190,14 +190,13 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Ve
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             // Rightmost, where a panel's close belongs; the lock sits inboard.
-            // The same switch the View and Geology menus throw, so the stored
-            // preference and the macOS check mark stay in step.
+            // The same switch Geology's viewport bar button throws.
             if ui
                 .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
                 .on_hover_text(tr!("borehole-inspector-close-inspector"))
                 .clicked()
             {
-                commands.push(UiCommand::ToggleViewOption(ViewToggle::BoreholeInspector));
+                editor.show_borehole_inspector = false;
             }
             let locked = editor.borehole_inspector_locked;
             // unthemed_icon! embeds the image at compile time, so each icon

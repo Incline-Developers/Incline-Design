@@ -61,8 +61,6 @@ struct MenuState {
     active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
-    /// Its own field, so a change here still trips `sync_menu_state`'s check.
-    show_borehole_inspector: bool,
     /// The File > Open Recent rows, as name and the project each opens.
     recent: Vec<(String, PathBuf)>,
 }
@@ -106,8 +104,6 @@ pub(crate) enum MacMenuAction {
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
-    /// The Drillholes menu's row; the View menu's copy rides [`VIEW_TOGGLES`].
-    ToggleBoreholeInspector,
     /// The Drillholes menu's row that opens the reference points dialog.
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
@@ -120,8 +116,8 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same three - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::BoreholeInspector, ViewToggle::DarkMode];
+/// the same two - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.
@@ -180,7 +176,6 @@ impl MacMenuAction {
         Self::OpenAbout,
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
-        Self::ToggleBoreholeInspector,
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
     ];
@@ -506,16 +501,6 @@ pub(crate) fn install_menu_bar() {
         mtm,
     );
     add_separator(&drill_hole_menu, mtm);
-    // The inspector's own switch, kept in sync by `sync_menu_state`.
-    add_action(
-        &drill_hole_menu,
-        &ViewToggle::BoreholeInspector.label(),
-        "",
-        MacMenuAction::ToggleBoreholeInspector,
-        &target,
-        mtm,
-    );
-    add_separator(&drill_hole_menu, mtm);
     add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
     add_action(
         &drill_hole_menu,
@@ -664,7 +649,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
-        show_borehole_inspector: ViewToggle::BoreholeInspector.get(editor),
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
@@ -713,5 +697,4 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
-    set_checked(&root, MacMenuAction::ToggleBoreholeInspector, state.show_borehole_inspector);
 }

@@ -617,10 +617,9 @@ fn draw_ui(
 
     // Down the right edge. Claimed after the two strips below it, so it stops
     // at the bottom toolbar's top and they carry on underneath it, and after
-    // the viewport bar, so it starts directly under it. Shown on a stored
-    // preference, not on the active workspace.
-    let borehole_inspector_rect = editor
-        .show_borehole_inspector
+    // the viewport bar, so it starts directly under it. Geology's own panel:
+    // shown there on a per-session switch from its viewport bar run.
+    let borehole_inspector_rect = (editor.active_workspace == state::Workspace::Geology && editor.show_borehole_inspector)
         .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes, well_logs, commands));
     if borehole_inspector_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
