@@ -99,4 +99,5 @@ wasm is `panic = "abort"` (the job queue's panic recovery does *not* apply), nee
 
 ## Git
 
+- **Never open a PR against `main`.** A push to `main` triggers `.github/workflows/release.yml`, so a merge there can cut a release. PRs go to `staging` or to the integration branch the current line of work uses.
 - Short, action-oriented commit subjects; no mandatory prefix scheme. Keep PRs focused: problem, resulting behaviour, validation, platform limitations. Link relevant issues and include screenshots for visual changes.
