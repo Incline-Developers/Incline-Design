@@ -360,9 +360,10 @@ schedule stays, alongside the failure.
 
 The stitched schedule has no bound of its own: each window is optimal at best
 given the days already kept. A run whose whole-horizon solve found nothing
-better publishes the stitched schedule, with the whole-horizon bound when that
-solve produced one and no bound otherwise. The run details state which of
-the two was published.
+better publishes the stitched schedule, with the tighter of the whole-horizon
+bound and the relaxation bound (below) when either exists, and no bound
+otherwise. The run details state which schedule was published and which
+solve proved its bound.
 
 Chunked piles are solved this way too. Each chunk's tonnes and contained
 quantity cross the boundary from the window's replay, and whether it was
@@ -454,3 +455,76 @@ the same optimum.
 A fault this exposed is also fixed. SCIP reports "no dual bound" as its
 infinity, 1e20, and a solve stopped before its first root LP used to publish
 1e20 as the bound, with a matching gap. Both are now reported as absent.
+
+## Relaxation bound from HiGHS
+
+SCIP's own bound on a long horizon arrives late, because its first LP is
+slow: SoPlex has only simplex methods. SCIP cannot be pointed at HiGHS's
+interior-point method instead. Its HiGHS LP interface (`lpi_highs.cpp`)
+answers a barrier request with dual simplex, so building SCIP against HiGHS
+would swap one simplex for another and change packaging on every platform.
+
+Instead, a run solved day by day also solves the model's linear relaxation
+with HiGHS's interior-point method, on its own thread, from the start of the
+run (`blended/relaxation.rs`, `RelaxationJob` in `app/scip_blend.rs`). The
+relaxation is the model `formulate` builds with three changes. Each one only
+enlarges the feasible set, so the optimum is an upper bound on every schedule
+the model allows:
+
+- binaries may take any value in 0..=1;
+- indicators are posted as the formulation's big-M rows, valid at any flag
+  value;
+- the perfect-mixing equality is left out. The grade-box rows stay, so a
+  reclaim's grade is held to the pile's grade ceilings, but not to its blend.
+
+The last change makes the bound weaker on models whose value depends on the
+blend, not wrong. HiGHS's optimum is loosened by `max(1e-4, 1e-6 x |value|)`
+to cover its solve tolerances before it is used. A replayed schedule worth
+more than the loosened bound would mean the relaxation is wrong. The bound is
+then logged and dropped, and the schedule, which was replayed on its own, is
+kept. The run never waits for the relaxation: it is polled when the
+day-by-day schedule is ready and when the run ends. Cancelling the run, or
+the run finishing, stops it at HiGHS's next interior-point iteration.
+
+The bound is used in three places:
+
+- **The early day-by-day schedule** is shown with it, so its gap is known
+  while the whole-horizon solve runs.
+- **The final result** carries the tighter of SCIP's bound and the
+  relaxation's. The run details say when the relaxation proved it.
+- **The gap target.** If the day-by-day schedule is already within the
+  run's gap target of the relaxation bound, the whole-horizon solve is
+  skipped. The schedule is published as optimal within that target
+  (`DayByDayRole::Proven`), the same claim SCIP makes when it stops at its
+  gap limit. A SCIP result that the relaxation bound brings within the
+  target is reported as optimal in the same way.
+
+Bounds on the fixtures, relaxation against SCIP, with SCIP given 40 s:
+
+| fixture | relaxation | SCIP |
+|---|---|---|
+| known answer, 3 h | 6,000 in 2 ms | 6,000, optimal |
+| graded, 96 h | 24,000 in 30 ms | 24,000, optimal |
+| dynamic chunks FIFO / LIFO, 96 h | 9,600 in 0.24 / 0.29 s | 9,600, optimal |
+| released chunks FIFO, 96 h | 800 in 55 ms | 800, optimal |
+| competition, 72 h | 18,300 in 66 ms | 18,300 at the limit |
+| competition, 168 h | 36,300 in 0.24 s | 36,300 at the limit |
+| threshold trap | 11,200 in 3 ms | 900, optimal |
+
+The threshold trap is the weak case: its value depends on whether a reclaim's
+blend clears a grade threshold, which the relaxation cannot see. Through a
+whole run, 40 s budget:
+
+- The graded 96 h fixture is proven within the gap target by the
+  day-by-day schedule. It finishes in 0.39 s with no whole-horizon solve.
+- The dynamic chunk fixtures show their early schedules with a 9,600 bound
+  and finish as before, optimal at 9,600.
+- The competition week shows its early schedule at 31,500 against 36,300
+  after 20 s, and ends the same.
+
+DreamLand's week has not yet been run with the relaxation. Its earlier LP
+probe, the whole-horizon model written by SCIP and relaxed by HiGHS, took
+36 s by interior point, which would put a bound on the early schedule about
+two minutes sooner than SCIP's root LP. Its day-by-day schedule sat 0.11%
+below the final bound, above the default 0.01% gap target, so it would still
+run the whole-horizon solve.

@@ -5,10 +5,12 @@
 //! throughout. A horizon longer than one day-by-day window is first solved a
 //! day at a time; the stitched schedule is replayed against the whole
 //! horizon and seeds the whole-horizon solve, and whichever replayed schedule
-//! is worth more is the one kept. No SCIP model, pointer or solution
-//! wrapper leaves it; only owned, replayed rows do. Run Period and Run All
-//! Periods reach it through [`crate::app::schedule_run`], which owns the
-//! job, currentness and publication.
+//! is worth more is the one kept. Beside such a run, HiGHS solves the
+//! model's linear relaxation for a bound SCIP may not reach in time. No SCIP
+//! model, pointer or solution wrapper leaves it; only owned, replayed rows
+//! do. Run Period and Run All Periods reach it through
+//! [`crate::app::schedule_run`], which owns the job, currentness and
+//! publication.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -16,8 +18,9 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -30,6 +33,7 @@ use crate::model::schedule::{
         blended::{
             formulation::BlendSizes,
             input::BlendInput,
+            relaxation::{RelaxationBound, relaxation_bound},
             replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
         },
@@ -39,7 +43,7 @@ use crate::model::schedule::{
             experiments::extract_solution,
         },
     },
-    result::{DayByDayRole, DayByDaySummary},
+    result::{BoundSource, DayByDayRole, DayByDaySummary},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +117,8 @@ pub(crate) struct ScipCompletion {
     pub(crate) raw_objective: Option<f64>,
     pub(crate) primary_bound: Option<f64>,
     pub(crate) primary_gap: Option<f64>,
+    /// Which solve proved `primary_bound`.
+    pub(crate) bound_source: BoundSource,
     pub(crate) adjustments: Option<ExtractionAdjustments>,
     pub(crate) sizes: BlendSizes,
     pub(crate) timings: ScipPhaseTimings,
@@ -141,6 +147,7 @@ impl ScipCompletion {
             raw_objective: None,
             primary_bound: None,
             primary_gap: None,
+            bound_source: BoundSource::Scip,
             adjustments: None,
             sizes: BlendSizes::default(),
             timings: ScipPhaseTimings::default(),
@@ -228,13 +235,24 @@ pub(crate) fn execute_scip_blend(
     // whatever is left.
     let budget_started = Instant::now();
     let mut seed = None;
+    let mut relaxation = None;
     if let Some(windows) = rolling::plan(&out.input) {
+        relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
         match solve_day_by_day(&mut out, &windows, options, cancel, activity) {
             DayByDay::Seed(found) => {
+                let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
                 let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
                 shown.sizes = out.sizes;
                 shown.timings = out.timings;
-                adopt_seed(&mut shown, (*found).clone(), None, DayByDayRole::Early);
+                adopt_seed(&mut shown, (*found).clone(), None, proved, DayByDayRole::Early);
+                if shown.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+                    log::info!(
+                        "schedule run {}: the day-by-day schedule is within the gap target of the relaxation bound; no whole-horizon solve",
+                        out.identity.run_id
+                    );
+                    adopt_seed(&mut out, *found, None, proved, DayByDayRole::Proven);
+                    return out;
+                }
                 early(&shown);
                 seed = Some(*found);
             }
@@ -260,7 +278,8 @@ pub(crate) fn execute_scip_blend(
             "schedule run {}: no time left for a whole-horizon solve; keeping the day-by-day schedule",
             out.identity.run_id
         );
-        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
+        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
 
@@ -284,7 +303,8 @@ pub(crate) fn execute_scip_blend(
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
-        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
+        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
 
@@ -382,8 +402,8 @@ pub(crate) fn execute_scip_blend(
     let Some(solution) = extracted.expect("checked extraction result") else {
         if let Some(found) = seed {
             // A dual bound needs no incumbent, so it still bounds the seed.
-            let bound = out.primary_bound;
-            adopt_seed(&mut out, found, bound, DayByDayRole::Kept);
+            let (bound, proved) = (out.primary_bound, relaxation.as_mut().and_then(RelaxationJob::ready));
+            adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
         out.termination = classify_status(report.status, false);
@@ -409,7 +429,8 @@ pub(crate) fn execute_scip_blend(
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: whole-horizon incumbent rejected by replay: {issue}", out.identity.run_id);
         }
-        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
+        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
     out.published_objective = Some(checked.replayed_objective);
@@ -429,12 +450,25 @@ pub(crate) fn execute_scip_blend(
             return out;
         }
     }
-    let termination = classify_status(report.status, true);
+    let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+    let mut termination = classify_status(report.status, true);
+    {
+        let slack = out.replay.as_ref().map_or(0.0, |report| report.boundary_value_slack);
+        let published = out.published_objective.expect("replayed objective") - slack;
+        if let Some(bound) = consistent_relaxation(proved, published, out.identity.run_id).filter(|bound| out.primary_bound.is_none_or(|scip| *bound < scip)) {
+            out.primary_bound = Some(bound);
+            out.primary_gap = out.raw_objective.and_then(|raw| relative_gap(raw, bound));
+            out.bound_source = BoundSource::Relaxation;
+            if termination == ScipTermination::FeasibleLimit && out.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+                termination = ScipTermination::Optimal;
+            }
+        }
+    }
     if let Some(found) = seed {
         let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
         if !improved && termination != ScipTermination::Optimal {
-            let bound = out.primary_bound;
-            adopt_seed(&mut out, found, bound, DayByDayRole::Kept);
+            let bound = out.primary_bound.filter(|_| out.bound_source == BoundSource::Scip);
+            adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
         out.day_by_day = Some(found.summary);
@@ -461,6 +495,75 @@ const SEED_COMPLETION_SHARE: f64 = 0.25;
 /// Below this, a whole-horizon solve cannot build and presolve its model,
 /// let alone improve on the seed, so the day-by-day schedule is kept as is.
 const WHOLE_HORIZON_MINIMUM: Duration = Duration::from_secs(2);
+
+/// How far the relaxation's optimum is loosened before it is used as a bound:
+/// HiGHS solves the LP to feasibility and optimality tolerances of 1e-7, so
+/// its reported optimum can sit a little below the exact one.
+const RELAXATION_MARGIN_ABSOLUTE: f64 = 1e-4;
+const RELAXATION_MARGIN_RELATIVE: f64 = 1e-6;
+
+/// The HiGHS relaxation bound (see
+/// [`crate::model::schedule::optimisation::blended::relaxation`]), solved on
+/// its own thread beside a day-by-day run.
+///
+/// It starts with the run, needs nothing from the windows, and is only ever
+/// polled: the run never waits for it. Dropping the job stops the solve at
+/// HiGHS's next interior-point iteration, as does cancelling the run.
+struct RelaxationJob {
+    run_id: u64,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<Result<RelaxationBound, String>>>,
+    bound: Option<f64>,
+}
+
+impl RelaxationJob {
+    fn start(input: &Arc<BlendInput>, limit: Option<Duration>, cancel: &CancelFlag, run_id: u64) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (input, cancel, stopped) = (Arc::clone(input), cancel.signal(), Arc::clone(&stop));
+        let spawned = std::thread::Builder::new()
+            .name("schedule-relaxation".into())
+            .spawn(move || relaxation_bound(&input, limit, &|| stopped.load(Ordering::Acquire) || cancel.load(Ordering::Acquire)));
+        match spawned {
+            Ok(handle) => Some(Self {
+                run_id,
+                stop,
+                handle: Some(handle),
+                bound: None,
+            }),
+            Err(error) => {
+                log::warn!("schedule run {run_id}: relaxation bound not started: {error}");
+                None
+            }
+        }
+    }
+
+    /// The bound, once the solve has finished with one.
+    fn ready(&mut self) -> Option<f64> {
+        if let Some(handle) = self.handle.take_if(|handle| handle.is_finished()) {
+            match handle.join() {
+                Ok(Ok(found)) => {
+                    log::info!(
+                        "schedule run {}: relaxation bound {:.2} in {:.2?} ({} mixing equalities left out)",
+                        self.run_id,
+                        found.value,
+                        found.elapsed,
+                        found.dropped_mixing
+                    );
+                    self.bound = Some(found.value + RELAXATION_MARGIN_ABSOLUTE.max(found.value.abs() * RELAXATION_MARGIN_RELATIVE));
+                }
+                Ok(Err(problem)) => log::warn!("schedule run {}: no relaxation bound: {problem}", self.run_id),
+                Err(_) => log::warn!("schedule run {}: the relaxation bound panicked", self.run_id),
+            }
+        }
+        self.bound
+    }
+}
+
+impl Drop for RelaxationJob {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
 
 /// The stitched day-by-day schedule, replayed against the whole horizon.
 #[derive(Clone)]
@@ -624,33 +727,63 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
     }))
 }
 
-/// Publish the day-by-day schedule. `bound` is a whole-horizon dual bound
-/// that still stands, if there is one.
-fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>, role: DayByDayRole) {
+/// Publish the day-by-day schedule. `bound` is a whole-horizon SCIP dual
+/// bound that still stands, and `proved` the relaxation's, if there are any;
+/// the tighter is published.
+fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>, proved: Option<f64>, role: DayByDayRole) {
     let published = found.replay.replayed_objective;
     let raw = found.solution.reported_objective;
+    let checked = published - found.replay.boundary_value_slack;
     if let Some(bound) = bound
-        && let Some(problem) = exceeds_bound(published - found.replay.boundary_value_slack, bound)
+        && let Some(problem) = exceeds_bound(checked, bound)
     {
         out.stop(ScipTermination::ValidationFailure, problem);
         return;
     }
+    let proved = consistent_relaxation(proved, checked, out.identity.run_id);
+    let (bound, source) = match (bound, proved) {
+        (scip, Some(proved)) if scip.is_none_or(|scip| proved < scip) => (Some(proved), BoundSource::Relaxation),
+        (scip, _) => (scip, BoundSource::Scip),
+    };
     out.raw_objective = Some(raw);
     out.primary_bound = bound;
-    // SCIP's own definition, so the figure reads the same as a solver gap.
-    out.primary_gap = bound.and_then(|bound| {
-        let smaller = raw.abs().min(bound.abs());
-        (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
-    });
+    out.bound_source = source;
+    out.primary_gap = bound.and_then(|bound| relative_gap(raw, bound));
     out.published_objective = Some(published);
     out.adjustments = Some(found.solution.adjustments);
     out.replay = Some(Arc::new(found.replay));
     out.solution = Some(Arc::new(found.solution));
     out.day_by_day = Some(DayByDaySummary { role, ..found.summary });
-    out.termination = ScipTermination::FeasibleLimit;
+    out.termination = if role == DayByDayRole::Proven {
+        ScipTermination::Optimal
+    } else {
+        ScipTermination::FeasibleLimit
+    };
     // Shown early, it is not the run's outcome yet.
     if role != DayByDayRole::Early {
         log_outcome(out);
+    }
+}
+
+/// SCIP's own definition, so the figure reads the same as a solver gap.
+fn relative_gap(raw: f64, bound: f64) -> Option<f64> {
+    let smaller = raw.abs().min(bound.abs());
+    (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
+}
+
+/// The relaxation bound, unless a replayed schedule is worth more than it.
+///
+/// That cannot happen with a correct relaxation, so it is reported; but the
+/// schedule was replayed on its own and the relaxation is only a second
+/// opinion on its quality, so the bound is dropped rather than the schedule.
+fn consistent_relaxation(proved: Option<f64>, published: f64, run_id: u64) -> Option<f64> {
+    let proved = proved?;
+    match exceeds_bound(published, proved) {
+        None => Some(proved),
+        Some(problem) => {
+            log::warn!("schedule run {run_id}: relaxation bound not used: {problem}");
+            None
+        }
     }
 }
 

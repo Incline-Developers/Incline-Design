@@ -55,7 +55,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
-        result::{CalculatedSchedule, DayByDayRole, SolveQuality},
+        result::{BoundSource, CalculatedSchedule, DayByDayRole, SolveQuality},
     },
     ui::state::{ScheduleRepairTarget, ScheduleStep},
 };
@@ -783,6 +783,11 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
         currency = currency.to_owned()
     )];
     lines.push(match (report.bound, report.gap) {
+        (Some(bound), Some(gap)) if report.bound_source == BoundSource::Relaxation => tr!(
+            "schedule-detail-bound-relaxation",
+            bound = crate::ui::elements::schedule_calendar::format_money(bound),
+            gap = format!("{:.3}", gap * 100.0)
+        ),
         (Some(bound), Some(gap)) => tr!(
             "schedule-detail-bound",
             bound = crate::ui::elements::schedule_calendar::format_money(bound),
@@ -802,6 +807,7 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
                     DayByDayRole::Kept => tr!("schedule-detail-day-by-day-kept", windows = windows, seconds = seconds, value = value),
                     DayByDayRole::Early => tr!("schedule-detail-day-by-day-early", windows = windows, seconds = seconds, value = value),
                     DayByDayRole::Stopped => tr!("schedule-detail-day-by-day-stopped", windows = windows, seconds = seconds, value = value),
+                    DayByDayRole::Proven => tr!("schedule-detail-day-by-day-proven", windows = windows, seconds = seconds, value = value),
                 }
             }
             (None, reason) => tr!("schedule-detail-day-by-day-failed", reason = reason.cloned().unwrap_or_default()),

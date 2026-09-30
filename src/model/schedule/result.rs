@@ -282,6 +282,20 @@ pub(crate) enum DayByDayRole {
     Early,
     /// It is published because the user stopped the whole-horizon solve.
     Stopped,
+    /// It is published as within the gap target: the relaxation bound proved
+    /// it, so no whole-horizon solve ran.
+    Proven,
+}
+
+/// Which solve proved a published bound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BoundSource {
+    /// SCIP's own dual bound on the model.
+    #[default]
+    Scip,
+    /// HiGHS's optimum of the model's linear relaxation, which is looser by
+    /// construction but can be had long before SCIP's first LP finishes.
+    Relaxation,
 }
 
 /// How the answer was found, and the approximations it rests on.
@@ -294,6 +308,7 @@ pub(crate) struct SolveReport {
     pub(crate) raw_objective: Option<f64>,
     pub(crate) bound: Option<f64>,
     pub(crate) gap: Option<f64>,
+    pub(crate) bound_source: BoundSource,
     pub(crate) capture_s: f64,
     pub(crate) formulation_s: f64,
     pub(crate) solve_s: f64,

@@ -11,6 +11,7 @@
 //! | [`replay`] | an independent physical replay of a published schedule |
 //! | [`rolling`] | windows, carried state and stitching for day-by-day solving |
 //! | [`iterative`] | the iterative fixed-grade HiGHS method |
+//! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
 //!
 //! The nonlinear SCIP formulation lives next door in
 //! [`super::scip::blend`], because it is the one piece that genuinely needs
@@ -44,5 +45,6 @@ pub(crate) mod grade;
 pub(crate) mod input;
 #[cfg(feature = "blend-experiment")]
 pub(crate) mod iterative;
+pub(crate) mod relaxation;
 pub(crate) mod replay;
 pub(crate) mod rolling;

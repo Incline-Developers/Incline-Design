@@ -401,6 +401,7 @@ pub(crate) fn publish(
         raw_objective: completion.raw_objective,
         bound: completion.primary_bound,
         gap: completion.primary_gap,
+        bound_source: completion.bound_source,
         capture_s: meta.capture_s,
         formulation_s: completion.timings.formulation.as_secs_f64(),
         solve_s: completion.timings.solver.as_secs_f64(),
