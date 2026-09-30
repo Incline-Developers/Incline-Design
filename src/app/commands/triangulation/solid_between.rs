@@ -5,6 +5,7 @@
 //! inspection preview, so the two can never disagree about what a solid is.
 
 use anyhow::Result;
+use rayon::prelude::*;
 
 use super::{
     cuts::clip_mesh_by_surface,
@@ -376,7 +377,7 @@ fn boundary_segments(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<
     use std::collections::HashMap;
     let weld = Weld::of(vertices);
     let key = |vertex: mesh_data::Vertex| weld.key(vertex);
-    let mut counts: HashMap<EdgeKey, (usize, [mesh_data::Vertex; 2])> = HashMap::new();
+    let mut counts: HashMap<EdgeKey, (usize, [mesh_data::Vertex; 2]), foldhash::fast::RandomState> = HashMap::default();
     for face in faces {
         let corners = face.map(|index| vertices[index as usize]);
         for (a, b) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
@@ -465,24 +466,141 @@ fn append_caps(rings: &[Vec<mesh_data::Vertex>], plane: f64, upwards: bool, vert
         if outer.len() < 3 || !depths[index].is_multiple_of(2) {
             continue;
         }
-        let mut points = outer.clone();
-        let mut holes = Vec::new();
+        let mut cap = CapPolygon::default();
+        if !cap.add_ring(outer, false) {
+            continue;
+        }
         for (j, hole) in rings.iter().enumerate() {
             if !hole.is_empty() && depths[j] == depths[index] + 1 && contains(outer, hole[0]) {
-                holes.push(points.len());
-                points.extend(hole);
+                cap.add_ring(hole, true);
             }
         }
         let mut indices = Vec::new();
-        earcut::Earcut::new().earcut(points.iter().map(|point| [point.x, point.y]), &holes, &mut indices);
+        earcut::Earcut::new().earcut(cap.corners.iter().map(|&corner| [cap.points[corner].x, cap.points[corner].y]), &cap.holes, &mut indices);
         let base = vertices.len() as u32;
-        vertices.extend(points.iter().map(|point| mesh_data::Vertex { x: point.x, y: point.y, z: plane }));
-        for triangle in indices.as_chunks::<3>().0 {
-            let face = [base + triangle[0] as u32, base + triangle[1] as u32, base + triangle[2] as u32];
+        vertices.extend(cap.points.iter().map(|point| mesh_data::Vertex { x: point.x, y: point.y, z: plane }));
+        let mut push = |face: [u32; 3], vertices: &[mesh_data::Vertex]| {
             let corners = face.map(|index| vertices[index as usize]);
             let points_up = (corners[1].x - corners[0].x) * (corners[2].y - corners[0].y) - (corners[1].y - corners[0].y) * (corners[2].x - corners[0].x) > 0.0;
             faces.push(if points_up == upwards { face } else { [face[0], face[2], face[1]] });
+        };
+        let mut outline = Vec::new();
+        for triangle in indices.as_chunks::<3>().0 {
+            let corners = triangle.map(|corner| cap.corners[corner]);
+            // The ring points earcut skipped go back on the edges they lie
+            // along, so the cap keeps every rim vertex and meets the walls
+            // without a T-junction.
+            outline.clear();
+            for (from, to) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
+                outline.push(from);
+                if let Some(skipped) = cap.skipped.get(&(from, to)) {
+                    outline.extend(skipped.iter().copied());
+                } else if let Some(skipped) = cap.skipped.get(&(to, from)) {
+                    outline.extend(skipped.iter().rev().copied());
+                }
+            }
+            if outline.len() == 3 {
+                push(corners.map(|corner| base + corner as u32), vertices);
+                continue;
+            }
+            // Points on the triangle's edges: fan from its centroid, which
+            // sees every one of them from strictly inside.
+            let [a, b, c] = corners.map(|corner| cap.points[corner]);
+            let centre = vertices.len() as u32;
+            vertices.push(mesh_data::Vertex {
+                x: (a.x + b.x + c.x) / 3.0,
+                y: (a.y + b.y + c.y) / 3.0,
+                z: plane,
+            });
+            for (position, &from) in outline.iter().enumerate() {
+                let to = outline[(position + 1) % outline.len()];
+                push([centre, base + from as u32, base + to as u32], vertices);
+            }
         }
+    }
+}
+
+/// How far a ring point may sit off the straight run through it and still be
+/// left out of a cap's triangulation: a nanometre, far below anything drawn
+/// or measured.
+const COLLINEAR_TOLERANCE: f64 = 1.0e-9;
+
+/// One cap's rings, with the corners earcut is given kept apart from the
+/// points it is not.
+///
+/// A vertical cut through a flat, finely triangulated bench crosses its floor
+/// and roof in long straight chains - a thousand ring points with a score of
+/// corners among them - and earcut falls back to its quadratic search on
+/// chains like that, taking a tenth of a second over a cap that has twenty
+/// points' worth of shape. So it triangulates the corners alone, and
+/// [`append_caps`] puts the skipped points back on the edges they lie along.
+#[derive(Default)]
+struct CapPolygon {
+    /// Every ring point, in ring order.
+    points: Vec<mesh_data::Vertex>,
+    /// Indices into `points` of each ring's corners, rings one after another.
+    corners: Vec<usize>,
+    /// Where each hole's corners start in `corners`, as earcut wants.
+    holes: Vec<usize>,
+    /// The points skipped between two consecutive corners, keyed by those
+    /// corners in ring order.
+    skipped: HashMap<(usize, usize), Vec<usize>, foldhash::fast::RandomState>,
+}
+
+impl CapPolygon {
+    /// Whether the ring had enough shape to add.
+    ///
+    /// A skipped point is within [`COLLINEAR_TOLERANCE`] of the edge that
+    /// replaces it, not merely of its own two neighbours, so a gentle curve
+    /// cannot be straightened a nanometre at a time. The walk starts at the
+    /// lowest point in (x, y) order, which is never strictly between its
+    /// neighbours on a line.
+    fn add_ring(&mut self, ring: &[mesh_data::Vertex], hole: bool) -> bool {
+        let count = ring.len();
+        if count < 3 {
+            return false;
+        }
+        let start = (0..count)
+            .min_by(|&a, &b| ring[a].x.total_cmp(&ring[b].x).then(ring[a].y.total_cmp(&ring[b].y)))
+            .unwrap_or(0);
+        let at = |step: usize| ring[(start + step) % count];
+        let off_line = |point: mesh_data::Vertex, from: mesh_data::Vertex, to: mesh_data::Vertex| {
+            let span = glam::DVec2::new(to.x - from.x, to.y - from.y);
+            let offset = glam::DVec2::new(point.x - from.x, point.y - from.y);
+            let length = span.length();
+            if length > 0.0 { span.perp_dot(offset).abs() / length } else { offset.length() }
+        };
+        // Steps round the ring, from `start`, of the points kept as corners.
+        let mut kept = vec![0];
+        let mut anchor = 0;
+        while anchor < count {
+            // Stretch the edge from `anchor` for as long as every point it
+            // skips stays on it; step `count` is the start again.
+            let mut end = anchor + 1;
+            while end < count && (anchor + 1..=end).all(|skipped| off_line(at(skipped), at(anchor), at(end + 1)) <= COLLINEAR_TOLERANCE) {
+                end += 1;
+            }
+            if end < count {
+                kept.push(end);
+            }
+            anchor = end;
+        }
+        if kept.len() < 3 {
+            return false;
+        }
+        let base = self.points.len();
+        self.points.extend((0..count).map(at));
+        if hole {
+            self.holes.push(self.corners.len());
+        }
+        self.corners.extend(kept.iter().map(|&step| base + step));
+        for (position, &from) in kept.iter().enumerate() {
+            let to = kept.get(position + 1).copied().unwrap_or(count);
+            if to > from + 1 {
+                self.skipped.insert((base + from, base + to % count), (from + 1..to).map(|step| base + step).collect());
+            }
+        }
+        true
     }
 }
 
@@ -985,10 +1103,11 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
     let mut triangles = Vec::new();
     earcut::Earcut::new().earcut(points.iter().map(|p| [p.x, p.y]), &holes, &mut triangles);
     let original: Slab = (mesh.vertices().to_vec(), mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect());
-    let mut result: Slab = (Vec::new(), Vec::new());
-    let mut boundary_wall = Vec::new();
-    let mut volume = 0.0;
-    for triangle in triangles.as_chunks::<3>().0 {
+    // Each cell clips the whole body three times and shares nothing with the
+    // others, so the cells run in parallel. They are joined in earcut order,
+    // and the volume summed in that order, so the result is the same one a
+    // sequential walk produces.
+    let clip_cell = |triangle: &[usize; 3]| -> Result<Option<(Slab, Vec<bool>, f64)>> {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
         let mut cell = [points[triangle[0]], points[triangle[1]], points[triangle[2]]];
         if (cell[1] - cell[0]).perp_dot(cell[2] - cell[0]) < 0.0 {
@@ -1059,7 +1178,7 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
             wall = clipped_wall;
         }
         if slab.1.is_empty() {
-            continue;
+            return Ok(None);
         }
         // Each cell's own volume, as the integral between its floor and its
         // roof over the ground it covers.
@@ -1075,7 +1194,6 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         // and contribute nothing here; only floor and roof do, and those
         // cover the cell exactly whatever the walls did.
         let signed = prism_volume(&slab.0, &slab.1);
-        volume += signed.abs();
         // Volume is taken per cell as a magnitude, but the block-model overlap
         // integrates signed prisms over floor and roof from one shared origin,
         // so it needs every cell wound the same way. No cell in the test fixture
@@ -1086,6 +1204,14 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
                 face.swap(1, 2);
             }
         }
+        Ok(Some((slab, wall, signed.abs())))
+    };
+    let cells = triangles.as_chunks::<3>().0.par_iter().map(clip_cell).collect::<Result<Vec<_>>>()?;
+    let mut result: Slab = (Vec::new(), Vec::new());
+    let mut boundary_wall = Vec::new();
+    let mut volume = 0.0;
+    for (slab, wall, cell_volume) in cells.into_iter().flatten() {
+        volume += cell_volume;
         boundary_wall.extend(wall);
         let offset = result.0.len() as u32;
         result.0.extend(slab.0);
@@ -1165,7 +1291,7 @@ pub(crate) fn boundary_wall_outline(slab: &Slab, boundary_wall: &[bool]) -> Vec<
 
     let (vertices, faces) = slab;
     let weld = Weld::of(vertices);
-    let mut counts: HashMap<EdgeKey, (usize, [u32; 2])> = HashMap::new();
+    let mut counts: HashMap<EdgeKey, (usize, [u32; 2]), foldhash::fast::RandomState> = HashMap::default();
     for (face, _) in faces.iter().zip(boundary_wall).filter(|(_, wall)| **wall) {
         for (a, b) in [(0, 1), (1, 2), (2, 0)] {
             let (ia, ib) = (face[a], face[b]);
