@@ -12,8 +12,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    io::Write,
+    path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU8, Ordering},
     },
     time::{Duration, Instant},
@@ -684,6 +686,11 @@ fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relativ
             return Err(format!("setting SCIP {name:?}: retcode {code}"));
         }
     }
+    if let Some(file) = ipopt_options_file() {
+        model = model
+            .set_str_param("nlpi/ipopt/optfile", file)
+            .map_err(|error| format!("setting SCIP's Ipopt options file: {error:?}"))?;
+    }
     if let Some(limit) = time_limit {
         model = model
             .set_real_param("limits/time", limit.as_secs_f64())
@@ -693,6 +700,43 @@ fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relativ
         model = model.set_real_param("limits/gap", gap).map_err(|error| format!("setting SCIP gap: {error:?}"))?;
     }
     Ok(model)
+}
+
+/// Ipopt's options for every SCIP solve: MUMPS orders its factorisations
+/// with AMD rather than METIS.
+///
+/// The bundled build's METIS path is broken. Called by MUMPS through
+/// `mumps_metis_nodend_mixedto32`, it corrupts the heap: glibc then either
+/// aborts the process (`free(): invalid size` in `gk_malloc_cleanup`) or
+/// leaves the solver thread hanging in `malloc`. Any Ipopt solve can reach
+/// it - SCIP's sub-NLP heuristic did, in an unseeded solve of the
+/// competition fixture over a week, as did MPEC in a seeded one. With this
+/// option the same fixture completed every time; set to METIS explicitly it
+/// hung. AMD changes only the fill-in of Ipopt's factorisations, not what
+/// any solve means.
+const IPOPT_OPTIONS: &str = "mumps_pivot_order 0\n";
+
+/// SCIP takes Ipopt options only from a file. It is written once per
+/// process, atomically, so concurrent runs and app instances never see it
+/// half written. Without it, solves still run, on Ipopt's defaults.
+fn ipopt_options_file() -> Option<&'static str> {
+    static FILE: OnceLock<Option<String>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let path: PathBuf = std::env::temp_dir().join("incline-ipopt.opt");
+        let written = crate::model::atomic_file::write_atomic(&path, |file| Ok(file.write_all(IPOPT_OPTIONS.as_bytes())?));
+        match (written, path.to_str()) {
+            (Ok(()), Some(path)) => Some(path.to_owned()),
+            (Err(error), _) => {
+                log::warn!("SCIP's Ipopt options were not written to {}: {error:#}", path.display());
+                None
+            }
+            (Ok(()), None) => {
+                log::warn!("SCIP's Ipopt options path {} is not valid UTF-8", path.display());
+                None
+            }
+        }
+    })
+    .as_deref()
 }
 
 /// How far completion may move a seed value, in tonnes or hours: an absolute

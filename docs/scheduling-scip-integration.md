@@ -385,6 +385,18 @@ three times out of three. Unseeded solves keep SCIP's default. A day-by-day
 window's derived input is also validated like a captured one before SCIP
 sees it.
 
+The fault is not MPEC's. Any Ipopt solve can reach it: MUMPS calls the
+bundled METIS through `mumps_metis_nodend_mixedto32`, which corrupts the heap,
+and glibc then aborts the whole app (`free(): invalid size` in
+`gk_malloc_cleanup`) or hangs the solver thread. SCIP's sub-NLP heuristic hit
+it in an unseeded solve of the competition fixture over 168 h, two runs out of
+two. Every SCIP solve now gives Ipopt an options file,
+`$TMPDIR/incline-ipopt.opt`, holding `mumps_pivot_order 0`, so MUMPS orders
+with AMD instead. The same fixture then completed five runs out of five.
+With the option set to METIS explicitly, it hung. The four chunk fixtures over
+96 h reached the same proven optima as before. The ordering affects only how
+Ipopt factorises, not what any solve means. MPEC stays off in seeded solves.
+
 Two exact changes came with this:
 
 - A dig candidate whose block the input does not hold gets no columns.
@@ -393,6 +405,25 @@ Two exact changes came with this:
 - A dig bar's readiness in the first cell is now whether any of its blocks
   holds material, as the replay already defined it. It was forced to 1, which
   could make a bar with no work block lower-priority bars for one cell.
+
+Two ideas from the literature were tried on the windows and not kept. Each
+was measured on six fixtures at 40 s, against the unchanged code:
+
+- **Relaxed look-ahead** (Ankem et al. 2026: binaries only in the kept
+  period, continuous beyond it; only the kept day replayed). Worse. SCIP found
+  no schedule at all in the competition fixture's first window, and the
+  dynamic LIFO chunk fixture ended at 0 instead of its proven 9,600. Dynamic
+  FIFO ended at 6,400 instead of 9,600. The graded fixture was unchanged. The
+  fractional look-ahead makes the kept day's choices look better than they
+  are, and it weakens SCIP's primal heuristics.
+- **No exhaustion flag before a block could be finished** (Bley et al. 2010,
+  early-start fixing, applied to `exh` as reach pruning already is to dig
+  columns). Neutral, and graded's first window was slower (2.2 s against
+  0.26 s). SCIP's presolve evidently derives these fixings from the column
+  bounds itself.
+
+The patch for both is not in the tree. DreamLand was not re-measured, so a
+look-ahead that stays integer but shorter remains untested.
 
 SCIP's LP now starts with primal simplex and devex pricing
 (`lp/initalgorithm = p`, `lp/pricing = d`) in every solve. Only the LP
