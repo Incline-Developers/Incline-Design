@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Incline Design Web</title>
+    <link data-trunk rel="icon" type="image/svg+xml" href="../res/logo.svg" />
+    <link data-trunk rel="copy-file" href="_headers" />
+
+    <style>
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        canvas:focus {
+            outline: none;
+        }
+
+        #startup-panel {
+            position: fixed;
+            z-index: 1000;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            box-sizing: border-box;
+            padding: 32px;
+            overflow: auto;
+            color: #e8edf3;
+            background: #fff;
+            font: 14px/1.5 system-ui, sans-serif;
+            text-align: center;
+        }
+
+        #startup-panel[hidden] {
+            display: none;
+        }
+
+        .startup-content {
+            width: min(100%, 480px);
+        }
+
+        #startup-status {
+            margin: 18px 0 0;
+            color: #6b7280;
+        }
+
+        .startup-progress {
+            position: relative;
+            width: 80px;
+            height: 80px;
+            margin: 0 auto;
+        }
+
+        .startup-progress svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+            fill: none;
+            stroke-width: 4;
+        }
+
+        .startup-track {
+            stroke: #e5e7eb;
+        }
+
+        #startup-ring {
+            stroke: #45c76b;
+            stroke-dasharray: 100;
+            stroke-dashoffset: 100;
+            transition: stroke-dashoffset 180ms linear;
+        }
+
+        #startup-percentage {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            color: #374151;
+            font-size: 18px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #startup-ring {
+                transition: none;
+            }
+        }
+
+        #startup-errors {
+            color: #ffc1c5;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        #startup-errors p {
+            margin: 20px 0 0;
+        }
+
+        .startup-failed .startup-progress {
+            display: none;
+        }
+
+        #startup-panel.startup-complete {
+            inset: 18px 16px auto;
+            padding: 16px;
+            border: 1px solid #ff8990;
+            border-radius: 6px;
+            background: #8c1d23;
+            max-height: calc(100% - 36px);
+        }
+
+        .startup-complete .startup-progress,
+        .startup-complete #startup-status {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="startup-panel">
+        <div class="startup-content">
+            <div class="startup-progress" role="progressbar" aria-label="Loading Incline Design Web" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <svg viewBox="0 0 80 80" aria-hidden="true">
+                    <circle class="startup-track" cx="40" cy="40" r="36" />
+                    <circle id="startup-ring" cx="40" cy="40" r="36" pathLength="100" />
+                </svg>
+                <span id="startup-percentage" aria-hidden="true">0%</span>
+            </div>
+            <p id="startup-status" role="status">Loading Incline Design Web</p>
+            <div id="startup-errors" role="alert"></div>
+        </div>
+    </div>
+    <script>
+        (() => {
+            const panel = document.getElementById("startup-panel");
+            const status = document.getElementById("startup-status");
+            const errors = document.getElementById("startup-errors");
+            const progress = document.querySelector(".startup-progress");
+            const ring = document.getElementById("startup-ring");
+            const percentage = document.getElementById("startup-percentage");
+            let currentProgress = 0;
+            window.inclineDesignStartupProgress = (value) => {
+                if (!Number.isFinite(value) || errors.childElementCount) return;
+                currentProgress = Math.max(currentProgress, Math.min(100, Math.round(value)));
+                ring.style.strokeDashoffset = 100 - currentProgress;
+                percentage.textContent = `${currentProgress}%`;
+                progress.setAttribute("aria-valuenow", currentProgress);
+            };
+            window.inclineDesignStartupError = (message) => {
+                console.error(message);
+                panel.hidden = false;
+                panel.classList.add("startup-failed");
+                status.textContent = "Incline Design could not start";
+                const item = document.createElement("p");
+                item.textContent = message;
+                errors.appendChild(item);
+            };
+            window.inclineDesignStartupReady = () => {
+                window.inclineDesignStartupProgress(100);
+                panel.classList.add("startup-complete");
+                panel.hidden = !errors.childElementCount;
+            };
+
+            const missing = [];
+            if (!("gpu" in navigator)) {
+                missing.push("WebGPU");
+            }
+            if (!window.crossOriginIsolated) {
+                missing.push("cross-origin isolation (COOP/COEP headers)");
+            }
+            if (!("SharedArrayBuffer" in window)) {
+                missing.push("SharedArrayBuffer/WebAssembly threads");
+            }
+            const sharedMemoryModule = new Uint8Array([
+                0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                0x05, 0x04, 0x01, 0x03, 0x01, 0x01,
+            ]);
+            if (!WebAssembly.validate(sharedMemoryModule)) {
+                missing.push("WebAssembly shared-memory support");
+            }
+            if (missing.length) {
+                window.inclineDesignStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser over HTTPS or localhost and configure the required isolation headers.`);
+            }
+
+            addEventListener("error", event => {
+                const message = event.error?.message || event.message;
+                if (message) {
+                    window.inclineDesignStartupError(message);
+                }
+            });
+            addEventListener("unhandledrejection", event => {
+                const message = event.reason?.message || String(event.reason || "Unknown startup failure");
+                window.inclineDesignStartupError(message);
+            });
+        })();
+    </script>
+    <!-- Binaryen 123 does not auto-enable the threads/bulk-memory validators;
+         rustc LTO still performs the release optimizations for this module. -->
+    <link data-trunk rel="rust" href="../Cargo.toml" data-wasm-opt="0" data-initializer="web-initializer.js">
+</body>
+</html>

@@ -1,11 +1,81 @@
 use crate::{
     app::App,
     i18n::{tr, tr_format},
-    ui::state::DelayProduct,
-    userspace_log,
+    ui::state::{ActiveTool, DelayProduct},
+    userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
+    /// The toolbar's one button: release a set centre, else arm the pick (or
+    /// disarm it: the toolbar toggles a tool handed twice).
+    pub(crate) fn toggle_rotation_centre(&mut self) {
+        if self.editor.rotation_centre.is_some() {
+            self.clear_rotation_centre();
+            userspace_log!("{}", tr!(literal = "Released the centre of rotation"));
+        } else if self.editor.fly_mode_enabled {
+            userspace_warn!("{}", tr!(literal = "The centre of rotation is not available in flying mode"));
+        } else {
+            self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
+        }
+    }
+
+    /// The armed click: fix the centre where the cursor says it will land -
+    /// the caught snap point when a snap mode holds one, else the closest
+    /// point under the cursor - and stand the tool down.
+    pub(crate) fn pick_rotation_centre_at_cursor(&mut self) {
+        // The snap dot is a promise: the tool must fix the centre on the point
+        // it drew, not on a second pick that lands somewhere else.
+        let snapped = if self.editor.snapping_active() && self.editor.cursor_snapped {
+            self.editor.cursor_world
+        } else {
+            None
+        };
+        let centre = if let Some(centre) = snapped {
+            centre
+        } else {
+            self.refresh_snap_index();
+            let Some(graphics) = self.graphics.as_mut() else {
+                return;
+            };
+            // No snap caught: one rule for every object, the closest point on
+            // it to the cursor.
+            let Some(centre) = graphics.pick_rotation_centre(
+                &self.triangulations,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                &self.scene_document,
+                &self.snap_index,
+                self.editor.z_level,
+                self.editor.xray_enabled,
+            ) else {
+                userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
+                return;
+            };
+            centre
+        };
+        self.editor.rotation_centre = Some(centre);
+        self.editor.active_tool = ActiveTool::None;
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Fixed the centre of rotation at %x%, %y%, %z%",
+                x = format!("{:.3}", centre.x),
+                y = format!("{:.3}", centre.y),
+                z = format!("{:.3}", centre.z)
+            )
+        );
+        self.redraw_requested = true;
+    }
+
+    /// Drop the fixed centre; plan orbits pivot on the cursor again, and the
+    /// section's eye turns freely instead of about it.
+    pub(crate) fn clear_rotation_centre(&mut self) {
+        if self.editor.rotation_centre.take().is_some() {
+            self.redraw_requested = true;
+        }
+    }
+
     pub(crate) fn set_topology_wireframes(&mut self, enabled: bool) -> anyhow::Result<()> {
         self.editor.topology_wireframes_enabled = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
@@ -24,13 +94,41 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Flip one view preference and save it, exactly as the Interface tab
+    /// Turn the presentation shading on or off. Like the other view switches
+    /// this is per-session and unsaved; unlike them it changes what the scene
+    /// pass itself draws, so the cached scene image has to be thrown away.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_cinematic_enabled(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.editor.cinematic_enabled = enabled;
+        self.invalidate_geometry();
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set cinematic view = %enabled%", enabled = enabled));
+        Ok(())
+    }
+
+    /// Show or hide the construction grid on the world XY plane.
+    ///
+    /// Deliberately not persisted: this is a per-session view toggle, shown
+    /// again at the start of every run. Reached from the viewport bar alone -
+    /// see [`Self::set_grid_shown`], which picks it or the section's RL grid.
+    pub(crate) fn set_xy_grid_shown(&mut self, enabled: bool) {
+        self.editor.show_xy_grid = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set XY grid = %enabled%", enabled = enabled));
+    }
+
+    /// Flip one View menu switch and save it, exactly as the Interface tab
     /// would: the View menu is a shortcut to those settings, not a second
     /// place they are stored.
     pub(crate) fn toggle_view_option(&mut self, option: crate::ui::state::ViewToggle) -> anyhow::Result<()> {
+        use crate::ui::state::ViewToggle;
+
+        let value = !option.get(&self.editor);
         let mut preferences = self.editor.current_preferences();
-        let value = !option.get(&preferences);
-        option.set(&mut preferences, value);
+        match option {
+            ViewToggle::Console => preferences.show_console = value,
+            ViewToggle::DarkMode => preferences.dark_mode = value,
+        }
         self.apply_preferences(preferences)
     }
 
@@ -48,6 +146,7 @@ impl<'a> App<'a> {
     pub(crate) fn apply_preferences(&mut self, mut preferences: crate::ui::state::PreferencesDraft) -> anyhow::Result<()> {
         // Clamp once, up front, so the saved config, the applied editor state
         // and the retained draft cannot diverge.
+        preferences.ui_size_percent = crate::app::io::finite_clamped(preferences.ui_size_percent, 50.0, 200.0, crate::app::io::default_ui_size_percent());
         preferences.snap_poll_rate = preferences.snap_poll_rate.clamp(5, 1000);
         preferences.frame_rate_cap = preferences.frame_rate_cap.clamp(20, 1000);
         preferences.resize_frame_rate_cap = preferences.resize_frame_rate_cap.clamp(20, 1000);
@@ -65,13 +164,15 @@ impl<'a> App<'a> {
             &preferences,
             self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
         ))?;
 
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
         self.editor.panel_chrome = preferences.panel_chrome;
+        self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
-        self.editor.show_xy_grid = preferences.show_xy_grid;
         self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
@@ -84,13 +185,14 @@ impl<'a> App<'a> {
         self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
         if !preferences.frame_counter_enabled {
             self.editor.measured_fps = None;
-            self.editor.smoothed_frame_interval = None;
+            self.editor.frame_rate_window = (0, 0.0);
         }
-        self.editor.debug_chunk_coloring = preferences.debug_chunk_coloring;
-        if !preferences.debug_chunk_coloring {
-            self.editor.debug_chunk_stats = None;
+        self.editor.debug_surface_chunks = preferences.debug_surface_chunks;
+        if !preferences.debug_surface_chunks {
+            self.editor.debug_surface_stats = None;
         }
         self.editor.debug_clip_planes = preferences.debug_clip_planes;
+        self.editor.debug_point_cloud_chunks = preferences.debug_point_cloud_chunks;
         self.editor.plan_orbit_sensitivity = preferences.plan_orbit_sensitivity;
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
@@ -125,7 +227,7 @@ impl<'a> App<'a> {
             preferences.snap_poll_rate,
             preferences.frame_rate_cap,
             preferences.frame_counter_enabled,
-            preferences.debug_chunk_coloring
+            preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
         Ok(())
@@ -228,18 +330,21 @@ impl<'a> App<'a> {
 /// draft because they are not a preference the settings tabs edit - the
 /// palette owns them. The workspace order is passed separately for the same
 /// reason, so saving preferences or products preserves the tab arrangement.
+/// Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 4],
+    workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
+    coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
+    mine_coordinate_system: Option<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
         panel_chrome: preferences.panel_chrome,
+        ui_size_percent: preferences.ui_size_percent,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-        show_xy_grid: preferences.show_xy_grid,
         show_scale_bar: preferences.show_scale_bar,
         renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,
@@ -250,8 +355,9 @@ pub(crate) fn config_from(
         show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
         downscale_raster_previews: preferences.downscale_raster_previews,
         frame_counter_enabled: preferences.frame_counter_enabled,
-        debug_chunk_coloring: preferences.debug_chunk_coloring,
+        debug_surface_chunks: preferences.debug_surface_chunks,
         debug_clip_planes: preferences.debug_clip_planes,
+        debug_point_cloud_chunks: preferences.debug_point_cloud_chunks,
         plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,
@@ -264,6 +370,8 @@ pub(crate) fn config_from(
         fly_near_clip_limit: preferences.fly_near_clip_limit,
         fly_max_clip_span: preferences.fly_max_clip_span,
         delay_products,
+        coordinate_systems,
+        mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
     }
 }

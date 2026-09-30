@@ -17,7 +17,7 @@ use crate::{
     i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
-        Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
+        Axis, FillStyle, FolderId, FolderMember, FolderRegistry, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
@@ -46,8 +46,8 @@ pub(crate) struct PreferencesDraft {
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
     pub(crate) panel_chrome: bool,
+    pub(crate) ui_size_percent: f64,
     pub(crate) show_world_axis_gizmo: bool,
-    pub(crate) show_xy_grid: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
@@ -57,8 +57,9 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_block_model_boundary_highlights: bool,
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
-    pub(crate) debug_chunk_coloring: bool,
+    pub(crate) debug_surface_chunks: bool,
     pub(crate) debug_clip_planes: bool,
+    pub(crate) debug_point_cloud_chunks: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -87,8 +88,8 @@ impl Default for PreferencesDraft {
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
+            ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -98,8 +99,9 @@ impl Default for PreferencesDraft {
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
-            debug_chunk_coloring: false,
+            debug_surface_chunks: false,
             debug_clip_planes: false,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -362,6 +364,25 @@ impl EditorState {
         if !self.selected_handles.remove(&handle) {
             self.selected_handles.insert(handle);
         }
+    }
+
+    /// Whether a tool that runs on the selection is open on a snapshot of it.
+    ///
+    /// These tools take their inputs when they open and cannot be re-pointed
+    /// from inside, so the viewport and the explorer tree both stop taking
+    /// selection while one is up: a click that appeared to add or drop an
+    /// input would not reach the run. Changing the inputs means closing the
+    /// tool, selecting, and reopening.
+    pub(crate) fn selection_locked_by_tool(&self) -> bool {
+        self.tri_create_open
+            || self.tri_cut_poly_open
+            || self.tri_cut_z_open
+            || self.tri_contour_open
+            || self.point_cloud_tin_open
+            || self.point_cloud_join_open
+            || self.point_cloud_classify_open
+            || self.block_model_create_open
+            || self.ore_triangulation_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -830,20 +851,43 @@ pub(crate) enum ContourOutputLayer {
     Existing(LayerId),
 }
 
+/// What the current scene selection offers the tools that run on it.
+///
+/// Create Triangulation, the terrain tools, the point-cloud tools and the
+/// estimation tools act on whatever was selected when they were opened, so
+/// their menu entries have to know every frame whether the selection can feed
+/// them. Counting here rather
+/// than at each menu keeps the document out of the menu code and the scan off
+/// the frame: `App::refresh_selection_counts` fills this in once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectionCounts {
+    /// Selected design objects able to contribute an edge to a triangulation.
+    pub(crate) triangulation_sources: usize,
+    /// Selected design objects that enclose an area, and so can serve as a
+    /// clipping boundary.
+    pub(crate) clip_boundaries: usize,
+    /// Selected triangulations that are loaded, and so have a mesh to work on.
+    pub(crate) triangulations: usize,
+    /// Selected point clouds that are loaded, and so have points to work on.
+    pub(crate) point_clouds: usize,
+    /// Selected drill-hole datasets that are loaded, and so have intervals to
+    /// estimate from.
+    pub(crate) drill_holes: usize,
+    /// Selected block models that are loaded, and so have blocks to work on.
+    pub(crate) block_models: usize,
+}
+
 /// A triangulation selector temporarily being filled from a viewport click.
 /// Keeping one shared mode prevents overlapping dialogs from competing for a
 /// click and lets Escape cancel the pick without closing the owning tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TriangulationPickTarget {
-    ClipSurface,
-    SliceSurface,
     TrimTopology,
     TrimSurface,
     CutPitTopology,
     CutPitShell,
     IncludeTopology,
     IncludeShape,
-    ContourSurface,
     /// The design surface half of the Build Solid tool.
     SolidDesign,
     /// The topography half of the Build Solid tool.
@@ -858,7 +902,7 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!(literal = "Click the pit or stockpile solid in the viewport."),
             Self::SolidDesign => tr!(literal = "Click the design surface in the viewport."),
             Self::SolidTopography => tr!(literal = "Click the topography in the viewport."),
-            Self::ClipSurface | Self::SliceSurface | Self::TrimSurface | Self::ContourSurface => tr!(literal = "Click the surface in the viewport."),
+            Self::TrimSurface => tr!(literal = "Click the surface in the viewport."),
         }
     }
 }
@@ -1305,6 +1349,141 @@ pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::Colla
     }
 }
 
+/// Horizontal axis of an upright section-grid line: `Easting` lines run at constant E, `Northing` at constant N.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridAxis {
+    Easting,
+    Northing,
+}
+
+/// Kind of section-grid line: `Level` at constant elevation, `Upright` where the cut crosses a world easting/northing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridLineKind {
+    Level,
+    Upright(SectionGridAxis),
+}
+
+/// The section grid's look; not persisted with the project.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionGridStyle {
+    /// `None` picks a colour that contrasts the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels.
+    pub(crate) thickness: f64,
+    /// Metres between RL levels; `None` sizes them from the zoom, as the
+    /// easting/northing lines always are.
+    pub(crate) level_spacing: Option<f64>,
+}
+
+impl Default for SectionGridStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            thickness: 1.0,
+            level_spacing: None,
+        }
+    }
+}
+
+impl std::hash::Hash for SectionGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+        self.level_spacing.map(f64::to_bits).hash(state);
+    }
+}
+
+/// The plan view's XY grid look. Spacing isn't overridden; it stays the
+/// automatic level rule. Not persisted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanGridStyle {
+    /// `None` keeps the colours picked against the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels; 1 is the width the grid has always had.
+    pub(crate) thickness: f64,
+}
+
+impl Default for PlanGridStyle {
+    fn default() -> Self {
+        Self { color: None, thickness: 1.0 }
+    }
+}
+
+impl std::hash::Hash for PlanGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+    }
+}
+
+/// The grid options dialog's fields, for the RL grid in a section or the XY
+/// grid in plan; Cancel drops them, an earlier Apply stays.
+#[derive(Clone, Debug)]
+pub(crate) struct GridOptionsDialog {
+    /// The plan grid: no spacing fields, its level rule is not overridden.
+    pub(crate) plan: bool,
+    pub(crate) auto_color: bool,
+    pub(crate) color: egui::Color32,
+    pub(crate) thickness: f64,
+    pub(crate) auto_spacing: bool,
+    pub(crate) spacing: f64,
+}
+
+impl GridOptionsDialog {
+    const COLOR_SEED: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(140, 146, 152, 115);
+
+    /// Open on the section grid's style; `spacing_now` seeds the manual
+    /// spacing with what the zoom chose.
+    pub(crate) fn open_section(style: SectionGridStyle, spacing_now: f64) -> Self {
+        Self {
+            plan: false,
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
+            thickness: style.thickness,
+            auto_spacing: style.level_spacing.is_none(),
+            spacing: style.level_spacing.unwrap_or(spacing_now),
+        }
+    }
+
+    pub(crate) fn open_plan(style: PlanGridStyle) -> Self {
+        Self {
+            plan: true,
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
+            thickness: style.thickness,
+            auto_spacing: true,
+            spacing: 0.0,
+        }
+    }
+
+    pub(crate) fn section_style(&self) -> SectionGridStyle {
+        SectionGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
+            level_spacing: (!self.auto_spacing).then_some(self.spacing),
+        }
+    }
+
+    pub(crate) fn plan_style(&self) -> PlanGridStyle {
+        PlanGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
+        }
+    }
+}
+
+/// One frame's screen-space projection of a section-grid line, in physical pixels matching `cursor_screen_px`.
+#[derive(Clone, Copy)]
+pub(crate) struct SectionGridLine {
+    pub(crate) from_px: (f32, f32),
+    pub(crate) to_px: (f32, f32),
+    /// World coordinate in metres: elevation for a level line, easting or northing for an upright one.
+    pub(crate) value: f64,
+    pub(crate) kind: SectionGridLineKind,
+}
+
 /// Plane-handle index used for the Move gizmo's view-aligned ring, which
 /// translates in the camera plane instead of a world-axis plane.
 pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
@@ -1415,6 +1594,7 @@ pub(crate) enum RenameTarget {
     /// One blast shape of one bench. Blasts are derived from geometry, so
     /// what is renamed is the stored name held against the face's anchor.
     BlastShape(BlastShapeRef),
+    Folder(SectionKind, FolderId),
 }
 
 /// A stable, copyable reference to one stored blast name.
@@ -1461,6 +1641,7 @@ impl RenameTarget {
             Self::ReserveField(_) => tr!(literal = "Field"),
             Self::Solid(_) => tr!(literal = "Solid"),
             Self::BlastShape(_) => tr!(literal = "Blast"),
+            Self::Folder(..) => tr!(literal = "Collection"),
         }
     }
 
@@ -1480,6 +1661,7 @@ impl RenameTarget {
             // as the lines around it do. Clearing its name is the nearest
             // thing: it goes back to being numbered automatically.
             Self::BlastShape(blast) => UiCommand::ResetBlastName(blast),
+            Self::Folder(section, id) => UiCommand::DeleteFolder { section, folder: id },
         }
     }
 }
@@ -1495,6 +1677,19 @@ pub(crate) enum ReserveFieldKind {
     Category,
 }
 
+/// One selectable row in the explorer tree.
+///
+/// A design layer is not a scene entity - it is a container - but it selects
+/// like one: clicking it takes everything standing on it. Carrying both
+/// shapes in the row list lets a Shift-click run across the two without the
+/// tree having to know what each row stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ExplorerRow {
+    Entity(SceneEntityId),
+    /// A design layer, which stands for every object on it.
+    Layer(LayerId),
+}
+
 /// Central mutable editor state.
 ///
 /// Shared between the render pipeline and every UI draw call. Fields are grouped
@@ -1502,6 +1697,18 @@ pub(crate) enum ReserveFieldKind {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
+    /// Every selectable row the explorer tree drew this frame, in the order it
+    /// drew them, with collapsed sections left out.
+    ///
+    /// A Shift-click selects the run of rows between the last click and this
+    /// one, which is a question only the tree can answer: it alone knows which
+    /// sections are open and how the rows read down the panel. It is rebuilt
+    /// each time the tree is drawn, so the click that reads it is always
+    /// resolved against the rows the user was looking at.
+    pub(crate) explorer_rows: Vec<ExplorerRow>,
+    /// The row a Shift-click measures its run from: the last row clicked
+    /// without Shift.
+    pub(crate) explorer_anchor: Option<ExplorerRow>,
     /// Individually selected drill holes, which the Drill & Blast workspace
     /// works in place of whole datasets - see [`DrillHoleRef`]. Production
     /// selects the dataset into [`Self::selected_handles`] and leaves this
@@ -1537,6 +1744,12 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
+    /// Draw classified point clouds in their ASPRS class colours. Survey's
+    /// reading of a cloud - what a delivery's ground filter decided - so the
+    /// switch appears there and the renderer honours it there only. On by
+    /// default: a classified cloud arrives to be checked, and a flat one hides
+    /// the vegetation and noise that check is looking for.
+    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -1548,9 +1761,12 @@ pub(crate) struct EditorState {
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
+    pub(crate) ui_size_percent: f64,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
-    /// Show the construction grid on the world XY plane at Z=0.
+    /// Show the construction grid on the world XY plane at Z=0. Per-session
+    /// like the other view toggles above: shown at the start of every run and
+    /// never written to the config.
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
@@ -1582,20 +1798,26 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
-    /// Smoothed seconds between rendered frames, which `measured_fps` is the
-    /// reciprocal of. See the note where it is updated: the average has to be
-    /// taken over the interval, never over the instantaneous rate.
-    pub(crate) smoothed_frame_interval: Option<f32>,
-    /// Developer view: colour each surface chunk distinctly to visualise the
-    /// Morton spatial chunking (and drive the chunk-cull stats readout).
-    pub(crate) debug_chunk_coloring: bool,
-    /// `(rendered, total)` surface chunks from the last frame; shown in the
-    /// status bar while `debug_chunk_coloring` is on.
-    pub(crate) debug_chunk_stats: Option<(u32, u32)>,
+    /// Frames and busy seconds counted towards the next `measured_fps`, which
+    /// is published once per window rather than every frame. See
+    /// `App::record_frame_time`.
+    pub(crate) frame_rate_window: (u32, f32),
+    /// Developer view of surface chunking: colour each chunk distinctly,
+    /// outline its culling AABB, and show the chunk-cull readout.
+    pub(crate) debug_surface_chunks: bool,
+    /// Last frame's surface faces and chunks after culling; shown in the
+    /// status bar while `debug_surface_chunks` is on.
+    pub(crate) debug_surface_stats: Option<crate::rendering::scene::gpu_cache::SurfaceRenderStats>,
     /// Current projection near/far values, shown in the status bar when the
     /// developer clip-plane readout is enabled.
     pub(crate) debug_clip_plane_distances: Option<(f64, f64)>,
     pub(crate) debug_clip_planes: bool,
+    /// Last frame's point-cloud draw against the LOD target, shown in the
+    /// status bar when the developer point readout is enabled.
+    pub(crate) debug_point_stats: Option<crate::rendering::scene::point_cloud_cache::PointRenderStats>,
+    /// Developer view of point-cloud chunking: colour each chunk distinctly,
+    /// outline its culling AABB, and show the point readout.
+    pub(crate) debug_point_cloud_chunks: bool,
     pub(crate) plan_orbit_sensitivity: f64,
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
@@ -1701,7 +1923,7 @@ pub(crate) struct EditorState {
     pub(crate) editing_labels_id: Option<ObjectId>,
 
     // Cursor & snapping
-    /// Z plane used for all placement operations (point, line, poly vertices).
+    /// Z plane used for placement (point, line, poly vertices) outside the slice view.
     pub(crate) z_level: f64,
     /// Editable Z level value used by the toolbar and Design > Move to > Set Z.
     pub(crate) z_input: f64,
@@ -1740,10 +1962,25 @@ pub(crate) struct EditorState {
     /// `App::refresh_intersection_availability` before each frame's UI. Gates
     /// Design > Insert Point > At intersection.
     pub(crate) selection_has_intersections: bool,
+    /// Whether Insert Point has a selected polyline to act on; circles are excluded.
+    pub(crate) selection_has_polylines: bool,
+    /// How much of the scene selection each selection-driven tool can act on,
+    /// refreshed by `App::refresh_selection_counts` before each frame's UI.
+    /// The menus decide their own availability from this, and never see the
+    /// document the counts are derived from.
+    pub(crate) selection_counts: SelectionCounts,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
+    /// The "Edit Object" dialog, holding a working copy of one design object
+    /// until Apply or OK hands it back to the document.
+    pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
 
     // Display overrides
     pub(crate) xray_enabled: bool,
+    /// Presentation shading: sky, ambient occlusion, sun shadows and a filmic
+    /// grade over the ordinary scene pass. A view mode, not a tool - every
+    /// tool keeps working with it on, and nothing about it is saved. On by
+    /// default natively; the browser build has no post chain at all.
+    pub(crate) cinematic_enabled: bool,
     pub(crate) vertical_exaggeration_dialog_open: bool,
     pub(crate) vertical_exaggeration: f64,
     pub(crate) vertical_exaggeration_input: f64,
@@ -1844,6 +2081,16 @@ pub(crate) struct EditorState {
     pub(crate) slice_direction: [f64; 2],
     /// Half-width of the section currently visible in the main viewport.
     pub(crate) slice_half_length: f64,
+    /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
+    pub(crate) slice_grid_enabled: bool,
+    pub(crate) section_grid_px: Vec<SectionGridLine>,
+    /// The section grid's look, from the grid button's right-click dialog.
+    pub(crate) section_grid_style: SectionGridStyle,
+    /// The plan grid's look, from the same button's right click in plan.
+    pub(crate) xy_grid_style: PlanGridStyle,
+    pub(crate) grid_dialog: Option<GridOptionsDialog>,
+    /// The RL spacing in force this frame, chosen or automatic.
+    pub(crate) section_grid_level_spacing: f64,
 
     // Selection box
     /// Physical-pixel bounds of an in-progress box selection.
@@ -1877,16 +2124,11 @@ pub(crate) struct EditorState {
     pub(crate) offset_collide_with_triangulation: bool,
     /// Preview polyline vertices in world coordinates.
     pub(crate) offset_preview_world: Vec<DVec3>,
-    /// Source vertices matching `offset_preview_world`, used for offset guide connectors.
-    pub(crate) offset_source_world: Vec<DVec3>,
     /// Preview polyline vertices projected to physical-pixel screen
-    /// coordinates this frame. One entry per source vertex; `None` marks a
+    /// coordinates this frame. One entry per preview vertex; `None` marks a
     /// vertex outside the camera depth range so indexed consumers stay
     /// aligned with `offset_preview_world`.
     pub(crate) offset_preview_screen_px: Vec<Option<(f32, f32)>>,
-    /// Source vertices projected to physical-pixel screen coordinates this
-    /// frame; index-aligned with `offset_source_world` (`None` = clipped).
-    pub(crate) offset_source_screen_px: Vec<Option<(f32, f32)>>,
     /// Preview screen ranges as `(start, end, closed)` so multiple offset
     /// previews are drawn independently.
     pub(crate) offset_preview_ranges: Vec<(usize, usize, bool)>,
@@ -2064,13 +2306,12 @@ pub(crate) struct EditorState {
 
     // Cut Triangulation by Polyline
     pub(crate) tri_cut_poly_open: bool,
-    pub(crate) tri_cut_poly_awaiting_pick: bool,
     pub(crate) tri_cut_poly_tri_id: Option<TriangulationId>,
     pub(crate) tri_cut_poly_object_id: Option<ObjectId>,
     pub(crate) tri_cut_poly_object_name: String,
     pub(crate) tri_cut_poly_mode: TriPolylineClipMode,
     pub(crate) tri_cut_poly_name_input: String,
-    pub(crate) tri_cut_poly_name_auto: bool,
+    pub(crate) tri_cut_poly_unload_source: bool,
 
     // Cut Triangulation by Z Range
     pub(crate) tri_cut_z_open: bool,
@@ -2078,7 +2319,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_z_min_input: f64,
     pub(crate) tri_cut_z_max_input: f64,
     pub(crate) tri_cut_z_name_input: String,
-    pub(crate) tri_cut_z_name_auto: bool,
+    pub(crate) tri_cut_z_unload_source: bool,
 
     // Trim Surface to Topology
     pub(crate) tri_cut_surface_open: bool,
@@ -2094,6 +2335,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_solid_region: SolidRegion,
     pub(crate) tri_solid_name_input: String,
     pub(crate) tri_solid_name_auto: bool,
+    pub(crate) tri_cut_surface_unload_source: bool,
 
     // Cut Topology to Pit Shell
     pub(crate) tri_cut_pitshell_open: bool,
@@ -2101,6 +2343,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_pitshell_pitshell_id: Option<TriangulationId>,
     pub(crate) tri_cut_pitshell_name_input: String,
     pub(crate) tri_cut_pitshell_name_auto: bool,
+    pub(crate) tri_cut_pitshell_unload_source: bool,
 
     // Include Pit/Stockpile Solid in Topology
     pub(crate) tri_include_solid_open: bool,
@@ -2143,11 +2386,37 @@ pub(crate) struct EditorState {
     pub(crate) point_cloud_tin_candidate_mult: u32,
     /// Bridge holes and boundary concavities narrower than this (0 = only gaps).
     pub(crate) point_cloud_tin_hole_fill: f64,
+    /// Reconstruct the terrain from classified ground points alone. On by
+    /// default, and honoured only by a classified cloud: a delivery that has
+    /// been through a ground filter is meant to be used through it.
+    pub(crate) point_cloud_tin_ground_only: bool,
+    /// Ground points in the cloud the dialog opened on, counted then, so the
+    /// budget and memory estimate describe what a ground-only build surfaces.
+    pub(crate) point_cloud_tin_ground_count: Option<(PointCloudId, usize)>,
+    pub(crate) point_cloud_join_open: bool,
+    /// Clouds ticked for joining, in the order the explorer lists them.
+    pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
+    pub(crate) point_cloud_join_name_input: String,
+    /// Remove the sources once the joined cloud is in the project.
+    pub(crate) point_cloud_join_remove_sources: bool,
+    pub(crate) point_cloud_classify_open: bool,
+    /// Clouds the Classify dialog opened on, in the order the explorer lists them.
+    pub(crate) point_cloud_classify_sources: Vec<PointCloudId>,
+    pub(crate) point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams,
+    /// Plan spacing of the sparsest selected cloud, measured when the dialog
+    /// opens, from which the cloth resolution is recommended.
+    pub(crate) point_cloud_classify_spacing: Option<f64>,
+    /// Plan extent of each selected cloud, from which the dialog estimates
+    /// the cloth's memory.
+    pub(crate) point_cloud_classify_extents: Vec<(PointCloudId, glam::DVec2)>,
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
     /// Model edited by the viewport filter controls; retained after deselection.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
+    /// The fixed centre of rotation while one is set (world space);
+    /// transient, cleared on section exit and project open.
+    pub(crate) rotation_centre: Option<DVec3>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -2195,6 +2464,11 @@ pub(crate) struct EditorState {
     pub(crate) batter_berm_direction_up: bool,
     /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
     pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
+    /// Centre and radius per ring, parallel to [`Self::batter_berm_rings_world`],
+    /// when the source is a circle. Benching a circle yields concentric
+    /// circles, so the commit writes those rather than the flattened rings the
+    /// preview draws. `None` for every other source.
+    pub(crate) batter_berm_ring_circles: Option<Vec<(DVec3, f64)>>,
     pub(crate) batter_berm_source_world: Vec<DVec3>,
     /// Screen projections preserve one entry per world vertex. `None` means
     /// that vertex is outside the camera depth range, so adjacent vertices
@@ -2447,7 +2721,8 @@ pub(crate) struct EditorState {
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
     pub(crate) schedule_calendar: ScheduleCalendarView,
-    pub(crate) workspace_order: [Workspace; 4],
+    pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
+    pub(crate) workspace_order: [Workspace; 5],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -2506,9 +2781,119 @@ pub(crate) struct EditorState {
     pub(crate) export_layer: Option<LayerId>,
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
+    /// What the whole-project OMF export writes.
+    pub(crate) export_omf: OmfExportSelection,
+}
+
+/// One section of the OMF export checklist: the whole kind, or named items of
+/// it.
+///
+/// A section starts whole, which is why its items' own boxes are disabled
+/// while it stands ticked - they would have nothing left to decide. Unticking
+/// it hands the choice back to them, and their earlier ticks are still here.
+#[derive(Clone, Debug)]
+pub(crate) struct OmfExportSection<Id> {
+    /// Take everything in this section, whatever `items` holds.
+    pub(crate) all: bool,
+    pub(crate) items: HashSet<Id>,
+}
+
+/// Written out rather than derived: a derived `PartialEq` would only bound
+/// `Id: PartialEq`, which is not enough to compare the `HashSet`.
+impl<Id: Eq + std::hash::Hash> PartialEq for OmfExportSection<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.all == other.all && self.items == other.items
+    }
+}
+
+impl<Id> Default for OmfExportSection<Id> {
+    fn default() -> Self {
+        Self { all: true, items: HashSet::new() }
+    }
+}
+
+impl<Id: Copy + Eq + std::hash::Hash> OmfExportSection<Id> {
+    /// Whether this section writes `id`.
+    pub(crate) fn includes(&self, id: Id) -> bool {
+        self.all || self.items.contains(&id)
+    }
+
+    /// Tick or untick the section as a whole, taking its items with it.
+    pub(crate) fn set_all(&mut self, ticked: bool) {
+        self.all = ticked;
+        self.items.clear();
+    }
+
+    /// Tick or untick one item, keeping the heading in step: unticking an item
+    /// unticks the heading and leaves the item's neighbours as they were, and
+    /// ticking the last missing one makes the section whole again.
+    ///
+    /// `every` is the section's full contents, needed because `all` stands for
+    /// the section rather than for a list of what is in it.
+    pub(crate) fn set_item(&mut self, id: Id, ticked: bool, every: &[Id]) {
+        if self.all {
+            // The section stood whole: spell out what that covered before
+            // taking this one out of it.
+            self.items = every.iter().copied().collect();
+            self.all = false;
+        }
+        if ticked {
+            self.items.insert(id);
+        } else {
+            self.items.remove(&id);
+        }
+        if !every.is_empty() && every.iter().all(|id| self.items.contains(id)) {
+            self.all = true;
+            self.items.clear();
+        }
+    }
+
+    /// Whether the section writes nothing at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.all && self.items.is_empty()
+    }
+}
+
+/// What a whole-project OMF export writes, one section of the data explorer's
+/// tree at a time.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct OmfExportSelection {
+    pub(crate) designs: OmfExportSection<LayerId>,
+    pub(crate) triangulations: OmfExportSection<TriangulationId>,
+    pub(crate) rasters: OmfExportSection<RasterTextureId>,
+    pub(crate) point_clouds: OmfExportSection<PointCloudId>,
+    pub(crate) block_models: OmfExportSection<BlockModelId>,
+    pub(crate) drill_holes: OmfExportSection<crate::model::drill_hole::DrillHoleId>,
+}
+
+impl OmfExportSelection {
+    /// Whether every section is empty, leaving nothing to export.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.designs.is_empty()
+            && self.triangulations.is_empty()
+            && self.rasters.is_empty()
+            && self.point_clouds.is_empty()
+            && self.block_models.is_empty()
+            && self.drill_holes.is_empty()
+    }
 }
 
 impl EditorState {
+    pub(crate) fn overlay_follows_cursor(&self) -> bool {
+        !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
+    }
+
+    /// Whether a snap mode is up. The section snaps as the plan does: its
+    /// targets are the ones inside the slab, and off them the cursor falls
+    /// back to the section plane like any unsnapped pick.
+    pub(crate) fn snapping_active(&self) -> bool {
+        self.cursor_mode.snaps()
+    }
+
+    pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
+        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
+    }
+
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -2525,26 +2910,28 @@ impl EditorState {
     /// Dialogs that take Escape as their cancel shortcut. The startup splash
     /// is absent on purpose: nothing in the tool chain reacts to Escape while
     /// it is up, so its own handler is enough.
+    ///
+    /// The "Edit Object" dialog is here but not in
+    /// [`Self::dialog_owns_confirm_key`]: Escape must close it rather than
+    /// run the viewport tool-cancel chain and drop the user out of slice
+    /// view, while Enter belongs to the cell being edited, which commits on it.
     pub(crate) fn dialog_owns_cancel_key(&self) -> bool {
         if self.viewport_pick_in_progress() {
             return false;
         }
-        self.dialog_owns_both_keys()
+        self.object_edit_dialog.is_some() || self.dialog_owns_both_keys()
     }
 
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some()
-            || self.tri_cut_poly_awaiting_pick
-            || self.drill_pattern_awaiting_shape_pick
-            || self.canvas_context_menu_open
-            || self.text_editing_enabled
+        self.triangulation_pick_target.is_some() || self.drill_pattern_awaiting_shape_pick || self.canvas_context_menu_open || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
-        self.exit_confirm_open
+        self.grid_dialog.is_some()
+            || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
             || self.delete_confirm_open
@@ -2564,6 +2951,8 @@ impl EditorState {
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
+            || self.survey.definitions_open
+            || self.survey.transform_open
             || self.new_delay_product_open
             || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
@@ -2577,6 +2966,8 @@ impl EditorState {
             || self.tri_include_solid_open
             || self.tri_contour_open
             || self.point_cloud_tin_open
+            || self.point_cloud_join_open
+            || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
             || {
@@ -2706,6 +3097,7 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
+        self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
         self.batter_angle_points.clear();
@@ -2775,9 +3167,7 @@ impl EditorState {
         self.offset_awaiting_side_pick = false;
         self.offset_project_to_rl = None;
         self.offset_preview_world.clear();
-        self.offset_source_world.clear();
         self.offset_preview_screen_px.clear();
-        self.offset_source_screen_px.clear();
         self.offset_preview_ranges.clear();
 
         self.relimit_dialog_open = false;
@@ -2836,6 +3226,7 @@ impl EditorState {
         self.batter_berm_dialog_open = false;
         self.batter_berm_target_id = None;
         self.batter_berm_rings_world.clear();
+        self.batter_berm_ring_circles = None;
         self.batter_berm_source_world.clear();
         self.batter_berm_rings_screen_px.clear();
         self.batter_berm_source_screen_px.clear();
@@ -2863,7 +3254,6 @@ impl EditorState {
         self.triangulation_pick_target = None;
         self.viewport_pick_hover_label = None;
         self.tri_cut_poly_open = false;
-        self.tri_cut_poly_awaiting_pick = false;
         self.tri_cut_poly_object_id = None;
         self.tri_cut_poly_object_name.clear();
     }
@@ -2875,8 +3265,8 @@ impl EditorState {
             dark_mode: self.dark_mode,
             show_console: self.show_console,
             panel_chrome: self.panel_chrome,
+            ui_size_percent: self.ui_size_percent,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
-            show_xy_grid: self.show_xy_grid,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
@@ -2886,8 +3276,9 @@ impl EditorState {
             show_block_model_boundary_highlights: self.show_block_model_boundary_highlights,
             downscale_raster_previews: self.downscale_raster_previews,
             frame_counter_enabled: self.frame_counter_enabled,
-            debug_chunk_coloring: self.debug_chunk_coloring,
+            debug_surface_chunks: self.debug_surface_chunks,
             debug_clip_planes: self.debug_clip_planes,
+            debug_point_cloud_chunks: self.debug_point_cloud_chunks,
             plan_orbit_sensitivity: self.plan_orbit_sensitivity,
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
             plan_invert_vertical_look: self.plan_invert_vertical_look,
@@ -2911,6 +3302,8 @@ impl EditorState {
     pub(crate) fn new() -> Self {
         Self {
             selected_handles: HashSet::new(),
+            explorer_rows: Vec::new(),
+            explorer_anchor: None,
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             hidden_handles: HashSet::new(),
@@ -2921,12 +3314,14 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
+            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
+            ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
+            show_xy_grid: true,
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             show_preferences: false,
@@ -2941,11 +3336,13 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
-            smoothed_frame_interval: None,
-            debug_chunk_coloring: false,
-            debug_chunk_stats: None,
+            frame_rate_window: (0, 0.0),
+            debug_surface_chunks: false,
+            debug_surface_stats: None,
             debug_clip_plane_distances: None,
             debug_clip_planes: false,
+            debug_point_stats: None,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: crate::app::io::default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -3023,8 +3420,12 @@ impl EditorState {
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
+            selection_has_polylines: false,
+            selection_counts: SelectionCounts::default(),
             insert_point_at_elevation_dialog: None,
+            object_edit_dialog: None,
             xray_enabled: false,
+            cinematic_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
             vertical_exaggeration_input: 1.,
@@ -3071,6 +3472,12 @@ impl EditorState {
             slice_center: [0.0; 3],
             slice_direction: [1.0, 0.0],
             slice_half_length: 0.0,
+            slice_grid_enabled: false,
+            section_grid_px: Vec::new(),
+            section_grid_style: SectionGridStyle::default(),
+            xy_grid_style: PlanGridStyle::default(),
+            grid_dialog: None,
+            section_grid_level_spacing: 10.0,
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,
@@ -3087,9 +3494,7 @@ impl EditorState {
             offset_project_to_rl: None,
             offset_collide_with_triangulation: false,
             offset_preview_world: Vec::new(),
-            offset_source_world: Vec::new(),
             offset_preview_screen_px: Vec::new(),
-            offset_source_screen_px: Vec::new(),
             offset_preview_ranges: Vec::new(),
             offset_preview_closed: false,
             relimit_dialog_open: false,
@@ -3176,19 +3581,18 @@ impl EditorState {
             triangulation_pick_target: None,
             viewport_pick_hover_label: None,
             tri_cut_poly_open: false,
-            tri_cut_poly_awaiting_pick: false,
             tri_cut_poly_tri_id: None,
             tri_cut_poly_object_id: None,
             tri_cut_poly_object_name: String::new(),
             tri_cut_poly_mode: TriPolylineClipMode::KeepInside,
             tri_cut_poly_name_input: String::new(),
-            tri_cut_poly_name_auto: true,
+            tri_cut_poly_unload_source: true,
             tri_cut_z_open: false,
             tri_cut_z_tri_id: None,
             tri_cut_z_min_input: 0.0,
             tri_cut_z_max_input: 100.0,
             tri_cut_z_name_input: String::new(),
-            tri_cut_z_name_auto: true,
+            tri_cut_z_unload_source: true,
             tri_cut_surface_open: false,
             tri_cut_surface_target_id: None,
             tri_cut_surface_reference_id: None,
@@ -3201,11 +3605,13 @@ impl EditorState {
             tri_solid_region: SolidRegion::Cut,
             tri_solid_name_input: String::new(),
             tri_solid_name_auto: true,
+            tri_cut_surface_unload_source: true,
             tri_cut_pitshell_open: false,
             tri_cut_pitshell_topology_id: None,
             tri_cut_pitshell_pitshell_id: None,
             tri_cut_pitshell_name_input: String::new(),
             tri_cut_pitshell_name_auto: true,
+            tri_cut_pitshell_unload_source: true,
             tri_include_solid_open: false,
             tri_include_solid_topology_id: None,
             tri_include_solid_shape_id: None,
@@ -3235,8 +3641,20 @@ impl EditorState {
             point_cloud_tin_sampler: crate::app::commands::triangulation::TerrainSampler::Adaptive,
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
+            point_cloud_tin_ground_only: true,
+            point_cloud_tin_ground_count: None,
+            point_cloud_join_open: false,
+            point_cloud_join_sources: Vec::new(),
+            point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
+            point_cloud_join_remove_sources: true,
+            point_cloud_classify_open: false,
+            point_cloud_classify_sources: Vec::new(),
+            point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams::default(),
+            point_cloud_classify_spacing: None,
+            point_cloud_classify_extents: Vec::new(),
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
+            rotation_centre: None,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -3272,6 +3690,7 @@ impl EditorState {
             // Down keeps the historical default (Pit + Down = inward + down).
             batter_berm_direction_up: false,
             batter_berm_rings_world: Vec::new(),
+            batter_berm_ring_circles: None,
             batter_berm_source_world: Vec::new(),
             batter_berm_rings_screen_px: Vec::new(),
             batter_berm_source_screen_px: Vec::new(),
@@ -3383,6 +3802,7 @@ impl EditorState {
             gantt: GanttView::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
+            survey: Default::default(),
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
             active_delay_product: builtin_delay_products().first().map(|product| product.id),
@@ -3413,6 +3833,7 @@ impl EditorState {
             export_layer: None,
             export_triangulation: None,
             export_block_model: None,
+            export_omf: OmfExportSelection::default(),
         }
     }
 
@@ -3422,9 +3843,11 @@ impl EditorState {
     }
 
     /// Left-click that landed on entity geometry: selects it and reports the
-    /// picked world point (with the geometry's true Z).
+    /// picked world point (with the geometry's true Z), except in the slice view.
     pub(crate) fn on_canvas_pick(&mut self, handle: SceneEntityId, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => self.replace_selection(handle),
             SelectionMode::Add => self.add_selection(handle),
@@ -3435,7 +3858,9 @@ impl EditorState {
     /// Left-click that landed on one drill hole, in a workspace that works a
     /// hole at a time: selects the hole rather than the dataset holding it.
     pub(crate) fn on_drill_hole_pick(&mut self, hole: DrillHoleRef, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => {
                 self.clear_scene_selection();
@@ -3487,6 +3912,17 @@ impl EditorState {
     /// same rule for drawing them, so nothing is ever pickable unseen.
     pub(crate) fn shows_tie_ins(&self) -> bool {
         self.active_workspace == Workspace::DrillAndBlast
+    }
+
+    /// Whether classified point clouds draw in their ASPRS class colours.
+    ///
+    /// Survey's reading of a cloud - what a delivery's ground filter decided -
+    /// rather than a property of the cloud, so it applies in that workspace
+    /// alone. Read by the renderer at draw time rather than pushed to it, so
+    /// it is also part of `EditorSceneState` - the editor state a cached scene
+    /// image is only valid for.
+    pub(crate) fn colors_points_by_classification(&self) -> bool {
+        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3576,6 +4012,8 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's initiation tool: a click puts the point a round starts
     /// at on the hole under the cursor, at the delay the products panel holds.
     SetInitiationPoint,
+    /// One click fixes the centre both views orbit about.
+    PickRotationCentre,
     Chamfer,
     BatterBermOffset,
     Bezier,
@@ -3613,6 +4051,35 @@ impl ActiveTool {
     pub(crate) fn acts_on_collars(self) -> bool {
         matches!(self, Self::MoveCollar | Self::RotateCollar)
     }
+
+    /// Tools whose click takes the world point under the cursor, and so want
+    /// the snap poll running while they are armed. Everything else picks an
+    /// entity or drives a gizmo, where a snapped cursor means nothing.
+    pub(crate) fn snaps_cursor(self) -> bool {
+        matches!(
+            self,
+            Self::MakePoint
+                | Self::MakeLine
+                | Self::MakePoly
+                | Self::MakeCircle
+                | Self::MakeText
+                | Self::MeasureDistance
+                | Self::MeasureBatterAngle
+                | Self::VerticalSlice
+                | Self::PickRotationCentre
+        )
+    }
+
+    pub(crate) fn works_in_slice_view(self) -> bool {
+        matches!(
+            self,
+            Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::PickRotationCentre
+        )
+    }
+
+    pub(crate) fn section_refuses(self) -> bool {
+        self != Self::None && !self.works_in_slice_view()
+    }
 }
 
 /// Immediate commands applied to the current selection (or whole drawing).
@@ -3631,6 +4098,10 @@ pub(crate) enum CursorMode {
 }
 
 impl CursorMode {
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, CursorMode::SnapToPoint | CursorMode::SnapToLine | CursorMode::SnapToSurface)
+    }
+
     pub(crate) fn next(self) -> Self {
         match self {
             CursorMode::Select => CursorMode::SnapToSurface,
@@ -3678,7 +4149,6 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
-    XyGrid,
 }
 
 impl ViewToggle {
@@ -3686,24 +4156,16 @@ impl ViewToggle {
         match self {
             Self::Console => tr!(literal = "Show Console"),
             Self::DarkMode => tr!(literal = "Dark Mode"),
-            Self::XyGrid => tr!(literal = "XY Grid"),
         }
     }
 
-    /// Read this toggle out of a preferences snapshot.
-    pub(crate) fn get(self, preferences: &PreferencesDraft) -> bool {
+    /// Read this toggle's live value. Taken off the editor, which applying
+    /// the preferences keeps in step with them, rather than off a whole
+    /// [`PreferencesDraft`] built to read one bool out of.
+    pub(crate) fn get(self, editor: &EditorState) -> bool {
         match self {
-            Self::Console => preferences.show_console,
-            Self::DarkMode => preferences.dark_mode,
-            Self::XyGrid => preferences.show_xy_grid,
-        }
-    }
-
-    pub(crate) fn set(self, preferences: &mut PreferencesDraft, value: bool) {
-        match self {
-            Self::Console => preferences.show_console = value,
-            Self::DarkMode => preferences.dark_mode = value,
-            Self::XyGrid => preferences.show_xy_grid = value,
+            Self::Console => editor.show_console,
+            Self::DarkMode => editor.dark_mode,
         }
     }
 }
@@ -3754,6 +4216,10 @@ pub(crate) enum UiCommand {
     /// browser can do, so it is not offered there.
     #[cfg(not(target_arch = "wasm32"))]
     ShowProjectInFileManager,
+    /// Open the file manager on a remembered project's file, from the
+    /// splash's Recent list.
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowTrackedProjectInFileManager(PathBuf),
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
@@ -3780,12 +4246,14 @@ pub(crate) enum UiCommand {
         path: PathBuf,
         mapping: CsvColumnMapping,
     },
-    ExportOmf,
+    /// Boxed: the selection carries six sets, and every other variant is small.
+    ExportOmf(Box<OmfExportSelection>),
     ExportProjectDxf(u32),
     ExportViewportImage,
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
     ExitWithoutSaving,
@@ -3797,6 +4265,18 @@ pub(crate) enum UiCommand {
     CancelLossyProjectSave,
     CreateLayer {
         name: String,
+    },
+    /// Create a collection under a section, named Collection, Collection (2), etc.
+    CreateFolder(SectionKind),
+    /// Remove a folder. The items it held return to the section root.
+    DeleteFolder {
+        section: SectionKind,
+        folder: FolderId,
+    },
+    /// Move an item into a folder, or back to the section root with `None`.
+    MoveToFolder {
+        member: FolderMember,
+        folder: Option<FolderId>,
     },
     /// Add a product to the Drill & Blast palette, as the New Product dialog
     /// filled it in.
@@ -3905,15 +4385,45 @@ pub(crate) enum UiCommand {
     CancelOffset,
     ConfirmDrapeSelection,
     CancelRelimit,
+    /// Frame everything visible from square on. Sliced, square on means the
+    /// section plane, and the mode is kept - the section is the view.
     ResetView,
+    /// Arm a click that fixes the centre of rotation, or release the one that is set.
+    ToggleRotationCentre,
+    /// The grid button: the RL grid in a section, the XY grid in plan.
+    SetGridShown(bool),
+    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
+    /// Presentation shading over the scene pass. Native only.
+    #[cfg(not(target_arch = "wasm32"))]
+    SetCinematicEnabled(bool),
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
     SetPlanningPage(PlanningPage),
     SetPlanningSubpage(PlanningSubpage),
     FocusScheduleAnimationSolid(crate::model::SolidId),
+    OpenSurveyDefinitions,
+    OpenSurveyTransform,
+    TransformSurveySelection,
+    /// Write one coordinate system to the config, replacing `target` if it
+    /// names an existing system and adding one otherwise. The edit travels
+    /// with the command so switching rows mid-edit cannot drop it.
+    SaveSurveyDefinition {
+        target: Option<String>,
+        definition: crate::model::survey::SystemDefinition,
+    },
+    DeleteSurveyDefinition(String),
+    /// Mark one saved system as the site's mine coordinate system, or the
+    /// reference frame with `None`.
+    SetSurveyLocalSystem(Option<String>),
+    /// Select one explorer row. Every row in the tree sends this, whatever it
+    /// names, and `App` reads the modifiers to decide whether the click
+    /// replaces the selection, adds the row to it or takes the run between
+    /// two. The tools that run on a selection are reached this way as well as
+    /// from the viewport.
+    SelectExplorerRow(ExplorerRow),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3925,8 +4435,6 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
-    /// Select a block model and show its viewport filter controls.
-    SelectBlockModel(BlockModelId),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -3976,7 +4484,6 @@ pub(crate) enum UiCommand {
     /// Lock or unlock every loaded item in one explorer section.
     SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
-    ActivateTriangulation(TriangulationId),
     CloseTriangulation(TriangulationId),
     /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
@@ -4037,7 +4544,10 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
     },
-    OpenCreateBlockModel(Option<DrillHoleId>),
+    /// Open Create Block Model on the selected drill holes. Like the other
+    /// select-first tools it takes its input from the scene selection, so the
+    /// command carries nothing.
+    OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
         variables: Vec<String>,
@@ -4135,18 +4645,35 @@ pub(crate) enum UiCommand {
         cloud_id: PointCloudId,
         params: crate::app::commands::triangulation::TerrainTinParams,
     },
+    /// Open the "Join Point Clouds" dialog (Point Cloud menu).
+    OpenPointCloudJoin,
+    /// Concatenate several loaded clouds into one new cloud.
+    ExecutePointCloudJoin {
+        cloud_ids: Vec<PointCloudId>,
+        name: String,
+        /// Delete the sources from the project once the join lands.
+        remove_sources: bool,
+    },
+    /// Open the "Classify Point Clouds" dialog (Point Cloud menu).
+    OpenPointCloudClassify,
+    /// Classify ground and noise in each cloud, rewriting its codes in place.
+    ExecutePointCloudClassify {
+        cloud_ids: Vec<PointCloudId>,
+        params: crate::model::ground_filter::GroundFilterParams,
+    },
     /// User confirmed deletion of all selected objects via the confirm dialog.
     ConfirmDeleteSelection,
     /// Open the "Cut Triangulation by Polyline" dialog.
     OpenCutTriangulationByPolyline,
     /// Enter polyline-pick mode for the cut-by-polyline tool.
-    BeginCutPolyPick,
     /// Execute the clip against the polyline boundary in XY.
     ExecuteCutTriangulationByPolyline {
         tri_id: TriangulationId,
         polyline_id: ObjectId,
         mode: TriPolylineClipMode,
         name: String,
+        /// Unload the source surface once the clip lands.
+        unload_source: bool,
     },
     /// Open the "Cut Triangulation by Z Range" dialog.
     OpenCutTriangulationByZ,
@@ -4156,6 +4683,8 @@ pub(crate) enum UiCommand {
         z_min: f64,
         z_max: f64,
         name: String,
+        /// Unload the source surface once the slice lands.
+        unload_source: bool,
     },
     /// Open the "Trim to Topology" dialog.
     OpenCutTriangulationBySurface,
@@ -4174,6 +4703,8 @@ pub(crate) enum UiCommand {
         reference_id: TriangulationId,
         side: TriSurfaceCutSide,
         name: String,
+        /// Unload the trimmed surface's source once the trim lands; the topology stays.
+        unload_source: bool,
     },
     /// Open the "Cut Topology to Pit Shell" dialog.
     OpenCutTopologyByPitShell,
@@ -4182,6 +4713,8 @@ pub(crate) enum UiCommand {
         topology_id: TriangulationId,
         pit_shell_id: TriangulationId,
         name: String,
+        /// Unload the source topology once the cut lands; the pit shell stays for the merge.
+        unload_source: bool,
     },
     /// Open the "Include Pit/Stockpile Solid" dialog.
     OpenIncludeSolidInTopology,
@@ -4216,6 +4749,17 @@ pub(crate) enum UiCommand {
     FitPlotScaleToData,
     /// Render and write the configured plot sheet.
     ExportPlotSheet,
+
+    /// Open the "Edit Object" dialog on one design object, seeding its working
+    /// copy from the document.
+    OpenObjectEditDialog(ObjectId),
+    /// Write the dialog's working copy back as one undoable replace; `close`
+    /// shuts the dialog once the write went through (OK), Apply leaves it open.
+    ApplyObjectEdit {
+        id: ObjectId,
+        object: Box<Object>,
+        close: bool,
+    },
 }
 
 impl UiCommand {
@@ -4252,9 +4796,15 @@ impl UiCommand {
             | Self::SetPlanningPage(_)
             | Self::SetPlanningSubpage(_)
             | Self::FocusScheduleAnimationSolid(_)
+            | Self::OpenSurveyDefinitions
+            | Self::OpenSurveyTransform
+            | Self::SaveSurveyDefinition { .. }
+            | Self::DeleteSurveyDefinition(_)
+            | Self::SetSurveyLocalSystem(_)
+            | Self::SelectExplorerRow(_)
+            | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
-            | Self::SelectBlockModel(_)
             | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
@@ -4265,7 +4815,7 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
-            | Self::OpenCreateBlockModel(_)
+            | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
             | Self::OpenRelimitDialog
@@ -4274,9 +4824,11 @@ impl UiCommand {
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
+            | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
+            | Self::OpenPointCloudJoin
+            | Self::OpenPointCloudClassify
             | Self::OpenCutTriangulationByPolyline
-            | Self::BeginCutPolyPick
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
             | Self::OpenBuildSolidFromSurfaces
@@ -4336,6 +4888,8 @@ impl UiCommand {
             Self::RemoveTrackedProject(id) => report(tr!(literal = "Remove Project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ShowProjectInFileManager => report(tr!(literal = "Show Project"), tr!(literal = "Open the containing folder")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ShowTrackedProjectInFileManager(path) => report(tr!(literal = "Show Project"), path.display().to_string()),
             Self::ImportOmfPaths(paths) => report(tr!(literal = "Import OMF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportDxfPathsInto(paths) => report(tr!(literal = "Import DXF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::ImportTriangulationPaths(paths) => report(tr!(literal = "Import Triangulation"), tr_format!(literal = "%count% file(s)", count = paths.len())),
@@ -4353,12 +4907,20 @@ impl UiCommand {
             Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
             Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
-            Self::ExportOmf => report(tr!(literal = "Export OMF"), tr!(literal = "All open Incline Design data")),
+            Self::ExportOmf(selection) => report(
+                tr!(literal = "Export OMF"),
+                if *selection.as_ref() == OmfExportSelection::default() {
+                    tr!(literal = "All open Incline Design data")
+                } else {
+                    tr!(literal = "The data ticked in the export checklist")
+                },
+            ),
             Self::ExportProjectDxf(id) => report(tr!(literal = "Export Project to DXF"), tr_format!(literal = "Project %id%", id = id)),
             Self::ExportViewportImage => report(tr!(literal = "Export Viewport Image"), tr!(literal = "Choose a destination")),
             Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
             Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
@@ -4487,19 +5049,49 @@ impl UiCommand {
             Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
             Self::ResetBlastName(blast) => report(tr!(literal = "Reset Blast Name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
             Self::SaveSolidPreviewToProject => report(tr!(literal = "Save Solid to Project"), tr!(literal = "From the Solids preview")),
+            Self::CreateFolder(section) => report(
+                tr!(literal = "Create Collection"),
+                tr_format!(literal = "New collection under %section%", section = ExplorerSection::from_kind(*section).label()),
+            ),
+            Self::DeleteFolder { section, folder } => report(
+                tr!(literal = "Delete Collection"),
+                tr_format!(
+                    literal = "%folder% in %section%",
+                    folder = format!("{folder:?}"),
+                    section = ExplorerSection::from_kind(*section).label()
+                ),
+            ),
+            Self::MoveToFolder { member, folder } => report(
+                tr!(literal = "Move to Collection"),
+                match folder {
+                    Some(folder) => tr_format!(literal = "%member% into %folder%", member = format!("{member:?}"), folder = format!("{folder:?}")),
+                    None => tr_format!(literal = "%member% to root", member = format!("{member:?}")),
+                },
+            ),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
             Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
             Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
             Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
             Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
+            Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
             Self::SetTopologyWireframes(enabled) => report(
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
+            Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
+            Self::SetPointCloudClassificationColors(enabled) => report(
+                tr!(literal = "Colour Points by Classification"),
+                if *enabled { tr!(literal = "On") } else { tr!(literal = "Off") },
+            ),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::SetCinematicEnabled(enabled) => report(
+                tr!(literal = "Set Cinematic View"),
+                if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") },
             ),
             Self::SetStandardView(view) => report(tr!(literal = "Set Standard View"), view.label()),
             Self::SaveProject => report(tr!(literal = "Save Project"), tr!(literal = "Current project")),
@@ -4537,7 +5129,6 @@ impl UiCommand {
                 tr_format!(literal = "%section% section", section = section.label()),
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
-            Self::ActivateTriangulation(id) => report(tr!(literal = "Set Current Triangulation"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
@@ -4588,6 +5179,7 @@ impl UiCommand {
             Self::RelimitLineResize { source_id, .. } => report(tr!(literal = "Relimit Line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!(literal = "Create Batter Berm"), tr!(literal = "Apply generated rings")),
             Self::InsertPointsAtIntersections => report(tr!(literal = "Insert Intersection Points"), tr!(literal = "Selected polylines")),
+            Self::ApplyObjectEdit { object, .. } => report(tr!(literal = "Edit Object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!(literal = "Insert Points at Elevation"),
                 tr_format!(literal = "%count% object(s) · Z %elevation%", count = object_ids.len(), elevation = elevation),
@@ -4599,6 +5191,11 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %count% object(s)", name = name, count = object_ids.len()),
             ),
             Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!(literal = "Create Point Cloud TIN"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
+                tr!(literal = "Join Point Clouds"),
+                tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
+            ),
+            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!(literal = "Classify Point Clouds"), tr_format!(literal = "%count% cloud(s)", count = cloud_ids.len())),
             Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
             Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(
@@ -4670,6 +5267,10 @@ pub(crate) struct UiLayerEntry {
     /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
+    /// Folder the layer sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    /// Explorer section this item is shown under.
+    pub(crate) section: SectionKind,
 }
 
 /// The one open project shown in the explorer tree.
@@ -4700,8 +5301,6 @@ pub(crate) struct UiTrackedProjectEntry {
     pub(crate) path: PathBuf,
     #[cfg(target_arch = "wasm32")]
     pub(crate) id: crate::model::project::ProjectId,
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) stored_in_browser: bool,
 }
 
 impl UiProjectEntry {
@@ -4749,6 +5348,32 @@ impl ExplorerSection {
             Self::DrillHoles => tr!(literal = "Drill Holes"),
         }
     }
+
+    /// The model-layer section this heading corresponds to, for commands
+    /// that address a section by [`SectionKind`] rather than by UI label.
+    pub(crate) fn kind(self) -> SectionKind {
+        match self {
+            Self::Designs => SectionKind::Designs,
+            Self::Triangulations => SectionKind::Triangulations,
+            Self::Rasters => SectionKind::Rasters,
+            Self::PointClouds => SectionKind::PointClouds,
+            Self::BlockModels => SectionKind::BlockModels,
+            Self::DrillHoles => SectionKind::DrillHoles,
+        }
+    }
+
+    /// Inverse of [`Self::kind`], for commands that carry a [`SectionKind`]
+    /// but need the heading's translated label.
+    pub(crate) fn from_kind(kind: SectionKind) -> Self {
+        match kind {
+            SectionKind::Designs => Self::Designs,
+            SectionKind::Triangulations => Self::Triangulations,
+            SectionKind::Rasters => Self::Rasters,
+            SectionKind::PointClouds => Self::PointClouds,
+            SectionKind::BlockModels => Self::BlockModels,
+            SectionKind::DrillHoles => Self::DrillHoles,
+        }
+    }
 }
 
 /// One project-owned point cloud shown in the explorer tree.
@@ -4760,6 +5385,12 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    /// Folder the point cloud sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
+    /// Whether the cloud carries ASPRS classification codes, which is what
+    /// offers the bare-earth filter and the classification view.
+    pub(crate) is_classified: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -4774,6 +5405,9 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) source_size: [u32; 2],
     pub(crate) driver_name: String,
     pub(crate) projection: String,
+    /// Folder the raster sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -4786,6 +5420,9 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) dirty: bool,
     /// Face colour edited in the context menu.
     pub(crate) color: [f32; 4],
+    /// Folder the triangulation sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -4799,6 +5436,9 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) variable_count: usize,
     pub(crate) lower: glam::DVec3,
     pub(crate) upper: glam::DVec3,
+    /// Folder the block model sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 #[derive(Clone, Debug)]
@@ -4810,6 +5450,9 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
+    /// Folder the drill hole dataset sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -4846,6 +5489,8 @@ pub(crate) struct UiProjectView {
     /// command that somehow escaped an empty workspace is refused rather than
     /// applied to whatever opens next.
     pub(crate) active_session: u32,
+    /// Every explorer folder, across all six sections.
+    pub(crate) folders: FolderRegistry,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
@@ -4869,19 +5514,20 @@ impl UiProjectView {
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
 /// tabs decide what its editors show. Production, Drill & Blast and Geology are
-/// built out; Planning carries what every workspace does and is where the
-/// scheduling tools will go.
+/// built out; Survey transforms project data into local mine grids. Planning
+/// carries the shared controls and is where scheduling tools will go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
     Planning,
+    Survey,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 4] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -4889,12 +5535,13 @@ impl Workspace {
             Self::DrillAndBlast => tr!("ws-drill-and-blast"),
             Self::Geology => tr!("ws-geology"),
             Self::Planning => tr!("ws-planning"),
+            Self::Survey => tr!("ws-survey"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning)
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey)
     }
 
     /// Whether this workspace carries the mine production tools.

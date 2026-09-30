@@ -148,6 +148,7 @@ pub(crate) struct ExplorerEntry {
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
     header_aligned_icon: bool,
     error: Option<String>,
+    draggable: bool,
 }
 
 impl ExplorerEntry {
@@ -162,6 +163,7 @@ impl ExplorerEntry {
             leading_icon: None,
             header_aligned_icon: false,
             error: None,
+            draggable: false,
         }
     }
 
@@ -202,6 +204,16 @@ impl ExplorerEntry {
         self
     }
 
+    /// Let the row be picked up and dropped somewhere else in the tree.
+    ///
+    /// The label senses dragging as well as clicking, so the caller can hang a
+    /// drag payload on the returned response while a plain click still does
+    /// whatever the row does when clicked.
+    pub(crate) fn draggable(mut self, draggable: bool) -> Self {
+        self.draggable = draggable;
+        self
+    }
+
     /// Show trailing eye and padlock toggles at the row's right edge.
     pub(crate) fn toggles(mut self, toggles: EntryToggles) -> Self {
         self.toggles = Some(toggles);
@@ -230,6 +242,7 @@ impl ExplorerEntry {
             leading_icon,
             header_aligned_icon,
             error,
+            draggable,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -292,6 +305,7 @@ impl ExplorerEntry {
                                 .left_text(title)
                                 .frame(false)
                                 .selected(selected)
+                                .sense(if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() })
                                 .min_size(egui::vec2(label_width, height)),
                         )
                     })
@@ -424,6 +438,12 @@ impl ExplorerHeader {
     /// its entries use.
     pub(crate) fn color(mut self, color: egui::Color32) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Whether the section stands open the first time it is drawn.
+    pub(crate) fn default_open(mut self, default_open: bool) -> Self {
+        self.default_open = default_open;
         self
     }
 

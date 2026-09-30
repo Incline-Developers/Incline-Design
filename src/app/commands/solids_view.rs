@@ -616,7 +616,7 @@ fn test_mesh() -> OpenTriangulation {
         .expect("test mesh"),
     );
     let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
-    let order = Arc::new(crate::model::triangulation::morton_surface_face_order(&mesh));
+    let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     preview_triangulation("test".to_owned(), mesh, spatial, Vec::new(), order, [1.0; 4], [0.0; 4])
 }
 
@@ -1912,7 +1912,7 @@ fn build_solid_partition(
             let (vertices, faces) = clipped.slab;
             let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
             let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
-            let order = Arc::new(crate::model::triangulation::morton_surface_face_order(&mesh));
+            let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
             let mut piece = preview_triangulation(flitch.mesh.name.clone(), mesh, spatial, edges, order, flitch.mesh.color, flitch.mesh.line_color);
             piece.cull_back_faces = true;
             piece.always_show_edges = true;

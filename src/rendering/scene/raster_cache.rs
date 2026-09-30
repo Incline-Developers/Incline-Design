@@ -62,13 +62,20 @@ impl RasterGpuCache {
                 continue;
             }
             if let Some(cached) = self.rasters.get_mut(&raster.id) {
-                if cached.scene_origin != scene_origin {
+                // Either end of the placement can move: the scene can rebase,
+                // and the raster itself can be converted into another
+                // coordinate system, which rewrites the map it is drawn
+                // through. Both land the image somewhere new, so both are
+                // watched - and both rebuild from the raster's current map
+                // rather than the cached one, which is the whole point.
+                if cached.scene_origin != scene_origin || cached.world_to_uv != raster.world_to_uv {
                     let map = map_uniform(raster.world_to_uv, scene_origin);
                     queue.write_buffer(&cached.map_buffer, 0, bytemuck::bytes_of(&map));
-                    if let (Some(buffer), Some(vertices)) = (&cached.plane_vertex_buffer, plane_vertices(cached.world_to_uv, scene_origin)) {
+                    if let (Some(buffer), Some(vertices)) = (&cached.plane_vertex_buffer, plane_vertices(raster.world_to_uv, scene_origin)) {
                         queue.write_buffer(buffer, 0, bytemuck::cast_slice(&vertices));
                     }
                     cached.scene_origin = scene_origin;
+                    cached.world_to_uv = raster.world_to_uv;
                 }
                 continue;
             }

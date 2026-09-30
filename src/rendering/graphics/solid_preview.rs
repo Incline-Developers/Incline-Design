@@ -83,7 +83,7 @@ impl SolidPreviewTarget {
         };
         let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Solid preview camera bind group"),
-            layout: &graphics.render_pipeline.get_bind_group_layout(0),
+            layout: &graphics.camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: camera_buffer.as_entire_binding(),

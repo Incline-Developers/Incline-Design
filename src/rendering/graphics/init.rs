@@ -1,6 +1,34 @@
 use super::*;
 use crate::{i18n::tr_format, userspace_log};
 
+/// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
+/// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
+pub(super) fn make_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+    let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+    })
+}
+
+/// As [`make_shader`], plus the cinematic preludes `cinematic_params.wgsl` and
+/// `cinematic_common.wgsl`: the post chain's parameter block, the fullscreen
+/// vertex stage and screen-to-world helpers, plus shared material grading.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn make_cinematic_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+    let source = format!(
+        "{}{}{}{}{body}",
+        include_str!("../shaders/camera_common.wgsl"),
+        include_str!("../shaders/cinematic_params.wgsl"),
+        include_str!("../shaders/cinematic_common.wgsl"),
+        include_str!("../shaders/scene_lighting_common.wgsl")
+    );
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+    })
+}
+
 impl<'a> Graphics<'a> {
     pub(crate) async fn new(window: Arc<Window>) -> Result<Graphics<'a>> {
         let window_size = window.inner_size();
@@ -103,12 +131,17 @@ impl<'a> Graphics<'a> {
             );
         }
 
+        // Fragment barycentrics let a surface draw its own wireframe instead of
+        // six instanced vertices per edge. Optional: the surface shader falls
+        // back to instanced edges where it is missing (always, on WebGPU).
+        let required_features = adapter.features() & wgpu::Features::SHADER_BARYCENTRICS;
+        let experimental_features = wgpu::ExperimentalFeatures::disabled();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits,
                 label: None,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                experimental_features,
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
@@ -120,6 +153,14 @@ impl<'a> Graphics<'a> {
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
             crate::userspace_error!("{}", tr_format!(literal = "wgpu error (continuing): %error%", error = error));
         }));
+        #[cfg(target_arch = "wasm32")]
+        device.set_device_lost_callback(|reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                let message = crate::i18n::tr!("browser-graphics-device-lost", message = message);
+                crate::userspace_error!("{message}");
+                crate::show_web_startup_error(&message);
+            }
+        });
 
         let surface_caps = surface.get_capabilities(&adapter);
         // Browser WebGPU surfaces expose only the base `*Unorm` canvas
@@ -185,20 +226,12 @@ impl<'a> Graphics<'a> {
 
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/shader.wgsl"));
-        let surface_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/surface.wgsl"));
-        let grid_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/grid.wgsl"));
-        let block_model_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model.wgsl"));
-        let block_model_volume_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume.wgsl"));
-        let block_model_transparency_fallback_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_transparency_fallback.wgsl"));
-        let block_model_transparency_composite_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_transparency_composite.wgsl"));
-        let block_model_volume_upscale_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume_upscale.wgsl"));
-        let stroke_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/stroke.wgsl"));
-        let edge_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/edge.wgsl"));
-        let point_cloud_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/point_cloud.wgsl"));
-        let drill_hole_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_hole.wgsl"));
-        let drill_collar_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_collar.wgsl"));
-        let design_point_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/design_point.wgsl"));
+        let block_model_volume_shader = make_shader(&device, "../shaders/block_model_volume.wgsl", include_str!("../shaders/block_model_volume.wgsl"));
+        let block_model_transparency_fallback_shader = make_shader(
+            &device,
+            "../shaders/block_model_transparency_fallback.wgsl",
+            include_str!("../shaders/block_model_transparency_fallback.wgsl"),
+        );
 
         let camera = Camera::new(DVec3::new(0.0, 0.0, 10.0), (-90.0_f64).to_radians(), 0.0);
         let projection = Projection::new(config.width, config.height, INITIAL_CAMERA_Z_NEAR, INITIAL_CAMERA_Z_FAR);
@@ -238,10 +271,9 @@ impl<'a> Graphics<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let initial_grid_uniform = GridUniform::new(DVec3::ZERO, crate::app::io::default_renderer_background_color(), &camera, &projection, 1.0, false);
         let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("XY Grid Uniform Buffer"),
-            contents: bytemuck::bytes_of(&initial_grid_uniform),
+            contents: bytemuck::bytes_of(&<GridUniform as bytemuck::Zeroable>::zeroed()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let grid_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -266,15 +298,18 @@ impl<'a> Graphics<'a> {
             }],
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout)],
-            immediate_size: 0,
+        let section_grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Section Grid Uniform Buffer"),
+            contents: bytemuck::bytes_of(&<SectionGridUniform as bytemuck::Zeroable>::zeroed()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let grid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("XY Grid Pipeline Layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&grid_bind_group_layout)],
-            immediate_size: 0,
+        let section_grid_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Section Grid Bind Group"),
+            layout: &grid_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: section_grid_buffer.as_entire_binding(),
+            }],
         });
 
         let style_bind_group_layout_entry = wgpu::BindGroupLayoutEntry {
@@ -290,11 +325,6 @@ impl<'a> Graphics<'a> {
         let surface_style_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[style_bind_group_layout_entry],
             label: Some("surface_style_bind_group_layout"),
-        });
-        let surface_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Surface Pipeline Layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&surface_style_bind_group_layout)],
-            immediate_size: 0,
         });
         // Per-chunk rebase offset for triangulation surfaces (group 2); block
         // model pipelines keep the plain two-group surface layout above.
@@ -342,16 +372,6 @@ impl<'a> Graphics<'a> {
                 },
             ],
         });
-        let tri_surface_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Triangulation Surface Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(&camera_bind_group_layout),
-                Some(&surface_style_bind_group_layout),
-                Some(&surface_chunk_bind_group_layout),
-                Some(&raster_surface_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
         let block_model_transparency_fallback_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -387,11 +407,6 @@ impl<'a> Graphics<'a> {
             }],
             label: Some("block_model_transparency_composite_bind_group_layout"),
         });
-        let block_model_transparency_composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Block Model Transparency Composite Pipeline Layout"),
-            bind_group_layouts: &[Some(&block_model_transparency_composite_bind_group_layout)],
-            immediate_size: 0,
-        });
         let block_model_volume_upscale_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -416,11 +431,6 @@ impl<'a> Graphics<'a> {
                 },
             ],
             label: Some("block_model_volume_upscale_bind_group_layout"),
-        });
-        let block_model_volume_upscale_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Block Model Volume Upscale Pipeline Layout"),
-            bind_group_layouts: &[Some(&block_model_volume_upscale_bind_group_layout)],
-            immediate_size: 0,
         });
         let block_model_volume_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -551,22 +561,25 @@ impl<'a> Graphics<'a> {
             entries: &[style_bind_group_layout_entry],
             label: Some("edge_style_bind_group_layout"),
         });
-        let edge_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Edge Pipeline Layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&edge_style_bind_group_layout)],
-            immediate_size: 0,
+        // A cloud's style, plus one per-chunk draw uniform selected by dynamic
+        // offset as each chunk is drawn (see `PointChunkDrawUniform`).
+        let point_cloud_style_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                style_bind_group_layout_entry,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(crate::rendering::scene::point_cloud_cache::POINT_CHUNK_DRAW_UNIFORM_SIZE),
+                    },
+                    count: None,
+                },
+            ],
+            label: Some("point_cloud_style_bind_group_layout"),
         });
 
-        let vertex_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-        })];
-        let surface_vertex_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<SurfaceVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-        })];
         // One instance per block: lower.xyz + grade, then upper.xyz + pad.
         // The shader expands vertex_index 0..36 into the cube's faces.
         let block_model_vertex_buffers = [Some(wgpu::VertexBufferLayout {
@@ -574,556 +587,27 @@ impl<'a> Graphics<'a> {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
         })];
-
-        let stroke_vertex_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<StrokeVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Float32x2, 4 => Float32],
-        })];
-        let edge_instance_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<EdgeInstance>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-        })];
-        let point_uncolored_instance_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<PointPosition>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        })];
-        let point_colored_instance_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<PointInstance>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
-        })];
-        let drill_hole_instance_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<DrillSegmentInstance>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
-        })];
-        let drill_collar_instance_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: size_of::<DrillCollarInstance>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
-        })];
-
-        let create_stroke_pipeline = |label, depth_stencil| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &stroke_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &stroke_vertex_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &stroke_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil,
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let stroke_render_pipeline = create_stroke_pipeline("Depth-tested Stroke Render Pipeline", Some(Self::depth_state(false, -1)));
-        let opaque_stroke_render_pipeline = create_stroke_pipeline("Opaque Depth-writing Stroke Render Pipeline", Some(Self::depth_state(true, -1)));
-        let edge_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Instanced Triangulation Edge Pipeline"),
-            layout: Some(&edge_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &edge_shader,
-                entry_point: Some("vs_main"),
-                buffers: &edge_instance_buffers,
-                compilation_options: Default::default(),
+        let document_style = DocumentStyleGpu::new(&device);
+        // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
+        let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
+            &device,
+            &scene_pipelines::ScenePipelineLayouts {
+                camera: &camera_bind_group_layout,
+                document_style: &document_style.layout,
+                grid: &grid_bind_group_layout,
+                surface_style: &surface_style_bind_group_layout,
+                surface_chunk: &surface_chunk_bind_group_layout,
+                raster_surface: &raster_surface_bind_group_layout,
+                edge_style: &edge_style_bind_group_layout,
+                point_cloud_style: &point_cloud_style_bind_group_layout,
+                block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
+                block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &edge_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(Self::depth_state(false, -1)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        // Point splats reuse the edge pipeline layout (camera + one style
-        // uniform) but write depth so clouds occlude correctly against
-        // meshes and themselves.
-        let point_cloud_colored_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Colored Point Cloud Pipeline"),
-            layout: Some(&edge_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &point_cloud_shader,
-                entry_point: Some("vs_colored"),
-                buffers: &point_colored_instance_buffers,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &point_cloud_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    // Imported point colors are opaque. Avoiding the blend
-                    // unit preserves the result while allowing the
-                    // depth/color path to use the cheapest opaque writes.
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(Self::depth_state(true, 0)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        let point_cloud_uncolored_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Uncolored Point Cloud Pipeline"),
-            layout: Some(&edge_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &point_cloud_shader,
-                entry_point: Some("vs_uncolored"),
-                buffers: &point_uncolored_instance_buffers,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &point_cloud_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    // The fallback point-cloud color is currently opaque.
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(Self::depth_state(true, 0)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        let create_drill_hole_pipeline = |label, depth_stencil| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &drill_hole_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &drill_hole_instance_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &drill_hole_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_stencil),
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let drill_hole_render_pipeline = create_drill_hole_pipeline("Opaque Drillhole Cylinder Pipeline", Self::depth_state(true, 0));
-        let mut xray_drill_hole_depth = Self::depth_state(false, 0);
-        xray_drill_hole_depth.depth_compare = Some(wgpu::CompareFunction::Always);
-        let xray_drill_hole_render_pipeline = create_drill_hole_pipeline("X-Ray Drillhole Cylinder Pipeline", xray_drill_hole_depth);
-        let create_drill_collar_pipeline = |label, depth_stencil| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &drill_collar_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &drill_collar_instance_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &drill_collar_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        // The disc's rim is antialiased by coverage, not by
-                        // blending: a blended rim would also write depth at
-                        // partial opacity, and the scene geometry that draws
-                        // after the collars would then be depth-rejected in
-                        // that one-pixel ring, leaving it composited against
-                        // the clear colour as a dark outline. Alpha is the
-                        // coverage mask below and never reaches the target,
-                        // so this writes colour only.
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::COLOR,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_stencil),
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    // The rim's fractional alpha becomes a sample mask, so an
-                    // uncovered sample keeps both the colour and the depth of
-                    // whatever stands behind the marker.
-                    alpha_to_coverage_enabled: true,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let drill_collar_render_pipeline = create_drill_collar_pipeline("Opaque Drillhole Collar Pipeline", Self::depth_state(true, 0));
-        let mut xray_drill_collar_depth = Self::depth_state(false, 0);
-        xray_drill_collar_depth.depth_compare = Some(wgpu::CompareFunction::Always);
-        let xray_drill_collar_render_pipeline = create_drill_collar_pipeline("X-Ray Drillhole Collar Pipeline", xray_drill_collar_depth);
-        let mut overlay_depth = Self::depth_state(false, 0);
-        overlay_depth.depth_compare = Some(wgpu::CompareFunction::Always);
-        let design_point_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Design Point Overlay Pipeline"),
-            layout: Some(&edge_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &design_point_shader,
-                entry_point: Some("vs_main"),
-                buffers: &point_uncolored_instance_buffers,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &design_point_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(overlay_depth.clone()),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        let overlay_render_pipeline = create_stroke_pipeline("Editor Overlay Render Pipeline", Some(overlay_depth));
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &vertex_buffers,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(Self::depth_state(true, 0)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // Triangulation surface pipelines use position-only vertices with a per-draw colour
-        // uniform.
-        let create_tri_surface_pipeline = |label, write_depth, depth_compare, cull_mode| {
-            let mut depth = Self::depth_state(write_depth, 0);
-            depth.depth_compare = Some(depth_compare);
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&tri_surface_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &surface_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &surface_vertex_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &surface_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(depth),
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual, None);
-        let solid_surface_render_pipeline = create_tri_surface_pipeline("Opaque Planning Slab Pipeline", true, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
-        let transparent_solid_surface_render_pipeline =
-            create_tri_surface_pipeline("Transparent Planning Slab Pipeline", false, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
-        let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual, None);
-        let grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Infinite XY Grid Pipeline"),
-            layout: Some(&grid_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &grid_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &grid_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            // The grid is a background construction overlay, not an opaque
-            // floor: it never writes depth and is drawn before scene
-            // geometry, so nothing in the scene is ever occluded by it.
-            depth_stencil: Some(Self::depth_state(false, 0)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        // Flat plan-view images for undraped rasters: drawn first, pinned to
-        // the far plane, no depth writes, so all scene geometry covers them.
-        let raster_plane_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/raster_plane.wgsl"));
-        let raster_plane_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Raster Plane Pipeline Layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&raster_surface_bind_group_layout)],
-            immediate_size: 0,
-        });
-        let raster_plane_vertex_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: (size_of::<f32>() * 4) as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
-        })];
-        let raster_plane_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Raster Plane Pipeline"),
-            layout: Some(&raster_plane_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &raster_plane_shader,
-                entry_point: Some("vs_main"),
-                buffers: &raster_plane_vertex_buffers,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &raster_plane_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(Self::depth_state(false, 0)),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        let create_block_model_surface_pipeline = |label, write_depth, depth_compare| {
-            let mut depth = Self::depth_state(write_depth, 0);
-            depth.depth_compare = Some(depth_compare);
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&surface_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &block_model_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &block_model_vertex_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &block_model_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        // Every fragment this pipeline draws is opaque (the
-                        // chunk builder routes alpha < 0.98 to the translucent
-                        // path), so skip blending entirely: zoomed-in views
-                        // are fill-bound and blending doubles the per-sample
-                        // colour traffic at 4x MSAA for no visual effect.
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    // The cube corner tables in block_model.wgsl deliberately
-                    // wind every face inward. Exterior faces are therefore
-                    // classified as back-facing and the far/interior faces as
-                    // front-facing. Cull the latter so the camera-facing cube
-                    // shells remain visible. The fragment shader derives its
-                    // normal from derivatives and does not rely on the winding.
-                    cull_mode: Some(wgpu::Face::Front),
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(depth),
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let block_model_render_pipeline = create_block_model_surface_pipeline("Opaque Block Model Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual);
+            scene_format,
+            sample_count,
+            scene_pipelines::SceneShading::Standard,
+        ));
         let block_model_volume_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Block Model Volume Raycast Pipeline"),
             layout: Some(&block_model_volume_pipeline_layout),
@@ -1260,158 +744,13 @@ impl<'a> Graphics<'a> {
             multiview_mask: None,
             cache: None,
         });
-        let block_model_transparency_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Block Model Transparency Composite Pipeline"),
-            layout: Some(&block_model_transparency_composite_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &block_model_transparency_composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &block_model_transparency_composite_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        let block_model_volume_upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Block Model Volume Upscale Pipeline"),
-            layout: Some(&block_model_volume_upscale_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &block_model_volume_upscale_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &block_model_volume_upscale_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: scene_format,
-                    // Premultiplied over: matches the direct volume pass
-                    // this replaces.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-        // Document-object xray pipeline keeps position+colour per-vertex.
-        let create_surface_pipeline = |label, write_depth, depth_compare, shader_module: &wgpu::ShaderModule| {
-            let mut depth = Self::depth_state(write_depth, 0);
-            depth.depth_compare = Some(depth_compare);
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: shader_module,
-                    entry_point: Some("vs_main"),
-                    buffers: &vertex_buffers,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: shader_module,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: scene_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(depth),
-                multisample: wgpu::MultisampleState {
-                    count: sample_count,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let xray_render_pipeline = create_surface_pipeline("X-Ray Document Fill Pipeline", false, wgpu::CompareFunction::Always, &shader);
-        let transparent_document_fill_pipeline = create_surface_pipeline("Transparent Document Fill Pipeline", false, wgpu::CompareFunction::GreaterEqual, &shader);
 
         let lyon_buffer: VertexBuffers<Vertex, u32> = VertexBuffers::new();
         let lyon_vertex_gpu = Self::create_stream_buffer(&device, "Lyon Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let lyon_index_gpu = Self::create_stream_buffer(&device, "Lyon Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let stroke_vertex_gpu = Self::create_stream_buffer(&device, "Stroke Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let stroke_index_gpu = Self::create_stream_buffer(&device, "Stroke Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let overlay_vertex_gpu = Self::create_stream_buffer(&device, "Editor Overlay Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let overlay_index_gpu = Self::create_stream_buffer(&device, "Editor Overlay Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
-        let dynamic_vertex_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Vertex Buffer", size_of::<StrokeVertex>(), wgpu::BufferUsages::VERTEX);
-        let dynamic_index_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
+        let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
 
@@ -1426,19 +765,12 @@ impl<'a> Graphics<'a> {
         Ok(Self {
             gui,
             text_system,
-            surface_render_pipeline,
-            solid_surface_render_pipeline,
-            transparent_solid_surface_render_pipeline,
-            transparent_surface_render_pipeline,
-            grid_render_pipeline,
-            raster_plane_render_pipeline,
-            block_model_render_pipeline,
+            scene_pipelines,
+            active_scene: None,
             block_model_volume_pipeline,
             block_model_beam_pipeline,
             block_model_beam_bind_group_layout,
             block_model_transparency_fallback_pipeline,
-            block_model_transparency_composite_pipeline,
-            block_model_volume_upscale_pipeline,
             block_model_volume_upscale_bind_group_layout,
             block_model_transparency_fallback_bind_group_layout,
             block_model_transparency_composite_bind_group_layout,
@@ -1446,35 +778,22 @@ impl<'a> Graphics<'a> {
             surface_style_bind_group_layout,
             surface_chunk_bind_group_layout,
             raster_surface_bind_group_layout,
-            render_pipeline,
-            transparent_document_fill_pipeline,
-            xray_render_pipeline,
-            opaque_stroke_render_pipeline,
-            stroke_render_pipeline,
-            edge_render_pipeline,
-            point_cloud_colored_render_pipeline,
-            point_cloud_uncolored_render_pipeline,
-            drill_hole_render_pipeline,
-            xray_drill_hole_render_pipeline,
-            drill_collar_render_pipeline,
-            xray_drill_collar_render_pipeline,
-            design_point_render_pipeline,
             edge_style_bind_group_layout,
-            overlay_render_pipeline,
+            point_cloud_style_bind_group_layout,
             lyon_vertex_gpu,
             lyon_index_gpu,
-            stroke_vertex_gpu,
-            stroke_index_gpu,
-            overlay_vertex_gpu,
-            overlay_index_gpu,
-            dynamic_vertex_gpu,
-            dynamic_index_gpu,
+            stroke_gpu,
+            overlay_stroke_gpu,
+            dynamic_stroke_gpu,
             text_vertex_gpu,
             text_index_gpu,
             camera_buffer,
             camera_bind_group,
+            camera_bind_group_layout,
             grid_buffer,
             grid_bind_group,
+            section_grid_buffer,
+            section_grid_bind_group,
             msaa_color,
             msaa_view,
             scene_cache,
@@ -1508,32 +827,34 @@ impl<'a> Graphics<'a> {
             fly_camera_controller,
             projection,
             mouse_pressed: None,
+            touch_gesture: Default::default(),
             fly_mode_enabled: false,
             slice_view: None,
-            stroke_index_buf: Vec::new(),
-            stroke_vertex_buf: Vec::new(),
-            stroke_vertex_capacity: 1,
-            stroke_index_capacity: 1,
-            overlay_vertex_buf: Vec::new(),
-            overlay_index_buf: Vec::new(),
-            overlay_vertex_capacity: 1,
-            overlay_index_capacity: 1,
-            dynamic_vertex_buf: Vec::new(),
-            dynamic_index_buf: Vec::new(),
-            dynamic_vertex_capacity: 1,
-            dynamic_index_capacity: 1,
+            strokes: Vec::new(),
+            stroke_blocks: StrokeBlocks::default(),
+            stroke_capacity: 1,
+            overlay_strokes: Vec::new(),
+            overlay_stroke_capacity: 1,
+            dynamic_strokes: Vec::new(),
+            dynamic_stroke_capacity: 1,
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,
             text_index_capacity: 1,
             text_draw_batches: Vec::new(),
             frame_index: 0,
+            retired_attachments: Vec::new(),
             last_text_cache_trim_frame: 0,
             last_interaction: None,
             geometry_dirty: true,
             polyline_fill_cache: Default::default(),
             cached_document_revision: u64::MAX,
             cached_render_style_key: None,
+            cached_document_scene_key: None,
+            document_style_dirty: true,
+            document_style_slots: DocumentStyleSlots::default(),
+            document_style,
+            document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),
@@ -1554,7 +875,9 @@ impl<'a> Graphics<'a> {
             drill_hole_gpu: DrillHoleGpuCache::default(),
             design_point_gpu,
             raster_gpu: RasterGpuCache::default(),
-            chunk_render_stats: (0, 0),
+            surface_render_stats: Default::default(),
+            point_render_stats: Default::default(),
+            chunk_bounds_outline: None,
             plot_preview: None,
             plot_preview_key: None,
             pending_screenshot: None,
@@ -1565,33 +888,66 @@ impl<'a> Graphics<'a> {
             solid_preview_key: None,
             solid_preview_framing: None,
             detached_preview_scene_key: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cinematic: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cinematic_targets: None,
         })
     }
 
     pub(crate) fn reconfigure(&mut self) {
-        self.resize(self.size);
+        // Surface recovery does not change attachment dimensions. Rebuilding
+        // full-resolution MSAA/depth targets on every failure wastes GPU memory.
+        self.surface.configure(&self.device, &self.config);
     }
 
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
+        if new_size.width > 0 && new_size.height > 0 && new_size != self.size {
             self.mark_interaction();
+            // Free what previous resizes replaced before allocating this
+            // resize's attachments, so a drag holds one extra set rather than
+            // one per event.
+            self.release_retired_attachments();
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
             let (msaa_color, msaa_view) = Self::create_msaa_target(&self.device, &self.config, self.sample_count);
-            self.msaa_color = msaa_color;
             self.msaa_view = msaa_view;
-            self.scene_cache = Self::create_scene_cache_target(&self.device, &self.config, &self.scene_cache_blit_layout);
-            self.scene_cache_key = None;
             let (depth_texture, depth_view) = Self::create_depth_target(&self.device, &self.config, self.sample_count);
-            self.depth_texture = depth_texture;
             self.depth_view = depth_view;
-            // Any lazily-created attachments refer to the old size/depth
-            // view. Drop them now and recreate only if the resized viewport
-            // actually renders a block model.
-            self.block_model_transparency_targets = None;
-            self.block_model_volume_target = None;
+            let scene_cache = Self::create_scene_cache_target(&self.device, &self.config, &self.scene_cache_blit_layout);
+            self.scene_cache_key = None;
+            // Hand the attachments this resize replaced to the retirement queue
+            // rather than dropping them for the browser's collector to find.
+            // `release_retired_attachments` destroys them once the frames that
+            // drew into them have been presented.
+            let mut retired = RetiredAttachments {
+                retired_at_frame: self.frame_index,
+                retired_at: Instant::now(),
+                textures: Vec::new(),
+                buffers: Vec::new(),
+            };
+            retired.textures.push(std::mem::replace(&mut self.msaa_color, msaa_color));
+            retired.textures.push(std::mem::replace(&mut self.depth_texture, depth_texture));
+            retired.textures.push(std::mem::replace(&mut self.scene_cache, scene_cache).texture);
+            // Lazily-created block-model attachments are recreated only if
+            // the resized viewport actually renders a block model.
+            if let Some(targets) = self.block_model_transparency_targets.take() {
+                retired.textures.extend(targets._accum_textures);
+            }
+            if let Some(target) = self.block_model_volume_target.take() {
+                retired.textures.push(target._texture);
+                retired.textures.push(target._beam_texture);
+                retired.buffers.push(target.params_buffer);
+            }
+            // The cinematic chain's attachments go the same way. Its pipelines
+            // and shadow map are size-independent and stay put.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(targets) = self.cinematic_targets.take() {
+                retired.textures.extend(targets.into_textures());
+            }
+            self.retired_attachments.push(retired);
             // Document geometry is stored in world space and screen-space stroke
             // sizing is handled by the viewport uniform. Resizing therefore only
             // requires new surface-sized attachments; rebuilding and re-uploading

@@ -44,6 +44,7 @@ menu-view = Вигляд
 ws-production = Виробництво
 ws-drill-and-blast = БПР
 ws-geology = Геологія
+ws-planning = Планування
 
 
 ## Menubars
@@ -75,12 +76,14 @@ dialog-delete-title = Видалити: { $kind }
 dialog-delete-confirm =
     Видалити «{ $name }» із проекту?
     Цю дію не можна скасувати.
+confirm-delete-product =
+    Видалити продукт «{ $name }» з палітри?
+    Цю дію не можна скасувати.
 
 
 ## Діалог «Створити тріангуляцію»
 
 tri-create-title = Створити тріангуляцію
-tri-create-help = Клацайте по об'єктах в області перегляду, щоб вибрати або зняти вибір. Для рамкового вибору протягніть курсор.
 tri-create-type-label = Тип тріангуляції
 tri-create-type-help =
     «Відкрита поверхня» створює полотно рельєфного типу. «Тіло» створює
@@ -91,11 +94,10 @@ tri-create-output-name-help = Назва, яку буде присвоєно с�
 tri-create-output-name-hint = назва тріангуляції
 tri-create-run = Тріангулювати
 
-tri-selection-none = Об'єкти ще не вибрано.
 tri-selection-selected = Вибрано: { $summary }
 
-tri-type-open-surface = Відкрита поверхня
-tri-type-solid-closed = Тіло — повністю замкнене
+tri-type-open-surface = Поверхня
+tri-type-solid-closed = Тіло
 
 tri-count-polylines =
     { $count ->
@@ -152,7 +154,6 @@ tri-estimated-memory = Очікуване пікове споживання па
 block-grid-summary = Сітка: { $x } × { $y } × { $z } = { $count } блоків
 status-selected = Вибрано: { $count }
 status-fps = FPS: { $fps }
-status-chunks = Фрагменти: { $rendered }/{ $total } (приховано: { $culled })
 status-clip = Ближня/дальня площина/Δ: { $near } / { $far } / { $delta } м
 
 ## High-frequency source literals
@@ -166,6 +167,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  м
 literal-mm-c2aba917cdd54d81 =  мм
 literal-ms-c2ab9317cdd5281f =  мс
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Відображається синхронно з екраном: без розривів кадру, частоту кадрів визначає екран. Якщо вимкнено, кадри відображаються одразу після малювання, і застосовується обмеження нижче.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (порожні заголовки)
 literal-absolute-rl-455fe0d96abfbb7a = Абсолютна RL
@@ -217,7 +219,6 @@ literal-choose-the-smallest-conventional-scale-that-fits-everything-visible-onto
 literal-choose-the-source-file-or-files-to-import-27542a84552e3918 = Виберіть вихідний файл або файли для імпорту.
 literal-choose-this-input-by-clicking-a-loaded-surface-in-the-viewport-89a5a69992cd2880 = Виберіть цей вхід, клацнувши по завантаженій поверхні в області перегляду
 literal-choose-9e53070883acbe06 = Виберіть...
-literal-chunks-d8bf831735fec9eb = Фрагменти: --
 literal-clear-b4f1dffbb6be6302 = Очистити
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистити текстуру активної тріангуляції
 literal-clear-raster-ef94c7849961e88f = Очистити растр
@@ -333,6 +334,12 @@ literal-exit-application-206c61fdca9522f7 = Вийти з програми
 literal-exit-incline-design-b11cdc542f0e84ef = Вийти з Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Вийти без збереження
 literal-exit-slice-ec67c9da3a320e5f = Вийти з режиму перерізу
+literal-set-section-grid-0317412c52213ca8 = Задати сітку перерізу
+literal-hide-rl-grid-5777afd90dcfdfef = Сховати сітку позначок
+literal-show-rl-grid-87a5e28c30f9ca36 = Показати сітку позначок
+literal-e-08faea07b5959400 = С
+literal-n-09208c07b5b5c383 = Пн
+literal-set-section-grid-enabled-4477cb755937abe4 = Сітку перерізу увімкнено = %enabled%
 literal-export-293aa6a6446fb153 = Експорт
 literal-export-block-model-csv-3755a5af2dbb71af = Експорт блочної моделі в CSV
 literal-export-csv-block-model-5c2ba2182ac51797 = Експорт блочної моделі CSV
@@ -406,6 +413,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Завантажити
 literal-load-block-model-9e1eebcd6fc9e399 = Завантажити блочну модель
 literal-load-drillholes-0e0c59498b0a629f = Завантажити свердловини
+literal-load-layer-c8261cf60e655064 = Завантажити шар
 literal-load-point-cloud-348b63ef7b0faa4a = Завантажити хмару точок
 literal-load-project-645e82ec5117c718 = Завантажити проект
 literal-load-raster-5393aaf7183657c2 = Завантажити растр
@@ -451,8 +459,11 @@ literal-near-clip-limit-25931ba2c7873778 = Ближня межа відсіка�
 literal-new-product-6c2124d5d6badd3a = Новий засіб
 literal-new-project-cd084c5e5d3ea300 = Новий проект
 literal-new-layer-name-e4ea5292efa5d03f = Назва нового шару
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Немає засобу сповільнення для з'єднання
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = клацніть правою кнопкою на заголовку палітри затримок, щоб додати
 literal-no-matches-28d7266643f5992f = Немає збігів
 literal-no-object-selected-d42da7912e4d01b6 = Немає вибраного об'єкта
+literal-no-products-483f3f49aae9b3c2 = Немає засобів
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Просторові межі недоступні
 literal-none-669b18c6d2d9c95b = Немає
 literal-north-arrow-0a1293ff4a52606d = Стрілка на північ
@@ -482,6 +493,7 @@ literal-point-cloud-ef650548cfd32358 = Хмара точок
 literal-point-clouds-9bcb25b923c4c211 = Хмари точок
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Натисніть Enter, щоб використати введений радіус
 literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = або клацніть, щоб використати радіус вказівника
+literal-product-de1f02481331134c = Засіб
 literal-project-282049f502eac1de = Проект
 literal-project-name-446c46bc623ccce1 = Назва проекту
 literal-quit-app-fa0a388754b23d8b = Вийти з %app%
@@ -633,6 +645,9 @@ literal-undrape-raster-19a3cb862f76d539 = Прибрати накладання 
 literal-undrape-rasters-08281f02a6ec6cbe = Прибрати накладання растрів
 literal-unload-5d3714bc882df1b2 = Вивантажити
 literal-unload-block-model-c14323e196f7603e = Вивантажити блочну модель
+literal-unload-drillholes-b63232aa559b051e = Вивантажити свердловини
+literal-unload-layer-e19afae5689edebb = Вивантажити шар
+literal-unload-point-cloud-2d0ee38fa0391df9 = Вивантажити хмару точок
 literal-unload-raster-19854bae2aea221f = Вивантажити растр
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Вивантажити тріангуляцію
 literal-unlock-5d303fbc88281c15 = Розблокувати
@@ -643,6 +658,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Використ
 literal-vertex-count-48fab462ae06a454 = Кількість вершин
 literal-vertical-exaggeration-3572327bb13435e7 = Вертикальне перебільшення
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Вертикальний підйом або спуск кожного уступу до створення наступної берми.
+literal-vertical-sync-85fd0e942adbf2be = Вертикальна синхронізація
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Візуалізує просторове розчленування Мортона, яке використовується для відсікання за пірамідою видимості.
 literal-website-82665b2ffabc9c0a = Сайт
 literal-weld-retry-b6c826b7541e89f1 = Зварити та повторити
@@ -803,6 +819,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Раст�
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Цей елемент більше не належить активному проекту
 literal-renamed-before-to-name-88160afa8287cd38 = «%before%» перейменовано на «%name%»
 literal-exited-slice-view-0d1f935a85f65cd3 = Режим перерізу закрито
+literal-reset-the-section-view-a90255a33a618651 = Скинути вигляд перерізу
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Текст об'єкта %object_id% оновлено
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Редагування тексту об'єкта %object_id% завершено
 literal-contour-generation-failed-error-60e87eda1ee29afa = Помилка створення горизонталей: %error%
@@ -888,10 +905,7 @@ literal-kind-properties-0d654a30f642b23a = %properties% об'єкта «%kind%»
 literal-choose-a-layer-b780e9cd371a31d2 = Виберіть шар
 literal-set-axis-e3f98268c98bcfa0 = Задати %axis%
 literal-axis-value-d5e196b32161897d = Значення %axis%
-literal-app-release-22a5f58485e368d3 = %app%: %release%
 literal-download-the-free-native-version-at-our-website-fcb17e9069698bd6 = Завантажте безкоштовну нативну версію на нашому сайті ↗
-literal-saved-in-browser-storage-d1cbcaaf02b483b2 = Збережено в сховищі браузера
-literal-not-saved-in-browser-storage-a86e3497e53de7ed = Не збережено в сховищі браузера
 literal-0ac58407b71b0d0f = °
 literal-distance-along-slope-9f62268eebab148c = Відстань уздовж укосу
 literal-horizontal-distance-643bfda0222c6424 = Горизонтальна відстань
@@ -1127,6 +1141,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Вимкнути режим по�
 literal-enable-flying-mode-5be056d1b9bdd218 = Увімкнути режим польоту
 literal-exit-slice-view-8f48e630d38a6390 = Вийти з режиму перерізу
 literal-vertical-slice-view-a721497b5e8007fa = Вертикальний переріз
+literal-reset-section-view-569ba01ea5ad8448 = Скинути вигляд перерізу
+literal-camera-square-to-the-section-095beff203b315a6 = Камера перпендикулярно до перерізу
 literal-hide-wireframes-a0bb1a91dde72948 = Приховати каркаси
 literal-show-wireframes-7e8dc68f7023441b = Показати каркаси
 literal-hide-points-6ec095fdf7ed73f4 = Приховати точки
@@ -1138,6 +1154,9 @@ literal-value-dip-1a0edf99f1cb897b = падіння %value%°
 literal-strike-strike-dip-3cbc18ac238a6a85 = простягання %strike%° · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (горизонтально, без простягання)
 literal-slice-view-531d1a0f0f256066 = Режим перерізу
+slice-viewport-gestures = перетягування середньою кнопкою: панорамування · перетягування правою кнопкою: орбіта · Shift+колесо: рух · W/S: зсув шару · Q/E: обертання · Esc: вихід
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% — недоступно у вигляді перерізу
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Цей інструмент недоступний у вигляді перерізу
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = перетягування середньою кнопкою — панорама · W/S — переміщення шару · Q/E — обертання · Esc — вихід
 literal-north-ca6a42d80c5dd964 = Північ
 literal-south-25b5d0c70a3936da = Південь
@@ -1201,7 +1220,6 @@ literal-rebuild-this-variable-s-colours-from-its-data-707bb6cf79dc6139 = Пер�
 literal-restore-the-full-model-range-23c0898e378be1df = Відновити повний діапазон моделі
 literal-axis-minimum-8a51a7bda9747700 = Мінімум %axis%
 literal-axis-maximum-fa149d72f9564fca = Максимум %axis%
-literal-name-no-range-4f328990327afd0b = %name% (без діапазону)
 literal-choose-a-variable-62b267fd35bdce31 = Виберіть змінну
 literal-no-usable-range-6bd2da592be04b0c = (немає придатного діапазону)
 literal-edit-the-colour-used-for-empty-values-c58c067db330ab15 = Змінити колір порожніх значень
@@ -1508,8 +1526,9 @@ literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Споч
 literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Клацніть замкнену полілінію, щоб використати її як контур блоку
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc — скасування
 literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Клацніть устя, щоб додати або змінити точку ініціювання
-literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
-    Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+literal-copyright-c-2026-leo-timmins-lucas-timmins-and-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-a24bf7d3973f216a =
+    Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
+
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
 literal-count-connector-s-b0f5c43e0c1c25ff = З'єднань: %count%
 literal-count-hole-s-d9bc7e624fadff18 = Свердловин: %count%
@@ -1573,6 +1592,46 @@ literal-update-8b0432eecbd8b034 = Оновити
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Вертикальна глибина від кожного устя.
 literal-x-offset-cf30a60198d81e4a = Зміщення X
 literal-y-offset-ffb673aa94de0fa7 = Зміщення Y
+literal-appearance-f0e261e04eda82ff = Зовнішній вигляд
+literal-arc-circle-69e83efed2ce9d47 = Дуга та коло
+literal-arc-segments-f2c50c445ff0606b = Сегменти дуги
+literal-bulge-5911694918e2fe44 = Стріла прогину
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = За моделлю даних дуги зі стрілою прогину горизонтальні: дуга вигинається у плані, а висота змінюється по прямій від однієї вершини до наступної.
+literal-centre-x-39ad69e3af6db6be = Центр X
+literal-centre-y-39ad6ae3af6db871 = Центр Y
+literal-centre-z-39ad67e3af6db358 = Центр Z
+literal-chord-ebed35dc77f41c35 = Хорда
+literal-circle-14c54ca33d0f3ea9 = Коло
+literal-colour-by-layer-01a922874fe4bebb = Колір за шаром
+literal-edit-6caa725f12d7e915 = Редагувати...
+literal-edit-object-03fd9f47ed01e398 = Редагувати об'єкт
+literal-edit-object-142afa7681e533de = Редагувати об'єкт...
+literal-edited-kind-017b9d5669af9d78 = Відредаговано %kind%
+literal-edited-kind-count-vertices-4e063a8127567887 = Відредаговано %kind% (вершин: %count%)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Введіть число
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Використовувати колір шару-власника замість кольору, закріпленого за цим об'єктом.
+literal-identity-94d63573d312fe9b = Тотожне
+literal-insert-after-3b715eafd7214722 = Вставити після
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = З'єднує останню вершину знову з першою.
+literal-length-length-m-7002054fb5f4218e = Довжина %length% м
+literal-move-down-b233557012dcb328 = Перемістити вниз
+literal-move-up-4ea0f21fc2a338a1 = Перемістити вгору
+literal-no-changes-to-apply-dfa74d34ff069444 = Немає змін для застосування
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Об'єкт редагування змінився; зміни скасовано
+literal-ok-091d3d07b5b3076f = Гаразд
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Одна або кілька властивостей не є коректним числом
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Периметр %length% м, площа %area% м²
+literal-reverse-3ffcdc5db5e7d0c5 = Обернути
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Рядок %row%: позиція або стріла прогину не є коректним числом
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Виберіть один об'єкт проєкту для редагування
+literal-sweep-84b7af08cf834f43 = Розгортка
+literal-text-is-not-a-number-edf6a2881b62a6bb = «%text%» не є числом
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Цей об'єкт більше не існує в документі
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Цей об'єкт змінився відтоді, як відкрито редактор; відкрийте його знову, щоб редагувати поточну версію
+literal-this-object-has-a-single-position-134add52252a573e = Цей об'єкт має одну позицію.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = Цей об'єкт не має сегментів дуги.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Цьому об'єкту потрібно щонайменше %required% вершин
+literal-unassigned-8a49b21a2c9c0022 = Не призначено
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1582,3 +1641,142 @@ color-opacity = Непрозорість
 color-edit = Натисніть, щоб змінити колір
 color-saturation-value = Насиченість і яскравість
 color-hue = Відтінок
+asset-loading = Завантаження даних ресурсу
+asset-unloading = Вивантаження даних ресурсу
+asset-load-failed = Не вдалося завантажити дані ресурсу
+asset-unload-failed = Не вдалося вивантажити дані ресурсу
+preferences-title = Параметри
+context-text-colour = Колір тексту
+context-polylines = Полілінії
+context-points = Точки
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Центр обертання звільнено
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Під курсором немає точки, щоб закріпити на ній центр обертання
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Центр обертання закріплено в точці %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Центр обертання недоступний у режимі польоту
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Звільнити центр обертання
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Клацніть точку, щоб закріпити на ній центр обертання
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Закріпити центр обертання
+literal-centre-of-rotation-5c1f34327183860b = Центр обертання
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Закріплює або звільняє центр, навколо якого обертаються обидва види
+literal-rl-grid-options-2329c7b8001bc333 = Параметри сітки позначок
+literal-automatic-colour-23347fe2c6749180 = Автоматичний колір
+literal-thickness-289be54832e4be75 = Товщина
+literal-px-c2a09a17cdcb2c7f =  пікс.
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Автоматичний крок позначок
+literal-rl-spacing-88a1992aa9332272 = Крок позначок
+literal-hide-xy-grid-85952898e2cff804 = Сховати сітку XY
+literal-show-xy-grid-d22a739bae102bb1 = Показати сітку XY
+literal-set-grid-63bc48801d739665 = Задати сітку
+literal-xy-grid-options-04861f560f92a08c = Параметри сітки XY
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Скинути вигляд перерізу (вписати в межі)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Сітку XY увімкнено = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Поворот шаблону проти годинникової стрілки від глобальної осі %axis%.
+literal-axis-offset-d064a568a65d9a1f = Зміщення по %axis%
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Зсуває сітку шаблону вздовж глобальної осі %axis%, зберігаючи обрізання за формою вибуху.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Відстань зсуву вздовж світової осі %axis%.
+literal-axis-scale-ratio-851b3aab8b582f09 = Коефіцієнт масштабу по %axis%
+literal-axis-range-5455776ed8bd0a89 = Діапазон по %axis%
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Накладено на поверхню
+crs-unknown-ellipsoid = Нерозпізнана модель Землі «{ $name }» у цьому визначенні системи координат.
+crs-no-ellipsoid = Це визначення системи координат не вказує, яку модель Землі використовує.
+crs-unknown-code = EPSG:{ $code } відсутній у реєстрі систем координат.
+crs-transform-failed = Не вдалося перетворити координату; результат не є скінченною позицією.
+crs-no-datum-path = Опублікованого перетворення між системами відліку { $from } і { $to } (датуми EPSG { $source } і { $target }) немає. Перетворення попри це було б неправильним на невідому величину, тому нічого не змінено.
+crs-unknown-datum = Систему відліку { $from } або { $to } неможливо визначити, і обидві використовують різні моделі Землі. Перетворення між ними було б неправильним на невідому величину.
+ws-survey = Геодезія
+survey-count-designs = { $count } { $count ->
+    [one] проєкт
+    [few] проєкти
+   *[other] проєктів
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] тріангуляція
+    [few] тріангуляції
+   *[other] тріангуляцій
+  }
+survey-count-models = { $count } { $count ->
+    [one] блочна модель
+    [few] блочні моделі
+   *[other] блочних моделей
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] хмара точок
+    [few] хмари точок
+   *[other] хмар точок
+  }
+survey-count-holes = { $count } { $count ->
+    [one] набір свердловин
+    [few] набори свердловин
+   *[other] наборів свердловин
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] растр
+    [few] растри
+   *[other] растрів
+  }
+survey-unsupported = Растри не можна перетворити цим інструментом. Вони недоступні для вибору в області перегляду, тому нічого з вибраного не зачіпається.
+survey-angle = Обертання навколо Z (проти годинникової стрілки)
+survey-scale = Єдиний коефіцієнт масштабу XYZ
+survey-invalid-transform = Початки координат, кут і результуючі координати мають бути скінченними.
+survey-invalid-scale = Масштаб має бути скінченним додатним числом зі скінченною оберненою величиною.
+survey-empty-selection = Виберіть щонайменше один підтримуваний елемент для перетворення.
+survey-unavailable = Вибраний елемент відсутній або не завантажений. Завантажте його перед перетворенням.
+survey-wrong-project = Вибирайте проєкти лише з активного проєкту.
+survey-name-required = Введіть назву системи координат.
+survey-working = Перетворення вибраних даних…
+survey-completed = Перетворено на місці: { $items }. Скасування відновить їх.
+survey-failed = Помилка перетворення: { $error }
+survey-stale = Перетворення скасовано, оскільки активний проєкт або вихідні дані змінилися. Виберіть вихідні дані та спробуйте ще раз.
+survey-coordinates-menu = Координати
+survey-definitions-action = Визначення…
+survey-transform-action = Перетворити…
+survey-definitions-title = Визначення координат
+survey-transform-title = Перетворення координат
+survey-new-system = Нова система координат
+survey-new-system-name = Система координат
+survey-set-local = Задати як систему координат рудника
+survey-delete-system = Видалити систему координат
+survey-systems-empty = Немає систем координат
+survey-system-section = Визначення сітки рудника
+survey-reference-note = Система відліку, відносно якої записано кожне визначення: координати, які ваші дані вже мають під час імпорту. Вона не має власних параметрів. Клацніть правою кнопкою на системі, щоб зробити її системою координат рудника, або на порожньому місці нижче, щоб визначити нову.
+survey-system-name = Назва
+survey-reference-system = Система відліку
+survey-reference-origin = Відома точка — координати в системі відліку
+survey-system-origin = Та сама точка — координати в системі
+survey-angle-help = Проти годинникової стрілки від осі X системи відліку до осі Y, якщо дивитися згори.
+survey-scale-help = Єдиний масштаб XYZ від системи відліку до цієї системи. Використовуйте 1, щоб зберегти розміри.
+survey-close = Закрити
+survey-from = Із
+survey-to = До
+survey-transform-button = Перетворити
+survey-swap = Поміняти місцями
+survey-drape-note = Накладені зображення вилучаються з перетворених поверхонь і мають бути накладені знову.
+survey-needs-grid-block-model = Блочна модель — це регулярна сітка комірок, і зміна проєкції чи системи відліку не зберігає цю регулярність. Перетворення означало б передискретизацію кожної комірки в нову сітку з втратою значень, які вона містить, тому модель залишено без змін.
+survey-needs-grid-raster = Растр розміщується у світі за допомогою афінного відображення, що зміна проєкції чи системи відліку зберегти не може. Перетворення означало б передискретизацію зображення, тому растр залишено без змін.
+survey-conversion-exact = Точне: лише зміна сітки, без перепроєктування.
+survey-conversion-accuracy = Заявлена точність { $accuracy } м.
+survey-kind = Тип
+survey-axis-names = Назви осей
+survey-axis-help = Як ця система називає свої осі, якщо не X, Y і Z — «С», «Пн», «RL» для сітки рудника. Використовується скрізь, де показуються координати, але лише поки це система координат рудника. Назвіть усі три або жодної.
+survey-kind-registry-short = Система з реєстру
+survey-kind-grid-short = Сітка над іншою системою
+survey-registry-search = Пошук
+survey-registry-hint = Назва або код EPSG, напр. «mga zone 56»
+survey-registry-none = У реєстрі немає збігів за всіма словами.
+survey-parent = Визначена відносно
+survey-parent-origin = Відома точка — координати батьківської системи
+survey-pick-registry = Знайдіть систему та виберіть її з результатів.
+survey-pick-parent = Виберіть систему, відносно якої визначена ця сітка.
+survey-pick-system = Виберіть систему
+survey-pick-systems = Виберіть вихідну систему та систему призначення для перетворення.
+survey-no-selection = Виберіть систему координат ліворуч або клацніть правою кнопкою, щоб додати нову.
+survey-kind-grid = Сітка над { $parent }
+survey-system-in-use = «{ $name }» не можна видалити: відносно неї визначено { $dependants } { $dependants ->
+    [one] систему
+    [few] системи
+   *[other] систем
+  }. Спершу перенаправте їх на іншу систему.
+survey-system-cycle = «{ $name }» визначена відносно самої себе, напряму або через свої батьківські системи.
+survey-system-missing = Ця система координат більше не існує. Виберіть інше визначення.
+survey-same-system = Виберіть різні вихідну систему та систему призначення.
+survey-name-exists = Система координат із такою назвою вже існує. Виберіть її для редагування або вкажіть іншу назву.

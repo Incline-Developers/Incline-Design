@@ -1,6 +1,53 @@
 use super::*;
 
+/// Presented frames a replaced attachment is held for before destruction.
+/// `desired_maximum_frame_latency` is 2, so three presented frames always
+/// outlast the last submission that could still be reading the old image.
+const ATTACHMENT_RETIREMENT_FRAMES: u64 = 3;
+
+/// How long a replaced attachment is held when frames stop presenting.
+/// Surface acquisition fails routinely while a window is being dragged, and
+/// waiting on a frame count alone would hold every attachment the drag
+/// replaced until one finally succeeded - the opposite of the intent. Nothing
+/// new is submitted while acquisition is failing, so work that could still be
+/// reading these images was submitted before the resize and has long finished.
+const ATTACHMENT_RETIREMENT_AGE: Duration = Duration::from_millis(250);
+
+/// Whether a retired attachment has been held long enough to destroy.
+/// `frame_index` wraps, so compare with a wrapping difference rather than by
+/// ordering.
+fn retirement_due(frame_index: u64, retired_at_frame: u64, age: Duration) -> bool {
+    frame_index.wrapping_sub(retired_at_frame) >= ATTACHMENT_RETIREMENT_FRAMES || age >= ATTACHMENT_RETIREMENT_AGE
+}
+
 impl<'a> Graphics<'a> {
+    /// Destroy attachments an earlier resize replaced, once the frames that
+    /// drew into them have been presented. Called once per rendered frame and
+    /// again at the start of each resize, so a drag that never completes a
+    /// frame still frees what it replaced.
+    /// Destroying frees the GPU allocation immediately instead of waiting for
+    /// the browser to collect the handle, which is what keeps a fast
+    /// drag-resize from exhausting GPU memory.
+    pub(super) fn release_retired_attachments(&mut self) {
+        if self.retired_attachments.is_empty() {
+            return;
+        }
+        let frame_index = self.frame_index;
+        let now = Instant::now();
+        self.retired_attachments.retain_mut(|retired| {
+            if !retirement_due(frame_index, retired.retired_at_frame, now.duration_since(retired.retired_at)) {
+                return true;
+            }
+            for texture in retired.textures.drain(..) {
+                texture.destroy();
+            }
+            for buffer in retired.buffers.drain(..) {
+                buffer.destroy();
+            }
+            false
+        });
+    }
+
     pub(super) fn create_scene_cache_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, blit_layout: &wgpu::BindGroupLayout) -> SceneCacheTarget {
         let scene_format = config.format.add_srgb_suffix();
         let view_formats = (scene_format != config.format).then_some(scene_format).into_iter().collect::<Vec<_>>();
@@ -34,7 +81,7 @@ impl<'a> Graphics<'a> {
                 resource: wgpu::BindingResource::TextureView(&view),
             }],
         });
-        SceneCacheTarget { view, bind_group }
+        SceneCacheTarget { texture, view, bind_group }
     }
 
     /// Layout and pipeline for the fullscreen fetch that puts the cached scene

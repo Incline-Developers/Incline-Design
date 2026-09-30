@@ -58,11 +58,7 @@ impl<'a> App<'a> {
         if self.delete_polyline_vertex_at_cursor() {
             return;
         }
-        let frozen = &self.editor.frozen_handles;
-        let picked = self
-            .graphics
-            .as_ref()
-            .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
+        let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(object_id), world)) = picked else {
             return;
         };
@@ -111,21 +107,10 @@ impl<'a> App<'a> {
     }
 
     fn pick_hovered_object(&self) -> Option<ObjectId> {
-        self.graphics
-            .as_ref()
-            .and_then(|graphics| {
-                graphics.pick_at_cursor(
-                    PICK_THRESHOLD_PX,
-                    &self.triangulations,
-                    &self.editor.hidden_handles,
-                    &self.editor.frozen_handles,
-                    self.editor.xray_enabled,
-                )
-            })
-            .and_then(|(entity, _)| match entity {
-                SceneEntityId::Object(object_id) => Some(object_id),
-                _ => None,
-            })
+        self.pick_under_cursor().and_then(|(entity, _)| match entity {
+            SceneEntityId::Object(object_id) => Some(object_id),
+            _ => None,
+        })
     }
 
     fn delete_polyline_vertex_at_cursor(&mut self) -> bool {
@@ -190,6 +175,7 @@ impl<'a> App<'a> {
             } else {
                 pick::VertexPickFilter::DeletablePolyline
             },
+            graphics.section_slab(),
         )?;
         let ObjectPoint::Vertex(vertex_index) = point else {
             return None;
@@ -321,9 +307,6 @@ impl<'a> App<'a> {
         self.refresh_snap_index();
         let graphics = self.graphics.as_ref()?;
         let cursor_px = self.editor.cursor_screen_px?;
-        // Cursor positions are physical pixels; the marker the user aims at is
-        // sized in logical ones, so scale the radius to match what is drawn.
-        let scale_factor = self.window.as_ref().map_or(1.0, |window| window.scale_factor() as f32);
         let (object_id, point, world) = pick::pick_nearest_vertex_indexed(
             &self.scene_document,
             &self.snap_index,
@@ -332,8 +315,11 @@ impl<'a> App<'a> {
             &graphics.view_proj(),
             graphics.screen_size_pub(),
             graphics.window_to_viewport_px(cursor_px),
-            MOVE_VERTEX_PICK_PX * scale_factor,
+            // Cursor is physical pixels; the marker size is in logical
+            // points, so scale the radius up to match.
+            self.points_to_px(MOVE_VERTEX_PICK_PX),
             pick::VertexPickFilter::AnyEditable,
+            graphics.section_slab(),
         )?;
         let screen_px = graphics.world_to_window_px(&graphics.view_proj(), world)?;
         Some(MoveVertexHit {

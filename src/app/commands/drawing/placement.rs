@@ -1,17 +1,13 @@
 use crate::{
     app::App,
     logging::CommandReportSpec,
-    model::{Command, LayerId, Object, PolyVertex, geometry::circle_polyline_vertices},
+    model::{Command, LayerId, Object, PolyVertex},
     ui::state::{ActiveTool, CircleDraft},
 };
 
 impl<'a> App<'a> {
     pub(crate) fn measure_distance_click(&mut self) {
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(point) = self.editor.cursor_world else {
@@ -29,11 +25,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn measure_batter_angle_click(&mut self) {
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(point) = self.editor.cursor_world else {
@@ -51,11 +43,7 @@ impl<'a> App<'a> {
             return;
         }
         // Block if snap mode is active but cursor isn't snapped
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(world) = self.editor.cursor_world else {
@@ -96,11 +84,7 @@ impl<'a> App<'a> {
             return;
         }
         // Block if snap mode is active but cursor isn't snapped
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(world) = self.editor.cursor_world else {
@@ -109,6 +93,8 @@ impl<'a> App<'a> {
         let Some(layer) = self.active_layer() else {
             return;
         };
+        // A vertex is pinned to the plane showing when it was clicked; the
+        // section can move afterwards (W/S walk, Q/E turn), so a line may span planes.
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {
             ActiveTool::MakeLine if self.editor.pending_stroke.len() >= 2 => {
@@ -148,11 +134,7 @@ impl<'a> App<'a> {
         if !self.editing_ready() {
             return;
         }
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(world) = self.editor.cursor_world else {
@@ -191,14 +173,13 @@ impl<'a> App<'a> {
         let Some(center) = self.editor.circle_draft.as_ref().map(|draft| draft.center) else {
             return;
         };
-        let bearing = self.editor.cursor_world.map_or(glam::DVec2::X, |cursor| cursor.truncate() - center.truncate());
-        let Some(verts) = circle_polyline_vertices(center, radius, bearing) else {
+        if !radius.is_finite() || radius <= 0.0 || !center.is_finite() {
             return;
-        };
+        }
         let Some(layer) = self.active_layer() else {
             return;
         };
-        if !self.commit_polyline(verts.to_vec(), true, layer) {
+        if !self.commit_circle_object(center, radius, layer) {
             return;
         }
         self.editor.circle_draft = None;
@@ -340,6 +321,29 @@ impl<'a> App<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Add a circle on `layer` with the active tool styling.
+    fn commit_circle_object(&mut self, center: glam::DVec3, radius: f64, layer: LayerId) -> bool {
+        let color = crate::model::ObjectColor::Fixed(self.editor.tool_line_color);
+        let line_weight = self.editor.tool_line_weight;
+        let fill = self.editor.tool_hatch.to_fill_style();
+        if let Some(project) = self.workspace.active_project_mut() {
+            let doc = &mut project.project.document;
+            let id = doc.allocate_object_id();
+            self.execute_edit(Command::AddObject(Object::Circle {
+                id,
+                layer,
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+            }));
+            true
+        } else {
+            false
         }
     }
 

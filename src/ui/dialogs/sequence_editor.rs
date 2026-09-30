@@ -590,7 +590,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         );
         // Registered after the row, so the cross is the topmost thing over its
         // own square and a click there removes rather than selects.
-        if menu::close_cross(ui, cross, ui.id().with(("sequence_remove", index))).clicked() {
+        if menu::close_cross(ui, cross, ui.id().with(("sequence_remove", index)), menu::menu_surface(ui.visuals())).clicked() {
             edit = Some(ListEdit::Remove(index));
         }
         if response.drag_started_by(egui::PointerButton::Primary) {

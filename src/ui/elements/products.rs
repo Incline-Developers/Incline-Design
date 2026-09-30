@@ -1,13 +1,8 @@
-//! The Drill & Blast workspace's products panel, down the window's right edge.
-//!
-//! One region, claimed after the console and the bottom toolbar so it runs
-//! from the viewport bar down to the toolbar's top edge and the two strips
-//! below carry on underneath it, the way the explorer's column is claimed
-//! before them and they stop at its edge.
+//! The Drill & Blast workspace's products island below the data explorer.
 //!
 //! It is built out of the explorer's own parts - the banded rows, the coloured
 //! section heading carrying the only symbol in the panel, the lit row for the
-//! one that is armed - so the two side panels read as one interface rather
+//! one that is armed - so the two islands read as one interface rather
 //! than as a tree beside a board of cards. A product fits a row: the delay, in
 //! the colour a tie-in laid with it is drawn in, and the name after it.
 //! Interhole delays are the only product so far - see
@@ -27,7 +22,6 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
-            island::{Island, IslandResponse, Side},
         },
     },
 };
@@ -35,14 +29,6 @@ use crate::{
 /// Id of the products panel. Shared with [`crate::ui::chrome`], which reads
 /// the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "products_panel";
-
-/// Width the panel opens at: a delay, its name, and the heading above them,
-/// without the column being wider than the little it has to say.
-const DEFAULT_WIDTH: f32 = 190.0;
-/// Narrowest the panel may be dragged. Rows truncate rather than clip.
-const MIN_WIDTH: f32 = 140.0;
-/// Widest, so dragging it out cannot swallow the scene.
-const MAX_WIDTH: f32 = 360.0;
 
 /// Heading tint for the palette: the red the heading's own tie-in icon is
 /// drawn in, so the section reads as one mark rather than as a symbol beside
@@ -55,21 +41,23 @@ const HEADER_DELAY_PALETTE: egui::Color32 = egui::Color32::from_rgb(0xE2, 0x3B, 
 const LABEL_GAP: f32 = 6.0;
 
 /// Draw the products panel and return what it claimed.
-pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> IslandResponse<()> {
+pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> egui::Rect {
     // The explorer's row colours, because these are the explorer's rows: the
-    // two side panels share one palette rather than each mixing its own.
+    // two islands share one palette rather than each mixing its own.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    Island::new(PANEL_ID, Side::Right)
-        .default_width(DEFAULT_WIDTH)
-        .min_width(MIN_WIDTH)
-        .max_width(MAX_WIDTH)
-        .fill(surface)
-        .flush()
-        .show(ui, |ui, _| {
-            // The palette can outgrow a short viewport. Keep that content
-            // inside the height the surrounding bottom panels left us; if it
-            // overflows, scroll it rather than allowing the side panel's frame
-            // and chrome rect to expand across those panels.
+    let (min_height, max_height) = crate::ui::chrome::panel_size_limits(ui.ctx(), ui.available_height());
+    egui::Panel::bottom(PANEL_ID)
+        .resizable(true)
+        .default_size(max_height)
+        .min_size(min_height)
+        .max_size(max_height)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| {
+            // Prevent content from forcing the panel wider than the user has dragged it.
+            ui.set_max_width(ui.available_width());
+            // Scroll overflowing products within the island's chosen height
+            // so the data explorer keeps its share of the column.
             egui::ScrollArea::vertical()
                 .id_salt("products_panel_scroll")
                 .auto_shrink([false; 2])
@@ -103,6 +91,8 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                 });
         })
+        .response
+        .rect
 }
 
 /// The palette itself: one row per stored product.

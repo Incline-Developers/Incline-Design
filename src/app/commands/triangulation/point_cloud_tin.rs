@@ -42,6 +42,10 @@ pub(crate) struct TerrainTinParams {
     /// Bridge (fill) holes and boundary concavities narrower than this distance;
     /// wider gaps stay open. Zero fills only sub-cell scan gaps.
     pub(crate) hole_fill_distance: f64,
+    /// Reconstruct from the points a ground filter classified as bare earth,
+    /// discarding vegetation, buildings, plant and noise. Ignored by a cloud
+    /// that carries no classifications.
+    pub(crate) ground_only: bool,
 }
 
 /// Resolve a budget specification to an absolute vertex target.
@@ -56,6 +60,49 @@ pub(crate) fn terrain_budget_target(point_count: usize, budget: TerrainBudget) -
     target.clamp(3, point_count)
 }
 
+/// Peak working memory (bytes) of a terrain TIN build over `point_count` input
+/// points - the ground points alone when `ground_only` - so the
+/// dialog can warn before a configuration risks the process. The cloud itself
+/// is already resident and not counted.
+///
+/// The constants are measured, not derived: allocation peaks on scanline-ordered
+/// synthetic terrain, rounded up. A cloud whose points arrive in no spatial
+/// order at all bins into per-thread cell maps that overlap, and can peak
+/// several times higher in the binning pass.
+pub(crate) fn estimate_terrain_tin_memory_bytes(point_count: usize, ground_only: bool, budget: TerrainBudget, sampler: TerrainSampler, candidate_multiplier: u32) -> u64 {
+    /// Binning pass, per occupied cell: the cell map, its per-thread partials,
+    /// and the occupancy set. The adaptive quadtree built after it is smaller.
+    const BIN_BYTES_PER_CELL: f64 = 220.0;
+    /// Occupancy set, per cell, which stays alive through triangulation.
+    const OCCUPANCY_BYTES_PER_CELL: f64 = 40.0;
+    /// Deduplication, the Delaunay mesh, and the output surface with its BVH and
+    /// edges, per vertex.
+    const TIN_BYTES_PER_VERTEX: f64 = 370.0;
+    /// The ground-only filter's copy of the points it keeps.
+    const GROUND_COPY_BYTES_PER_POINT: f64 = 24.0;
+
+    let points = point_count as f64;
+    let target = terrain_budget_target(point_count, budget) as f64;
+    let triangulation = |cells: f64| OCCUPANCY_BYTES_PER_CELL * cells + TIN_BYTES_PER_VERTEX * target;
+    let peak = if target >= points {
+        // Nothing to subsample: every point is triangulated directly.
+        TIN_BYTES_PER_VERTEX * points
+    } else {
+        let requested = match sampler {
+            TerrainSampler::Grid => target,
+            TerrainSampler::Adaptive => target * f64::from(candidate_multiplier.max(1)),
+        };
+        // Cells are sized so `requested` of them cover the footprint, but only
+        // cells a point lands in exist: with points spread evenly that is the
+        // Poisson occupied share, which saturates at the point count rather
+        // than growing with the multiplier.
+        let cells = requested * (1.0 - (-points / requested).exp());
+        (BIN_BYTES_PER_CELL * cells).max(triangulation(cells))
+    };
+    let ground_copy = if ground_only { GROUND_COPY_BYTES_PER_POINT * points } else { 0.0 };
+    (peak + ground_copy) as u64
+}
+
 impl<'a> App<'a> {
     /// Build an open XY Delaunay terrain surface from a loaded point cloud on a
     /// background job and register it like any generated triangulation.
@@ -66,8 +113,20 @@ impl<'a> App<'a> {
             .find(|cloud| cloud.id == cloud_id)
             .ok_or_else(|| anyhow::anyhow!("The selected point cloud is no longer loaded"))?;
         let points = cloud.points.clone();
+        // Filtering runs on the worker with the reconstruction rather than here:
+        // bare earth is a fraction of a delivery, but the scan that finds it is
+        // still a pass over every point.
+        let classifications = params.ground_only.then(|| cloud.classifications.clone()).flatten();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulation> {
-            reconstruct_terrain_tin_from_point_cloud(&points, &params, cancel, progress)
+            let ground;
+            let points: &[DVec3] = match classifications.as_deref() {
+                Some(codes) => {
+                    ground = ground_points(&points, codes)?;
+                    &ground
+                }
+                None => &points,
+            };
+            reconstruct_terrain_tin_from_point_cloud(points, &params, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation(generated),
@@ -78,6 +137,36 @@ impl<'a> App<'a> {
         self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
         Ok(())
     }
+}
+
+/// Keep only the points a ground filter classified as bare earth.
+///
+/// Surveyors do this before anything else touches a delivery: canopy, plant and
+/// blunders would otherwise be averaged into the surface, and the adaptive
+/// sampler would spend its budget resolving trees, which are the roughest thing
+/// in a scene and so the greediest for vertices.
+fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>> {
+    if classifications.len() != points.len() {
+        anyhow::bail!("The point cloud's classifications do not match its points");
+    }
+    let ground: Vec<DVec3> = points
+        .par_iter()
+        .zip(classifications.par_iter())
+        .filter(|(_, code)| **code == crate::model::point_cloud::CLASS_GROUND)
+        .map(|(point, _)| *point)
+        .collect();
+    if ground.len() < 3 {
+        anyhow::bail!("The point cloud classifies fewer than 3 points as ground; turn off 'Ground points only' to use every point");
+    }
+    userspace_log!(
+        "{}",
+        tr_format!(
+            literal = "Terrain TIN: filtered to %ground% ground points of %total%",
+            ground = ground.len(),
+            total = points.len()
+        )
+    );
+    Ok(ground)
 }
 
 /// Selects how the point budget is distributed before triangulation.
@@ -322,7 +411,8 @@ fn spatial_grid_subsample_terrain(
     }
 
     let cell_size = choose_terrain_cell_size(points, min, area, max_points, finite_count, cancel)?;
-    let cells = bin_terrain_cells(points, min, cell_size, cancel)?;
+    let grid = CellGrid::new(min, extent, cell_size, points.len());
+    let cells = bin_terrain_cells(points, &grid, cancel)?;
     let occupancy = OccupancyGrid {
         cells: cells.keys().copied().collect(),
         min,
@@ -330,7 +420,10 @@ fn spatial_grid_subsample_terrain(
         dilation: hole_fill_dilation(hole_fill_distance, cell_size),
     };
 
-    let mut sampled: Vec<DVec3> = cells.into_par_iter().filter_map(|(_, (sum, count))| (count > 0).then(|| sum.mean(count))).collect();
+    let mut sampled: Vec<DVec3> = cells
+        .into_par_iter()
+        .filter_map(|(key, (sum, count))| (count > 0).then(|| grid.mean(key, &sum, count)))
+        .collect();
     if sampled.len() > max_points {
         sampled.par_sort_unstable_by(|a, b| spatial_hash(a).cmp(&spatial_hash(b)).then_with(|| a.x.total_cmp(&b.x)).then_with(|| a.y.total_cmp(&b.y)));
         sampled.truncate(max_points);
@@ -342,50 +435,105 @@ fn spatial_grid_subsample_terrain(
 /// f64 in parallel is non-associative, so the resulting mean - and thus the
 /// truncation order and Delaunay topology built from it - varied run to run.
 /// Quantising each coordinate to fixed-point integers before summing makes the
-/// total order-independent and the whole TIN reproducible. `SCALE` is finer than
-/// the survey's own quantisation, so no meaningful precision is lost, and i128
-/// cannot overflow for any realistic point count.
+/// total order-independent and the whole TIN reproducible.
+///
+/// Offsets are quantised relative to the point's own cell in x and y, and to
+/// the cloud's floor in z, which keeps every magnitude inside an i64. Width is
+/// the point: binning a large cloud is bound by how much of the cell map stays
+/// in cache, and a 24-byte accumulator keeps the map's value at 32 bytes where
+/// an i128 one would need 16-byte alignment and 64.
 #[derive(Clone, Copy, Default)]
 struct CellSum {
-    x: i128,
-    y: i128,
-    z: i128,
+    x: i64,
+    y: i64,
+    z: i64,
 }
 
-/// Fixed-point units per metre (micrometres): well below survey precision.
-const CELL_SUM_SCALE: f64 = 1.0e6;
-
 impl CellSum {
-    fn add(&mut self, point: &DVec3) {
-        self.x += (point.x * CELL_SUM_SCALE).round() as i128;
-        self.y += (point.y * CELL_SUM_SCALE).round() as i128;
-        self.z += (point.z * CELL_SUM_SCALE).round() as i128;
-    }
-
     fn merge(&mut self, other: &Self) {
         self.x += other.x;
         self.y += other.y;
         self.z += other.z;
     }
+}
 
-    fn mean(&self, count: u64) -> DVec3 {
-        let divisor = count as f64 * CELL_SUM_SCALE;
-        DVec3::new(self.x as f64 / divisor, self.y as f64 / divisor, self.z as f64 / divisor)
+/// The quantisation a cell map was binned with: enough to turn a point into a
+/// cell key, fold it into that cell's accumulator, and turn the accumulated
+/// sum back into a mean. Binning and reading back must agree on all of it, so
+/// it travels as one value rather than as loose parameters.
+#[derive(Clone, Copy)]
+struct CellGrid {
+    min: DVec3,
+    cell_size: f64,
+    /// Fixed-point units per metre.
+    scale: f64,
+}
+
+/// Fixed-point units per metre (micrometres): well below survey precision.
+const CELL_SUM_SCALE: f64 = 1.0e6;
+
+impl CellGrid {
+    fn new(min: DVec3, extent: DVec3, cell_size: f64, point_count: usize) -> Self {
+        // The largest offset one point can contribute: within its own cell in x
+        // and y, from the cloud floor in z.
+        let max_offset = cell_size.max(extent.z.abs()).max(1.0);
+        // Cap the scale so that even every point landing in a single cell cannot
+        // overflow the accumulator. With a kilometre of relief the cap only
+        // starts to bind past ~9e9 points, so real clouds quantise at the full
+        // micrometre; beyond that, resolution degrades smoothly instead of the
+        // sum wrapping. The 1.0 floor is a last stop at metre resolution, and
+        // is unreachable short of ~9e15 points - some 200,000 TB of input.
+        let headroom = i64::MAX as f64 / (max_offset * point_count.max(1) as f64);
+        Self {
+            min,
+            cell_size,
+            scale: headroom.clamp(1.0, CELL_SUM_SCALE),
+        }
+    }
+
+    fn key(&self, point: &DVec3) -> (i64, i64) {
+        (
+            ((point.x - self.min.x) / self.cell_size).floor() as i64,
+            ((point.y - self.min.y) / self.cell_size).floor() as i64,
+        )
+    }
+
+    fn cell_origin(&self, key: (i64, i64)) -> (f64, f64) {
+        (self.min.x + key.0 as f64 * self.cell_size, self.min.y + key.1 as f64 * self.cell_size)
+    }
+
+    fn add(&self, sum: &mut CellSum, key: (i64, i64), point: &DVec3) {
+        let (origin_x, origin_y) = self.cell_origin(key);
+        sum.x += ((point.x - origin_x) * self.scale).round() as i64;
+        sum.y += ((point.y - origin_y) * self.scale).round() as i64;
+        sum.z += ((point.z - self.min.z) * self.scale).round() as i64;
+    }
+
+    fn mean(&self, key: (i64, i64), sum: &CellSum, count: u64) -> DVec3 {
+        let (origin_x, origin_y) = self.cell_origin(key);
+        let divisor = count as f64 * self.scale;
+        DVec3::new(origin_x + sum.x as f64 / divisor, origin_y + sum.y as f64 / divisor, self.min.z + sum.z as f64 / divisor)
     }
 }
 
-type CellMap = HashMap<(i64, i64), (CellSum, u64)>;
+/// Cell keys are dense small integers straight out of a grid index, which
+/// SipHash charges far more to mix than the table lookup itself costs. These
+/// maps are process-local and never exposed to untrusted input, so the
+/// HashDoS-resistant default buys nothing here.
+type CellMap = HashMap<(i64, i64), (CellSum, u64), foldhash::fast::RandomState>;
+type CellSet = HashSet<(i64, i64), foldhash::fast::RandomState>;
 
-fn terrain_cell_key(point: &DVec3, min: DVec3, cell_size: f64) -> (i64, i64) {
-    (((point.x - min.x) / cell_size).floor() as i64, ((point.y - min.y) / cell_size).floor() as i64)
-}
+/// Points per parallel work item. Small enough that the cancel check between
+/// items stays responsive and rayon can balance the tail, large enough that the
+/// per-item overhead disappears against the binning itself.
+const TERRAIN_BIN_CHUNK: usize = 16_384;
 
 /// Which grid cells actually contain survey points, used to reject triangles
 /// that a convex-hull Delaunay would otherwise bridge across concave
 /// boundaries and interior voids. Cells are the sampler's own bins, so at that
 /// resolution genuine terrain is densely occupied while gaps read as empty.
 struct OccupancyGrid {
-    cells: HashSet<(i64, i64)>,
+    cells: CellSet,
     min: DVec3,
     cell_size: f64,
     /// Neighbourhood radius (cells) treated as covered. One rejects only genuine
@@ -470,19 +618,32 @@ fn choose_terrain_cell_size(points: &[DVec3], min: DVec3, area: f64, target: usi
     } else {
         base
     };
+    // The probe only needs cell keys, so it borrows the grid's indexing with a
+    // nominal accumulator scale - nothing here accumulates.
+    let probe_grid = CellGrid {
+        min,
+        cell_size: probe_size,
+        scale: 1.0,
+    };
     let occupied = points
-        .par_iter()
+        .par_chunks(TERRAIN_BIN_CHUNK)
         .enumerate()
-        .try_fold(HashSet::<(i64, i64)>::new, |mut occupied, (index, point)| -> Result<_> {
-            if index % 262_144 == 0 && cancel.is_cancelled() {
+        .try_fold(CellSet::default, |mut occupied, (chunk_index, chunk)| -> Result<_> {
+            if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
-            if index.is_multiple_of(stride) && point.is_finite() {
-                occupied.insert(terrain_cell_key(point, min, probe_size));
+            // `par_chunks` yields full-width chunks except the last, so the
+            // global index of each point is exact and the stride stays aligned
+            // with the serial walk it replaced.
+            let base = chunk_index * TERRAIN_BIN_CHUNK;
+            for (offset, point) in chunk.iter().enumerate() {
+                if (base + offset).is_multiple_of(stride) && point.is_finite() {
+                    occupied.insert(probe_grid.key(point));
+                }
             }
             Ok(occupied)
         })
-        .try_reduce(HashSet::new, |mut left, mut right| -> Result<_> {
+        .try_reduce(CellSet::default, |mut left, mut right| -> Result<_> {
             // Union both partials, extending the larger for fewer inserts.
             // Returning either alone would drop the other's cells and make
             // the occupied count depend on the reduce tree shape.
@@ -516,23 +677,24 @@ fn merge_terrain_cells(mut destination: CellMap, source: CellMap) -> Result<Cell
 /// Bin every finite point into fixed-point cell accumulators. Shared by the grid
 /// and adaptive samplers; the fixed-point sums keep the resulting means
 /// reproducible regardless of parallel accumulation order.
-fn bin_terrain_cells(points: &[DVec3], min: DVec3, cell_size: f64, cancel: &crate::app::jobs::CancelFlag) -> Result<CellMap> {
+fn bin_terrain_cells(points: &[DVec3], grid: &CellGrid, cancel: &crate::app::jobs::CancelFlag) -> Result<CellMap> {
     points
-        .par_iter()
-        .enumerate()
-        .try_fold(CellMap::new, |mut cells, (index, point)| -> Result<CellMap> {
-            if index % 262_144 == 0 && cancel.is_cancelled() {
+        .par_chunks(TERRAIN_BIN_CHUNK)
+        .try_fold(CellMap::default, |mut cells, chunk| -> Result<CellMap> {
+            if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
-            if point.is_finite() {
-                let key = terrain_cell_key(point, min, cell_size);
-                let entry = cells.entry(key).or_insert((CellSum::default(), 0));
-                entry.0.add(point);
-                entry.1 += 1;
+            for point in chunk {
+                if point.is_finite() {
+                    let key = grid.key(point);
+                    let entry = cells.entry(key).or_default();
+                    grid.add(&mut entry.0, key, point);
+                    entry.1 += 1;
+                }
             }
             Ok(cells)
         })
-        .try_reduce(CellMap::new, |left, right| -> Result<CellMap> {
+        .try_reduce(CellMap::default, |left, right| -> Result<CellMap> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Terrain TIN reconstruction cancelled");
             }
@@ -710,75 +872,111 @@ fn morton_code(kx: i64, ky: i64) -> u64 {
 
 /// Aggregate Morton-sorted leaf cells bottom-up into a quadtree, summing each
 /// node's moments from its children in code order for a reproducible result.
-/// Each leaf is `(morton, moments, rebased mean, is_boundary)`.
-fn build_quadtree(leaves: &[(u64, PlaneMoments, DVec3, bool)]) -> QuadTree {
-    let mut nodes: Vec<QuadNode> = Vec::with_capacity(leaves.len() * 2);
-    let mut moments: Vec<PlaneMoments> = Vec::with_capacity(leaves.len() * 2);
-    let mut current: Vec<(u64, u32)> = Vec::with_capacity(leaves.len());
-    for &(code, cell_moments, sum, boundary) in leaves {
-        let index = nodes.len() as u32;
-        nodes.push(QuadNode {
-            sum,
-            fine_count: 1,
-            children: [u32::MAX; 4],
-            residual_sq: cell_moments.residual_sq(),
-            contains_boundary: boundary,
-        });
-        moments.push(cell_moments);
-        current.push((code, index));
+/// Each leaf is `(morton, rebased mean, is_boundary)`; a leaf's moments are its
+/// one point's, so they are derived rather than stored. Moments are read only
+/// while their parents are built, so they live one level at a time instead of
+/// once per node - at candidate-grid scale that is the build's peak memory.
+fn build_quadtree(leaves: &[(u64, DVec3, bool)]) -> QuadTree {
+    let leaf_node = |&(_, sum, boundary): &(u64, DVec3, bool)| QuadNode {
+        sum,
+        fine_count: 1,
+        children: [u32::MAX; 4],
+        // A single point fits any plane exactly.
+        residual_sq: 0.0,
+        contains_boundary: boundary,
+    };
+    if leaves.len() <= 1 {
+        return QuadTree {
+            nodes: leaves.iter().map(leaf_node).collect(),
+            roots: (0..leaves.len() as u32).collect(),
+        };
     }
 
-    while current.len() > 1 {
-        let mut next: Vec<(u64, u32)> = Vec::new();
-        let mut start = 0;
-        while start < current.len() {
-            let parent_code = current[start].0 >> 2;
-            let mut child_indices = [u32::MAX; 4];
-            let mut occupied = 0;
-            let mut node_moments = PlaneMoments::default();
-            let mut sum = DVec3::ZERO;
-            let mut fine_count = 0u32;
-            let mut contains_boundary = false;
-            let mut end = start;
-            while end < current.len() && current[end].0 >> 2 == parent_code {
-                let child = current[end].1;
-                child_indices[occupied] = child;
-                occupied += 1;
-                node_moments.add(&moments[child as usize]);
-                sum += nodes[child as usize].sum;
-                fine_count += nodes[child as usize].fine_count;
-                contains_boundary |= nodes[child as usize].contains_boundary;
-                end += 1;
-            }
-            let index = nodes.len() as u32;
-            nodes.push(QuadNode {
-                sum,
-                fine_count,
-                children: child_indices,
-                residual_sq: node_moments.residual_sq(),
-                contains_boundary,
-            });
-            moments.push(node_moments);
-            next.push((parent_code, index));
-            start = end;
+    // Every level groups the same sorted codes at a coarser shift, so each
+    // level's size is a count of code changes, and `nodes` is sized once
+    // instead of reallocating (and briefly doubling) as it grows.
+    let level_len = |shift: u32| 1 + leaves.par_windows(2).filter(|pair| pair[0].0.checked_shr(shift) != pair[1].0.checked_shr(shift)).count();
+    let mut level_lens = Vec::new();
+    let mut shift = 2;
+    loop {
+        let len = level_len(shift);
+        level_lens.push(len);
+        if len <= 1 {
+            break;
         }
+        shift += 2;
+    }
+    let mut nodes: Vec<QuadNode> = Vec::with_capacity(leaves.len() + level_lens.iter().sum::<usize>());
+    nodes.extend(leaves.iter().map(leaf_node));
+
+    let mut level_lens = level_lens.into_iter();
+    let mut current = aggregate_quadtree_level(&mut nodes, leaves.len(), level_lens.next().unwrap_or(1), |index| {
+        let (code, point, _) = leaves[index];
+        (code, index as u32, PlaneMoments::from_point(point))
+    });
+    while current.len() > 1 {
+        let next = aggregate_quadtree_level(&mut nodes, current.len(), level_lens.next().unwrap_or(1), |index| current[index]);
         current = next;
     }
 
-    let roots = current.iter().map(|&(_, index)| index).collect();
+    let roots = current.iter().map(|&(_, index, _)| index).collect();
     QuadTree { nodes, roots }
+}
+
+/// Build one quadtree level from the Morton-sorted level below, `entry(i)`
+/// giving each child's `(code, node index, moments)`, and return the new level
+/// in the same form.
+fn aggregate_quadtree_level(nodes: &mut Vec<QuadNode>, len: usize, next_len: usize, entry: impl Fn(usize) -> (u64, u32, PlaneMoments)) -> Vec<(u64, u32, PlaneMoments)> {
+    let mut next = Vec::with_capacity(next_len);
+    let mut start = 0;
+    while start < len {
+        let parent_code = entry(start).0 >> 2;
+        let mut child_indices = [u32::MAX; 4];
+        let mut occupied = 0;
+        let mut node_moments = PlaneMoments::default();
+        let mut sum = DVec3::ZERO;
+        let mut fine_count = 0u32;
+        let mut contains_boundary = false;
+        let mut end = start;
+        while end < len {
+            let (code, child, child_moments) = entry(end);
+            if code >> 2 != parent_code {
+                break;
+            }
+            child_indices[occupied] = child;
+            occupied += 1;
+            node_moments.add(&child_moments);
+            let child = &nodes[child as usize];
+            sum += child.sum;
+            fine_count += child.fine_count;
+            contains_boundary |= child.contains_boundary;
+            end += 1;
+        }
+        let index = nodes.len() as u32;
+        nodes.push(QuadNode {
+            sum,
+            fine_count,
+            children: child_indices,
+            residual_sq: node_moments.residual_sq(),
+            contains_boundary,
+        });
+        next.push((parent_code, index, node_moments));
+        start = end;
+    }
+    next
 }
 
 /// Select at most `budget` quadtree nodes as output vertices, each becoming one
 /// vertex.
 ///
-/// Phase 1 refines every branch touching the footprint edge down to fine cells
-/// so the boundary keeps its shape instead of collapsing into a few large
-/// triangles - but only while the budget has room for the extra vertices a
-/// split introduces. `count` tracks the eventual active-node total (the roots,
-/// plus one extra per split beyond the node it replaces), so descent stops
-/// before it can exceed `budget`; a fragmented footprint that makes nearly
-/// every cell a boundary cell then refines only as far as the budget allows
+/// Phase 1 refines every branch touching the footprint edge down to fine cells,
+/// one level at a time across the whole tree, so the boundary keeps its shape
+/// instead of collapsing into a few large triangles - but only while the budget
+/// has room for the extra vertices a split introduces. `count` tracks the
+/// eventual active-node total (the roots, plus one extra per split beyond the
+/// node it replaces), so descent stops before it can exceed `budget`; a
+/// fragmented footprint that makes nearly every cell a boundary cell then
+/// refines only as far as the budget allows, evenly across the footprint,
 /// rather than blowing past it. Phase 2 spends any remaining budget refining the
 /// highest residual-per-vertex interior nodes.
 fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
@@ -786,16 +984,41 @@ fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
     // The eventual active-node count: descent replaces one prospective vertex
     // with its occupied children, a net gain of `occupied - 1`.
     let mut count = tree.roots.len();
-    let mut stack: Vec<usize> = tree.roots.iter().map(|&root| root as usize).collect();
-    while let Some(node) = stack.pop() {
-        let entry = &tree.nodes[node];
-        let occupied = entry.child_indices().count();
-        if entry.contains_boundary && entry.has_children() && count + (occupied - 1) <= budget {
-            count += occupied - 1;
-            stack.extend(entry.child_indices());
-        } else {
+    // Descend a whole level at a time. A depth-first walk spends the entire
+    // budget fully refining whichever branch it reaches first, leaving one
+    // patch of the cloud dense and the rest a handful of huge triangles.
+    // Frontiers stay in Morton order, since each is its parents' children in turn.
+    let mut frontier: Vec<usize> = tree.roots.iter().map(|&root| root as usize).collect();
+    while !frontier.is_empty() {
+        let added = |node: usize| tree.nodes[node].child_indices().count().saturating_sub(1);
+        let (refine, settled): (Vec<usize>, Vec<usize>) = frontier.iter().partition(|&&node| tree.nodes[node].contains_boundary && tree.nodes[node].has_children());
+        for node in settled {
             active[node] = true;
         }
+        let level_cost: usize = refine.iter().map(|&node| added(node)).sum();
+        if count + level_cost <= budget {
+            count += level_cost;
+            frontier = refine.iter().flat_map(|&node| tree.nodes[node].child_indices()).collect();
+            continue;
+        }
+        // The level does not fit: split an evenly spaced subset of it so the
+        // leftover budget is spread across the footprint rather than spent on
+        // the first nodes in Morton order, which all sit in one corner.
+        let spare = budget - count;
+        let mut credit = 0.0;
+        for node in refine {
+            credit += spare as f64 / level_cost as f64 * added(node) as f64;
+            if credit >= added(node) as f64 && count + added(node) <= budget {
+                credit -= added(node) as f64;
+                count += added(node);
+                for child in tree.nodes[node].child_indices() {
+                    active[child] = true;
+                }
+            } else {
+                active[node] = true;
+            }
+        }
+        break;
     }
 
     // Phase 2 - residual: refine the highest error-per-vertex interior nodes
@@ -863,7 +1086,8 @@ fn adaptive_quadtree_subsample_terrain(
     // cloud into more cells.
     let candidate_target = max_points.saturating_mul(candidate_multiplier.max(1) as usize).max(4);
     let fine_size = choose_terrain_cell_size(points, min, area, candidate_target, finite_count, cancel)?;
-    let cells = bin_terrain_cells(points, min, fine_size, cancel)?;
+    let grid = CellGrid::new(min, extent, fine_size, points.len());
+    let cells = bin_terrain_cells(points, &grid, cancel)?;
     if cancel.is_cancelled() {
         anyhow::bail!("Terrain TIN reconstruction cancelled");
     }
@@ -878,12 +1102,12 @@ fn adaptive_quadtree_subsample_terrain(
     // for well-conditioned plane fits, and a boundary flag (adjacent to an empty
     // cell). Sort by Morton code so quadtree children are contiguous.
     let occupied = &occupancy.cells;
-    let mut leaves: Vec<(u64, PlaneMoments, DVec3, bool)> = cells
+    let mut leaves: Vec<(u64, DVec3, bool)> = cells
         .par_iter()
         .map(|(&key, &(sum, count))| {
-            let rebased = sum.mean(count) - min;
+            let rebased = grid.mean(key, &sum, count) - min;
             let boundary = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| !occupied.contains(&(key.0 + dx, key.1 + dy)));
-            (morton_code(key.0, key.1), PlaneMoments::from_point(rebased), rebased, boundary)
+            (morton_code(key.0, key.1), rebased, boundary)
         })
         .collect();
     drop(cells);
@@ -891,7 +1115,7 @@ fn adaptive_quadtree_subsample_terrain(
 
     if leaves.len() <= max_points {
         // The candidate grid already fits the budget; keep every fine cell.
-        let vertices = leaves.into_iter().map(|(_, _, point, _)| point + min).collect();
+        let vertices = leaves.into_iter().map(|(_, point, _)| point + min).collect();
         return Ok((vertices, Some(occupancy)));
     }
 

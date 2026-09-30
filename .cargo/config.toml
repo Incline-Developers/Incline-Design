@@ -8,7 +8,10 @@ rustflags = [
     # Unwinding is unsupported on wasm; keep abort here while the release
     # profile leaves panic = "unwind" for native builds (job panic recovery).
     '-C', 'panic=abort',
-    '-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals',
+    '-C', 'target-feature=+bulk-memory,+mutable-globals',
+    # Atomics is unstable; enable it through the nightly target modifier so
+    # build-std uses the same feature without unstable -Ctarget-feature warnings.
+    '-Z', 'llvm-target-feature=+atomics',
     '-C', 'link-arg=--shared-memory',
     # Every Web Worker must instantiate the module with the same shared
     # WebAssembly.Memory. wasm-bindgen's thread transform therefore requires

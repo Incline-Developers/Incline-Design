@@ -11,12 +11,17 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     model::{
-        block_model::{BlockBounds, BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, color_variable_default},
+        block_model::{
+            BlockBounds, BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, block_bounds_key, block_world_corners, color_variable_default,
+        },
         formats::mesh_data,
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
     },
-    rendering::{BlockInstance, SurfaceVertex},
+    rendering::{
+        BlockInstance, SurfaceVertex,
+        graphics::{frustum::OrientedBox, make_translucent},
+    },
     ui::state::EditorState,
 };
 
@@ -27,7 +32,7 @@ const HIDDEN_BLOCK_GRADE: f32 = -2.0;
 /// Grades below this are discarded by `block_model.wgsl` (`grade < -1.5`).
 /// Geometry building must treat such blocks as absent - a discarded block
 /// leaves a hole, so it can't be allowed to cull its neighbours' faces.
-use super::block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, is_hidden_block_grade, make_translucent, ramp_alpha};
+use super::block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, is_hidden_block_grade, ramp_alpha};
 
 #[derive(Clone, Copy)]
 enum BlockSurfaceSelection {
@@ -37,7 +42,22 @@ enum BlockSurfaceSelection {
 }
 
 pub(crate) struct CachedTriangulationGpu {
-    mesh: std::sync::Weak<mesh_data::Triangulation>,
+    /// The mesh these buffers were built from, held so the geometry can be
+    /// recognised rather than assumed.
+    ///
+    /// Everything else here is style, and style is all this cache used to have
+    /// to watch: a surface's geometry only ever arrived or left, so an entry
+    /// under a live id was always built from the mesh that id still had. A
+    /// coordinate conversion breaks that - it rewrites a mesh in place, under
+    /// the same id - and without something to compare, the cache would go on
+    /// drawing the vertices it first uploaded. Held by `Arc` rather than
+    /// compared by address alone so the allocation cannot be freed and a new
+    /// mesh land on the same address.
+    mesh: std::sync::Arc<crate::model::formats::mesh_data::Triangulation>,
+    /// The floating origin the chunk offsets, bounds and edge instances were
+    /// built against. A fit to extents moves it; the surface vertices are
+    /// chunk-local and survive that, so only the offsets are rewritten.
+    scene_origin: DVec3,
     flitch_style: Option<crate::model::FlitchStyle>,
     depth_shade: Option<[f64; 2]>,
     /// The scene origin the depth range was reduced by. Rebasing moves it,
@@ -57,23 +77,49 @@ pub(crate) struct CachedTriangulationGpu {
     pub(crate) edge_width: f32,
 }
 
+/// Last main-viewport frame's surface draw after chunk culling, for the
+/// developer surface-chunk readout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SurfaceRenderStats {
+    /// Faces in the chunks that survived frustum culling.
+    pub(crate) drawn_faces: u64,
+    /// Every face in the visible surfaces.
+    pub(crate) total_faces: u64,
+    /// Chunks drawn this frame, and every chunk in the visible surfaces.
+    pub(crate) drawn_chunks: u32,
+    pub(crate) total_chunks: u32,
+}
+
 pub(crate) struct CachedSurfaceChunk {
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) index_buffer: wgpu::Buffer,
     pub(crate) index_count: u32,
-    /// Scene-origin-relative AABB, for per-chunk frustum culling. Vertex
-    /// positions are stored relative to the chunk's own AABB centre instead
-    /// (small magnitudes keep f32 interpolation precise far from the scene
-    /// origin); the shader re-adds the scene-relative centre from the chunk
-    /// uniform in `chunk_bind_group`.
-    pub(crate) bounds_min: Vec3,
-    pub(crate) bounds_max: Vec3,
+    /// Scene-origin-relative bounding box, for per-chunk frustum culling:
+    /// fitted to the chunk's principal axes, so an inclined wall gets a thin
+    /// tilted slab (see [`super::bounds::fit_chunk_box`]). Vertex positions are stored
+    /// relative to the chunk's own AABB centre instead (small magnitudes keep
+    /// f32 interpolation precise far from the scene origin); the shader
+    /// re-adds the scene-relative centre from the chunk uniform in
+    /// `chunk_bind_group`.
+    pub(crate) bounds: OrientedBox,
     /// Uniform bind group (group 2) holding this chunk's scene-origin-relative
     /// rebase offset; the bind group keeps the buffer alive.
     pub(crate) chunk_bind_group: wgpu::BindGroup,
+    /// The buffer behind `chunk_bind_group`, rewritten when the scene origin moves.
+    chunk_buffer: wgpu::Buffer,
+    /// World-space box centre and local origin, kept in `f64` so a rebase can
+    /// recompute the scene-relative values without touching the vertices.
+    world_box_center: DVec3,
+    world_origin: DVec3,
     /// A `SurfaceStyle` bind group holding a distinct per-chunk debug colour,
     /// bound instead of the mesh colour when the chunk-debug view is on.
     pub(crate) debug_style_bind_group: wgpu::BindGroup,
+    /// The buffer behind `debug_style_bind_group`, rewritten with the
+    /// surface's wireframe so selection still shows in the debug view.
+    debug_style_buffer: wgpu::Buffer,
+    /// The colour behind `debug_style_bind_group`, which the bounding-box
+    /// debug view outlines the chunk in so box and fill match.
+    pub(crate) debug_color: [f32; 4],
 }
 
 pub(crate) struct CachedEdgeChunk {
@@ -94,8 +140,12 @@ pub(crate) struct EdgeInstance {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SurfaceStyleUniform {
     color: [f32; 4],
+    /// x: raster blend opacity; y: in-shader wireframe width in pixels.
     params: [f32; 4],
+    wire_color: [f32; 4],
     pattern_color: [f32; 4],
+    /// x: hatch pattern (0 clear, 1 slashes, 2 crosses); remaining lanes reserved.
+    pattern: [f32; 4],
 }
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
@@ -1029,6 +1079,22 @@ fn surface_chunks_key(scene_origin: DVec3, block_model: &OpenBlockModel, force_t
     scene_origin.x.to_bits().hash(&mut hasher);
     scene_origin.y.to_bits().hash(&mut hasher);
     scene_origin.z.to_bits().hash(&mut hasher);
+    // Where the model sits and what it holds. Neither used to be able to
+    // change under a live id - a block model arrived placed and left placed -
+    // so neither was keyed. A coordinate conversion rewrites both in place,
+    // and without them here the chunks would stay where they were first built.
+    // The block source is identified by its allocation and length rather than
+    // hashed through: the point is to notice a different buffer, not to read
+    // several million cells every frame.
+    for value in block_model.model.origin().to_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    for value in block_model.model.rotation().to_cols_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    (std::sync::Arc::as_ptr(&block_model.blocks) as usize).hash(&mut hasher);
+    block_model.blocks.len().hash(&mut hasher);
+
     force_translucent.hash(&mut hasher);
     has_partial_alpha_stops.hash(&mut hasher);
     hidden_fingerprint.hash(&mut hasher);
@@ -1122,6 +1188,11 @@ fn upload_surface_chunks(device: &wgpu::Device, chunks: Vec<SurfaceChunkCpu>) ->
 
 fn volume_asset_key(block_model: &OpenBlockModel) -> u64 {
     let mut hasher = DefaultHasher::new();
+    // The voxels are built in the model's own frame, so a move does not touch
+    // them - but a conversion carrying a scale factor replaces the cells
+    // themselves, and that this asset is built from.
+    (std::sync::Arc::as_ptr(&block_model.blocks) as usize).hash(&mut hasher);
+    block_model.blocks.len().hash(&mut hasher);
     block_model.active_color_variable.hash(&mut hasher);
     block_model.hide_empty_color_values.hash(&mut hasher);
     let ramp = block_model.normalized_ramp();
@@ -1252,6 +1323,10 @@ impl TriangulationGpuCache {
         // A drape survives unloading and hiding the raster, so the texture a
         // surface actually samples is the drape filtered by what can be drawn.
         let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
+        // With fragment barycentrics the surface shader draws its own edges and
+        // the instanced edge chunks are never built: on a dense surface they
+        // cost six vertices per edge, several times the surface itself.
+        let shader_wireframe = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
         let loaded: HashSet<_> = triangulations.iter().chain(solid_preview).filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
         for triangulation in triangulations.iter().chain(solid_preview) {
@@ -1285,14 +1360,7 @@ impl TriangulationGpuCache {
             } else {
                 0.0
             };
-
-            if self
-                .meshes
-                .get(&triangulation.id)
-                .is_some_and(|cached| cached.mesh.as_ptr() != std::sync::Arc::as_ptr(&triangulation.mesh))
-            {
-                self.meshes.remove(&triangulation.id);
-            }
+            let instanced_edges = edge_width > 0.0 && !shader_wireframe;
             let pattern = triangulation.flitch_style.map_or(0.0, |style| match style.pattern {
                 crate::model::FillStyle::Crosses => 2.0,
                 crate::model::FillStyle::Slashes => 1.0,
@@ -1305,33 +1373,59 @@ impl TriangulationGpuCache {
                 .depth_shade
                 .filter(|[low, high]| high > low)
                 .map_or([0.0, 0.0], |[low, high]| [(low - scene_origin.z) as f32, (high - scene_origin.z) as f32]);
+            let surface_style = SurfaceStyleUniform {
+                color,
+                params: [
+                    if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
+                    if shader_wireframe { edge_width } else { 0.0 },
+                    depth_low,
+                    depth_high,
+                ],
+                wire_color: line_color,
+                pattern_color,
+                pattern: [pattern, 0.0, 0.0, 0.0],
+            };
+
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
+                // A different mesh under the same id: the vertices on the GPU
+                // are not this surface's any more and have to be replaced.
+                let geometry_dirty = !std::sync::Arc::ptr_eq(&cached.mesh, &triangulation.mesh);
+                let origin_dirty = cached.scene_origin != scene_origin;
+                if origin_dirty && !geometry_dirty {
+                    for chunk in &mut cached.surface_chunks {
+                        chunk.rebase(queue, scene_origin);
+                    }
+                }
+                cached.scene_origin = scene_origin;
+                // Rebuild edge geometry when edges flip between present and
+                // absent, or when the origin baked into the instances moved.
+                let edge_geom_dirty = geometry_dirty || (cached.edge_width == 0.0) != (edge_width == 0.0) || (origin_dirty && !cached.edge_chunks.is_empty());
+                let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
                 let surface_dirty = cached.depth_shade != triangulation.depth_shade
                     || (triangulation.depth_shade.is_some() && cached.depth_origin_z != scene_origin.z)
                     || cached.flitch_style != triangulation.flitch_style
                     || cached.color != color
                     || cached.raster_texture != raster_texture
-                    || cached.raster_opacity != triangulation.raster_opacity;
-                // Rebuild edge geometry only when edges flip between present and absent.
-                let edge_geom_dirty = (cached.edge_width == 0.0) != (edge_width == 0.0);
-                let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
+                    || cached.raster_opacity != triangulation.raster_opacity
+                    || (shader_wireframe && edge_style_dirty);
 
-                if !surface_dirty && !edge_geom_dirty && !edge_style_dirty {
+                if !geometry_dirty && !surface_dirty && !edge_geom_dirty && !edge_style_dirty {
                     continue;
                 }
 
+                if geometry_dirty {
+                    cached.surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                    cached.edge_chunks.clear();
+                    cached.mesh = triangulation.mesh.clone();
+                }
+
+                if surface_dirty || geometry_dirty {
+                    for chunk in &cached.surface_chunks {
+                        chunk.write_debug_style(queue, &surface_style);
+                    }
+                }
                 if surface_dirty {
-                    let style = SurfaceStyleUniform {
-                        color,
-                        params: [
-                            if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
-                            pattern,
-                            depth_low,
-                            depth_high,
-                        ],
-                        pattern_color,
-                    };
-                    queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
+                    queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&surface_style));
                     cached.flitch_style = triangulation.flitch_style;
                     cached.depth_shade = triangulation.depth_shade;
                     cached.depth_origin_z = scene_origin.z;
@@ -1340,7 +1434,10 @@ impl TriangulationGpuCache {
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
 
-                if edge_geom_dirty && edge_width > 0.0 && cached.edge_chunks.is_empty() {
+                if edge_geom_dirty && origin_dirty {
+                    cached.edge_chunks.clear();
+                }
+                if (edge_geom_dirty || geometry_dirty) && instanced_edges && cached.edge_chunks.is_empty() {
                     cached.edge_chunks = build_edge_chunks(device, scene_origin, triangulation);
                 }
 
@@ -1359,17 +1456,10 @@ impl TriangulationGpuCache {
                 if surface_chunks.is_empty() {
                     continue;
                 }
+                for chunk in &surface_chunks {
+                    chunk.write_debug_style(queue, &surface_style);
+                }
 
-                let surface_style = SurfaceStyleUniform {
-                    color,
-                    params: [
-                        if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
-                        pattern,
-                        depth_low,
-                        depth_high,
-                    ],
-                    pattern_color,
-                };
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Surface Style Uniform"),
                     contents: bytemuck::bytes_of(&surface_style),
@@ -1384,7 +1474,7 @@ impl TriangulationGpuCache {
                     label: Some("Surface Style Bind Group"),
                 });
 
-                let edge_chunks = if edge_width > 0.0 {
+                let edge_chunks = if instanced_edges {
                     build_edge_chunks(device, scene_origin, triangulation)
                 } else {
                     Vec::new()
@@ -1411,7 +1501,8 @@ impl TriangulationGpuCache {
                 self.meshes.insert(
                     triangulation.id,
                     CachedTriangulationGpu {
-                        mesh: std::sync::Arc::downgrade(&triangulation.mesh),
+                        mesh: triangulation.mesh.clone(),
+                        scene_origin,
                         flitch_style: triangulation.flitch_style,
                         depth_shade: triangulation.depth_shade,
                         depth_origin_z: scene_origin.z,
@@ -1433,16 +1524,10 @@ impl TriangulationGpuCache {
     }
 }
 
-/// Target triangles per spatial chunk. Chunks are the granularity of frustum
-/// culling (and per-chunk debug colouring), so this trades culling precision
-/// (smaller = tighter) against per-chunk draw-call/AABB-test overhead
-/// (smaller = more). ~100k keeps a multi-million-face mesh in tens of chunks.
-const TARGET_FACES_PER_CHUNK: usize = 100_000;
-
 /// Upload indexed surface geometry as spatially-coherent chunks, walking faces
-/// in the precomputed XY-Morton order (`triangulation.surface_face_order`,
-/// built off-thread) so each chunk covers a compact region with a tight AABB
-/// the renderer can frustum-cull - rather than the old size-only split whose
+/// in the precomputed kd order (`triangulation.surface_face_order`, built
+/// off-thread) so each chunk covers a compact box with a tight AABB the
+/// renderer can frustum-cull - rather than the old size-only split whose
 /// chunks each spanned the whole mesh. No sorting happens here, so a huge
 /// mesh's first upload doesn't hitch the render thread. Colour is NOT baked in;
 /// it lives in a per-draw SurfaceStyle uniform (plus a per-chunk debug-colour
@@ -1473,12 +1558,14 @@ fn build_surface_chunks(
     let order = &triangulation.surface_face_order;
 
     // Chunk size: the target, capped so a chunk's vertex/index buffers fit the
-    // device limit and local indices stay within u32.
+    // device limit and local indices stay within u32. The order's leaves are
+    // exactly `SURFACE_CHUNK_FACES` long, so only the uncapped size gets its
+    // compact boxes - the cap is a safety net no real device reaches.
     let limit = (device.limits().max_buffer_size as usize).min(MAX_SURFACE_CHUNK_BYTES);
     let max_indices = limit / size_of::<u32>();
     let max_vertices = limit / size_of::<SurfaceVertex>();
     let faces_cap = (max_indices / 3).min(max_vertices / 3).min(u32::MAX as usize / 3).max(1);
-    let faces_per_chunk = TARGET_FACES_PER_CHUNK.min(faces_cap).max(1);
+    let faces_per_chunk = crate::model::triangulation::SURFACE_CHUNK_FACES.min(faces_cap).max(1);
 
     let mut chunks = Vec::new();
     // Dense sentinel remap reused across chunks: remap[global] == u32::MAX means
@@ -1570,14 +1657,20 @@ fn build_surface_chunks(
             provoking_claimed[provoking] = true;
             indices.extend_from_slice(&local);
         }
+        let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
+        let (world_box_center, axes, half_extents) = super::bounds::fit_chunk_box(
+            &vertices,
+            |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
+            &[mean_normal],
+            chunk_origin,
+            world_max - world_min,
+        );
         if let Some(chunk) = upload_surface_chunk(
             device,
             &vertices,
             &indices,
-            (world_min - scene_origin).as_vec3(),
-            (world_max - scene_origin).as_vec3(),
-            (chunk_origin - scene_origin).as_vec3(),
-            chunk_origin,
+            (world_box_center, axes, half_extents, chunk_origin),
+            scene_origin,
             chunk_index,
             surface_style_layout,
             surface_chunk_layout,
@@ -1604,7 +1697,7 @@ fn build_surface_chunks(
 }
 
 /// A distinct, well-spread debug colour per chunk index (golden-ratio hue).
-fn chunk_debug_color(chunk_index: usize) -> [f32; 4] {
+pub(crate) fn chunk_debug_color(chunk_index: usize) -> [f32; 4] {
     let hue = (chunk_index as f32 * 0.618_034).fract();
     let [r, g, b] = hsv_to_rgb(hue, 0.65, 0.95);
     [r, g, b, 1.0]
@@ -1639,10 +1732,8 @@ fn upload_surface_chunk(
     device: &wgpu::Device,
     vertices: &[SurfaceVertex],
     indices: &[u32],
-    bounds_min: Vec3,
-    bounds_max: Vec3,
-    chunk_offset: Vec3,
-    chunk_origin: DVec3,
+    (world_box_center, axes, half_extents, world_origin): (DVec3, [Vec3; 3], Vec3, DVec3),
+    scene_origin: DVec3,
     chunk_index: usize,
     surface_style_layout: &wgpu::BindGroupLayout,
     surface_chunk_layout: &wgpu::BindGroupLayout,
@@ -1676,15 +1767,18 @@ fn upload_surface_chunk(
         usage: wgpu::BufferUsages::INDEX,
     });
     // Per-chunk debug colour uniform; the bind group keeps the buffer alive.
+    let debug_color = chunk_debug_color(chunk_index);
     let debug_style = SurfaceStyleUniform {
-        color: chunk_debug_color(chunk_index),
+        color: debug_color,
         params: [0.0; 4],
+        wire_color: [0.0; 4],
         pattern_color: [0.0; 4],
+        pattern: [0.0; 4],
     };
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),
         contents: bytemuck::bytes_of(&debug_style),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let debug_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_style_layout,
@@ -1695,20 +1789,10 @@ fn upload_surface_chunk(
         label: Some("Chunk Debug Style Bind Group"),
     });
     // Scene-origin-relative rebase offset re-added in the vertex shader.
-    let chunk_uniform: [f32; 8] = [
-        chunk_offset.x,
-        chunk_offset.y,
-        chunk_offset.z,
-        0.0,
-        chunk_origin.x.rem_euclid(5.0) as f32,
-        chunk_origin.y.rem_euclid(5.0) as f32,
-        chunk_origin.z.rem_euclid(5.0) as f32,
-        0.0,
-    ];
     let chunk_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Surface Chunk Offset Uniform"),
-        contents: bytemuck::bytes_of(&chunk_uniform),
-        usage: wgpu::BufferUsages::UNIFORM,
+        contents: bytemuck::bytes_of(&chunk_offset_uniform(world_origin, scene_origin)),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let chunk_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_chunk_layout,
@@ -1722,11 +1806,50 @@ fn upload_surface_chunk(
         vertex_buffer,
         index_buffer,
         index_count: indices.len() as u32,
-        bounds_min,
-        bounds_max,
+        bounds: OrientedBox {
+            center: (world_box_center - scene_origin).as_vec3(),
+            axes,
+            half_extents,
+        },
         chunk_bind_group,
+        chunk_buffer,
+        world_box_center,
+        world_origin,
         debug_style_bind_group,
+        debug_style_buffer,
+        debug_color,
     })
+}
+
+/// The chunk's scene-relative offset, then the hatch phase: its world origin
+/// reduced to the hatch period in `f64`, so the shader interpolates only local
+/// coordinates and close-up derivatives do not quantize at mine coordinates.
+fn chunk_offset_uniform(world_origin: DVec3, scene_origin: DVec3) -> [f32; 8] {
+    let offset = (world_origin - scene_origin).as_vec3();
+    let phase = |value: f64| value.rem_euclid(5.0) as f32;
+    [offset.x, offset.y, offset.z, 0.0, phase(world_origin.x), phase(world_origin.y), phase(world_origin.z), 0.0]
+}
+
+impl CachedSurfaceChunk {
+    /// Re-express this chunk against a new floating origin: a uniform write
+    /// and a box-centre subtraction, where a rebuild re-uploads every vertex.
+    fn rebase(&mut self, queue: &wgpu::Queue, scene_origin: DVec3) {
+        queue.write_buffer(&self.chunk_buffer, 0, bytemuck::bytes_of(&chunk_offset_uniform(self.world_origin, scene_origin)));
+        self.bounds.center = (self.world_box_center - scene_origin).as_vec3();
+    }
+
+    /// Carry the surface's in-shader wireframe into the debug colour uniform,
+    /// without the raster drape, which would hide the debug colour.
+    fn write_debug_style(&self, queue: &wgpu::Queue, surface_style: &SurfaceStyleUniform) {
+        let style = SurfaceStyleUniform {
+            color: self.debug_color,
+            params: [0.0, surface_style.params[1], 0.0, 0.0],
+            wire_color: surface_style.wire_color,
+            pattern_color: [0.0; 4],
+            pattern: [0.0; 4],
+        };
+        queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
+    }
 }
 
 fn build_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, triangulation: &OpenTriangulation) -> Vec<CachedEdgeChunk> {
@@ -2045,7 +2168,7 @@ fn build_block_model_surface_chunks(
                 // Chunk bounds are the scene-relative world AABB, so keep
                 // walking the block's rotated corners here (frustum culling /
                 // depth sort).
-                for corner in block_corners(model, block) {
+                for corner in block_world_corners(model, block) {
                     let scene_rel = (corner - scene_origin).as_vec3();
                     bounds_min = bounds_min.min(scene_rel);
                     bounds_max = bounds_max.max(scene_rel);
@@ -2415,7 +2538,7 @@ fn build_block_occupancy(block_model: &OpenBlockModel, drawn: &[bool]) -> BlockO
         }
         return BlockOccupancy::Lattice { lattice, bits };
     }
-    BlockOccupancy::Keys(drawn_blocks(block_model, drawn).map(block_key).collect())
+    BlockOccupancy::Keys(drawn_blocks(block_model, drawn).map(block_bounds_key).collect())
 }
 
 /// The blocks the shader draws, in `renderable_block_indices` order. `drawn`
@@ -2474,7 +2597,7 @@ impl BlockOccupancy {
                     DVec3::new(0.0, 0.0, size.z),
                 ];
                 neighbours.iter().all(|&delta| {
-                    let neighbour = block_key(BlockBounds {
+                    let neighbour = block_bounds_key(BlockBounds {
                         lower: block.lower + delta,
                         upper: block.upper + delta,
                     });
@@ -2518,7 +2641,7 @@ impl BlockOccupancy {
                 let size = block.upper - block.lower;
                 FACE_OFFSETS.map(|offset| {
                     let delta = DVec3::new(offset[0] as f64 * size.x, offset[1] as f64 * size.y, offset[2] as f64 * size.z);
-                    let neighbour = block_key(BlockBounds {
+                    let neighbour = block_bounds_key(BlockBounds {
                         lower: block.lower + delta,
                         upper: block.upper + delta,
                     });
@@ -2527,21 +2650,6 @@ impl BlockOccupancy {
             }
         }
     }
-}
-
-fn block_key(block: BlockBounds) -> [u64; 6] {
-    [
-        quantize(block.lower.x),
-        quantize(block.lower.y),
-        quantize(block.lower.z),
-        quantize(block.upper.x),
-        quantize(block.upper.y),
-        quantize(block.upper.z),
-    ]
-}
-
-fn quantize(value: f64) -> u64 {
-    (value * 1_000_000.0).round().to_bits()
 }
 
 fn is_empty_grade_value(value: f64, default: Option<f64>) -> bool {
@@ -2640,7 +2748,7 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
                 continue;
             }
         }
-        let corners = block_corners(&block_model.model, block);
+        let corners = block_world_corners(&block_model.model, block);
         for ([a, b], [face_a, face_b]) in BLOCK_EDGE_FACES {
             if !exposed[face_a] && !exposed[face_b] {
                 continue;
@@ -2661,19 +2769,4 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
         chunks.push(chunk);
     }
     chunks
-}
-
-fn block_corners(model: &crate::model::formats::block_model_data::BlockModelData, block: crate::model::block_model::BlockBounds) -> [DVec3; 8] {
-    let lo = block.lower;
-    let hi = block.upper;
-    [
-        model.local_to_world(DVec3::new(lo.x, lo.y, lo.z)),
-        model.local_to_world(DVec3::new(hi.x, lo.y, lo.z)),
-        model.local_to_world(DVec3::new(hi.x, hi.y, lo.z)),
-        model.local_to_world(DVec3::new(lo.x, hi.y, lo.z)),
-        model.local_to_world(DVec3::new(lo.x, lo.y, hi.z)),
-        model.local_to_world(DVec3::new(hi.x, lo.y, hi.z)),
-        model.local_to_world(DVec3::new(hi.x, hi.y, hi.z)),
-        model.local_to_world(DVec3::new(lo.x, hi.y, hi.z)),
-    ]
 }

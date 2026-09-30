@@ -1,5 +1,3 @@
-use glam::DVec3;
-
 use crate::{
     i18n::{tr, tr_format},
     model::{
@@ -10,7 +8,7 @@ use crate::{
     ui::{
         EditorState, UiCommand,
         state::OreFilterMode,
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label, selected_source_field},
     },
 };
 
@@ -26,33 +24,20 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             );
             ui.add_space(4.0);
 
-            let selected_label = editor
+            // The collection is the one that was selected when the dialog
+            // opened. It can still be unloaded or removed from under the
+            // dialog, which takes the run button with it.
+            let selected_dataset = editor
                 .kriging_drill_hole_id
-                .and_then(|id| drill_holes.iter().find(|dataset| dataset.id == id))
-                .map(|dataset| dataset.name.clone())
-                .unwrap_or_else(|| tr!(literal = "Choose Drill Holes"));
-            let dataset_changed = MenuFieldCombo::new(
-                "kriging_drill_holes",
+                .and_then(|id| drill_holes.iter().find(|dataset| dataset.state.loaded && dataset.id == id));
+            selected_source_field(
+                ui,
                 tr!(literal = "Drill Holes"),
-                &mut editor.kriging_drill_hole_id,
-                selected_label,
-                drill_holes.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
-            )
-            .help_text(tr!(literal = "Loaded Drill Holes collection containing numeric interval values."))
-            .show(ui)
-            .changed();
-
-            let selected_dataset = editor.kriging_drill_hole_id.and_then(|id| drill_holes.iter().find(|dataset| dataset.id == id));
-            if dataset_changed && let Some(dataset) = selected_dataset {
-                editor.kriging_variables = dataset
-                    .dataset
-                    .fields
-                    .iter()
-                    .find(|field| matches!(field.kind, DrillFieldKind::Numeric { .. }))
-                    .map(|field| vec![field.key.clone()])
-                    .unwrap_or_default();
-                initialise_grid_from_dataset(editor, dataset);
-            }
+                selected_dataset.map_or_else(|| tr!(literal = "No drill holes selected"), |dataset| dataset.name.clone()),
+                tr!(literal = "The selected Drill Holes collection, whose numeric intervals are estimated into \
+                 blocks. Close the dialog to estimate from a different one."),
+                220.0,
+            );
 
             let numeric_fields: Vec<_> = selected_dataset
                 .map(|dataset| dataset.dataset.fields.iter().filter(|field| matches!(field.kind, DrillFieldKind::Numeric { .. })).collect())
@@ -186,7 +171,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 ))
                 .show(ui);
 
-            let ready = editor.kriging_drill_hole_id.is_some()
+            let ready = selected_dataset.is_some()
                 && !editor.kriging_variables.is_empty()
                 && !editor.kriging_name_input.trim().is_empty()
                 && block_count.is_some()
@@ -260,51 +245,27 @@ fn vector_fields(ui: &mut egui::Ui, label: &str, help_text: &str, value: &mut gl
     });
 }
 
-fn initialise_grid_from_dataset(editor: &mut EditorState, dataset: &OpenDrillHoleDataset) {
-    let Some((lower, upper)) = dataset.dataset.bounds else {
-        return;
-    };
-    let span = upper - lower;
-    let characteristic = span.max_element().max(1.0);
-    let padding = DVec3::splat(characteristic * 0.025);
-    editor.kriging_lower = lower - padding;
-    editor.kriging_upper = upper + padding;
-    editor.kriging_cell = DVec3::splat((characteristic / 25.0).max(0.001));
-    editor.kriging_range = (characteristic / 3.0).max(editor.kriging_cell.max_element());
-    if let Some(DrillFieldKind::Numeric { min, max }) = editor
-        .kriging_variables
-        .first()
-        .and_then(|variable| dataset.dataset.field(variable))
-        .map(|field| &field.kind)
-    {
-        let spread = max - min;
-        editor.kriging_sill = (spread * spread / 12.0).max(1.0e-6);
-    }
-}
-
 pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], commands: &mut Vec<UiCommand>) {
     let mut open = true;
     DragableMenu::new("create_ore_triangulation_dialog", tr!(literal = "Create Ore Triangulation"))
         .open(&mut open)
         .min_width(340.0)
         .show(ui.ctx(), |ui| {
-            let selected_label = editor
+            // The model is the one that was selected when the dialog opened,
+            // and can still be unloaded or removed from under it.
+            let selected_model = editor
                 .ore_block_model_id
-                .and_then(|id| block_models.iter().find(|model| model.id == id))
-                .map(|model| model.name.clone())
-                .unwrap_or_else(|| tr!(literal = "Choose a block model"));
-            MenuFieldCombo::new(
-                "ore_block_model",
+                .and_then(|id| block_models.iter().find(|model| model.state.loaded && model.id == id));
+            selected_source_field(
+                ui,
                 tr!(literal = "Block model"),
-                &mut editor.ore_block_model_id,
-                selected_label,
-                block_models.iter().map(|model| (Some(model.id), model.name.clone().into())),
-            )
-            .show(ui);
+                selected_model.map_or_else(|| tr!(literal = "No block model selected"), |model| model.name.clone()),
+                tr!(literal = "The selected block model, whose blocks are thresholded into a solid. \
+                 Close the dialog to threshold a different one."),
+                190.0,
+            );
 
-            let variables: Vec<String> = editor
-                .ore_block_model_id
-                .and_then(|id| block_models.iter().find(|model| model.id == id))
+            let variables: Vec<String> = selected_model
                 .map(|model| model.model.numeric_variables().into_iter().filter(|var| !var.special).map(|var| var.name.clone()).collect())
                 .unwrap_or_default();
             if !variables.is_empty() && !variables.contains(&editor.ore_variable) {
@@ -353,7 +314,7 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
 
             let min = editor.ore_min_input;
             let max = editor.ore_max_input;
-            let ready = editor.ore_block_model_id.is_some()
+            let ready = selected_model.is_some()
                 && !editor.ore_variable.is_empty()
                 && !editor.ore_name_input.trim().is_empty()
                 && min.is_finite()

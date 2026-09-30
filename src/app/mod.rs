@@ -51,8 +51,8 @@ use crate::userspace_error;
 use crate::{
     app::commands::file::PendingFileDialog,
     model::{
-        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
-        block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
+        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
+        block_model::{BlockModelSource, OpenBlockModel},
         drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
@@ -70,6 +70,35 @@ pub(crate) const PICK_THRESHOLD_PX: f32 = 8.0;
 /// Move tool. Deliberately tight - just outside the drawn vertex marker - so a
 /// vertex only grabs when the cursor is genuinely on it.
 pub(crate) const MOVE_VERTEX_PICK_PX: f32 = 6.0;
+
+/// Ceiling on how often a browser drag-resize reconfigures the surface and
+/// rebuilds its attachments, whatever the configured resize cap. Matches the
+/// lowest cap the properties panel offers, so it never contradicts a setting
+/// the user can see.
+const WEB_RESIZE_FRAME_RATE_CAP: u32 = 20;
+
+/// How still the window must be for a drag-resize to count as finished.
+const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(120);
+
+/// Step the surface size is rounded up to while a drag is still moving.
+/// Wide enough that dragging an edge crosses few steps, narrow enough that
+/// the browser scaling the slightly oversized buffer onto the canvas is not
+/// noticeable - at most this many pixels across the window.
+const DRAG_SURFACE_QUANTUM: u32 = 64;
+
+/// The surface extent to configure mid-drag, along one axis.
+///
+/// Grows as soon as the window outgrows the buffer, but shrinks only once the
+/// window is two steps smaller, so jiggling an edge back and forth across a
+/// step boundary does not reallocate on every frame. Returning the current
+/// extent unchanged is what makes the reconfiguration a no-op.
+fn drag_surface_extent(current: u32, requested: u32) -> u32 {
+    if requested > current || current.saturating_sub(requested) >= 2 * DRAG_SURFACE_QUANTUM {
+        requested.div_ceil(DRAG_SURFACE_QUANTUM) * DRAG_SURFACE_QUANTUM
+    } else {
+        current
+    }
+}
 
 fn rate_interval(rate: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(rate.clamp(1, 1000)))
@@ -296,6 +325,8 @@ pub(crate) struct App<'a> {
     web_event_loop_proxy: Option<EventLoopProxy<AppEvent>>,
     #[cfg(target_arch = "wasm32")]
     browser_saves_pending: HashSet<u32>,
+    /// Counts workspace replacements, which is where runtime ids restart.
+    workspace_generation: u64,
     #[cfg(target_arch = "wasm32")]
     browser_deletes_pending: HashSet<crate::model::project::ProjectId>,
     #[cfg(target_arch = "wasm32")]
@@ -310,7 +341,16 @@ pub(crate) struct App<'a> {
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
+    /// When the last resize event arrived, for deciding whether a drag is
+    /// still moving. See `take_resize_to_apply`.
+    last_resize_event: Option<Instant>,
     last_render_time: Option<Instant>,
+    /// When the last rendered frame finished, and when a redraw was first
+    /// wanted after it: the frame counter's clock. See `record_frame_time`.
+    last_frame_end: Option<Instant>,
+    frame_demanded_at: Option<Instant>,
+    surface_retry_pending: bool,
+    slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
@@ -323,7 +363,6 @@ pub(crate) struct App<'a> {
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
     block_models: Vec<OpenBlockModel>,
-    active_block_model: Option<BlockModelId>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
     next_drill_hole_id: u64,
@@ -489,6 +528,7 @@ impl<'a> Default for App<'a> {
             web_event_loop_proxy: None,
             #[cfg(target_arch = "wasm32")]
             browser_saves_pending: HashSet::new(),
+            workspace_generation: 0,
             #[cfg(target_arch = "wasm32")]
             browser_deletes_pending: HashSet::new(),
             #[cfg(target_arch = "wasm32")]
@@ -500,7 +540,12 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
             pending_resize: None,
+            last_resize_event: None,
             last_render_time: None,
+            last_frame_end: None,
+            frame_demanded_at: None,
+            surface_retry_pending: false,
+            slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
@@ -511,7 +556,6 @@ impl<'a> Default for App<'a> {
             active_triangulation: None,
             next_triangulation_id: 0,
             block_models: Vec::new(),
-            active_block_model: None,
             next_block_model_id: 0,
             drill_holes: Vec::new(),
             next_drill_hole_id: 0,
@@ -637,7 +681,11 @@ impl<'a> App<'a> {
             MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
-            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
+            MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
+            MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
+            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
+            MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
+            MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
@@ -691,6 +739,19 @@ impl<'a> App<'a> {
         }
         self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
         self.editor.active_workspace = self.editor.workspace_order[0];
+        // A definition naming a parent that is not in the list, or itself,
+        // cannot be resolved and would fail on every use; it is dropped on the
+        // way in so the rest of the list still works.
+        let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
+        self.editor.survey.definitions = definitions
+            .iter()
+            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .cloned()
+            .collect();
+        self.editor.survey.local_system = config
+            .mine_coordinate_system
+            .filter(|name| self.editor.survey.definitions.iter().any(|definition| &definition.name == name));
+        self.refresh_axis_names();
         // The status bar's picker switches this live afterwards; here it just
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
@@ -698,8 +759,8 @@ impl<'a> App<'a> {
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
+        self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_xy_grid = config.show_xy_grid;
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
@@ -710,8 +771,9 @@ impl<'a> App<'a> {
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
         self.editor.frame_counter_enabled = config.frame_counter_enabled;
-        self.editor.debug_chunk_coloring = config.debug_chunk_coloring;
+        self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
+        self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;
         self.editor.plan_orbit_sensitivity = io::finite_clamped(config.plan_orbit_sensitivity, 0.0001, 0.02, io::default_plan_orbit_sensitivity());
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());
         self.editor.plan_invert_vertical_look = config.plan_invert_vertical_look;
@@ -785,6 +847,18 @@ impl<'a> App<'a> {
 
     fn active_document(&self) -> &Document {
         self.workspace.active_document().unwrap_or(&self.empty_document)
+    }
+
+    /// What the cursor is over at the standard pick threshold, honouring the
+    /// editor's hidden and frozen sets and x-ray.
+    pub(crate) fn pick_under_cursor(&self) -> Option<(SceneEntityId, DVec3)> {
+        self.graphics.as_ref()?.pick_at_cursor(
+            PICK_THRESHOLD_PX,
+            &self.triangulations,
+            &self.editor.hidden_handles,
+            &self.editor.frozen_handles,
+            self.editor.xray_enabled,
+        )
     }
 
     pub(crate) fn activate_project_for_object(&mut self, object_id: ObjectId) -> bool {
@@ -960,6 +1034,7 @@ impl<'a> App<'a> {
         let project = self.workspace.projects.get_mut(index)?;
         let mut target = EditTarget {
             document: &mut project.project.document,
+            folders: &mut project.project.folders,
             content: &mut project.content,
             triangulations: &mut self.triangulations,
             block_models: &mut self.block_models,
@@ -1040,6 +1115,7 @@ impl<'a> App<'a> {
             SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id),
             SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
             SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id),
+            SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id),
         };
         let missing: Vec<SceneEntityId> = self
             .editor
@@ -1061,9 +1137,6 @@ impl<'a> App<'a> {
         }
         if self.active_triangulation.is_some_and(|id| !self.triangulations.iter().any(|item| item.id == id)) {
             self.active_triangulation = None;
-        }
-        if self.active_block_model.is_some_and(|id| !self.block_models.iter().any(|item| item.id == id)) {
-            self.active_block_model = None;
         }
         if self.editor.active_drill_hole.is_some_and(|id| !self.drill_holes.iter().any(|item| item.id == id)) {
             self.editor.active_drill_hole = None;
@@ -1147,6 +1220,7 @@ impl<'a> App<'a> {
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
         SaveToken {
+            folders: Box::new(self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default()),
             triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             block_models: self.block_models.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
@@ -1210,6 +1284,12 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // A browser save already holds its own snapshot and still owes the
+        // completion handler a result; cancelling it would strand the pending
+        // flag and lose a save the user asked for.
+        #[cfg(target_arch = "wasm32")]
+        self.cancel_jobs(|key| !matches!(key, jobs::JobKey::BrowserProjectSave { .. }));
+        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_jobs(|_| true);
         #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
         {
@@ -1249,13 +1329,16 @@ impl<'a> App<'a> {
         }
 
         self.workspace = ProjectStore::default();
+        // Runtime ids restart at one here; in-flight work must not follow.
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        #[cfg(target_arch = "wasm32")]
+        self.browser_saves_pending.clear();
         self.history = crate::model::History::new();
         self.triangulations.clear();
         self.next_triangulation_id = 0;
         self.active_triangulation = None;
         self.block_models.clear();
         self.next_block_model_id = 0;
-        self.active_block_model = None;
         self.drill_holes.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
@@ -1292,6 +1375,7 @@ impl<'a> App<'a> {
     }
 
     fn clear_editor_transient_state(&mut self) {
+        self.clear_rotation_centre();
         // Resolve document-backed drafts while their source identity is still
         // available. These helpers locate the owning project explicitly, so
         // this is also safe when a newly opened project has already become
@@ -1307,6 +1391,8 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
+        // A section's plane and slab are in the coordinates of the project it was cut from, so it is left whenever the active project changes.
+        self.leave_slice_mode();
         self.editor.clear_project_transients();
         self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.
@@ -1322,18 +1408,86 @@ impl<'a> App<'a> {
         self.editor.rotate_preview_active = false;
     }
 
+    /// The surface size to configure for a pending resize, if one is due.
+    ///
+    /// Every configuration hands the browser a new canvas drawing buffer and
+    /// swapchain, and those are released on its collection schedule rather
+    /// than ours - a fast drag can outrun it and exhaust the tab's GPU memory
+    /// even though the attachments we own are destroyed promptly. So while a
+    /// drag is still moving the surface is configured to a coarsely rounded
+    /// size and reused until the window outgrows it, which makes most frames
+    /// of a drag reconfigure nothing at all. The browser scales that slightly
+    /// oversized buffer onto the canvas, and the exact size is applied once
+    /// the drag settles. Native windowing has no such collection delay, so it
+    /// always takes the exact size.
+    fn take_resize_to_apply(&mut self, now: Instant) -> Option<winit::dpi::PhysicalSize<u32>> {
+        let requested = self.pending_resize?;
+        let settled = self.last_resize_event.is_none_or(|last| now.duration_since(last) >= RESIZE_SETTLE_DELAY);
+        let current = self.graphics.as_ref().map(Graphics::surface_size)?;
+        if settled || !cfg!(target_arch = "wasm32") {
+            self.pending_resize = None;
+            return Some(requested);
+        }
+        // Left pending deliberately: the exact size still has to land when the
+        // drag stops, and `about_to_wait` schedules the wake-up for it.
+        Some(winit::dpi::PhysicalSize::new(
+            drag_surface_extent(current.width, requested.width),
+            drag_surface_extent(current.height, requested.height),
+        ))
+    }
+
     /// How long to hold off the next frame.
     ///
     /// While resizing, the resize cap deliberately renders below the display's
     /// rate: attachments are rebuilt every frame and the interaction stays
-    /// responsive for costing fewer of them. Otherwise the cap only applies
+    /// responsive for costing fewer of them. In the browser each applied
+    /// resize also reconfigures the surface, and the swapchain images that
+    /// replaces are released on the browser's schedule rather than ours, so a
+    /// fast drag there is capped harder still - the alternative is exhausting
+    /// GPU memory and losing the device mid-drag. Otherwise the cap only applies
     /// with vsync off - with it on the display already paces presentation, and
     /// a cap the refresh rate does not divide evenly just makes every frame
     /// miss its slot and wait for the next one (144 on a 165 Hz display
     /// presents 82.5 times a second, not 144).
+    /// Count one frame, begun at `frame_start`, toward the frame counter.
+    ///
+    /// Rendering is on demand, so the time between two frames is often the app
+    /// waiting for input, not drawing. Only time from when a redraw was first
+    /// wanted to when its frame finished counts: back-to-back frames still add
+    /// up to the full display interval (the vsync wait and the frame limiter
+    /// included), while a pause of any length adds nothing. A redraw asked for
+    /// outside `about_to_wait` (winit, the compositor, a direct request) is
+    /// timed from the frame's own start.
+    ///
+    /// Published once per window of busy time so the readout is legible;
+    /// averaging instantaneous rates instead would be dominated by the short
+    /// frame of each vsync pair (16 ms + 0.8 ms reads as 600+ fps).
+    fn record_frame_time(&mut self, frame_start: Instant) {
+        const WINDOW_SECONDS: f32 = 0.2;
+        let end = Instant::now();
+        let demanded = self.frame_demanded_at.take().unwrap_or(frame_start).min(frame_start);
+        let busy_from = self.last_frame_end.map_or(demanded, |last_end| last_end.max(demanded));
+        self.last_frame_end = Some(end);
+        let (frames, elapsed) = &mut self.editor.frame_rate_window;
+        *frames += 1;
+        *elapsed += end.saturating_duration_since(busy_from).as_secs_f32();
+        if *elapsed >= WINDOW_SECONDS {
+            self.editor.measured_fps = Some(*frames as f32 / *elapsed);
+            self.editor.frame_rate_window = (0, 0.0);
+        }
+    }
+
     fn frame_interval(&self) -> Duration {
-        if self.pending_resize.is_some() {
-            rate_interval(self.editor.resize_frame_rate_cap)
+        if self.surface_retry_pending {
+            // Failed acquisition never reaches present, so vsync cannot pace it.
+            Duration::from_millis(250)
+        } else if self.pending_resize.is_some() {
+            let cap = if cfg!(target_arch = "wasm32") {
+                self.editor.resize_frame_rate_cap.min(WEB_RESIZE_FRAME_RATE_CAP)
+            } else {
+                self.editor.resize_frame_rate_cap
+            };
+            rate_interval(cap)
         } else if self.editor.vsync_enabled {
             Duration::ZERO
         } else {
@@ -1578,6 +1732,8 @@ impl<'a> App<'a> {
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
+        self.surface_retry_pending = false;
+        self.slice_surface_retry_deadline = None;
         self.redraw_requested = false;
     }
 
@@ -1637,10 +1793,11 @@ impl<'a> App<'a> {
             project.project.document.revision().hash(&mut hasher);
             project.savepoint_revision().hash(&mut hasher);
             for layer in project.project.document.layers() {
-                layer.id.hash(&mut hasher);
-                layer.name.hash(&mut hasher);
-                layer.loaded.hash(&mut hasher);
+                layer.hash_row(&mut hasher);
             }
+            // All six sections at once: the registry is shared project
+            // content, not just the Designs tree's.
+            project.project.folders.hash_into(&mut hasher);
         }
 
         self.active_triangulation.hash(&mut hasher);
@@ -1650,45 +1807,40 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
-            triangulation.state.loaded.hash(&mut hasher);
-            triangulation.state.revision().hash(&mut hasher);
+            triangulation.state.hash_row(&mut hasher);
         }
 
-        self.active_block_model.hash(&mut hasher);
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);
-            model.state.loaded.hash(&mut hasher);
             model.renderable_block_indices.len().hash(&mut hasher);
             model.model.color_variables().into_iter().filter(|variable| !variable.special).count().hash(&mut hasher);
-            model.state.revision().hash(&mut hasher);
+            model.state.hash_row(&mut hasher);
         }
 
         for dataset in &self.drill_holes {
             dataset.id.hash(&mut hasher);
             dataset.name.hash(&mut hasher);
-            dataset.state.loaded.hash(&mut hasher);
             dataset.dataset.holes.len().hash(&mut hasher);
             dataset.dataset.fields.len().hash(&mut hasher);
-            dataset.state.revision().hash(&mut hasher);
+            dataset.state.hash_row(&mut hasher);
         }
 
         for cloud in &self.point_clouds {
             cloud.id.hash(&mut hasher);
             cloud.name.hash(&mut hasher);
-            cloud.state.loaded.hash(&mut hasher);
             cloud.points.len().hash(&mut hasher);
-            cloud.state.revision().hash(&mut hasher);
+            cloud.is_classified().hash(&mut hasher);
+            cloud.state.hash_row(&mut hasher);
         }
 
         for raster in &self.raster_textures {
             raster.id.hash(&mut hasher);
             raster.name.hash(&mut hasher);
-            raster.state.loaded.hash(&mut hasher);
             raster.source_size.hash(&mut hasher);
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
-            raster.state.revision().hash(&mut hasher);
+            raster.state.hash_row(&mut hasher);
         }
         hasher.finish()
     }
@@ -1712,7 +1864,7 @@ impl<'a> App<'a> {
                     runtime_id: project.runtime_id,
                     name: project.project.metadata.name.clone(),
                     dirty: project_dirty,
-                    designs_dirty: project.designs_dirty(),
+                    designs_dirty: project.designs_dirty(&self.project_asset_baseline.folders),
                     lossy_save_warnings: project.lossy_save_warnings.clone(),
                     is_active: self.workspace.active_index == Some(index),
                     #[cfg(target_arch = "wasm32")]
@@ -1728,6 +1880,8 @@ impl<'a> App<'a> {
                             name: layer.name.clone(),
                             is_loaded: layer.loaded,
                             dirty: dirty_layers.contains(&layer.id),
+                            folder: layer.folder,
+                            section: layer.section,
                         })
                         .collect(),
                 }
@@ -1768,7 +1922,6 @@ impl<'a> App<'a> {
                     is_active: active.is_some_and(|project| project.id == stored.id),
                     dirty: active.is_some_and(|project| project.id == stored.id) && project_dirty,
                     id: stored.id,
-                    stored_in_browser: true,
                 })
                 .collect::<Vec<_>>();
             if let Some(active) = active
@@ -1779,7 +1932,6 @@ impl<'a> App<'a> {
                     is_active: true,
                     dirty: project_dirty,
                     id: active.id,
-                    stored_in_browser: false,
                 });
             }
             entries
@@ -1795,6 +1947,8 @@ impl<'a> App<'a> {
                 is_loaded: tri.state.loaded,
                 dirty: tri.state.is_dirty(),
                 color: tri.color,
+                folder: tri.state.folder,
+                section: tri.state.section,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1814,6 +1968,8 @@ impl<'a> App<'a> {
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
                 lower: model.world_bounds.map_or(model.model.metadata.lower, |(lower, _)| lower),
                 upper: model.world_bounds.map_or(model.model.metadata.upper, |(_, upper)| upper),
+                folder: model.state.folder,
+                section: model.state.section,
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1831,6 +1987,8 @@ impl<'a> App<'a> {
                     .summary
                     .as_ref()
                     .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
+                folder: dataset.state.folder,
+                section: dataset.state.section,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1843,6 +2001,9 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
+                folder: cloud.state.folder,
+                section: cloud.state.section,
+                is_classified: cloud.is_classified(),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
@@ -1859,6 +2020,8 @@ impl<'a> App<'a> {
                 source_size: raster.source_size,
                 driver_name: raster.driver_name.clone(),
                 projection: raster.projection.clone(),
+                folder: raster.state.folder,
+                section: raster.state.section,
             })
             .collect::<Vec<_>>();
 
@@ -1884,20 +2047,32 @@ impl<'a> App<'a> {
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
+        // A section's item membership can stay byte-identical while its
+        // folder list changes - a folder created and left empty, say - so
+        // the heading needs this on top of `same_membership`: an empty
+        // folder touches no item's epoch, and would otherwise never read as
+        // unsaved work.
+        let section_folders_dirty = |section: SectionKind| {
+            self.workspace
+                .active_project()
+                .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
+        };
         let triangulations_membership_dirty = !same_membership(
             &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.triangulations,
-        );
+        ) || section_folders_dirty(SectionKind::Triangulations);
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
-        );
-        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes);
+        ) || section_folders_dirty(SectionKind::BlockModels);
+        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
+            || section_folders_dirty(SectionKind::DrillHoles);
         let point_clouds_membership_dirty = !same_membership(
             &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.point_clouds,
-        );
-        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters);
+        ) || section_folders_dirty(SectionKind::PointClouds);
+        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+            || section_folders_dirty(SectionKind::Rasters);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
@@ -1920,6 +2095,7 @@ impl<'a> App<'a> {
             active_triangulation_for_menu,
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
             active_session: self.workspace.active_project().map_or(0, |project| project.runtime_id),
+            folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
         view
@@ -2074,7 +2250,22 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.next_ui_repaint_deadline = None;
             self.redraw_requested = true;
         }
+        // A drag that has stopped produces no further events, so the frame
+        // that applies its exact size has to be asked for here.
+        let resize_settle_deadline = self.pending_resize.and(self.last_resize_event).map(|last| last + RESIZE_SETTLE_DELAY);
+        if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
+            self.redraw_requested = true;
+        }
+        if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
+            self.slice_surface_retry_deadline = None;
+            if let Some(graphics) = self.graphics.as_ref() {
+                graphics.request_slice_preview_redraw();
+            }
+        }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
+        if self.redraw_requested || continuous_redraw {
+            self.frame_demanded_at.get_or_insert(now);
+        }
 
         if (self.redraw_requested || continuous_redraw)
             && let Some(window) = self.window.as_ref()
@@ -2098,6 +2289,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
+        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -2204,8 +2396,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 snapshot_hash,
                 snapshot_layer_hashes,
                 asset_token,
+                workspace,
                 result,
             } => {
+                if workspace != self.workspace_generation {
+                    // Its project is gone and the id may be someone else's now,
+                    // so nothing here is ours to clear.
+                    if let Err(error) = result {
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
+                    }
+                    return;
+                }
                 self.browser_saves_pending.remove(&runtime_id);
                 match result {
                     Ok(()) => {
@@ -2322,6 +2523,8 @@ pub(crate) enum AppEvent {
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
         asset_token: crate::model::project::SaveToken,
+        /// Which workspace the snapshot came from; runtime ids are recycled.
+        workspace: u64,
         result: std::result::Result<(), String>,
     },
     BrowserProjectDeleted {

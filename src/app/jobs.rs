@@ -106,9 +106,17 @@ pub(crate) enum JobKey {
         serial: u64,
     },
     ReserveStats(crate::model::block_model::BlockModelId, u64),
+    Raster(crate::model::raster::RasterTextureId),
     Project {
         runtime_id: u32,
         document_revision: u64,
+    },
+    /// A browser project save whose OMF encoding runs on a worker. Never tied
+    /// to the project's revision: the snapshot was taken when the save was
+    /// asked for and has to reach storage even if the document has moved on.
+    #[cfg(target_arch = "wasm32")]
+    BrowserProjectSave {
+        runtime_id: u32,
     },
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
@@ -257,6 +265,7 @@ impl<'a> App<'a> {
             JobKey::ExperimentalScip { runtime, serial } => self
                 .pending_experimental_scip
                 .is_some_and(|pending| pending.inputs.runtime == runtime && pending.run_id == serial),
+            JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -274,6 +283,8 @@ impl<'a> App<'a> {
                 self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
                     && self.project_item_state(item).is_some_and(|state| state.revision() == revision)
             }
+            #[cfg(target_arch = "wasm32")]
+            JobKey::BrowserProjectSave { .. } => true,
             JobKey::Anonymous => true,
         })
     }

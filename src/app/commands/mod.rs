@@ -4,7 +4,9 @@ mod dig_strips;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
+pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for all six sections
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
+pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
@@ -14,6 +16,7 @@ pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
 pub(crate) mod residency;
+pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod schedule;
 /// Real-project capture for the experimental blended optimiser. Native only
 /// and off by default; nothing in the ordinary schedule run reaches it.
@@ -25,6 +28,7 @@ pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock ac
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).
 pub(crate) mod solids_view;
+mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
@@ -32,9 +36,9 @@ pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
 use anyhow::Result;
 
 use crate::{
-    app::{App, canvas::is_triangulation_polyline},
+    app::App,
     i18n::{tr, tr_format},
-    model::{Command, Object, ObjectId, SceneEntityId},
+    model::{Command, SceneEntityId},
     ui::state::{ActiveTool, TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
 };
@@ -69,7 +73,7 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
-        self.cancel_fuse();
+        self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
         // A step that put an item back may have restored one the editor had
@@ -109,7 +113,8 @@ impl<'a> App<'a> {
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
         let requires_project = matches!(
             &command,
-            UiCommand::ImportOmfPaths(_)
+            UiCommand::TransformSurveySelection
+                | UiCommand::ImportOmfPaths(_)
                 | UiCommand::ImportDxfPathsInto(_)
                 | UiCommand::ImportTriangulationPaths(_)
                 | UiCommand::ImportPointCloudPaths(_)
@@ -121,8 +126,11 @@ impl<'a> App<'a> {
                 | UiCommand::BeginDrillPatternShapePick
                 | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
+                | UiCommand::CreateFolder(_)
+                | UiCommand::DeleteFolder { .. }
+                | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
-                | UiCommand::OpenCreateBlockModel(_)
+                | UiCommand::OpenCreateBlockModel
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::AddReserveField { .. }
                 | UiCommand::DeleteReserveField(_)
@@ -202,6 +210,8 @@ impl<'a> App<'a> {
             UiCommand::RemoveTrackedProject(project) => self.remove_tracked_project(project),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::ShowProjectInFileManager => self.show_active_project_in_file_manager(),
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::ShowTrackedProjectInFileManager(path) => file::show_in_file_manager(&path),
             UiCommand::CloseStartupDialog => {
                 self.startup_dialog_dismissed = true;
                 // Dismissing the splash leaves the application on a project,
@@ -311,7 +321,7 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
-            UiCommand::ExportOmf => self.choose_export_omf(),
+            UiCommand::ExportOmf(selection) => self.choose_export_omf(&selection),
             UiCommand::ExportProjectDxf(runtime_id) => {
                 self.choose_export_project_dxf(runtime_id);
                 Ok(())
@@ -336,6 +346,7 @@ impl<'a> App<'a> {
                 self.hide_selected_elements();
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestExit => self.request_exit(),
             UiCommand::SaveAndExit => self.save_and_exit(),
             UiCommand::ExitWithoutSaving => {
@@ -347,6 +358,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateLayer { name } => self.create_layer(name),
+            UiCommand::CreateFolder(section) => self.create_folder(section),
+            UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
+            UiCommand::MoveToFolder { member, folder } => {
+                self.move_to_folder(member, folder);
+                Ok(())
+            }
             UiCommand::AddDelayProduct { delay_ms, name, color } => {
                 self.add_delay_product(delay_ms, name, color);
                 Ok(())
@@ -520,6 +537,7 @@ impl<'a> App<'a> {
                     crate::ui::state::RenameTarget::ReserveField(id) => self.rename_reserve_field(id, new_name),
                     crate::ui::state::RenameTarget::Solid(id) => self.rename_solid(id, new_name),
                     crate::ui::state::RenameTarget::BlastShape(blast) => self.rename_blast(blast, new_name),
+                    crate::ui::state::RenameTarget::Folder(section, id) => self.rename_folder(section, id, new_name),
                     _ => self.rename_project_item(target, new_name),
                 }
                 self.editor.renaming_item = None;
@@ -674,8 +692,15 @@ impl<'a> App<'a> {
                 self.set_drill_hole_category_colors(id, categories);
                 Ok(())
             }
-            UiCommand::OpenCreateBlockModel(preferred) => {
-                self.open_create_block_model_dialog(preferred);
+            UiCommand::OpenCreateBlockModel => {
+                // One dataset is estimated at a time, so the selection has to
+                // name exactly which one before the dialog opens on it.
+                let selected = self.selected_drill_hole_datasets();
+                let [drill_hole_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded drill hole collection before creating a block model from it"));
+                    return Ok(());
+                };
+                self.open_create_block_model_dialog(drill_hole_id);
                 Ok(())
             }
             UiCommand::ExecuteCreateBlockModel {
@@ -698,9 +723,16 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenCreateOreTriangulation => {
+                // One model is thresholded at a time, so the selection has to
+                // name exactly which one before the dialog opens on it.
+                let selected = self.selected_block_models();
+                let [block_model_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded block model before creating an ore triangulation from it"));
+                    return Ok(());
+                };
                 self.editor.ore_triangulation_open = true;
-                self.editor.ore_block_model_id = self.active_block_model.or_else(|| self.block_models.first().map(|model| model.id));
-                if let Some(model) = self.editor.ore_block_model_id.and_then(|id| self.block_models.iter().find(|model| model.id == id)) {
+                self.editor.ore_block_model_id = Some(block_model_id);
+                if let Some(model) = self.block_models.iter().find(|model| model.id == block_model_id) {
                     self.editor.ore_variable = model
                         .active_color_variable
                         .clone()
@@ -746,9 +778,24 @@ impl<'a> App<'a> {
                 self.cancel_relimit();
                 Ok(())
             }
+            UiCommand::ToggleRotationCentre => {
+                self.toggle_rotation_centre();
+                Ok(())
+            }
             UiCommand::ResetView => {
-                self.set_slice_mode_enabled(false);
-                self.reset_view();
+                // Sliced, the section is the view: squaring up to it and
+                // fitting is the reset, rather than dropping the mode.
+                if self.editor.slice_mode_enabled {
+                    self.reset_slice_view();
+                } else {
+                    self.reset_view();
+                }
+                Ok(())
+            }
+            UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
+            UiCommand::SetPointCloudClassificationColors(enabled) => {
+                self.editor.point_cloud_classification_colors = enabled;
+                self.redraw_requested = true;
                 Ok(())
             }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
@@ -766,17 +813,36 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::SetCinematicEnabled(enabled) => self.set_cinematic_enabled(enabled),
             UiCommand::SetStandardView(view) => {
-                // The slice camera is derived from the slice state each frame;
-                // a standard-view transition would silently queue and fire on
-                // exit, so ignore it while sliced.
-                if self.editor.slice_mode_enabled {
-                    return Ok(());
-                }
+                // The slice camera is derived from the slice state each frame,
+                // so a standard-view transition would silently queue and fire
+                // on exit; sliced, the section turns to face the view instead.
+                let sliced = self.editor.slice_mode_enabled;
                 if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.set_standard_view(view);
+                    if sliced {
+                        graphics.set_slice_standard_view(view);
+                    } else {
+                        graphics.set_standard_view(view);
+                    }
                     self.redraw_requested = true;
                 }
+                if sliced {
+                    // No mouse event behind this camera swap; ending any orbit lets the cursor land back on the section.
+                    self.end_right_orbit();
+                }
+                Ok(())
+            }
+            UiCommand::OpenSurveyDefinitions => {
+                self.editor.survey.transform_open = false;
+                self.editor.survey.definitions_open = true;
+                let name = self.editor.survey.editing_name.clone();
+                self.editor.survey.edit_definition(name);
+                Ok(())
+            }
+            UiCommand::OpenSurveyTransform => {
+                self.editor.survey.open_transform();
                 Ok(())
             }
             UiCommand::SetPlanningSubpage(subpage) => {
@@ -818,6 +884,32 @@ impl<'a> App<'a> {
                 self.redraw_requested = true;
                 Ok(())
             }
+            UiCommand::SaveSurveyDefinition { target, definition } => {
+                let result = self.save_survey_definition(target, definition);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::DeleteSurveyDefinition(name) => {
+                let result = self.delete_survey_definition(&name);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::SelectExplorerRow(row) => {
+                self.select_from_explorer_row(row);
+                Ok(())
+            }
+            UiCommand::SetSurveyLocalSystem(system) => {
+                let result = self.set_survey_local_system(system);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::TransformSurveySelection => self.transform_survey_selection(),
             UiCommand::ReorderWorkspace { workspace, before } => {
                 let mut order = self.editor.workspace_order.to_vec();
                 if before != Some(workspace) {
@@ -830,6 +922,8 @@ impl<'a> App<'a> {
                             &self.editor.current_preferences(),
                             order,
                             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                            self.editor.survey.definitions.clone(),
+                            self.editor.survey.local_system.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;
@@ -844,16 +938,8 @@ impl<'a> App<'a> {
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
-            UiCommand::SelectBlockModel(id) => {
-                self.select_block_model(id);
-                Ok(())
-            }
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
-                Ok(())
-            }
-            UiCommand::ActivateTriangulation(id) => {
-                self.activate_triangulation(id);
                 Ok(())
             }
             UiCommand::CloseTriangulation(id) => {
@@ -901,7 +987,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.set_slice_mode_enabled(false);
+                // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
                 Ok(())
             }
@@ -972,6 +1058,14 @@ impl<'a> App<'a> {
                 self.open_insert_point_at_elevation_dialog();
                 Ok(())
             }
+            UiCommand::OpenObjectEditDialog(id) => {
+                self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ApplyObjectEdit { id, object, close } => {
+                self.apply_object_edit(id, *object, close);
+                Ok(())
+            }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {
                 self.insert_points_at_elevation(object_ids, elevation);
                 Ok(())
@@ -985,31 +1079,20 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::OpenCreateTriangulation => {
+                // Select first, then act: the dialog runs on the objects that
+                // were selected when it opened and cannot be edited afterwards.
+                // Objects that cannot contribute an edge are dropped from both
+                // lists, keeping the viewport highlight and the dialog's count
+                // in agreement.
+                let object_ids = self.selected_triangulation_sources();
+                if object_ids.is_empty() {
+                    userspace_warn!("{}", tr!(literal = "Select the objects to triangulate before running Create Triangulation"));
+                    return Ok(());
+                }
                 self.editor.tri_create_open = true;
                 self.editor.tri_create_phase = TriCreatePhase::MainDialog;
-                // Seed the pick list from what is already selected, so this
-                // behaves like the rest of the Design menu: select first, then
-                // run the action. Objects that cannot contribute an edge are
-                // dropped from both lists, keeping the viewport highlight and
-                // the dialog's count in agreement; document order keeps the
-                // result independent of the selection set's iteration order.
-                let selected: std::collections::HashSet<ObjectId> = self
-                    .editor
-                    .selected_handles
-                    .iter()
-                    .filter_map(|handle| match handle {
-                        SceneEntityId::Object(object_id) => Some(*object_id),
-                        _ => None,
-                    })
-                    .collect();
-                self.editor.tri_selected_object_ids = self
-                    .scene_document
-                    .objects()
-                    .iter()
-                    .filter(|object| selected.contains(&object.id()) && is_triangulation_polyline(object))
-                    .map(Object::id)
-                    .collect();
-                self.editor.selected_handles = self.editor.tri_selected_object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
+                self.editor.selected_handles = object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
+                self.editor.tri_selected_object_ids = object_ids;
                 self.editor.tri_selected_layer_ids.clear();
                 self.editor.tri_name_input = tr!(literal = "Surface");
                 self.editor.tri_hover_handles.clear();
@@ -1024,12 +1107,25 @@ impl<'a> App<'a> {
                 coarse_weld,
             } => self.run_create_triangulation(name, object_ids, surface_type, coarse_weld, true),
             UiCommand::OpenPointCloudTin => {
+                // One cloud is reconstructed at a time, so the selection has to
+                // name exactly which one before the dialog opens on it.
+                let selected = self.selected_point_clouds();
+                let [cloud_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded point cloud before creating a triangulation from it"));
+                    return Ok(());
+                };
                 self.editor.point_cloud_tin_open = true;
-                // Default to the only loaded cloud, or keep a still-valid pick.
-                let still_loaded = self.editor.point_cloud_tin_cloud_id.is_some_and(|id| self.point_clouds.iter().any(|cloud| cloud.id == id));
-                if !still_loaded {
-                    self.editor.point_cloud_tin_cloud_id = self.point_clouds.first().map(|cloud| cloud.id);
-                }
+                self.editor.point_cloud_tin_cloud_id = Some(cloud_id);
+                self.editor.point_cloud_tin_ground_count = self
+                    .point_clouds
+                    .iter()
+                    .find(|cloud| cloud.id == cloud_id)
+                    .and_then(|cloud| cloud.classifications.as_deref())
+                    .map(|codes| {
+                        use rayon::prelude::*;
+                        let ground = codes.par_iter().filter(|&&code| code == crate::model::point_cloud::CLASS_GROUND).count();
+                        (cloud_id, ground)
+                    });
                 // Keep any name the user already typed; otherwise restore the
                 // default rather than opening with an empty, un-runnable field.
                 if self.editor.point_cloud_tin_name_input.trim().is_empty() {
@@ -1038,32 +1134,53 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExecutePointCloudTin { cloud_id, params } => self.run_point_cloud_tin(cloud_id, params),
+            UiCommand::OpenPointCloudJoin => {
+                self.open_point_cloud_join();
+                Ok(())
+            }
+            UiCommand::ExecutePointCloudJoin { cloud_ids, name, remove_sources } => self.run_point_cloud_join(cloud_ids, name, remove_sources),
+            UiCommand::OpenPointCloudClassify => {
+                self.open_point_cloud_classify();
+                Ok(())
+            }
+            UiCommand::ExecutePointCloudClassify { cloud_ids, params } => self.run_point_cloud_classify(cloud_ids, params),
             UiCommand::OpenCutTriangulationByPolyline => {
+                // Two inputs, but of different kinds, so the selection names
+                // both without anything having to say which is which.
+                let selected = self.selected_triangulations();
+                let ([tri_id], Some(polyline_id)) = (&selected[..], self.selected_clip_boundary()) else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation and one closed polyline before clipping"));
+                    return Ok(());
+                };
+                let (tri_id, polyline_id) = (*tri_id, polyline_id);
+                let Some(surface) = self.triangulations.iter().find(|t| t.id == tri_id) else {
+                    return Ok(());
+                };
+                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!(literal = "Clipped"));
+                let boundary_name = self
+                    .scene_document
+                    .get_object(polyline_id)
+                    .and_then(|object| self.scene_document.layer(object.layer()))
+                    .map(|layer| tr_format!(literal = "Polyline on '%layer%'", layer = &layer.name))
+                    .unwrap_or_else(|| tr!(literal = "Polyline"));
                 self.editor.tri_cut_poly_open = true;
-                self.editor.tri_cut_poly_name_auto = true;
-                self.editor.tri_cut_poly_awaiting_pick = false;
-                self.editor.viewport_pick_hover_label = None;
                 self.editor.tri_hover_handles.clear();
-                self.editor.tri_cut_poly_tri_id = self.active_triangulation;
-                self.editor.tri_cut_poly_object_id = None;
-                self.editor.tri_cut_poly_object_name = String::new();
+                self.editor.tri_cut_poly_tri_id = Some(tri_id);
+                self.editor.tri_cut_poly_object_id = Some(polyline_id);
+                self.editor.tri_cut_poly_object_name = boundary_name;
                 self.editor.tri_cut_poly_mode = crate::ui::state::TriPolylineClipMode::KeepInside;
-                self.editor.tri_cut_poly_name_input = self
-                    .active_triangulation
-                    .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Clipped")))
-                    .unwrap_or_default();
+                self.editor.tri_cut_poly_name_input = name;
+                self.editor.tri_cut_poly_unload_source = true;
                 Ok(())
             }
-            UiCommand::BeginCutPolyPick => {
-                self.editor.tri_cut_poly_awaiting_pick = true;
-                self.editor.viewport_pick_hover_label = None;
-                self.editor.tool_highlight_id = None;
-                self.invalidate_geometry();
-                Ok(())
-            }
-            UiCommand::ExecuteCutTriangulationByPolyline { tri_id, polyline_id, mode, name } => {
-                let result = self.cut_triangulation_by_polyline(tri_id, polyline_id, mode, name);
+            UiCommand::ExecuteCutTriangulationByPolyline {
+                tri_id,
+                polyline_id,
+                mode,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_triangulation_by_polyline(tri_id, polyline_id, mode, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_poly_open = false;
                     self.editor.tool_highlight_id = None;
@@ -1071,28 +1188,32 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenCutTriangulationByZ => {
+                let selected = self.selected_triangulations();
+                let [tri_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation before slicing it by Z range"));
+                    return Ok(());
+                };
+                let Some(surface) = self.triangulations.iter().find(|t| t.id == tri_id) else {
+                    return Ok(());
+                };
+                let bounds = surface.mesh.bounds();
+                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!(literal = "Sliced"));
                 self.editor.tri_cut_z_open = true;
-                self.editor.tri_cut_z_name_auto = true;
-                self.editor.tri_cut_z_tri_id = self.active_triangulation;
-                let (z_min, z_max) = self
-                    .active_triangulation
-                    .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| {
-                        let b = t.mesh.bounds();
-                        (b.min.z, b.max.z)
-                    })
-                    .unwrap_or((0.0, 100.0));
-                self.editor.tri_cut_z_min_input = z_min;
-                self.editor.tri_cut_z_max_input = z_max;
-                self.editor.tri_cut_z_name_input = self
-                    .active_triangulation
-                    .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Sliced")))
-                    .unwrap_or_default();
+                self.editor.tri_cut_z_tri_id = Some(tri_id);
+                self.editor.tri_cut_z_min_input = bounds.min.z;
+                self.editor.tri_cut_z_max_input = bounds.max.z;
+                self.editor.tri_cut_z_name_input = name;
+                self.editor.tri_cut_z_unload_source = true;
                 Ok(())
             }
-            UiCommand::ExecuteCutTriangulationByZ { tri_id, z_min, z_max, name } => {
-                let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name);
+            UiCommand::ExecuteCutTriangulationByZ {
+                tri_id,
+                z_min,
+                z_max,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_z_open = false;
                 }
@@ -1108,6 +1229,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_surface_target_id = None;
                 self.editor.tri_cut_surface_side = crate::ui::state::TriSurfaceCutSide::CutTop;
                 self.editor.tri_cut_surface_name_input.clear();
+                self.editor.tri_cut_surface_unload_source = true;
                 Ok(())
             }
             UiCommand::ExecuteCutTriangulationBySurface {
@@ -1115,8 +1237,9 @@ impl<'a> App<'a> {
                 reference_id,
                 side,
                 name,
+                unload_source,
             } => {
-                let result = self.cut_triangulation_by_surface(target_id, reference_id, side, name);
+                let result = self.cut_triangulation_by_surface(target_id, reference_id, side, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_surface_open = false;
                 }
@@ -1155,6 +1278,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_pitshell_name_auto = true;
                 self.editor.tri_cut_pitshell_topology_id = self.active_triangulation;
                 self.editor.tri_cut_pitshell_pitshell_id = None;
+                self.editor.tri_cut_pitshell_unload_source = true;
                 self.editor.tri_cut_pitshell_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
@@ -1162,8 +1286,13 @@ impl<'a> App<'a> {
                     .unwrap_or_default();
                 Ok(())
             }
-            UiCommand::ExecuteCutTopologyByPitShell { topology_id, pit_shell_id, name } => {
-                let result = self.cut_topology_by_pit_shell(topology_id, pit_shell_id, name);
+            UiCommand::ExecuteCutTopologyByPitShell {
+                topology_id,
+                pit_shell_id,
+                name,
+                unload_source,
+            } => {
+                let result = self.cut_topology_by_pit_shell(topology_id, pit_shell_id, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_pitshell_open = false;
                 }
@@ -1197,16 +1326,20 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenContourTriangulation => {
+                let selected = self.selected_triangulations();
+                let [tri_id] = selected[..] else {
+                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation before generating contours from it"));
+                    return Ok(());
+                };
+                let surface_name = self
+                    .triangulations
+                    .iter()
+                    .find(|triangulation| triangulation.id == tri_id)
+                    .map(|triangulation| triangulation.name.clone());
                 self.editor.tri_contour_open = true;
-                self.editor.tri_contour_tri_id = self.active_triangulation;
+                self.editor.tri_contour_tri_id = Some(tri_id);
                 self.editor.tri_contour_target_layer = None;
                 self.editor.tri_contour_layer_name_auto = true;
-                let surface_name = self.active_triangulation.and_then(|id| {
-                    self.triangulations
-                        .iter()
-                        .find(|triangulation| triangulation.id == id)
-                        .map(|triangulation| triangulation.name.clone())
-                });
                 if let Some(surface_name) = surface_name {
                     self.editor.update_contour_layer_name_from_surface(&surface_name);
                 } else {

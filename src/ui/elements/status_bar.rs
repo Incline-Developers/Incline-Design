@@ -130,15 +130,21 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
     ui.separator();
     if editor.frame_counter_enabled {
         match editor.measured_fps {
-            Some(fps) => ui.label(format!("{}: {fps:.1}", tr!(literal = "Frame rate"))),
+            Some(fps) => ui.label(format!("{}: {fps:.0}", tr!(literal = "Frame rate"))),
             None => ui.label(format!("{}: --", tr!(literal = "Frame rate"))),
         };
         ui.separator();
     }
-    if editor.debug_chunk_coloring {
-        match editor.debug_chunk_stats {
-            Some((rendered, total)) => ui.label(tr!("status-chunks", rendered = rendered, total = total, culled = total.saturating_sub(rendered))),
-            None => ui.label(tr!(literal = "Chunks: --")),
+    if editor.debug_surface_chunks {
+        match editor.debug_surface_stats {
+            Some(stats) => ui.label(tr!(
+                "status-faces",
+                drawn = stats.drawn_faces.separate_with_commas(),
+                total = stats.total_faces.separate_with_commas(),
+                drawn_chunks = stats.drawn_chunks,
+                total_chunks = stats.total_chunks
+            )),
+            None => ui.label(tr!(literal = "Faces: -- / -- (--/-- chunks)")),
         };
         ui.separator();
     }
@@ -154,15 +160,30 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
         };
         ui.separator();
     }
+    if editor.debug_point_cloud_chunks {
+        match editor.debug_point_stats {
+            Some(stats) => ui.label(tr!(
+                "status-points",
+                drawn = stats.drawn.separate_with_commas(),
+                target = stats.target.separate_with_commas(),
+                total = stats.total.separate_with_commas(),
+                drawn_chunks = stats.drawn_chunks,
+                total_chunks = stats.total_chunks
+            )),
+            None => ui.label(tr!(literal = "Points: -- / -- of -- (--/-- chunks)")),
+        };
+        ui.separator();
+    }
     let coord_width = coord_field_width(ui);
-    match editor.cursor_world {
+    let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();
+    match editor.cursor_world.filter(|_| cursor_in_viewport) {
         Some(p) => {
-            for (axis, value) in [(tr!(literal = "X"), p.x), (tr!(literal = "Y"), p.y), (tr!(literal = "Z"), p.z)] {
+            for (axis, value) in crate::model::survey::axis_names().into_iter().zip([p.x, p.y, p.z]) {
                 coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
             }
         }
         None => {
-            for axis in [tr!(literal = "X"), tr!(literal = "Y"), tr!(literal = "Z")] {
+            for axis in crate::model::survey::axis_names() {
                 coord_field(ui, coord_width, format!("{axis}: --"));
             }
         }

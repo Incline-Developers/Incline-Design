@@ -314,7 +314,7 @@ pub(crate) fn preview_triangulation(
 ) -> OpenTriangulation {
     OpenTriangulation {
         id: SOLID_PREVIEW_ID,
-        state: crate::model::project::ProjectItemState::dirty(None).with_loaded(true),
+        state: crate::model::project::ProjectItemState::dirty(crate::model::MemberKind::Triangulation, None).with_loaded(true),
         // A preview is generated geometry, never a source surface; its token
         // only has to exist.
         geometry: crate::model::triangulation::GeometryVersion::mint(),
@@ -927,7 +927,7 @@ pub(super) fn build_bench_body(
             let mesh = Arc::new(mesh);
             let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
             let edges = crate::model::triangulation::unique_edges(&mesh);
-            let order = Arc::new(crate::model::triangulation::morton_surface_face_order(&mesh));
+            let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
             let mut item = preview_triangulation(name.clone(), mesh, spatial, edges, order, [1.0; 4], line_color);
             // Each flitch needs an id of its own for the renderer's
             // per-surface cache, counted down from the preview's own.

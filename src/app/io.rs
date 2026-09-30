@@ -45,19 +45,19 @@ pub(crate) const fn default_show_block_model_boundary_highlights() -> bool {
 }
 
 pub(crate) const fn default_downscale_raster_previews() -> bool {
-    true
+    false
 }
 
 pub(crate) const fn default_show_world_axis_gizmo() -> bool {
     true
 }
 
-pub(crate) const fn default_show_xy_grid() -> bool {
+pub(crate) const fn default_show_scale_bar() -> bool {
     true
 }
 
-pub(crate) const fn default_show_scale_bar() -> bool {
-    true
+pub(crate) const fn default_ui_size_percent() -> f64 {
+    100.0
 }
 
 pub(crate) const fn default_panel_chrome() -> bool {
@@ -159,6 +159,9 @@ pub(crate) struct Config {
     /// square with a separator line between them.
     #[serde(default = "default_panel_chrome")]
     pub(crate) panel_chrome: bool,
+    /// User multiplier on native OS/browser UI scaling.
+    #[serde(default = "default_ui_size_percent")]
+    pub(crate) ui_size_percent: f64,
     /// Linear RGBA clear colour used behind the rendered scene.
     #[serde(default = "default_renderer_background_color")]
     pub(crate) renderer_background_color: [f32; 4],
@@ -185,15 +188,15 @@ pub(crate) struct Config {
     pub(crate) frame_counter_enabled: bool,
     #[serde(default = "default_show_world_axis_gizmo")]
     pub(crate) show_world_axis_gizmo: bool,
-    #[serde(default = "default_show_xy_grid")]
-    pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     #[serde(default = "default_show_scale_bar")]
     pub(crate) show_scale_bar: bool,
-    #[serde(default)]
-    pub(crate) debug_chunk_coloring: bool,
+    #[serde(default, alias = "debug_chunk_coloring")]
+    pub(crate) debug_surface_chunks: bool,
     #[serde(default)]
     pub(crate) debug_clip_planes: bool,
+    #[serde(default, alias = "debug_point_counts")]
+    pub(crate) debug_point_cloud_chunks: bool,
     #[serde(default = "default_plan_orbit_sensitivity")]
     pub(crate) plan_orbit_sensitivity: f64,
     #[serde(default = "default_plan_zoom_sensitivity")]
@@ -223,6 +226,43 @@ pub(crate) struct Config {
     pub(crate) delay_products: Vec<StoredDelayProduct>,
     #[serde(default)]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
+    /// Which saved system the project's numbers are in.
+    #[serde(default)]
+    pub(crate) mine_coordinate_system: Option<String>,
+}
+
+/// Deserialize a list, dropping entries this build cannot read instead of
+/// failing the whole file.
+///
+/// A config is one document holding every preference, so a single unreadable
+/// coordinate system must not cost a user their theme, their camera settings
+/// and their delay palette. An entry written by a newer build, or by an older
+/// one whose shape has since changed, is skipped and the rest of the file
+/// loads. The untagged fallback accepts anything, so the element deserializer
+/// cannot itself fail.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Entry<T> {
+        Readable(T),
+        Unreadable(serde::de::IgnoredAny),
+    }
+
+    let entries = Vec::<Entry<T>>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Readable(value) => Some(value),
+            Entry::Unreadable(_) => None,
+        })
+        .collect())
 }
 
 impl Default for Config {
@@ -232,6 +272,7 @@ impl Default for Config {
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
             panel_chrome: default_panel_chrome(),
+            ui_size_percent: default_ui_size_percent(),
             renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),
             vsync_enabled: default_vsync_enabled(),
@@ -242,10 +283,10 @@ impl Default for Config {
             downscale_raster_previews: default_downscale_raster_previews(),
             frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
-            show_xy_grid: default_show_xy_grid(),
             show_scale_bar: default_show_scale_bar(),
-            debug_chunk_coloring: false,
+            debug_surface_chunks: false,
             debug_clip_planes: false,
+            debug_point_cloud_chunks: false,
             plan_orbit_sensitivity: default_plan_orbit_sensitivity(),
             plan_zoom_sensitivity: default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
@@ -259,6 +300,8 @@ impl Default for Config {
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
+            coordinate_systems: Vec::new(),
+            mine_coordinate_system: None,
         }
     }
 }

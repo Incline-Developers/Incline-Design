@@ -31,10 +31,23 @@ struct MenuState {
     can_save: bool,
     has_project: bool,
     can_create_terrain_tin: bool,
+    can_join_point_clouds: bool,
+    can_classify_point_clouds: bool,
+    can_create_triangulation: bool,
+    /// Whether exactly one loaded surface is selected, which is what the
+    /// single-surface triangulation tools run on.
+    one_surface_selected: bool,
+    /// Clipping additionally needs the one closed polyline to clip against.
+    can_clip_by_polyline: bool,
+    /// Whether exactly one loaded drill-hole collection is selected, which is
+    /// what block-model estimation runs on.
     can_create_block_model: bool,
+    /// Whether exactly one loaded block model is selected, which is what ore
+    /// thresholding runs on.
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
     has_design_selection: bool,
+    has_polyline_selection: bool,
     has_selection_intersections: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
@@ -75,8 +88,12 @@ pub(crate) enum MacMenuAction {
     OpenIncludeSolidInTopology,
     OpenContourTriangulation,
     OpenPointCloudTin,
+    OpenPointCloudJoin,
+    OpenPointCloudClassify,
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
+    OpenSurveyDefinitions,
+    OpenSurveyTransform,
     OpenPreferences,
     OpenAbout,
     UndrapeAllRasters,
@@ -89,14 +106,15 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same three - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
+/// the same two - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.
 const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
+const COORDINATES_MENU_TAG: isize = -6;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -138,8 +156,12 @@ impl MacMenuAction {
         Self::OpenIncludeSolidInTopology,
         Self::OpenContourTriangulation,
         Self::OpenPointCloudTin,
+        Self::OpenPointCloudJoin,
+        Self::OpenPointCloudClassify,
         Self::OpenCreateBlockModel,
         Self::OpenCreateOreTriangulation,
+        Self::OpenSurveyDefinitions,
+        Self::OpenSurveyTransform,
         Self::OpenPreferences,
         Self::OpenAbout,
         Self::UndrapeAllRasters,
@@ -443,18 +465,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&raster_menu, &tr!(literal = "Undrape All"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
 
-    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
-    point_cloud_menu.setAutoenablesItems(false);
-    add_action(
-        &point_cloud_menu,
-        &tr!(literal = "Create Triangulation..."),
-        "",
-        MacMenuAction::OpenPointCloudTin,
-        &target,
-        mtm,
-    );
-    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
-
     let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
     block_model_menu.setAutoenablesItems(false);
     add_action(
@@ -480,6 +490,27 @@ pub(crate) fn install_menu_bar() {
     );
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+
+    let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
+    coordinates_menu.setAutoenablesItems(false);
+    add_action(&coordinates_menu, &tr!("survey-definitions-action"), "", MacMenuAction::OpenSurveyDefinitions, &target, mtm);
+    add_action(&coordinates_menu, &tr!("survey-transform-action"), "", MacMenuAction::OpenSurveyTransform, &target, mtm);
+    let coordinates_item = add_submenu(&root, &tr!("survey-coordinates-menu"), &coordinates_menu, mtm);
+    coordinates_item.setTag(COORDINATES_MENU_TAG);
+
+    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
+    point_cloud_menu.setAutoenablesItems(false);
+    add_action(
+        &point_cloud_menu,
+        &tr!(literal = "Create Triangulation..."),
+        "",
+        MacMenuAction::OpenPointCloudTin,
+        &target,
+        mtm,
+    );
+    add_action(&point_cloud_menu, &tr!(literal = "Join..."), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
+    add_action(&point_cloud_menu, &tr!(literal = "Classify..."), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
+    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -516,7 +547,15 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// must stay in sync with the ones `install_menu_bar` gives the same root
 /// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
-    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster"), tr!("ws-menubar-point-cloud")] {
+    if let Some(item) = find_item(root, COORDINATES_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Survey);
+    }
+    // Point Cloud sits with Survey, next to Coordinates, rather than with the
+    // Production design menus.
+    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-point-cloud"))) {
+        item.setHidden(workspace != Workspace::Survey);
+    }
+    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster")] {
         if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
             item.setHidden(workspace != Workspace::Production);
         }
@@ -578,18 +617,21 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
-        can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
-        can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
-        can_create_ore_triangulation: !project.block_models.is_empty(),
+        can_create_terrain_tin: editor.selection_counts.point_clouds == 1,
+        can_join_point_clouds: editor.selection_counts.point_clouds >= 2,
+        can_classify_point_clouds: editor.selection_counts.point_clouds >= 1,
+        can_create_triangulation: editor.selection_counts.triangulation_sources > 0,
+        one_surface_selected: editor.selection_counts.triangulations == 1,
+        can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
+        can_create_block_model: editor.selection_counts.drill_holes == 1,
+        can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+        has_polyline_selection: editor.selection_has_polylines,
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
-        view_toggles: {
-            let preferences = editor.current_preferences();
-            VIEW_TOGGLES.map(|toggle| toggle.get(&preferences))
-        },
+        view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
@@ -614,18 +656,24 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
     set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
+    set_enabled(&root, MacMenuAction::OpenPointCloudJoin, state.can_join_point_clouds);
+    set_enabled(&root, MacMenuAction::OpenPointCloudClassify, state.can_classify_point_clouds);
+    set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
+    // Select first, then act: these run on the scene selection they were
+    // opened with rather than on a pick list filled inside their dialog.
+    set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
+    for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
+        set_enabled(&root, action, state.one_surface_selected);
+    }
+    set_enabled(&root, MacMenuAction::OpenCutTriangulationByPolyline, state.can_clip_by_polyline);
     // The Design menu only acts on selected design objects.
-    for action in [
-        MacMenuAction::OpenInsertPointAtElevation,
-        MacMenuAction::OpenMoveToX,
-        MacMenuAction::OpenMoveToY,
-        MacMenuAction::OpenMoveToZ,
-    ] {
+    for action in [MacMenuAction::OpenMoveToX, MacMenuAction::OpenMoveToY, MacMenuAction::OpenMoveToZ] {
         set_enabled(&root, action, state.has_design_selection);
     }
     // Inserting at intersections additionally needs two polylines that cross.
+    set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);

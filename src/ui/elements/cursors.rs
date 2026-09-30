@@ -1,5 +1,7 @@
 //! Canvas overlay helpers: orbit marker, cursor highlights, and view gizmos.
 
+use egui::emath::GuiRounding as _;
+
 /// Draw the orbit indicator (compass rose) on the canvas.
 ///
 /// The marker is clipped to `clip_rect` so it doesn't bleed over panels.
@@ -35,7 +37,18 @@ pub(crate) struct OrientationGizmo {
 /// `id` separates instances: the main viewport draws one, and the Solids Setup
 /// page's preview draws another over its own image. The caller decides what a
 /// click means, because the two drive different cameras.
-pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, id: egui::Id, canvas_rect: egui::Rect, camera_forward: [f32; 3], camera_up: [f32; 3]) -> OrientationGizmo {
+///
+/// `horizontal_only` drops the Z arms: a vertical section can be turned to
+/// face any compass axis, but never straight up or down, and an arm that
+/// cannot be honoured is better not drawn than drawn dead.
+pub(crate) fn draw_orientation_gizmo(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    canvas_rect: egui::Rect,
+    camera_forward: [f32; 3],
+    camera_up: [f32; 3],
+    horizontal_only: bool,
+) -> OrientationGizmo {
     let gizmo_rect = orientation_gizmo_rect(canvas_rect);
     if !gizmo_rect.is_positive() {
         return OrientationGizmo {
@@ -57,15 +70,17 @@ pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, id: egui::Id, canvas_rec
             let right = normalize3(cross3(forward, up)).unwrap_or([1.0, 0.0, 0.0]);
             let origin = rect.center();
             let axis_defs = [
-                ([1.0, 0.0, 0.0], "X", egui::Color32::from_rgb(235, 55, 55)),
-                ([0.0, 1.0, 0.0], "Y", egui::Color32::from_rgb(118, 210, 38)),
-                ([0.0, 0.0, 1.0], "Z", egui::Color32::from_rgb(58, 136, 225)),
+                ([1.0, 0.0, 0.0], crate::model::survey::axis_abbreviation(0), egui::Color32::from_rgb(235, 55, 55)),
+                ([0.0, 1.0, 0.0], crate::model::survey::axis_abbreviation(1), egui::Color32::from_rgb(118, 210, 38)),
+                ([0.0, 0.0, 1.0], crate::model::survey::axis_abbreviation(2), egui::Color32::from_rgb(58, 136, 225)),
             ];
 
             let mut nodes: Vec<_> = axis_defs
                 .into_iter()
+                .filter(|(axis, _, _)| !horizontal_only || axis[2] == 0.0)
                 .flat_map(|(axis, label, color)| {
                     [1.0_f32, -1.0].into_iter().map(move |sign| {
+                        let label = label.clone();
                         let signed_axis = [axis[0] * sign, axis[1] * sign, axis[2] * sign];
                         let screen = egui::vec2(dot3(signed_axis, right), -dot3(signed_axis, up));
                         let depth = dot3(signed_axis, forward);
@@ -112,13 +127,28 @@ pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, id: egui::Id, canvas_rec
 
                 if node.positive {
                     painter.circle_filled(node.pos, 8.0, color);
-                    painter.text(
-                        node.pos,
-                        egui::Align2::CENTER_CENTER,
-                        node.label,
-                        egui::FontId::proportional(12.5),
-                        egui::Color32::from_rgb(25, 32, 40),
-                    );
+                    // The disc is a fixed 16px across however long the name
+                    // is, so the type is sized to the name rather than the
+                    // other way round: a single letter can afford to fill the
+                    // disc, a pair has to give way to fit beside itself.
+                    let size = if node.label.chars().count() > 1 { 10.0 } else { 13.0 };
+                    let ink = egui::Color32::from_rgb(25, 32, 40);
+                    let galley = painter.layout_no_wrap(node.label.clone(), egui::FontId::proportional(size), ink);
+                    // Centred on the glyphs, not on the line box. The line box
+                    // reserves descender room that "RL" and "E" never use, so
+                    // centring on it leaves every label sitting low in its
+                    // disc; `mesh_bounds` is where the ink actually is.
+                    let centre = if galley.mesh_bounds.is_positive() {
+                        galley.mesh_bounds.center().to_vec2()
+                    } else {
+                        galley.rect.center().to_vec2()
+                    };
+                    // Snapped to the pixel grid afterwards. The disc centre is
+                    // wherever the projected axis put it, so without this the
+                    // glyphs rasterise off-grid and read as soft and slightly
+                    // askew however well the centring itself is done.
+                    let text_pos = (node.pos - centre).round_to_pixels(painter.pixels_per_point());
+                    painter.galley(text_pos, galley, ink);
                 } else {
                     painter.circle_stroke(node.pos, 6.0, egui::Stroke::new(1.4, color));
                 }
@@ -140,19 +170,54 @@ pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, id: egui::Id, canvas_rec
     OrientationGizmo { rect, clicked }
 }
 
-pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
+/// A foreground painter for a marker at window pixel (`x`, `y`), clipped to the
+/// viewport; `None` when the point is outside it.
+fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str) -> Option<(egui::Painter, egui::Pos2)> {
     let ppp = ui.ctx().pixels_per_point();
-    let pos = egui::pos2(ox / ppp, oy / ppp);
+    let pos = egui::pos2(x / ppp, y / ppp);
     if !clip_rect.contains(pos) {
-        return;
+        return None;
     }
-    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("orbit_marker")));
+    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new(id)));
     painter.set_clip_rect(clip_rect);
-    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 220));
-    let r = 4.0;
-    painter.circle_stroke(pos, r, stroke);
-    painter.line_segment([pos - egui::vec2(r + 4.0, 0.0), pos + egui::vec2(r + 4.0, 0.0)], stroke);
-    painter.line_segment([pos - egui::vec2(0.0, r + 4.0), pos + egui::vec2(0.0, r + 4.0)], stroke);
+    Some((painter, pos))
+}
+
+/// The mark a rotation turns about: a ringed dot with four ticks, carrying its
+/// own dark halo so it reads over any scene behind it.
+///
+/// One glyph serves both pivots - the transient one a plain orbit picks under
+/// the cursor, and the fixed centre the C tool pins - because they mean the
+/// same thing to the eye. What separates them is how long they stay: the
+/// transient one lives only for the drag, the fixed one stays up between drags.
+fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
+    let halo = egui::Stroke::new(3.2, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140));
+    let core = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 235));
+    let r = 6.0;
+    for stroke in [halo, core] {
+        painter.circle_stroke(pos, r, stroke);
+        for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let dir = egui::vec2(dx, dy);
+            painter.line_segment([pos + dir * (r + 2.0), pos + dir * (r + 7.0)], stroke);
+        }
+    }
+    painter.circle_filled(pos, 1.8, core.color);
+}
+
+/// The pivot a plain orbit drag turns about, shown for the length of the drag.
+pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, ox, oy, clip_rect, "orbit_marker") else {
+        return;
+    };
+    paint_pivot_marker(&painter, pos);
+}
+
+/// The fixed centre of rotation, which stays up between drags.
+pub(crate) fn draw_rotation_centre_marker(ui: &mut egui::Ui, cx: f32, cy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, cx, cy, clip_rect, "rotation_centre_marker") else {
+        return;
+    };
+    paint_pivot_marker(&painter, pos);
 }
 
 /// Half-width of the cursor's crosshair arms, in points.
@@ -343,11 +408,11 @@ fn lerp_u8(from: u8, to: u8, t: f32) -> u8 {
     (from as f32 + (to as f32 - from as f32) * t.clamp(0.0, 1.0)).round() as u8
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AxisGizmoNode {
     axis: [f32; 3],
     positive: bool,
-    label: &'static str,
+    label: String,
     color: egui::Color32,
     depth: f32,
     dir: egui::Vec2,

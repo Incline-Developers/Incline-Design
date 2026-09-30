@@ -7,6 +7,7 @@ pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
+mod scaling;
 pub(crate) mod state;
 pub(crate) mod widgets;
 
@@ -58,13 +59,28 @@ pub(crate) struct Gui {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    last_cursor_event: Option<WindowEvent>,
     #[cfg(target_arch = "wasm32")]
     pending_pastes: Vec<String>,
+}
+
+/// The layout rect covering `screen_size` physical pixels, expressed in the
+/// point space `window_rect` implies. `None` when there is nothing to scale
+/// from, in which case egui's own window-sized rect stands.
+fn surface_screen_rect(window_rect: egui::Rect, window_width: u32, screen_size: [u32; 2]) -> Option<egui::Rect> {
+    (window_rect.width() > 0.0 && window_width > 0).then(|| {
+        let points_per_pixel = window_rect.width() / window_width as f32;
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(screen_size[0] as f32, screen_size[1] as f32) * points_per_pixel)
+    })
 }
 
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = false;
+            options.zoom_factor = scaling::zoom_factor(100.0);
+        });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
         ctx.global_style_mut(|style| {
@@ -84,13 +100,42 @@ impl Gui {
             ctx,
             state,
             renderer,
+            last_cursor_event: None,
             #[cfg(target_arch = "wasm32")]
             pending_pastes: Vec::new(),
         }
     }
 
     pub(crate) fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> egui_winit::EventResponse {
+        match event {
+            WindowEvent::CursorMoved { .. } => self.last_cursor_event = Some(event.clone()),
+            WindowEvent::CursorLeft { .. } => self.last_cursor_event = None,
+            _ => {}
+        }
         self.state.on_window_event(window, event)
+    }
+
+    fn update_scale(&mut self, window: &Window, size_percent: f64) {
+        let zoom = scaling::zoom_factor(size_percent);
+        let old_zoom = self.ctx.zoom_factor();
+        if zoom == old_zoom {
+            return;
+        }
+        // Apply before take_egui_input so it computes the current screen rect.
+        // set_zoom_factor defers the change and replaces that rect with the
+        // previous frame's dimensions, which causes a lag during live resizing.
+        self.ctx.options_mut(|options| options.zoom_factor = zoom);
+        scaling::rescale_events(&mut self.state.egui_input_mut().events, old_zoom / zoom);
+        // Refresh egui-winit's cached pointer too: a click can follow a resize
+        // without a physical mouse move. This also updates egui's hover position.
+        if let Some(event) = &self.last_cursor_event {
+            let _ = self.state.on_window_event(window, event);
+        }
+    }
+
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        let point = egui::pos2(x, y) / self.ctx.pixels_per_point();
+        self.ctx.layer_id_at(point).is_some_and(|layer| layer.order != egui::Order::Background)
     }
 
     pub(crate) fn pointer_over_ui(&self) -> bool {
@@ -129,20 +174,31 @@ impl Gui {
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
+        rotation_centre: Option<(f32, f32)>,
         camera_active: bool,
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
     ) -> UiFrameOutput {
+        self.update_scale(window, editor.ui_size_percent);
         let selection_color = SELECTION_COLOR;
         let visuals = &self.ctx.global_style().visuals;
         if visuals.dark_mode != editor.dark_mode || visuals.selection.stroke.color != selection_color {
             self.ctx.set_visuals(theme_visuals(editor.dark_mode, selection_color));
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let raw_input = self.state.take_egui_input(window);
-        #[cfg(target_arch = "wasm32")]
         let mut raw_input = self.state.take_egui_input(window);
+        // egui-winit lays the UI out for the window, but these shapes are
+        // rendered into the surface texture, which a browser drag-resize
+        // leaves rounded up past the window (see `App::take_resize_to_apply`).
+        // Lay out for the surface instead, so the UI fills the buffer the
+        // browser then scales onto the canvas; sized to the window it would
+        // stop short of the edge and show a strip of bare scene past the
+        // panels. Outside a drag the two agree and this changes nothing.
+        if let Some(window_rect) = raw_input.screen_rect
+            && let Some(surface_rect) = surface_screen_rect(window_rect, window.inner_size().width, screen_size)
+        {
+            raw_input.screen_rect = Some(surface_rect);
+        }
         #[cfg(target_arch = "wasm32")]
         {
             // egui-winit's WASM build has only an in-process clipboard. Drop
@@ -159,6 +215,7 @@ impl Gui {
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,
+            rotation_centre,
             camera_active,
             camera_forward,
             camera_up,
@@ -288,6 +345,8 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
 #[derive(Clone, Copy)]
 struct UiFrameContext<'a> {
     orbit_marker: Option<(f32, f32)>,
+    /// Screen position of the fixed centre of rotation, while one is set.
+    rotation_centre: Option<(f32, f32)>,
     /// Whether the camera is being driven by the pointer right now (a
     /// right-button drag). The drawn cursor stands down for a fly-mode look,
     /// where the pointer is grabbed to the window and has no position to sit at.
@@ -343,7 +402,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!(literal = "middle-drag pan · W/S move slab · Q/E rotate · Esc exit")));
+        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!("slice-viewport-gestures")));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -363,6 +422,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
         ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
+        ActiveTool::PickRotationCentre => ViewportMessage::text(tr!(literal = "Click a point to fix the centre of rotation")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
         // all. Say so up front rather than only in the console warning the
@@ -375,7 +435,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!(literal = "Select designs")),
         ActiveTool::DrapeToTopology => ViewportMessage::text(tr!(literal = "Select topologies")),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!(literal = "Choose relimit side")),
-        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!(literal = "Select line to relimit to")),
+        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
         ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!(literal = "Select line to relimit")),
         ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!(literal = "Select the endpoint to join")),
         ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!(literal = "Select the next line to fuse")),
@@ -522,7 +582,7 @@ fn draw_ui(
 
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
-    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
+    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled;
 
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
@@ -553,8 +613,7 @@ fn draw_ui(
         let console_rect = editor.show_console.then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-            let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
-            let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
+            let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
@@ -627,8 +686,7 @@ fn draw_ui(
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
-        let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
+        let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -649,12 +707,11 @@ fn draw_ui(
         egui::Rect::NOTHING
     };
 
-    // The Drill & Blast workspace's products, down the right edge. Claimed
-    // after the two strips below it, so it stops at the bottom toolbar's top
-    // and they carry on underneath it, and after the viewport bar, so it
-    // starts directly under it: the mockup's shape, and the order it takes to
-    // get there.
-    let products_island = if editor.is_planning_cut_step() {
+    // The planning cut steps' panels, down the right edge. Claimed after the
+    // two strips below it, so it stops at the bottom toolbar's top and they
+    // carry on underneath it, and after the viewport bar, so it starts
+    // directly under it.
+    let planning_island = if editor.is_planning_cut_step() {
         Some(if editor.is_dig_strips_step() {
             elements::dig_strips::draw_panel(root_ui, editor, commands)
         } else {
@@ -663,9 +720,9 @@ fn draw_ui(
     } else if editor.is_planning_viewport() {
         Some(elements::planning_reserves::draw_data_panel(root_ui))
     } else {
-        (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor))
+        None
     };
-    if products_island.is_none() {
+    if planning_island.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this panel, or
         // every panel drawn after it receives a different unique id.
@@ -700,6 +757,9 @@ fn draw_ui(
     // - lays itself out in.
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
+
+    // Draw first so later overlays paint above it.
+    widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
     draw_initiation_cards(root_ui, editor, canvas_rect);
 
@@ -982,9 +1042,11 @@ fn draw_ui(
         dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
+    dialogs::files::draw_grid_options_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
+    dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
@@ -1034,28 +1096,14 @@ fn draw_ui(
     if editor.offset_awaiting_side_pick && !editor.offset_preview_screen_px.is_empty() {
         let ppp = root_ui.ctx().pixels_per_point();
         // Entries stay index-aligned with the world arrays; a clipped vertex
-        // is `None` so guides pair the right endpoints and preview ranges
-        // never shift onto different vertices.
+        // is `None` so preview ranges never shift onto different vertices.
         let pts: Vec<Option<egui::Pos2>> = editor
             .offset_preview_screen_px
             .iter()
             .map(|point| point.map(|(x, y)| egui::pos2(x / ppp, y / ppp)))
             .collect();
-        let src_pts: Vec<Option<egui::Pos2>> = editor
-            .offset_source_screen_px
-            .iter()
-            .map(|point| point.map(|(x, y)| egui::pos2(x / ppp, y / ppp)))
-            .collect();
         let painter = root_ui.painter().with_clip_rect(canvas_rect);
         let yellow = egui::Color32::from_rgb(255, 220, 0);
-        let guide = egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(255, 230, 40, 220));
-        for (from, to) in src_pts.iter().zip(pts.iter()) {
-            if let (Some(from), Some(to)) = (from, to) {
-                for seg in dashed_line_segments(*from, *to, 6.0, 4.0) {
-                    painter.line_segment(seg, guide);
-                }
-            }
-        }
         let stroke = egui::Stroke::new(2.0, yellow);
         for &(start, end, closed) in &editor.offset_preview_ranges {
             if start >= end || end > pts.len() {
@@ -1142,6 +1190,9 @@ fn draw_ui(
     if let Some((ox, oy)) = frame_context.orbit_marker {
         elements::cursors::draw_orbit_marker(root_ui, ox, oy, canvas_rect);
     }
+    if let Some((cx, cy)) = frame_context.rotation_centre {
+        elements::cursors::draw_rotation_centre_marker(root_ui, cx, cy, canvas_rect);
+    }
 
     if editor.show_world_axis_gizmo {
         let gizmo = elements::cursors::draw_orientation_gizmo(
@@ -1150,6 +1201,7 @@ fn draw_ui(
             canvas_rect,
             frame_context.camera_forward,
             frame_context.camera_up,
+            editor.slice_mode_enabled,
         );
         if let Some(view) = gizmo.clicked {
             commands.push(UiCommand::SetStandardView(view));
@@ -1192,7 +1244,7 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let products_regions: Vec<egui::Rect> = products_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
+    let planning_regions: Vec<egui::Rect> = planning_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
     chrome::paint_regions(
         &ctx,
         [
@@ -1204,7 +1256,7 @@ fn draw_ui(
             scene_claimed,
         ]
         .into_iter()
-        .chain(products_regions),
+        .chain(planning_regions),
     );
     // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(
@@ -1214,8 +1266,8 @@ fn draw_ui(
             .into_iter()
             .chain([chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID)])
         // The island names its own seam, so the grip lights up for whichever
-        // of the four right-edge panels the workspace drew.
-        .chain(products_island.map(|island| island.grip)),
+        // of the right-edge panels the workspace drew.
+        .chain(planning_island.map(|island| island.grip)),
     );
 
     geometry_dirty
@@ -1292,6 +1344,8 @@ fn draw_global_dialogs(
     commands: &mut Vec<UiCommand>,
 ) -> bool {
     let mut geometry_dirty = false;
+    dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
+    dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
 
@@ -1381,6 +1435,12 @@ fn draw_global_dialogs(
     }
     if editor.point_cloud_tin_open {
         dialogs::triangulation::draw_point_cloud_tin_dialog(root_ui, editor, project, commands);
+    }
+    if editor.point_cloud_join_open {
+        dialogs::point_cloud::draw_point_cloud_join_dialog(root_ui, editor, project, commands);
+    }
+    if editor.point_cloud_classify_open {
+        dialogs::point_cloud::draw_point_cloud_classify_dialog(root_ui, editor, project, commands);
     }
     if editor.triangulation_pick_target.is_some() {
         dialogs::triangulation::draw_triangulation_pick_prompt(root_ui, editor);

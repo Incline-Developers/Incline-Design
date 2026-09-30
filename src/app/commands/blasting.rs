@@ -139,6 +139,8 @@ impl crate::app::App<'_> {
             color: self.editor.tool_line_color,
             loaded: true,
             elevation: band.top as f32,
+            folder: None,
+            section: crate::model::SectionKind::natural_layer(),
         });
         self.update_solid(solid, SolidEdit::Blasting(plan));
         self.editor.active_layer = Some(layer);

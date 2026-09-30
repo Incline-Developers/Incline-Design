@@ -1,8 +1,8 @@
-Incline Design — a free open-source mine design application
+Incline Design
 
 # MIT License
 
-Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors
+Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

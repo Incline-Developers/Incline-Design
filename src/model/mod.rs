@@ -9,25 +9,33 @@ pub(crate) mod arrangement;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
 pub(crate) mod block_model;
+pub(crate) mod crs;
 pub(crate) mod drill_hole;
+pub(crate) mod folders;
+pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
+pub(crate) mod ground_filter;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod input;
 pub(crate) mod kernel;
 pub(crate) mod kriging;
+pub(crate) mod object_edit;
 pub(crate) mod plot;
 pub(crate) mod point_cloud;
+pub(crate) mod point_features;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
 pub(crate) mod schedule;
 pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
+pub(crate) mod survey;
 pub(crate) mod triangulation;
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
+pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, SectionKind};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
@@ -46,12 +54,20 @@ pub(crate) enum Axis {
 }
 
 impl Axis {
-    /// Single-letter name used in menus, dialog titles and console reports.
-    pub(crate) fn label(self) -> &'static str {
+    /// Name used in menus, dialog titles and console reports.
+    ///
+    /// X, Y and Z unless the chosen mine coordinate system renamed them: see
+    /// [`crate::model::survey::axis_name`].
+    pub(crate) fn label(self) -> String {
+        crate::model::survey::axis_name(self.index())
+    }
+
+    /// Position of this axis in a coordinate triple.
+    pub(crate) fn index(self) -> usize {
         match self {
-            Self::X => "X",
-            Self::Y => "Y",
-            Self::Z => "Z",
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
         }
     }
 }
@@ -64,6 +80,13 @@ pub(crate) enum SceneEntityId {
     BlockModel(block_model::BlockModelId),
     DrillHole(drill_hole::DrillHoleId),
     PointCloud(point_cloud::PointCloudId),
+    /// A georeferenced image. Unlike the others a raster has no geometry of
+    /// its own in the scene - it is painted onto whatever surface it is draped
+    /// over - so it is never the thing a viewport click hits. It is selected
+    /// from its explorer row, or alongside the surface wearing it when that
+    /// surface is picked. Everything downstream that works on a selection can
+    /// then reach it like any other entity.
+    Raster(raster::RasterTextureId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,6 +100,24 @@ pub(crate) struct Layer {
     #[serde(alias = "visible")]
     pub(crate) loaded: bool,
     pub(crate) elevation: f32,
+    /// Folder this layer sits in, or `None` for the section root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) folder: Option<FolderId>,
+    /// Explorer section this layer is shown under.
+    #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
+    pub(crate) section: SectionKind,
+}
+
+impl Layer {
+    /// Fold what the explorer tree draws of this layer into a view key.
+    pub(crate) fn hash_row(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.id.hash(hasher);
+        self.name.hash(hasher);
+        self.loaded.hash(hasher);
+        self.folder.hash(hasher);
+        self.section.hash(hasher);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -677,7 +718,13 @@ impl PolyVertex {
 }
 
 /// A drawable design element. `Polyline` with `closed == true` represents a
-/// polyline; vertices carry bulges so arcs/circles are preserved.
+/// polyline; vertices carry bulges so arcs are preserved.
+///
+/// A circle is its own variant rather than a two-vertex bulged polyline. The
+/// compact encoding still exists, but only as a *geometry view*
+/// ([`Object::string_geometry`]) for tessellation, snapping and export - never
+/// as something editing tools reason about. Tools ask which variant they have,
+/// not how many vertices it happens to hold.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Object {
@@ -696,6 +743,15 @@ pub(crate) enum Object {
         fill: FillStyle,
         line_weight: f32,
     },
+    Circle {
+        id: ObjectId,
+        layer: LayerId,
+        center: DVec3,
+        radius: f64,
+        color: ObjectColor,
+        fill: FillStyle,
+        line_weight: f32,
+    },
     Text {
         id: ObjectId,
         layer: LayerId,
@@ -710,13 +766,13 @@ pub(crate) enum Object {
 impl Object {
     pub(crate) fn id(&self) -> ObjectId {
         match self {
-            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Text { id, .. } => *id,
+            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } => *id,
         }
     }
 
     pub(crate) fn layer(&self) -> LayerId {
         match self {
-            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Text { layer, .. } => *layer,
+            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } => *layer,
         }
     }
 
@@ -727,13 +783,14 @@ impl Object {
             Object::Point { .. } => crate::i18n::tr!(literal = "Point"),
             Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!(literal = "Line"),
             Object::Polyline { .. } => crate::i18n::tr!(literal = "Polyline"),
+            Object::Circle { .. } => crate::i18n::tr!(literal = "Circle"),
             Object::Text { .. } => crate::i18n::tr!(literal = "Text"),
         }
     }
 
     pub(crate) fn color(&self) -> ObjectColor {
         match self {
-            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Text { color, .. } => *color,
+            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color,
         }
     }
 
@@ -784,6 +841,21 @@ impl Object {
                 1u8.hash(&mut hasher);
                 hash_verts(&mut hasher, verts);
                 closed.hash(&mut hasher);
+                hash_color(&mut hasher, *color);
+                std::mem::discriminant(fill).hash(&mut hasher);
+                line_weight.to_bits().hash(&mut hasher);
+            }
+            Object::Circle {
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+                ..
+            } => {
+                3u8.hash(&mut hasher);
+                hash_pos(&mut hasher, *center);
+                radius.to_bits().hash(&mut hasher);
                 hash_color(&mut hasher, *color);
                 std::mem::discriminant(fill).hash(&mut hasher);
                 line_weight.to_bits().hash(&mut hasher);
@@ -846,6 +918,17 @@ impl Object {
                     return Err("invalid polyline line weight".to_string());
                 }
             }
+            Object::Circle { center, radius, line_weight, .. } => {
+                if !center.is_finite() {
+                    return Err("non-finite circle centre".to_string());
+                }
+                if !radius.is_finite() || *radius <= 0.0 {
+                    return Err("circle radius must be greater than zero".to_string());
+                }
+                if !line_weight.is_finite() || *line_weight < 0.0 {
+                    return Err("invalid circle line weight".to_string());
+                }
+            }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
                     return Err("non-finite text position".to_string());
@@ -864,6 +947,7 @@ impl Object {
     pub(crate) fn translate(&mut self, delta: DVec3) {
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos += delta,
+            Object::Circle { center, .. } => *center += delta,
             Object::Polyline { verts, .. } => {
                 for vertex in verts {
                     vertex.pos += delta;
@@ -876,6 +960,7 @@ impl Object {
     pub(crate) fn axis_position(&self, axis: Axis) -> f64 {
         let pos = match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
+            Object::Circle { center, .. } => *center,
             Object::Polyline { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
         };
         match axis {
@@ -893,6 +978,7 @@ impl Object {
         };
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => set(pos),
+            Object::Circle { center, .. } => set(center),
             Object::Polyline { verts, .. } => {
                 for vertex in verts {
                     set(&mut vertex.pos);
@@ -925,6 +1011,22 @@ impl Object {
                 fill: *fill,
                 line_weight: *line_weight,
             },
+            Object::Circle {
+                center,
+                radius,
+                color,
+                fill,
+                line_weight,
+                ..
+            } => Object::Circle {
+                id,
+                layer,
+                center: *center,
+                radius: *radius,
+                color: *color,
+                fill: *fill,
+                line_weight: *line_weight,
+            },
             Object::Text {
                 pos,
                 content,
@@ -943,6 +1045,100 @@ impl Object {
             },
         }
     }
+
+    /// Centre and radius, for the one variant that has them.
+    pub(crate) fn circle(&self) -> Option<(DVec3, f64)> {
+        match self {
+            Object::Circle { center, radius, .. } => Some((*center, *radius)),
+            _ => None,
+        }
+    }
+
+    /// The bulged-polyline *view* of anything that draws as a string.
+    ///
+    /// A polyline lends its stored vertices; a circle is rendered into the
+    /// compact two-semicircle encoding on demand. This exists so tessellation,
+    /// snapping, picking and export keep one code path - it is emphatically
+    /// not an invitation to edit a circle through its vertices. Editing tools
+    /// match on the variant.
+    pub(crate) fn string_geometry(&self) -> Option<(Cow<'_, [PolyVertex]>, bool)> {
+        match self {
+            Object::Polyline { verts, closed, .. } => Some((Cow::Borrowed(verts.as_slice()), *closed)),
+            Object::Circle { center, radius, .. } => {
+                let verts = geometry::circle_polyline_vertices(*center, *radius, glam::DVec2::X)?;
+                Some((Cow::Owned(verts.to_vec()), true))
+            }
+            Object::Point { .. } | Object::Text { .. } => None,
+        }
+    }
+
+    /// Tessellated path of anything that draws as a string, plus whether it
+    /// closes. Arcs and circles are flattened, so callers that want a region
+    /// or a breakline get points without caring which variant produced them.
+    pub(crate) fn tessellated_path(&self) -> Option<(Vec<DVec3>, bool)> {
+        let (verts, closed) = self.string_geometry()?;
+        Some((geometry::tessellate_polyline_bulges(verts.as_ref(), closed), closed))
+    }
+
+    /// Tessellated outline of an object that encloses an area - a closed
+    /// polyline or a circle - with enough points to bound a region.
+    pub(crate) fn closed_boundary(&self) -> Option<Vec<DVec3>> {
+        let (points, closed) = self.tessellated_path()?;
+        (closed && points.len() >= 3).then_some(points)
+    }
+
+    /// Whether this object bounds a region: the question every boundary
+    /// picker actually means when it inspects `closed` and a vertex count.
+    pub(crate) fn encloses_area(&self) -> bool {
+        self.closed_boundary().is_some()
+    }
+
+    /// Hatching style, for the two variants that enclose an area.
+    pub(crate) fn fill(&self) -> Option<FillStyle> {
+        match self {
+            Object::Polyline { fill, .. } | Object::Circle { fill, .. } => Some(*fill),
+            _ => None,
+        }
+    }
+
+    /// Stroke width, for the two variants that carry one.
+    pub(crate) fn line_weight(&self) -> Option<f32> {
+        match self {
+            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } => Some(*line_weight),
+            _ => None,
+        }
+    }
+}
+
+/// Promote a polyline that is a circle in the pre-[`Object::Circle`] compact
+/// encoding - closed, two vertices, both bulges a half turn the same way.
+///
+/// Documents written before circles had a variant of their own, and DXF's own
+/// `CIRCLE` entity, both arrive in that form. Returns `None` for anything that
+/// is genuinely a polyline.
+pub(crate) fn promote_compact_circle(object: &Object) -> Option<Object> {
+    let Object::Polyline {
+        id,
+        layer,
+        verts,
+        closed,
+        color,
+        fill,
+        line_weight,
+    } = object
+    else {
+        return None;
+    };
+    let spec = object_edit::compact_circle(verts, *closed)?;
+    Some(Object::Circle {
+        id: *id,
+        layer: *layer,
+        center: spec.center,
+        radius: spec.radius,
+        color: *color,
+        fill: *fill,
+        line_weight: *line_weight,
+    })
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1033,9 +1229,17 @@ impl Document {
     /// Some external design formats encode ordinary two-point strings as
     /// closed polylines. Importers use this before constructing a project so the
     /// resulting document satisfies the three-vertex polyline invariant.
+    ///
+    /// A closed bulged pair is a circle in compact form, not a degenerate
+    /// string: those are promoted to [`Object::Circle`] rather than opened.
     pub(crate) fn repair_degenerate_closed_polylines(&mut self) -> usize {
         let mut repaired = 0;
         for object in &mut self.objects {
+            if let Some(promoted) = promote_compact_circle(object) {
+                *object = promoted;
+                repaired += 1;
+                continue;
+            }
             if let Object::Polyline { verts, closed, .. } = object
                 && *closed
                 && verts.len() == 2
@@ -1048,6 +1252,23 @@ impl Document {
             self.touch();
         }
         repaired
+    }
+
+    /// Upgrade every circle still stored in the pre-[`Object::Circle`] compact
+    /// encoding. Runs when a document is read, so nothing downstream of load
+    /// has to recognise the old form. Returns how many were promoted.
+    pub(crate) fn promote_compact_circles(&mut self) -> usize {
+        let mut promoted = 0;
+        for object in &mut self.objects {
+            if let Some(circle) = promote_compact_circle(object) {
+                *object = circle;
+                promoted += 1;
+            }
+        }
+        if promoted > 0 {
+            self.touch();
+        }
+        promoted
     }
 
     /// Validate on-disk model invariants. Runs on deserialized documents
@@ -1144,6 +1365,8 @@ impl Document {
             color,
             loaded,
             elevation,
+            folder: None,
+            section: SectionKind::natural_layer(),
         });
         self.touch();
         id
@@ -1634,6 +1857,15 @@ impl Document {
         }
     }
 
+    pub(crate) fn set_layer_elevation(&mut self, id: LayerId, elevation: f32) {
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.elevation != elevation
+        {
+            layer.elevation = elevation;
+            self.touch();
+        }
+    }
+
     /// Set a layer's viewport visibility. Returns the new state, or `None`
     /// when the layer no longer exists.
     pub(crate) fn set_layer_loaded(&mut self, id: LayerId, loaded: bool) -> Option<bool> {
@@ -1643,6 +1875,71 @@ impl Document {
             self.touch();
         }
         Some(loaded)
+    }
+
+    /// Put a layer in `folder`, or back at the root with `None`.
+    pub(crate) fn set_layer_folder(&mut self, id: LayerId, folder: Option<FolderId>) -> bool {
+        let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
+            return false;
+        };
+        if layer.folder != folder {
+            layer.folder = folder;
+            self.touch();
+        }
+        true
+    }
+
+    /// Show a layer under `section`. Moving it clears the folder it was in.
+    pub(crate) fn set_layer_section(&mut self, id: LayerId, section: SectionKind) -> bool {
+        let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
+            return false;
+        };
+        if layer.section != section {
+            layer.section = section;
+            layer.folder = None;
+            self.touch();
+        }
+        true
+    }
+
+    /// Ids of the layers held by `folder`, in layer order.
+    pub(crate) fn layers_in_folder(&self, folder: FolderId) -> Vec<LayerId> {
+        self.layers.iter().filter(|layer| layer.folder == Some(folder)).map(|layer| layer.id).collect()
+    }
+
+    /// Return every layer in `folder` to the root, for a folder being deleted.
+    pub(crate) fn clear_layer_folder(&mut self, folder: FolderId) {
+        for layer in &mut self.layers {
+            if layer.folder == Some(folder) {
+                layer.folder = None;
+            }
+        }
+        self.touch();
+    }
+
+    /// Put every layer somewhere it can actually be drawn, and report whether
+    /// any moved.
+    pub(crate) fn heal_layers(&mut self, known: &FolderRegistry) -> bool {
+        let mut healed = false;
+        for layer in &mut self.layers {
+            let section = layer.section.healed_for(MemberKind::Layer);
+            if layer.section != section {
+                log::warn!(
+                    "layer '{}' is tagged for {}, which does not show layers; showing it under {}",
+                    layer.name,
+                    layer.section.key(),
+                    section.key()
+                );
+                layer.section = section;
+                layer.folder = None;
+                healed = true;
+            }
+            if layer.folder.is_some_and(|folder| !known.contains(layer.section, folder)) {
+                layer.folder = None;
+                healed = true;
+            }
+        }
+        healed
     }
 
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
@@ -1813,9 +2110,9 @@ impl Document {
     /// the whole document to JSON, which interactive drags used to repeat on
     /// every pointer event. Ids are masked to their 32-bit local half so the
     /// fingerprint is identical before and after runtime namespacing.
-    pub(crate) fn content_hash(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> u64 {
+    pub(crate) fn content_hash(&self, cache: &mut HashMap<ObjectId, (u64, u64)>, folders: &FolderRegistry) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        let hashes = self.layer_content_hashes(cache);
+        let hashes = self.layer_content_hashes(cache, folders);
         let mut hasher = DefaultHasher::new();
         for layer in &self.layers {
             let id = layer.id.0 & u64::from(u32::MAX);
@@ -1831,7 +2128,12 @@ impl Document {
 
     /// Hash logical layer contents identically whether its payload is resident
     /// or backed by a file. Residency cannot change the saved-content baseline.
-    pub(crate) fn layer_content_hashes(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> HashMap<u64, u64> {
+    /// `folders` is the project's registry: a layer's membership is hashed by
+    /// the folder's *name*, because that is what a file records for it, so a
+    /// rename is unsaved work on everything inside while reopening a project
+    /// with freshly minted ids is not. The section is hashed as well - a file
+    /// records that too.
+    pub(crate) fn layer_content_hashes(&self, cache: &mut HashMap<ObjectId, (u64, u64)>, folders: &FolderRegistry) -> HashMap<u64, u64> {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let payloads = self.payload_hashes(cache);
         self.layers
@@ -1845,6 +2147,8 @@ impl Document {
                 }
                 layer.loaded.hash(&mut hasher);
                 layer.elevation.to_bits().hash(&mut hasher);
+                layer.section.hash(&mut hasher);
+                layer.folder.and_then(|id| folders.name(layer.section, id)).hash(&mut hasher);
                 payloads.get(&layer.id).hash(&mut hasher);
                 (layer.id.0 & u64::from(u32::MAX), hasher.finish())
             })
@@ -1869,6 +2173,16 @@ pub(crate) enum ItemRef {
 }
 
 impl ItemRef {
+    pub(crate) fn kind(self) -> MemberKind {
+        match self {
+            Self::Triangulation(_) => MemberKind::Triangulation,
+            Self::BlockModel(_) => MemberKind::BlockModel,
+            Self::DrillHole(_) => MemberKind::DrillHole,
+            Self::PointCloud(_) => MemberKind::PointCloud,
+            Self::Raster(_) => MemberKind::Raster,
+        }
+    }
+
     pub(crate) fn from_entity(entity: SceneEntityId) -> Option<Self> {
         match entity {
             SceneEntityId::Object(_) => None,
@@ -1876,6 +2190,7 @@ impl ItemRef {
             SceneEntityId::BlockModel(id) => Some(Self::BlockModel(id)),
             SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
             SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
+            SceneEntityId::Raster(id) => Some(Self::Raster(id)),
         }
     }
 }
@@ -2119,6 +2434,10 @@ pub(crate) struct StepEffects {
 /// is what keeps one Ctrl-Z timeline over edits that touch both.
 pub(crate) struct EditTarget<'a> {
     pub(crate) document: &'a mut Document,
+    /// Every explorer folder in the project. Borrowed here, beside the
+    /// document and the item collections, so one undo timeline covers the
+    /// folders of all six sections and their members in the same step.
+    pub(crate) folders: &'a mut FolderRegistry,
     pub(crate) content: &'a mut project::ProjectContentState,
     pub(crate) triangulations: &'a mut Vec<triangulation::OpenTriangulation>,
     pub(crate) block_models: &'a mut Vec<block_model::OpenBlockModel>,
@@ -2131,6 +2450,117 @@ pub(crate) struct EditTarget<'a> {
 }
 
 impl EditTarget<'_> {
+    /// Record that the folder lists changed.
+    fn touch_folders(&mut self) {
+        self.content.touch();
+    }
+
+    /// Delete a folder and return its members to the section root, recording
+    /// the effects each half owes. Shared by apply (delete) and revert (undo
+    /// of an add) so the two can never drift.
+    fn remove_folder(&mut self, section: SectionKind, id: FolderId) {
+        if !self.folders.remove(section, id) {
+            return;
+        }
+        // Both halves every time: an id is unique registry-wide, so whatever
+        // a section holds - layers, project items, or both - is exactly what
+        // that id can be found on.
+        if !self.document.layers_in_folder(id).is_empty() {
+            self.document.clear_layer_folder(id);
+            self.effects.document_changed = true;
+        }
+        for item in self.items_in_folder(id) {
+            self.set_item_folder(item, None);
+        }
+        self.touch_folders();
+    }
+
+    /// Project items currently held by `folder`, whichever section shows them.
+    fn items_in_folder(&self, folder: FolderId) -> Vec<ItemRef> {
+        self.all_item_refs().into_iter().filter(|item| self.item_folder(*item) == Some(folder)).collect()
+    }
+
+    /// Every project item the app holds, in collection order.
+    pub(crate) fn all_item_refs(&self) -> Vec<ItemRef> {
+        let triangulations = self.triangulations.iter().map(|entry| ItemRef::Triangulation(entry.id));
+        let rasters = self.rasters.iter().map(|entry| ItemRef::Raster(entry.id));
+        let point_clouds = self.point_clouds.iter().map(|entry| ItemRef::PointCloud(entry.id));
+        let block_models = self.block_models.iter().map(|entry| ItemRef::BlockModel(entry.id));
+        let drill_holes = self.drill_holes.iter().map(|entry| ItemRef::DrillHole(entry.id));
+        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+    }
+
+    fn item_folder(&self, item: ItemRef) -> Option<FolderId> {
+        self.item_state(item).and_then(|state| state.folder)
+    }
+
+    /// Move one project item between folders. Goes through `touch_item`, so a
+    /// move dirties the item exactly as any other edit to it would.
+    fn set_item_folder(&mut self, item: ItemRef, folder: Option<FolderId>) {
+        let Some(state) = self.item_state_mut(item) else {
+            return;
+        };
+        if state.folder == folder {
+            return;
+        }
+        state.folder = folder;
+        self.touch_item(item);
+    }
+
+    /// The folder a layer may actually be put in, which is `None` unless the
+    /// section the layer is shown under still has it.
+    fn placeable_layer_folder(&self, id: LayerId, folder: Option<FolderId>) -> Option<FolderId> {
+        let section = self.document.layer(id)?.section;
+        folder.filter(|folder| self.folders.contains(section, *folder))
+    }
+
+    /// The same guard for a project item. See [`Self::placeable_layer_folder`].
+    fn placeable_item_folder(&self, item: ItemRef, folder: Option<FolderId>) -> Option<FolderId> {
+        let section = self.item_state(item)?.section;
+        folder.filter(|folder| self.folders.contains(section, *folder))
+    }
+
+    fn item_state(&self, item: ItemRef) -> Option<&project::ProjectItemState> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+        }
+    }
+
+    /// Drop memberships no folder can resolve, across every section.
+    pub(crate) fn heal_folders(&mut self) {
+        if self.document.heal_layers(self.folders) {
+            self.effects.document_changed = true;
+        }
+        for item in self.all_item_refs() {
+            let Some(state) = self.item_state(item) else { continue };
+            let (was_section, was_folder) = (state.section, state.folder);
+            // Same two repairs the document's layers get, in the same order:
+            // an unadmitted tag would leave the item under no heading, and a
+            // retag leaves its folder behind because an id belongs to the
+            // section that minted it.
+            let section = was_section.healed_for(item.kind());
+            let folder = was_folder.filter(|folder| section == was_section && self.folders.contains(section, *folder));
+            if (section, folder) == (was_section, was_folder) {
+                continue;
+            }
+            if section != was_section {
+                log::warn!(
+                    "an item is tagged for {}, which does not show items of its kind; showing it under {}",
+                    was_section.key(),
+                    section.key()
+                );
+            }
+            if let Some(state) = self.item_state_mut(item) {
+                state.section = section;
+                state.folder = folder;
+            }
+        }
+    }
+
     fn item_state_mut(&mut self, item: ItemRef) -> Option<&mut project::ProjectItemState> {
         match item {
             ItemRef::Triangulation(id) => self.triangulations.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
@@ -2485,6 +2915,57 @@ pub(crate) enum Command {
         /// Original global draw-order position of every object on the layer.
         objects: Vec<(usize, Object)>,
     },
+    /// Add an explorer folder to one section. Undo removes it, which returns
+    /// anything put in it since to the root. The whole folder is carried, id
+    /// included, so redo restores the one its members remember rather than a
+    /// new folder.
+    AddFolder {
+        section: SectionKind,
+        folder: Folder,
+    },
+    /// Remove an explorer folder, returning what it held to the section root.
+    /// Undo puts the folder back where it was, with those members in it.
+    ///
+    /// Members are recorded in the two shapes a section can hold - design
+    /// layers live in the document, every other kind is a project item - and
+    /// exactly one of the two is ever non-empty, because a folder belongs to
+    /// one section and a section holds one kind.
+    // `ItemRef` is not serializable, the same reason every other item-touching
+    // variant carries this attribute. Folder commands own no layer or item
+    // payload, so `payload_owners` never nominates them for archiving.
+    #[serde(skip)]
+    DeleteFolder {
+        section: SectionKind,
+        folder: Folder,
+        /// Original position in the section's folder list, restored by undo.
+        index: usize,
+        layers: Vec<LayerId>,
+        items: Vec<ItemRef>,
+    },
+    /// Rename an explorer folder. Membership follows the id, so only the name
+    /// moves.
+    RenameFolder {
+        section: SectionKind,
+        id: FolderId,
+        before: String,
+        after: String,
+    },
+    /// Move a design layer into a folder, or back to the root.
+    SetLayerFolder {
+        id: LayerId,
+        before: Option<FolderId>,
+        after: Option<FolderId>,
+    },
+    /// Move a project item into a folder of its own section, or back to the
+    /// root. Separate from [`Self::SetLayerFolder`] because the two halves
+    /// store membership in different places - a layer in the document, an item
+    /// in its [`project::ProjectItemState`] - and dirty differently for it.
+    #[serde(skip)]
+    SetItemFolder {
+        item: ItemRef,
+        before: Option<FolderId>,
+        after: Option<FolderId>,
+    },
     /// Show or hide a design layer.
     SetLayerLoaded {
         id: LayerId,
@@ -2577,6 +3058,25 @@ pub(crate) enum Command {
         before: Box<schedule::SchedulePlan>,
         after: Box<schedule::SchedulePlan>,
     },
+    /// Replace one project item's contents in place - what a coordinate
+    /// conversion does to a mesh - keeping its identity, name, style and
+    /// position in the explorer. The item is rewritten, not reissued: nothing
+    /// downstream that holds its id has to be told.
+    ///
+    /// `other` carries whichever version is *not* currently in the project, so
+    /// applying and reverting are the same swap and the history holds one
+    /// extra copy of the data rather than two.
+    #[serde(skip)]
+    ReplaceItem {
+        item: ItemRef,
+        other: Option<OpenItem>,
+    },
+    /// Set a design layer's elevation (undo restores the old one).
+    SetLayerElevation {
+        id: LayerId,
+        before: f32,
+        after: f32,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -2601,7 +3101,7 @@ impl Command {
                 + match object {
                     Object::Polyline { verts, .. } => verts.len().saturating_mul(size_of::<PolyVertex>()),
                     Object::Text { content, .. } => content.len(),
-                    Object::Point { .. } => 0,
+                    Object::Point { .. } | Object::Circle { .. } => 0,
                 }
         }
         fn layer_bytes(layer: &Layer) -> usize {
@@ -2618,7 +3118,16 @@ impl Command {
                 Command::DeleteLayerSnapshot { layer, objects, .. } => {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
-                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } => 0,
+                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } | Command::SetLayerElevation { .. } => 0,
+                Command::AddFolder { folder, .. } => folder.name.len(),
+                Command::DeleteFolder { folder, layers, items, .. } => folder
+                    .name
+                    .len()
+                    .saturating_add(layers.len().saturating_mul(size_of::<LayerId>()))
+                    .saturating_add(items.len().saturating_mul(size_of::<ItemRef>())),
+                Command::RenameFolder { before, after, .. } => before.len().saturating_add(after.len()),
+                Command::SetLayerFolder { .. } | Command::SetItemFolder { .. } => 0,
+                Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
@@ -2701,6 +3210,26 @@ impl Command {
         }
     }
 
+    /// Whether this command can put a layer or an item back into the project.
+    ///
+    /// That is the only way a membership can outlive the folder it names, so
+    /// it is the only case worth a healing pass. Everything else - a drag, an
+    /// object edit, a colour change - answers `false` and pays nothing, which
+    /// matters because `History::execute` runs on every pointer event of a
+    /// live gesture.
+    fn may_restore_members(&self) -> bool {
+        match self {
+            Self::AddLayerSnapshot { .. }
+            | Self::DeleteLayerSnapshot { .. }
+            | Self::Archived { .. }
+            | Self::AddItem { .. }
+            | Self::DeleteItem { .. }
+            | Self::ReplaceItem { .. } => true,
+            Self::Batch(commands) => commands.iter().any(Self::may_restore_members),
+            _ => false,
+        }
+    }
+
     pub(crate) fn required_items(&self, undo: bool, into: &mut Vec<ItemRef>) {
         match self {
             Self::Archived { items, .. } => into.extend(items.iter().copied()),
@@ -2708,6 +3237,8 @@ impl Command {
             Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::SetInitiation { dataset, .. } => {
                 into.push(ItemRef::DrillHole(*dataset))
             }
+            // The swap lifts the resident version out, so it has to be there.
+            Self::ReplaceItem { item, .. } => into.push(*item),
             Self::Batch(commands) => {
                 for command in commands {
                     command.required_items(undo, into);
@@ -2722,9 +3253,25 @@ impl Command {
     fn touched_items(&self, into: &mut Vec<ItemRef>) {
         match self {
             Command::Archived { items, .. } => into.extend(items.iter().copied()),
-            Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::AddItem { item, .. } | Command::DeleteItem { item, .. } => {
+            Command::SetItemStyle { item, .. }
+            | Command::RenameItem { item, .. }
+            | Command::AddItem { item, .. }
+            | Command::DeleteItem { item, .. }
+            | Command::ReplaceItem { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
+                }
+            }
+            Command::SetItemFolder { item, .. } => {
+                if !into.contains(item) {
+                    into.push(*item);
+                }
+            }
+            Command::DeleteFolder { items, .. } => {
+                for item in items {
+                    if !into.contains(item) {
+                        into.push(*item);
+                    }
                 }
             }
             Command::MoveCollars { dataset, .. } | Command::RotateCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
@@ -2745,8 +3292,33 @@ impl Command {
             | Command::AddLayerSnapshot { .. }
             | Command::DeleteLayerSnapshot { .. }
             | Command::SetLayerLoaded { .. }
+            | Command::SetLayerElevation { .. }
             | Command::SetObjectHidden { .. }
+            | Command::AddFolder { .. }
+            | Command::RenameFolder { .. }
+            | Command::SetLayerFolder { .. }
             | Command::SetSchedulePlan { .. } => {}
+        }
+    }
+
+    /// Swap the resident version of an item for the one held in the command.
+    ///
+    /// Apply and revert are the same operation, which is what makes an
+    /// in-place rewrite exactly reversible however many times it is undone and
+    /// redone. The resident item is lifted first: if it has gone, the held
+    /// version goes straight back into the command rather than being dropped.
+    fn swap_item(item: ItemRef, other: &mut Option<OpenItem>, target: &mut EditTarget<'_>) {
+        let Some(replacement) = other.take() else { return };
+        match target.take_item(item) {
+            Some((index, resident)) => {
+                target.insert_item(index, replacement);
+                // `insert_item` deliberately preserves the epoch it restores,
+                // which is right for undoing a delete and wrong here: this is
+                // different content under the same identity, so it is dirty.
+                target.touch_item(item);
+                *other = Some(resident);
+            }
+            None => *other = Some(replacement),
         }
     }
 
@@ -2806,6 +3378,49 @@ impl Command {
                 target.document.delete_layer(layer.id);
                 target.effects.document_changed = true;
             }
+            Command::AddFolder { section, folder } => {
+                let index = target.folders.folders(*section).len();
+                if target.folders.insert(*section, index, folder.clone()) {
+                    target.touch_folders();
+                } else {
+                    // The first application is always unique - the caller
+                    // checks synchronously right before constructing the
+                    // command - but this arm also runs redo, which can land
+                    // after something outside the undo history (an OMF merge)
+                    // has taken the name since undo removed the folder. Keep
+                    // the id, uniquify the name, same fallback as
+                    // `DeleteFolder`/`RenameFolder` below.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(folder.name.clone(), existing.iter().map(String::as_str));
+                    if target.folders.insert(*section, index, Folder { id: folder.id, name }) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::DeleteFolder { section, folder, .. } => {
+                target.remove_folder(*section, folder.id);
+            }
+            Command::RenameFolder { section, id, after, .. } => {
+                if target.folders.rename(*section, *id, after.clone()) {
+                    target.touch_folders();
+                } else {
+                    // Same redo-after-external-merge fallback as `AddFolder`.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(after.clone(), existing.iter().map(String::as_str));
+                    if target.folders.rename(*section, *id, name) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::SetLayerFolder { id, after, .. } => {
+                let after = target.placeable_layer_folder(*id, *after);
+                target.document.set_layer_folder(*id, after);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemFolder { item, after, .. } => {
+                let after = target.placeable_item_folder(*item, *after);
+                target.set_item_folder(*item, after);
+            }
             Command::SetLayerLoaded { id, after, .. } => {
                 target.document.set_layer_loaded(*id, *after);
                 target.effects.document_changed = true;
@@ -2835,6 +3450,11 @@ impl Command {
                     *index = taken_index;
                     *removed = Some(taken);
                 }
+            }
+            Command::ReplaceItem { item, other } => Self::swap_item(*item, other, target),
+            Command::SetLayerElevation { id, after, .. } => {
+                target.document.set_layer_elevation(*id, *after);
+                target.effects.document_changed = true;
             }
         }
     }
@@ -2890,6 +3510,68 @@ impl Command {
                 target.document.restore_objects_bulk(objects.clone());
                 target.effects.document_changed = true;
             }
+            Command::AddFolder { section, folder } => {
+                target.remove_folder(*section, folder.id);
+            }
+            Command::DeleteFolder {
+                section,
+                folder,
+                index,
+                layers,
+                items,
+            } => {
+                if !target.folders.insert(*section, *index, folder.clone()) {
+                    // The name was taken by something outside the undo history
+                    // since the delete - an OMF merge adds folders directly,
+                    // with no history entry to conflict with. The folder and
+                    // its members still have to come back, so retry once under
+                    // a uniquified name: same id, so `layers`/`items` below
+                    // still resolve to it. A blank name cannot reach here -
+                    // `add` and `rename` both refuse one, so no command was
+                    // ever recorded with one - and `unique_item_name` always
+                    // terminates on a non-blank name, so this cannot loop.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(folder.name.clone(), existing.iter().map(String::as_str));
+                    if !target.folders.insert(*section, *index, Folder { id: folder.id, name }) {
+                        return;
+                    }
+                }
+                for id in layers.iter() {
+                    target.document.set_layer_folder(*id, Some(folder.id));
+                }
+                for item in items.iter() {
+                    target.set_item_folder(*item, Some(folder.id));
+                }
+                target.effects.document_changed |= !layers.is_empty();
+                target.touch_folders();
+            }
+            Command::RenameFolder { section, id, before, .. } => {
+                if target.folders.rename(*section, *id, before.clone()) {
+                    target.touch_folders();
+                } else {
+                    // `before` was taken by something outside the undo history
+                    // since the rename (an OMF merge) - rename back under a
+                    // uniquified form of it rather than leaving the entry
+                    // consumed with the name never reverted. Same reasoning as
+                    // `DeleteFolder` above: a blank `before` cannot reach here,
+                    // and `unique_item_name` always terminates on a non-blank
+                    // one.
+                    let existing: Vec<String> = target.folders.names(*section).into_iter().map(String::from).collect();
+                    let name = project::unique_item_name(before.clone(), existing.iter().map(String::as_str));
+                    if target.folders.rename(*section, *id, name) {
+                        target.touch_folders();
+                    }
+                }
+            }
+            Command::SetLayerFolder { id, before, .. } => {
+                let before = target.placeable_layer_folder(*id, *before);
+                target.document.set_layer_folder(*id, before);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemFolder { item, before, .. } => {
+                let before = target.placeable_item_folder(*item, *before);
+                target.set_item_folder(*item, before);
+            }
             Command::SetLayerLoaded { id, before, .. } => {
                 target.document.set_layer_loaded(*id, *before);
                 target.effects.document_changed = true;
@@ -2922,6 +3604,11 @@ impl Command {
                 if let Some(item) = removed.take() {
                     target.insert_item(*index, item);
                 }
+            }
+            Command::ReplaceItem { item, other } => Self::swap_item(*item, other, target),
+            Command::SetLayerElevation { id, before, .. } => {
+                target.document.set_layer_elevation(*id, *before);
+                target.effects.document_changed = true;
             }
         }
     }
@@ -3070,6 +3757,12 @@ impl History {
         command.touched_items(&mut items);
         let before = EpochSnapshot::capture(target, &items);
         command.apply(target);
+        // A command can put a layer or an item back carrying a folder that has
+        // since been deleted; nothing downstream would notice a membership
+        // pointing at a folder the registry no longer has.
+        if command.may_restore_members() {
+            target.heal_folders();
+        }
         let after = EpochSnapshot::capture(target, &items);
         self.push_entry(command, before, after, continuing);
     }
@@ -3163,6 +3856,9 @@ impl History {
                 // left behind from content something else has since changed.
                 let current = EpochSnapshot::capture(target, &items);
                 entry.command.revert(target);
+                if entry.command.may_restore_members() {
+                    target.heal_folders();
+                }
                 entry.before.restore(target, &current, &entry.after);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
                 entry.estimated_bytes = entry.command.estimated_bytes();
@@ -3192,6 +3888,9 @@ impl History {
                 entry.command.touched_items(&mut items);
                 let current = EpochSnapshot::capture(target, &items);
                 entry.command.apply(target);
+                if entry.command.may_restore_members() {
+                    target.heal_folders();
+                }
                 entry.after.restore(target, &current, &entry.before);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
                 entry.estimated_bytes = entry.command.estimated_bytes();

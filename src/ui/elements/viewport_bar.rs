@@ -35,8 +35,6 @@ use crate::{
     },
 };
 
-/// Gap between buttons in the same cluster.
-const BUTTON_GAP: f32 = 0.0;
 /// How much shorter than a button a menu label's hover fill is drawn, so the
 /// dropdowns read as labels in the bar rather than as more buttons.
 const MENU_ROW_INSET: f32 = 6.0;
@@ -97,7 +95,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // them. The layout centres everything on the row, so the three
                     // clusters can be three different heights and still line up.
 
-                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         if editor.active_workspace == Workspace::Planning {
                             divider(ui, side);
@@ -106,7 +104,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                             main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                         }
                     });
-                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !editor.is_planning_setup() {
                             draw_view_tools(ui, editor, project, commands, side);
                         }
@@ -129,7 +127,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // sized to it, so a stale width slides the run along
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
-                        let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let drawn = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             draw_centre_settings(ui, editor, project);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
@@ -146,20 +144,6 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
         .rect
 }
 
-/// Lay one cluster out over `rect`, and report what it drew into.
-///
-/// The three clusters are placed against the same strip rather than in
-/// sequence, so each is given the rect it should align itself in and none of
-/// them consumes space the next one wanted.
-fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
-        ui.spacing_mut().item_spacing.x = BUTTON_GAP;
-        add_contents(ui);
-    })
-    .response
-    .rect
-}
-
 /// The clear space between the two clusters the centre run has to stay inside.
 ///
 /// `None` once they meet, which is a window too narrow to show the centre at
@@ -174,6 +158,18 @@ fn centre_band(strip: egui::Rect, left: egui::Rect, right: egui::Rect) -> Option
 
 /// The project actions, which every workspace carries.
 fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
+    // A toggle, unlike File > Preferences: it reads as pressed while the
+    // panel is up, and a second click puts it away.
+    let preferences = ui.add(
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("preferences-title"))
+            .id_salt("preferences")
+            .selected(editor.show_preferences)
+            .button_side(side),
+    );
+    if preferences.clicked() {
+        editor.show_preferences = !editor.show_preferences;
+    }
+
     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
     let save = ui.add_enabled(
         has_unsaved,
@@ -252,7 +248,7 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
             centre_part(ui);
             draw_z_setting(ui, editor);
         }
-        Workspace::Geology | Workspace::Planning => {
+        Workspace::Geology | Workspace::Planning | Workspace::Survey => {
             ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
             draw_z_setting(ui, editor);
         }
@@ -264,7 +260,7 @@ fn centre_part(ui: &mut egui::Ui) {
 }
 
 fn draw_z_setting(ui: &mut egui::Ui, editor: &mut EditorState) {
-    let response = MenuFieldF64::new(tr!(literal = "Z:"), &mut editor.z_input, f64::MIN..=f64::MAX)
+    let response = MenuFieldF64::new(format!("{}:", crate::model::survey::axis_abbreviation(2)), &mut editor.z_input, f64::MIN..=f64::MAX)
         .width(80.0)
         .suffix(tr!(literal = "m"))
         .show_inline(ui);
@@ -427,16 +423,51 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern are the only such run so far - see
-/// [`draw_blast_view_tools`]; production adds nothing here, its own tools being
-/// the toolbar and the design menus.
+/// Blast's reviews of the fired pattern and Survey's reading of a classified
+/// cloud are the only such runs so far - see [`draw_blast_view_tools`] and
+/// [`draw_survey_view_tools`]; production adds nothing here, its own tools
+/// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     draw_scene_modes(ui, editor, commands, side);
     draw_camera_tools(ui, editor, commands, side);
 
-    if editor.active_workspace == Workspace::DrillAndBlast {
-        divider(ui, side);
-        draw_blast_view_tools(ui, editor, project, side);
+    match editor.active_workspace {
+        Workspace::DrillAndBlast => {
+            divider(ui, side);
+            draw_blast_view_tools(ui, editor, project, side);
+        }
+        Workspace::Survey => {
+            divider(ui, side);
+            draw_survey_view_tools(ui, editor, commands, side);
+        }
+        _ => {}
+    }
+}
+
+/// What Survey asks of a point cloud that has been through a ground filter:
+/// whether to read it by class. Off in every other workspace.
+///
+/// Always available, like the switches in the run beside it: it is a standing
+/// preference for how Survey draws clouds, and greying it out whenever no
+/// classified cloud happens to be loaded would make it flicker in and out as
+/// the explorer changes.
+fn draw_survey_view_tools(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    let enabled = editor.point_cloud_classification_colors;
+    let classification = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("classification_colors.svg")),
+            if enabled {
+                tr!(literal = "Hide Classification")
+            } else {
+                tr!(literal = "Show Classification")
+            },
+        )
+        .id_salt("point_cloud_classification_colors")
+        .button_side(side)
+        .selected(enabled),
+    );
+    if classification.clicked() {
+        commands.push(UiCommand::SetPointCloudClassificationColors(!enabled));
     }
 }
 
@@ -472,6 +503,28 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         editor.vertical_exaggeration_dialog_open = true;
     }
 
+    // Fixed centre of rotation: one click arms a pick, the next click on the
+    // button releases the centre; lit while armed or set.
+    let armed = editor.active_tool == ActiveTool::PickRotationCentre;
+    let centre = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("rotation_centre.svg")),
+            if editor.rotation_centre.is_some() {
+                format!("{} (C)", tr!(literal = "Release Centre of Rotation"))
+            } else if armed {
+                tr!(literal = "Click a point to fix the centre of rotation")
+            } else {
+                format!("{} (C)", tr!(literal = "Fix Centre of Rotation"))
+            },
+        )
+        .id_salt("rotation_centre")
+        .button_side(side)
+        .selected(armed || editor.rotation_centre.is_some()),
+    );
+    if centre.clicked() {
+        commands.push(UiCommand::ToggleRotationCentre);
+    }
+
     let zoom = ui.add(
         ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!(literal = "Zoom to Extents"))
             .id_salt("zoom_to_extents")
@@ -491,16 +544,112 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
+/// The switches saying how the scene's geometry is drawn: the vertices of its
+/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// presentation shading laid over the lot. None of them is a tool, and none of
+/// them is saved.
+///
+/// Added cinematic first because the layout runs right to left - see
+/// [`draw_scene_modes`], which they follow along the bar.
+fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    // Sits against the grid button, on its right: both say how the scene is
+    // presented rather than what is in it. Native only - the post chain's extra
+    // screen-sized targets are more GPU memory than the browser build can spare.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let cinematic = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(themed_icon!(ui, "cinematic.svg")),
+                if editor.cinematic_enabled {
+                    tr!(literal = "Disable Cinematic View")
+                } else {
+                    tr!(literal = "Cinematic View")
+                },
+            )
+            .id_salt("cinematic")
+            .button_side(side)
+            .selected(editor.cinematic_enabled),
+        );
+        if cinematic.clicked() {
+            commands.push(UiCommand::SetCinematicEnabled(!editor.cinematic_enabled));
+        }
+    }
+
+    // One grid button: the RL grid in a section, the XY grid in plan; which one
+    // is the app's call (`set_grid_shown`).
+    let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };
+    let label = match (editor.slice_mode_enabled, shown) {
+        (true, true) => tr!(literal = "Hide RL Grid"),
+        (true, false) => tr!(literal = "Show RL Grid"),
+        (false, true) => tr!(literal = "Hide XY Grid"),
+        (false, false) => tr!(literal = "Show XY Grid"),
+    };
+    let grid = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("section_grid.svg")), label)
+            .id_salt("section_grid")
+            .button_side(side)
+            .selected(shown),
+    );
+    if grid.clicked() {
+        commands.push(UiCommand::SetGridShown(!shown));
+    }
+    // Right click: that grid's options, the RL grid's on the spacing in force.
+    if grid.secondary_clicked() && editor.grid_dialog.is_none() {
+        editor.grid_dialog = Some(if editor.slice_mode_enabled {
+            crate::ui::state::GridOptionsDialog::open_section(editor.section_grid_style, editor.section_grid_level_spacing)
+        } else {
+            crate::ui::state::GridOptionsDialog::open_plan(editor.xy_grid_style)
+        });
+    }
+
+    let wireframes = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(themed_icon!(ui, "toggle_wireframes.svg")),
+            if editor.topology_wireframes_enabled {
+                tr!(literal = "Hide Wireframes")
+            } else {
+                tr!(literal = "Show Wireframes")
+            },
+        )
+        .id_salt("wireframes")
+        .button_side(side)
+        .selected(editor.topology_wireframes_enabled),
+    );
+    if wireframes.clicked() {
+        commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
+    }
+
+    let points = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("toggle_points.svg")),
+            if editor.show_points {
+                tr!(literal = "Hide Points")
+            } else {
+                tr!(literal = "Show Points")
+            },
+        )
+        .id_salt("show_points")
+        .button_side(side)
+        .selected(editor.show_points),
+    );
+    if points.clicked() {
+        commands.push(UiCommand::SetShowPoints(!editor.show_points));
+    }
+}
+
 /// How the scene is drawn and got at, which every workspace carries.
 ///
-/// Flying, the slice view, x-ray, the wireframes and the points are all ways of
+/// Flying, the slice view, x-ray and the three display switches are all ways of
 /// reading what is already in the scene rather than tools for drawing it, so
 /// they are as useful over a blast pattern or a geological model as over a pit
 /// design and they stay on the bar across the tabs - which also means a mode is
 /// never left running with the button that turns it off gone from the window.
 fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     // A right-to-left layout adds each button to the left of the last, so the
-    // run is added in reverse to read left to right on screen.
+    // run is added in reverse to read left to right on screen: the display
+    // switches come first here because they read last, after flying.
+    draw_display_switches(ui, editor, commands, side);
+
     let fly = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("fly_mode.svg")),
@@ -540,40 +689,6 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
         } else {
             commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
         }
-    }
-
-    let wireframes = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
-            if editor.topology_wireframes_enabled {
-                tr!(literal = "Hide Wireframes")
-            } else {
-                tr!(literal = "Show Wireframes")
-            },
-        )
-        .id_salt("wireframes")
-        .button_side(side)
-        .selected(editor.topology_wireframes_enabled),
-    );
-    if wireframes.clicked() {
-        commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
-    }
-
-    let points = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_points.svg")),
-            if editor.show_points {
-                tr!(literal = "Hide Points")
-            } else {
-                tr!(literal = "Show Points")
-            },
-        )
-        .id_salt("show_points")
-        .button_side(side)
-        .selected(editor.show_points),
-    );
-    if points.clicked() {
-        commands.push(UiCommand::SetShowPoints(!editor.show_points));
     }
 
     let xray = ui.add(

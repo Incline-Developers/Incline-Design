@@ -6,6 +6,7 @@ pub(crate) mod bounds;
 pub(crate) mod build;
 pub(crate) mod design_points;
 pub(crate) mod document;
+pub(crate) mod document_style;
 pub(crate) mod drill_hole_cache;
 pub(crate) mod gpu_cache;
 pub(crate) mod overlays;

@@ -13,6 +13,8 @@ impl<'a> Graphics<'a> {
         self.pick_records = Vec::new();
         self.text_pick_records = Vec::new();
         self.document_draw_batches = Vec::new();
+        self.document_object_ranges = Vec::new();
+        self.cached_document_scene_key = None;
         self.text_draw_batches = Vec::new();
         self.lyon_buffer.vertices = Vec::new();
         self.lyon_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
@@ -20,30 +22,22 @@ impl<'a> Graphics<'a> {
         self.lyon_buffer.indices = Vec::new();
         self.lyon_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
         self.lyon_index_capacity = 0;
-        self.stroke_vertex_buf = Vec::new();
-        self.stroke_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
-        self.stroke_vertex_capacity = 0;
-        self.stroke_index_buf = Vec::new();
-        self.stroke_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
-        self.stroke_index_capacity = 0;
+        self.strokes = Vec::new();
+        self.stroke_blocks = StrokeBlocks::default();
+        self.stroke_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.stroke_capacity = 0;
         self.text_vertex_buf = Vec::new();
         self.text_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
         self.text_vertex_capacity = 0;
         self.text_index_buf = Vec::new();
         self.text_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
         self.text_index_capacity = 0;
-        self.overlay_vertex_buf = Vec::new();
-        self.overlay_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
-        self.overlay_vertex_capacity = 0;
-        self.overlay_index_buf = Vec::new();
-        self.overlay_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
-        self.overlay_index_capacity = 0;
-        self.dynamic_vertex_buf = Vec::new();
-        self.dynamic_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
-        self.dynamic_vertex_capacity = 0;
-        self.dynamic_index_buf = Vec::new();
-        self.dynamic_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
-        self.dynamic_index_capacity = 0;
+        self.overlay_strokes = Vec::new();
+        self.overlay_stroke_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.overlay_stroke_capacity = 0;
+        self.dynamic_strokes = Vec::new();
+        self.dynamic_stroke_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.dynamic_stroke_capacity = 0;
         self.invalidate_geometry();
     }
 
@@ -103,9 +97,45 @@ impl<'a> Graphics<'a> {
         indices.truncate(cut);
     }
 
+    /// Truncate an instance stream to the device's per-buffer limit, then
+    /// upload it into `buffer`, growing it as needed. As with
+    /// [`Self::clamp_stream_geometry`], draw and pick read the truncated vec.
+    pub(super) fn upload_instance_stream<T: bytemuck::Pod>(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        buffer: &mut wgpu::Buffer,
+        capacity: &mut usize,
+        instances: &mut Vec<T>,
+        label: &'static str,
+    ) {
+        let max_buffer_size = device.limits().max_buffer_size;
+        let max_instances = usize::try_from(max_buffer_size).unwrap_or(usize::MAX) / size_of::<T>();
+        if instances.len() > max_instances {
+            crate::userspace_error!(
+                "{label}: {} stroke instances exceed the GPU's {} MiB per-buffer limit; truncating - some geometry will not be displayed",
+                instances.len(),
+                max_buffer_size / (1024 * 1024)
+            );
+            instances.truncate(max_instances);
+        }
+        if instances.is_empty() {
+            return;
+        }
+        Self::ensure_stream_capacity(device, buffer, capacity, instances.len(), size_of::<T>(), wgpu::BufferUsages::VERTEX, label);
+        queue.write_buffer(buffer, 0, bytemuck::cast_slice(instances));
+    }
+
     pub(super) fn upload_scene_stream_buffers(&mut self) {
         Self::clamp_stream_geometry(&self.device, &mut self.lyon_buffer.vertices, &mut self.lyon_buffer.indices, "Lyon Buffer");
-        Self::clamp_stream_geometry(&self.device, &mut self.stroke_vertex_buf, &mut self.stroke_index_buf, "Stroke Buffer");
+        Self::upload_instance_stream(
+            &self.device,
+            &self.queue,
+            &mut self.stroke_gpu,
+            &mut self.stroke_capacity,
+            &mut self.strokes,
+            "Stroke Instance Buffer",
+        );
+        self.stroke_blocks = StrokeBlocks::build(&self.strokes, self.scene_origin);
         Self::clamp_stream_geometry(&self.device, &mut self.text_vertex_buf, &mut self.text_index_buf, "Document Text Buffer");
         if !self.lyon_buffer.vertices.is_empty() {
             Self::ensure_stream_capacity(
@@ -130,30 +160,6 @@ impl<'a> Graphics<'a> {
                 "Lyon Index Buffer",
             );
             self.queue.write_buffer(&self.lyon_index_gpu, 0, bytemuck::cast_slice(&self.lyon_buffer.indices));
-        }
-        if !self.stroke_vertex_buf.is_empty() {
-            Self::ensure_stream_capacity(
-                &self.device,
-                &mut self.stroke_vertex_gpu,
-                &mut self.stroke_vertex_capacity,
-                self.stroke_vertex_buf.len(),
-                size_of::<StrokeVertex>(),
-                wgpu::BufferUsages::VERTEX,
-                "Stroke Vertex Buffer",
-            );
-            self.queue.write_buffer(&self.stroke_vertex_gpu, 0, bytemuck::cast_slice(&self.stroke_vertex_buf));
-        }
-        if !self.stroke_index_buf.is_empty() {
-            Self::ensure_stream_capacity(
-                &self.device,
-                &mut self.stroke_index_gpu,
-                &mut self.stroke_index_capacity,
-                self.stroke_index_buf.len(),
-                size_of::<u32>(),
-                wgpu::BufferUsages::INDEX,
-                "Stroke Index Buffer",
-            );
-            self.queue.write_buffer(&self.stroke_index_gpu, 0, bytemuck::cast_slice(&self.stroke_index_buf));
         }
         if !self.text_vertex_buf.is_empty() {
             Self::ensure_stream_capacity(

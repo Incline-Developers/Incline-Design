@@ -9,6 +9,14 @@ impl<'a> App<'a> {
     pub(crate) fn begin_select_or_drag(&mut self) {
         self.pending_selection_click = None;
 
+        // A tool open on a snapshot of the selection freezes it - see
+        // `EditorState::selection_locked_by_tool`. The field pickers below run
+        // first: the two-surface tools still name their own inputs, and their
+        // pick is not a selection change.
+        if self.editor.selection_locked_by_tool() {
+            return;
+        }
+
         if let Some(target) = self.editor.triangulation_pick_target {
             let picked = self
                 .graphics
@@ -54,55 +62,6 @@ impl<'a> App<'a> {
         // Drape owns a two-stage selection session. Defer both click and box
         // picks until release so each stage can strictly filter entity types.
         if self.editor.active_tool == ActiveTool::DrapeToTopology {
-            self.editor.selection_box_start_px = self.editor.cursor_screen_px;
-            self.editor.selection_box_current_px = self.editor.cursor_screen_px;
-            return;
-        }
-
-        // Polyline-pick mode for cut-by-polyline: intercept the click and look for a closed polyline.
-        if self.editor.tri_cut_poly_awaiting_pick {
-            let frozen = &self.editor.frozen_handles;
-            if let Some((SceneEntityId::Object(oid), _)) = self
-                .graphics
-                .as_ref()
-                .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
-            {
-                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|object| {
-                    matches!(
-                        object,
-                        Object::Polyline {
-                            closed: true,
-                            verts,
-                            ..
-                        } if verts.len() >= 3
-                    )
-                });
-                if is_closed_poly {
-                    let name = self
-                        .scene_document
-                        .get_object(oid)
-                        .and_then(|o| {
-                            let layer_id = o.layer();
-                            self.scene_document.layer(layer_id).map(|l| tr_format!(literal = "Polyline on '%layer%'", layer = &l.name))
-                        })
-                        .unwrap_or_else(|| tr!(literal = "Polyline"));
-                    self.editor.tri_cut_poly_object_id = Some(oid);
-                    self.editor.tri_cut_poly_object_name = name;
-                    self.editor.tri_cut_poly_awaiting_pick = false;
-                    self.editor.viewport_pick_hover_label = None;
-                    self.editor.tool_highlight_id = Some(oid);
-                    self.invalidate_geometry();
-                }
-            }
-            return;
-        }
-
-        // In triangulation creation mode, every canvas press starts a potential
-        // box selection. On release, a short press becomes a normal click-pick.
-        // This allows box drags to begin over a polyline instead of requiring
-        // empty space. Explicit field/polyline pickers above take priority over
-        // this broader selection mode when dialogs overlap.
-        if self.editor.tri_create_open {
             self.editor.selection_box_start_px = self.editor.cursor_screen_px;
             self.editor.selection_box_current_px = self.editor.cursor_screen_px;
             return;
@@ -198,7 +157,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.tri_cut_poly_awaiting_pick && !self.editor.drill_pattern_awaiting_shape_pick {
+        if !self.editor.drill_pattern_awaiting_shape_pick {
             return;
         }
 
@@ -211,18 +170,25 @@ impl<'a> App<'a> {
         let pattern_picker = self.editor.drill_pattern_awaiting_shape_pick;
         let (next_highlight, next_label) = match raw_hover {
             Some(SceneEntityId::Object(id)) if !pattern_picker || active_object_ids.contains(&id) => match self.scene_document.get_object(id) {
-                Some(object @ Object::Polyline { verts, closed, .. })
-                    if if pattern_picker {
-                        is_drill_pattern_boundary(object)
-                    } else {
-                        *closed && verts.len() >= 3
-                    } =>
-                {
+                Some(object) if if pattern_picker { is_drill_pattern_boundary(object) } else { object.encloses_area() } => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
-                    (
-                        Some(id),
-                        Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = verts.len())),
-                    )
+                    match object {
+                        Object::Circle { radius, .. } => (
+                            Some(id),
+                            Some(tr_format!(
+                                literal = "Circle | Layer: %layer% | radius %radius%",
+                                layer = layer,
+                                radius = format!("{radius:.3}")
+                            )),
+                        ),
+                        _ => {
+                            let count = object.string_geometry().map_or(0, |(verts, _)| verts.len());
+                            (
+                                Some(id),
+                                Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = count)),
+                            )
+                        }
+                    }
                 }
                 _ => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
             },
@@ -238,19 +204,6 @@ impl<'a> App<'a> {
 
     fn apply_triangulation_field_pick(&mut self, target: TriangulationPickTarget, id: crate::model::triangulation::TriangulationId, name: &str) {
         match target {
-            TriangulationPickTarget::ClipSurface => {
-                self.editor.tri_cut_poly_tri_id = Some(id);
-                update_auto_derived_name(
-                    &mut self.editor.tri_cut_poly_name_input,
-                    self.editor.tri_cut_poly_name_auto,
-                    name,
-                    &tr!(literal = "Clipped"),
-                );
-            }
-            TriangulationPickTarget::SliceSurface => {
-                self.editor.tri_cut_z_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, &tr!(literal = "Sliced"));
-            }
             TriangulationPickTarget::TrimTopology => {
                 self.editor.tri_cut_surface_reference_id = Some(id);
                 if self.editor.tri_cut_surface_target_id == Some(id) {
@@ -318,10 +271,6 @@ impl<'a> App<'a> {
                     self.editor.tri_include_solid_topology_id = None;
                 }
             }
-            TriangulationPickTarget::ContourSurface => {
-                self.editor.tri_contour_tri_id = Some(id);
-                self.editor.update_contour_layer_name_from_surface(name);
-            }
         }
         self.editor.triangulation_pick_target = None;
         self.editor.viewport_pick_hover_label = None;
@@ -376,42 +325,6 @@ impl<'a> App<'a> {
                 }
             } else {
                 self.delete_at_cursor();
-            }
-            return;
-        }
-
-        // In triangulation creation mode, drag-select adds eligible source objects to the tri pick list.
-        if self.editor.tri_create_open {
-            if dragged {
-                // Same left/right direction convention as regular selection.
-                let cross_select = end.0 > start.0;
-                let enclosed = self
-                    .graphics
-                    .as_ref()
-                    .map(|g| {
-                        if cross_select {
-                            g.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
-                        } else {
-                            g.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
-                        }
-                    })
-                    .unwrap_or_default();
-                let mut added = 0usize;
-                for handle in enclosed {
-                    if let SceneEntityId::Object(oid) = handle
-                        && !self.editor.tri_selected_object_ids.contains(&oid)
-                        && self.scene_document.get_object(oid).is_some_and(is_triangulation_polyline)
-                    {
-                        self.editor.tri_selected_object_ids.push(oid);
-                        self.editor.selected_handles.insert(SceneEntityId::Object(oid));
-                        added += 1;
-                    }
-                }
-                if added > 0 {
-                    self.invalidate_geometry();
-                }
-            } else {
-                self.tri_pick_at_cursor();
             }
             return;
         }
@@ -479,6 +392,21 @@ impl<'a> App<'a> {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
                 }
+                // A drape has no geometry of its own - it is painted onto the
+                // surface - so the click that lands on the surface lands on
+                // both. Following what the surface ended up doing covers every
+                // selection mode at once: the raster joins a surface that was
+                // just selected and leaves one that was just dropped.
+                if let SceneEntityId::Triangulation(id) = handle
+                    && let Some(draped) = self.triangulations.iter().find(|item| item.id == id).and_then(|item| item.raster_texture)
+                {
+                    let draped = SceneEntityId::Raster(draped);
+                    if self.editor.selected_handles.contains(&handle) {
+                        self.editor.selected_handles.insert(draped);
+                    } else {
+                        self.editor.selected_handles.remove(&draped);
+                    }
+                }
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
                     _ => None,
@@ -505,17 +433,24 @@ impl<'a> App<'a> {
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
         // Drill & Blast gives connectors first refusal on the marquee. If no
-        // tie-in is taken, it falls back to holes one at a time; production's
-        // marquee takes the design geometry over the same ground.
+        // tie-in is taken, it falls back to holes one at a time; Survey's
+        // marquee takes point clouds, and production's the design geometry
+        // over the same ground.
         if self.editor.active_workspace == Workspace::DrillAndBlast {
             self.finish_blast_box_selection(start, end, cross_select);
             return;
         }
+        // Move Design marquees only what it can move, the same as its clicks
+        // do - see `tool_accepts_pick`.
+        let objects_only = self.editor.active_tool == ActiveTool::Move;
+        let point_clouds_only = self.editor.active_workspace == Workspace::Survey && !objects_only;
         let mut enclosed = self
             .graphics
             .as_ref()
             .map(|graphics| {
-                if cross_select {
+                if point_clouds_only {
+                    graphics.point_clouds_in_screen_rect(start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                } else if cross_select {
                     graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
                 } else {
                     graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
@@ -523,15 +458,15 @@ impl<'a> App<'a> {
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
-        // Move Design marquees only what it can move, the same as its clicks
-        // do - see `tool_accepts_pick`.
-        let objects_only = self.editor.active_tool == ActiveTool::Move;
         enclosed.retain(|handle| match handle {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
             SceneEntityId::Triangulation(_) => !objects_only,
             SceneEntityId::BlockModel(_) => !objects_only,
             SceneEntityId::DrillHole(_) => !objects_only,
             SceneEntityId::PointCloud(_) => !objects_only,
+            // Nothing to enclose: a raster is painted onto a surface rather
+            // than occupying the scene, so a marquee never produces one.
+            SceneEntityId::Raster(_) => false,
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {
@@ -630,8 +565,17 @@ impl<'a> App<'a> {
         };
 
         let active_object_ids = self.active_project_object_ids();
+        // Drape selects only what it can drape, the same rule its apply step
+        // uses - see `tool_accepts_pick`. Offering a circle and then dropping
+        // it at apply time would let the user build a selection the tool was
+        // never going to honour.
         candidates.retain(|handle| match (self.editor.drape_phase, handle) {
-            (DrapePhase::Designs, SceneEntityId::Object(id)) => active_object_ids.contains(id),
+            (DrapePhase::Designs, SceneEntityId::Object(id)) => {
+                if !active_object_ids.contains(id) {
+                    return false;
+                }
+                self.active_document().get_object(*id).is_some_and(is_drapeable)
+            }
             (DrapePhase::Topologies, SceneEntityId::Triangulation(_)) => true,
             _ => false,
         });
@@ -657,33 +601,6 @@ impl<'a> App<'a> {
         } else {
             self.editor.selected_handles.clear();
             self.editor.selected_handles.extend(candidates);
-        }
-        self.invalidate_geometry();
-    }
-
-    /// Click-pick in triangulation creation mode: toggle the picked object in the tri selection.
-    fn tri_pick_at_cursor(&mut self) {
-        let Some(picked) = self.graphics.as_ref().and_then(|g| {
-            g.pick_at_cursor(
-                PICK_THRESHOLD_PX,
-                &self.triangulations,
-                &self.editor.hidden_handles,
-                &self.editor.frozen_handles,
-                self.editor.xray_enabled,
-            )
-        }) else {
-            return;
-        };
-        let (handle, _world) = picked;
-        let SceneEntityId::Object(oid) = handle else {
-            return;
-        };
-        if self.editor.tri_selected_object_ids.contains(&oid) {
-            self.editor.tri_selected_object_ids.retain(|&o| o != oid);
-            self.editor.selected_handles.remove(&SceneEntityId::Object(oid));
-        } else if self.scene_document.get_object(oid).is_some_and(is_triangulation_polyline) {
-            self.editor.tri_selected_object_ids.push(oid);
-            self.editor.selected_handles.insert(SceneEntityId::Object(oid));
         }
         self.invalidate_geometry();
     }
@@ -763,20 +680,17 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
 }
 
 pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
-    matches!(
-        obj,
-        Object::Polyline {
-            verts,
-            closed,
-            ..
-        } if verts.len() >= if *closed { 3 } else { 2 }
-    )
+    matches!(obj, Object::Polyline { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
 }
 
 fn is_drill_pattern_boundary(object: &Object) -> bool {
-    matches!(
-        object,
-        Object::Polyline { verts, closed: true, .. }
-            if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
-    )
+    object.encloses_area()
+}
+
+/// Whether the Drape tool will take this object.
+///
+/// A circle laid over topography is no longer a circle - draping it would have
+/// to hand back a polyline - so the tool does not offer one.
+fn is_drapeable(object: &Object) -> bool {
+    !matches!(object, Object::Circle { .. })
 }

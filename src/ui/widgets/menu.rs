@@ -497,7 +497,6 @@ impl<'open> DragableMenu<'open> {
 /// No divider under it. The whole card is the drag target, so the bar does not
 /// have to announce itself as one; the tint alone sets the title apart.
 fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::Rect, surface: egui::Color32, show_close_button: bool, close_clicked: &mut bool) {
-    let dark_mode = ui.visuals().dark_mode;
     ui.painter().rect_filled(
         rect,
         egui::CornerRadius {
@@ -506,34 +505,36 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
             sw: 0,
             se: 0,
         },
-        title_bar_fill(surface, dark_mode),
+        title_bar_fill(surface, ui.visuals().dark_mode),
     );
 
     paint_title_text(ui, &title, rect, show_close_button);
 
-    if show_close_button {
-        let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-        if close_cross(ui, close_rect, ui.id().with("close")).clicked() {
-            *close_clicked = true;
-        }
+    if show_close_button && title_bar_close_button(ui, rect, surface) {
+        *close_clicked = true;
     }
 }
 
+/// The close cross in the right-hand slot of a title bar `rect`, for cards
+/// that paint their own bar. Returns whether it was clicked.
+pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
+    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
+    close_cross(ui, close_rect, ui.id().with("close"), surface).on_hover_text(tr!(literal = "Close")).clicked()
+}
+
 /// The small cross that dismisses whatever it sits on, drawn and interacted
-/// with in one call.
+/// with in one call, over a card of colour `surface`.
 ///
 /// One mark in one place: a floating menu's own close button and a list row's
 /// remove control are the same gesture at two sizes, and drawing them twice is
 /// how they end up looking like two different controls.
-pub(crate) fn close_cross(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id) -> egui::Response {
-    let response = ui.interact(rect, id, egui::Sense::click());
+pub(crate) fn close_cross(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, surface: egui::Color32) -> egui::Response {
+    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let visuals = ui.visuals();
-    let surface = menu_surface(visuals);
     let dark_mode = visuals.dark_mode;
     let color = if response.hovered() { visuals.text_color() } else { visuals.weak_text_color() };
     if response.hovered() {
         ui.painter().rect_filled(rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     // Three tenths in from each side, so the cross keeps its proportions at
     // the row-sized version as well as the title-bar one.
@@ -702,6 +703,15 @@ pub(crate) fn menu_actions<R>(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut e
     response.inner
 }
 
+/// Whether a field's edit is finished, rather than mid-drag.
+///
+/// Settings that write straight through to the config, and edits that become
+/// undo entries, must land once when a drag ends rather than on every frame it
+/// moves.
+pub(crate) fn committed(response: &egui::Response) -> bool {
+    response.drag_stopped() || (response.changed() && !response.dragged())
+}
+
 /// A heading that groups the rows under it.
 ///
 /// Weak, and followed by a hairline across the menu, so a long dialog reads as
@@ -825,6 +835,22 @@ impl MenuField {
     pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_field: impl FnOnce(&mut egui::Ui, f32, f32) -> R) -> R {
         menu_field_row(ui, self.label, self.help_text, add_field)
     }
+}
+
+/// A read-only row naming what a selection-driven tool was opened on.
+///
+/// These tools take their input from the scene selection rather than from a
+/// control inside the dialog, so the input reads as a stated fact. It keeps
+/// the label column and control width of the picker rows beside it, so a
+/// dialog that mixes the two still lines up.
+pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, value: impl Into<egui::WidgetText>, help_text: impl Into<egui::WidgetText>, width: f32) {
+    let value = value.into();
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
+        })
+        .response
+    });
 }
 
 /// A labelled file-picker row showing the selected file count/name and a choose button.

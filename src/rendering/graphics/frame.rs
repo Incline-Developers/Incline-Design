@@ -1,6 +1,6 @@
 use super::*;
 use crate::rendering::scene::{
-    build::{DocumentSceneBuildInput, DynamicSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene},
+    build::{self, DocumentSceneBuildInput, DynamicSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene, restyle_document_scene},
     overlays::{OverlaySceneBuildInput, rebuild_editor_overlay},
 };
 
@@ -50,11 +50,24 @@ struct EditorSceneState {
     /// Bit pattern: the level the design plane and z-cut draw at.
     z_level: u64,
     show_xy_grid: bool,
+    slice_grid_enabled: bool,
+    section_grid_style: crate::ui::state::SectionGridStyle,
+    xy_grid_style: crate::ui::state::PlanGridStyle,
     fly_mode_enabled: bool,
     /// Tie Holes draws drill traces without the depth test (`draw_drill_holes`).
     tying_holes: bool,
     /// Drill & Blast alone draws the surface tie-in connectors.
     shows_tie_ins: bool,
+    /// Cinematic view changes what the scene pass draws and what happens to
+    /// the image afterwards, so a cached frame from the other mode is wrong.
+    cinematic_enabled: bool,
+    /// Survey draws classified point clouds in their class colours, which
+    /// `PointCloudGpuCache::sync` resolves from the editor at draw time.
+    colors_points_by_classification: bool,
+    /// The chunk-bounds outline is rebuilt by the scene pass, so switching
+    /// either chunk-debug view on has to force one.
+    debug_surface_chunks: bool,
+    debug_point_cloud_chunks: bool,
 }
 
 impl EditorSceneState {
@@ -62,9 +75,16 @@ impl EditorSceneState {
         Self {
             z_level: editor.z_level.to_bits(),
             show_xy_grid: editor.show_xy_grid,
+            slice_grid_enabled: editor.slice_grid_enabled,
+            section_grid_style: editor.section_grid_style,
+            xy_grid_style: editor.xy_grid_style,
             fly_mode_enabled: editor.fly_mode_enabled,
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
+            cinematic_enabled: editor.cinematic_enabled,
+            colors_points_by_classification: editor.colors_points_by_classification(),
+            debug_surface_chunks: editor.debug_surface_chunks,
+            debug_point_cloud_chunks: editor.debug_point_cloud_chunks,
         }
     }
 }
@@ -103,6 +123,16 @@ impl<'a> Graphics<'a> {
             solid_preview,
             project,
         } = input;
+        // Acquire before any queue writes: a hidden/unavailable surface can fail
+        // indefinitely, and write_buffer staging allocations live until submit.
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
+            wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
+            wgpu::CurrentSurfaceTexture::Outdated => return Err(RenderSurfaceError::Outdated),
+            wgpu::CurrentSurfaceTexture::Lost => return Err(RenderSurfaceError::Lost),
+            wgpu::CurrentSurfaceTexture::Validation => return Err(RenderSurfaceError::Validation),
+        };
         // Only scene content forces the cached scene to be re-rendered. The
         // editor overlay is drawn over the cache every frame by
         // `render_editor_overlay_pass`, so `overlay_dirty` deliberately does
@@ -132,14 +162,26 @@ impl<'a> Graphics<'a> {
         let mut scene_content_changed = self.geometry_dirty;
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
+        if self.slice_view.is_some() {
+            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+        }
         if let Some(slice) = self.slice_view.as_mut() {
-            // Slice mode owns the clip planes: the symmetric depth extent *is*
-            // the slab, so the scene-fitting passes below must not run - they
-            // would blow the clip range back out to the scene bounds.
+            // Slice mode sets the clip planes itself; the scene-fitting passes below must not run.
             slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
             slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
             slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
-            self.projection.set_symmetric_depth_extent(slice.width * 0.5);
+            // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
+            let forward = self.camera.forward();
+            let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
+            // Scene bounds are model elevations, the slice centre a display one - stretch bounds by the vertical exaggeration before comparing.
+            let origin_z = self.scene_origin.z;
+            let exaggeration = self.vertical_exaggeration;
+            let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
+            let bounds = self
+                .cached_scene_bounds
+                .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
+            self.projection
+                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds) + slice.view_offset.dot(forward).abs());
             editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
             editor.slice_direction = [slice.direction.x, slice.direction.y];
             editor.slice_half_length = slice_visible_half_length;
@@ -150,7 +192,8 @@ impl<'a> Graphics<'a> {
             self.include_blast_outlines_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+        // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,
@@ -158,8 +201,24 @@ impl<'a> Graphics<'a> {
             &self.projection,
             self.vertical_exaggeration,
             self.fly_mode_enabled,
+            &editor.xy_grid_style,
+            self.window.scale_factor(),
         );
         self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
+        if editor.slice_grid_enabled
+            && let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(editor.section_grid_style.level_spacing)
+        {
+            let section_grid_uniform = SectionGridUniform::new(
+                self.scene_origin,
+                editor.renderer_background_color,
+                axis,
+                axis_spacing,
+                elevation_spacing,
+                &editor.section_grid_style,
+                self.window.scale_factor(),
+            );
+            self.queue.write_buffer(&self.section_grid_buffer, 0, bytemuck::bytes_of(&section_grid_uniform));
+        }
         // Advance non-blocking volume-usage readbacks. Their callbacks only
         // send a small bitset through a channel; residency changes are applied
         // later by the normal streaming pass.
@@ -167,14 +226,6 @@ impl<'a> Graphics<'a> {
             let _ = self.device.poll(wgpu::PollType::Poll);
             self.block_model_gpu.poll_volume_feedback();
         }
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
-            wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
-            wgpu::CurrentSurfaceTexture::Outdated => return Err(RenderSurfaceError::Outdated),
-            wgpu::CurrentSurfaceTexture::Lost => return Err(RenderSurfaceError::Lost),
-            wgpu::CurrentSurfaceTexture::Validation => return Err(RenderSurfaceError::Validation),
-        };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.add_srgb_suffix()),
             ..Default::default()
@@ -226,7 +277,7 @@ impl<'a> Graphics<'a> {
             (self.camera.position - self.scene_origin).as_vec3(),
             point_clouds,
             editor,
-            &self.edge_style_bind_group_layout,
+            &self.point_cloud_style_bind_group_layout,
         );
         self.design_point_gpu.sync(
             &self.device,
@@ -238,10 +289,16 @@ impl<'a> Graphics<'a> {
             editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
+        // Selection, hover and translucency only restyle: the shaders read
+        // them from the style buffer. The key also covers hiding and
+        // translucency, which change what is tessellated and what the static
+        // chunks claim, so a geometry pass still runs; `document_scene_key`
+        // keeps it from re-tessellating when nothing it bakes has changed.
         let render_style_key = editor.render_style_key();
         if self.cached_render_style_key != Some(render_style_key) {
             self.cached_render_style_key = Some(render_style_key);
             self.geometry_dirty = true;
+            self.document_style_dirty = true;
             self.overlay_dirty = true;
         }
         let needs_geometry_rebuild = self.geometry_dirty || self.cached_document_revision != document.revision() || (self.cached_scale_factor - scale_factor).abs() > f32::EPSILON;
@@ -250,70 +307,88 @@ impl<'a> Graphics<'a> {
             scene_content_changed = true;
             // Reconcile the static stroke chunks first so the stream rebuild
             // below knows which objects they own and can skip them.
-            self.static_strokes.sync(&self.device, &self.queue, document, editor, self.scene_origin, scale_factor);
-            rebuild_document_scene(DocumentSceneBuildInput {
-                editor,
-                document,
-                static_ids: self.static_strokes.claimed(),
-                fill_cache: &mut self.polyline_fill_cache,
-                text_system: &mut self.text_system,
-                lyon_buffer: &mut self.lyon_buffer,
-                stroke_vertex_buf: &mut self.stroke_vertex_buf,
-                stroke_index_buf: &mut self.stroke_index_buf,
-                text_vertex_buf: &mut self.text_vertex_buf,
-                text_index_buf: &mut self.text_index_buf,
-                text_draw_batches: &mut self.text_draw_batches,
-                pick_records: &mut self.pick_records,
-                text_pick_records: &mut self.text_pick_records,
-                document_draw_batches: &mut self.document_draw_batches,
-                scene_origin: self.scene_origin,
-                scale_factor,
-            });
-
-            self.upload_scene_stream_buffers();
+            self.static_strokes
+                .sync(&self.device, &self.queue, document, editor, &mut self.document_style_slots, self.scene_origin, scale_factor);
+            // Most geometry passes come from editor-state invalidation with
+            // the document untouched; tessellate only when an input changed.
+            let scene_key = build::document_scene_key(document, editor, self.static_strokes.claimed_key(), self.scene_origin, scale_factor);
+            if self.cached_document_scene_key != Some(scene_key) {
+                rebuild_document_scene(DocumentSceneBuildInput {
+                    editor,
+                    document,
+                    static_ids: self.static_strokes.claimed(),
+                    fill_cache: &mut self.polyline_fill_cache,
+                    text_system: &mut self.text_system,
+                    slots: &mut self.document_style_slots,
+                    lyon_buffer: &mut self.lyon_buffer,
+                    strokes: &mut self.strokes,
+                    text_vertex_buf: &mut self.text_vertex_buf,
+                    text_index_buf: &mut self.text_index_buf,
+                    text_draw_batches: &mut self.text_draw_batches,
+                    pick_records: &mut self.pick_records,
+                    text_pick_records: &mut self.text_pick_records,
+                    object_ranges: &mut self.document_object_ranges,
+                    scene_origin: self.scene_origin,
+                    scale_factor,
+                });
+                self.upload_scene_stream_buffers();
+                self.cached_document_scene_key = Some(scene_key);
+            }
+            if self.cached_document_revision != document.revision() {
+                // Both slot holders have rebuilt against this document.
+                self.document_style_slots.retain(document);
+            }
+            self.document_style_dirty = true;
 
             self.cached_scale_factor = scale_factor;
             self.cached_document_revision = document.revision();
             self.geometry_dirty = false;
         }
 
+        if self.document_style_dirty {
+            restyle_document_scene(
+                &mut self.document_draw_batches,
+                &self.document_object_ranges,
+                editor,
+                &self.strokes,
+                &self.lyon_buffer.vertices,
+                &self.lyon_buffer.indices,
+            );
+            let flags = self.document_style_slots.flags(editor);
+            self.document_style.write(&self.device, &self.queue, &flags);
+            let claimed = self.static_strokes.claimed();
+            self.document_style.static_highlighted = editor
+                .selected_handles
+                .iter()
+                .chain(&editor.tri_hover_handles)
+                .filter_map(|handle| match handle {
+                    SceneEntityId::Object(id) => Some(*id),
+                    _ => None,
+                })
+                .chain(editor.tool_highlight_id)
+                .any(|id| claimed.contains(&id));
+            self.document_style_dirty = false;
+        }
+
         // Per-frame pass for the live drawing tools; the static scene above no
         // longer rebuilds while they run. Rebuilt while a tool is active and
         // once more after it deactivates (to clear the buffers).
         let dynamic_active = editor.batter_berm_dialog_open;
-        if dynamic_active || !self.dynamic_vertex_buf.is_empty() {
+        if dynamic_active || !self.dynamic_strokes.is_empty() {
             rebuild_dynamic_scene(DynamicSceneBuildInput {
                 editor,
-                dynamic_vertex_buf: &mut self.dynamic_vertex_buf,
-                dynamic_index_buf: &mut self.dynamic_index_buf,
+                dynamic_strokes: &mut self.dynamic_strokes,
                 scene_origin: self.scene_origin,
                 scale_factor,
             });
-            Self::clamp_stream_geometry(&self.device, &mut self.dynamic_vertex_buf, &mut self.dynamic_index_buf, "Dynamic Scene Buffer");
-            if !self.dynamic_vertex_buf.is_empty() {
-                Self::ensure_stream_capacity(
-                    &self.device,
-                    &mut self.dynamic_vertex_gpu,
-                    &mut self.dynamic_vertex_capacity,
-                    self.dynamic_vertex_buf.len(),
-                    size_of::<StrokeVertex>(),
-                    wgpu::BufferUsages::VERTEX,
-                    "Dynamic Scene Vertex Buffer",
-                );
-                self.queue.write_buffer(&self.dynamic_vertex_gpu, 0, bytemuck::cast_slice(&self.dynamic_vertex_buf));
-            }
-            if !self.dynamic_index_buf.is_empty() {
-                Self::ensure_stream_capacity(
-                    &self.device,
-                    &mut self.dynamic_index_gpu,
-                    &mut self.dynamic_index_capacity,
-                    self.dynamic_index_buf.len(),
-                    size_of::<u32>(),
-                    wgpu::BufferUsages::INDEX,
-                    "Dynamic Scene Index Buffer",
-                );
-                self.queue.write_buffer(&self.dynamic_index_gpu, 0, bytemuck::cast_slice(&self.dynamic_index_buf));
-            }
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.dynamic_stroke_gpu,
+                &mut self.dynamic_stroke_capacity,
+                &mut self.dynamic_strokes,
+                "Dynamic Scene Stroke Buffer",
+            );
         }
 
         let measurement_state = (
@@ -340,39 +415,21 @@ impl<'a> Graphics<'a> {
             rebuild_editor_overlay(OverlaySceneBuildInput {
                 editor,
                 document,
-                overlay_vertex_buf: &mut self.overlay_vertex_buf,
-                overlay_index_buf: &mut self.overlay_index_buf,
+                overlay_strokes: &mut self.overlay_strokes,
                 view_proj: overlay_vp,
                 screen_size: overlay_screen,
                 scene_origin: self.scene_origin,
                 scale_factor,
             });
 
-            Self::clamp_stream_geometry(&self.device, &mut self.overlay_vertex_buf, &mut self.overlay_index_buf, "Editor Overlay Buffer");
-            if !self.overlay_vertex_buf.is_empty() {
-                Self::ensure_stream_capacity(
-                    &self.device,
-                    &mut self.overlay_vertex_gpu,
-                    &mut self.overlay_vertex_capacity,
-                    self.overlay_vertex_buf.len(),
-                    size_of::<StrokeVertex>(),
-                    wgpu::BufferUsages::VERTEX,
-                    "Editor Overlay Vertex Buffer",
-                );
-                self.queue.write_buffer(&self.overlay_vertex_gpu, 0, bytemuck::cast_slice(&self.overlay_vertex_buf));
-            }
-            if !self.overlay_index_buf.is_empty() {
-                Self::ensure_stream_capacity(
-                    &self.device,
-                    &mut self.overlay_index_gpu,
-                    &mut self.overlay_index_capacity,
-                    self.overlay_index_buf.len(),
-                    size_of::<u32>(),
-                    wgpu::BufferUsages::INDEX,
-                    "Editor Overlay Index Buffer",
-                );
-                self.queue.write_buffer(&self.overlay_index_gpu, 0, bytemuck::cast_slice(&self.overlay_index_buf));
-            }
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.overlay_stroke_gpu,
+                &mut self.overlay_stroke_capacity,
+                &mut self.overlay_strokes,
+                "Editor Overlay Stroke Buffer",
+            );
             self.overlay_dirty = false;
         }
 
@@ -409,24 +466,44 @@ impl<'a> Graphics<'a> {
         // long as its key holds; the overlay pass then puts this frame's
         // editor content over it and resolves the result to the surface. On a
         // cache hit that is the whole of the scene's cost.
+        // Cinematic view renders its lit scene into targets of its own and
+        // puts the finished image into the cache instead, so everything
+        // downstream - the overlay pass, the cache hit next frame - is
+        // unchanged. Never set in the browser build, where it does not exist.
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut cinematic_post_ran = false;
         if render_scene {
-            let cache_view = self.scene_cache.view.clone();
-            self.render_scene_pass(
-                &mut encoder,
-                &cache_view,
-                self.viewport_rect,
-                editor,
-                triangulations,
-                block_models,
-                drill_holes,
-                point_clouds,
-                rasters,
-                true,
-            );
+            #[cfg(not(target_arch = "wasm32"))]
+            if editor.cinematic_enabled {
+                // The light is fitted to the scene's extent, which in every
+                // other view is only computed when something needs it.
+                self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+                cinematic_post_ran = self.render_cinematic_scene(&mut encoder, editor, triangulations, block_models, drill_holes, point_clouds, rasters);
+            }
+            if !cinematic_post_ran {
+                let cache_view = self.scene_cache.view.clone();
+                self.render_scene_pass(
+                    &mut encoder,
+                    &cache_view,
+                    self.viewport_rect,
+                    editor,
+                    triangulations,
+                    block_models,
+                    drill_holes,
+                    point_clouds,
+                    rasters,
+                    true,
+                );
+            }
             self.scene_cache_key = Some(scene_key);
         }
         if !editor.is_planning_setup() {
-            self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene);
+            // The overlay pass draws over whatever the multisample target holds.
+            // After an ordinary scene pass that is the scene itself; after a
+            // cinematic one it is the *ungraded* scene, because the graded image
+            // went to the cache - so restore from the cache exactly as a frame
+            // that skipped the scene pass would.
+            self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene || cinematic_post_ran);
         } else {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Planning setup background"),
@@ -474,6 +551,7 @@ impl<'a> Graphics<'a> {
         self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
+        let rotation_centre_screen = editor.rotation_centre.and_then(|centre| self.rotation_centre_screen_pos(centre));
         let camera_active = self.is_camera_active();
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
@@ -491,6 +569,7 @@ impl<'a> Graphics<'a> {
             drill_holes,
             [self.size.width, self.size.height],
             orbit_marker_screen,
+            rotation_centre_screen,
             camera_active,
             [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
@@ -535,6 +614,7 @@ impl<'a> Graphics<'a> {
             self.finish_screenshot_capture(capture);
         }
         self.frame_index = self.frame_index.wrapping_add(1);
+        self.release_retired_attachments();
 
         Ok(ui_output)
     }

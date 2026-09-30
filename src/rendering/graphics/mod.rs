@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
-use glam::{DMat4, DVec2, DVec3, DVec4};
+use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
 use lyon::tessellation::VertexBuffers;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
@@ -21,15 +21,16 @@ use crate::{
         triangulation::OpenTriangulation,
     },
     rendering::{
-        BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
-        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane, screen_to_world_on_view_plane},
-        pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
+        BlockInstance, StrokeInstance, SurfaceVertex, Vertex,
+        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, SectionSlab, screen_to_world_on_plane, screen_to_world_on_section_plane},
+        pick::{PickGeometry, PickRecord, StrokeBlocks, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
             RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
-            build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
+            document_style::{DocumentStyleGpu, DocumentStyleSlots},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -42,23 +43,28 @@ use crate::{
 
 pub(crate) mod buffers;
 pub(crate) mod camera;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cinematic;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
 pub(crate) mod passes;
 pub(crate) mod plot;
 pub(crate) mod projections;
+mod readback;
+pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
 pub(crate) mod solid_preview;
 pub(crate) mod targets;
+mod touch;
 
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
 pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
 pub(super) const CAMERA_ROTATE_SENSITIVITY: f64 = 0.003;
 /// Below this per-buffer limit, large tessellated scenes may be truncated.
 pub(super) const COMFORTABLE_MAX_BUFFER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-pub(super) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
+pub(crate) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
 /// Sizing for editable document geometry.
 pub(super) const DOC_LINE_WIDTH: f32 = 1.0;
 /// Colour for the in-progress stroke preview (committed segments + rubber band).
@@ -130,10 +136,26 @@ pub(crate) enum RenderSurfaceError {
 /// to the swapchain and paint fresh egui shapes over it, avoiding another
 /// block-model volume raycast.
 pub(super) struct SceneCacheTarget {
+    pub(super) texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     /// The cache bound for reading, for the blit that restores it into the
     /// multisample target at the start of an overlay-only frame.
     pub(super) bind_group: wgpu::BindGroup,
+}
+
+/// Full-screen attachments a resize replaced. WebGPU frees a texture's memory
+/// when it is destroyed or collected, and leaving it to the browser's garbage
+/// collector lets a fast drag-resize pile up dozens of full-screen MSAA and
+/// depth images - enough to exhaust GPU memory. They cannot be destroyed the
+/// moment they are replaced either: the frames that drew into them are
+/// submitted but may still be executing, and destroying a texture out from
+/// under work in flight invalidates that work. Holding them for a few
+/// presented frames outlasts anything still queued.
+pub(super) struct RetiredAttachments {
+    pub(super) retired_at_frame: u64,
+    pub(super) retired_at: Instant,
+    pub(super) textures: Vec<wgpu::Texture>,
+    pub(super) buffers: Vec<wgpu::Buffer>,
 }
 
 /// Per-frame style and placement for the viewport's procedural world XY grid.
@@ -151,16 +173,70 @@ pub(super) struct GridUniform {
     pub(super) y_axis_color: [f32; 4],
 }
 
+/// The section grid's shader inputs; see `section_grid.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct SectionGridUniform {
+    pub(super) params: [f32; 4],
+    pub(super) phase: [f32; 4],
+    pub(super) color: [f32; 4],
+}
+
+impl SectionGridUniform {
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        axis: crate::ui::state::SectionGridAxis,
+        axis_spacing: f64,
+        elevation_spacing: f64,
+        style: &crate::ui::state::SectionGridStyle,
+        scale_factor: f64,
+    ) -> Self {
+        let rule_x = matches!(axis, crate::ui::state::SectionGridAxis::Easting);
+        let axis_origin = if rule_x { scene_origin.x } else { scene_origin.y };
+        let color = match style.color {
+            Some(chosen) => crate::rendering::color::color32_to_rgba(chosen),
+            None => {
+                let luminance = crate::rendering::color::relative_luminance(background);
+                let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(if luminance > 0.35 { [55, 60, 66] } else { [99, 106, 115] });
+                color[3] = 0.45;
+                color
+            }
+        };
+        Self {
+            params: [if rule_x { 1.0 } else { 0.0 }, axis_spacing as f32, elevation_spacing as f32, 0.0],
+            phase: [
+                (axis_origin / axis_spacing).fract() as f32,
+                (scene_origin.z / elevation_spacing).fract() as f32,
+                // Points to the physical pixels the shader measures in.
+                (style.thickness * scale_factor) as f32,
+                0.0,
+            ],
+            color,
+        }
+    }
+}
+
 impl GridUniform {
-    fn new(scene_origin: DVec3, background: [f32; 4], camera: &Camera, projection: &Projection, vertical_exaggeration: f64, fly_mode_enabled: bool) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        camera: &Camera,
+        projection: &Projection,
+        vertical_exaggeration: f64,
+        fly_mode_enabled: bool,
+        style: &crate::ui::state::PlanGridStyle,
+        scale_factor: f64,
+    ) -> Self {
         fn color(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
             let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(rgb);
             color[3] = alpha;
             color
         }
 
-        let luminance = background[0] * 0.2126 + background[1] * 0.7152 + background[2] * 0.0722;
-        let (minor_color, major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
+        let luminance = crate::rendering::color::relative_luminance(background);
+        let (mut minor_color, mut major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
             (color([72, 77, 82], 0.28), color([55, 60, 66], 0.46), color([130, 62, 66], 0.78), color([67, 108, 57], 0.78))
         } else {
             (
@@ -170,6 +246,18 @@ impl GridUniform {
                 color([65, 101, 55], 0.82),
             )
         };
+
+        // A chosen colour takes the major lines as given and the minor lines
+        // at the palette's minor-to-major opacity; the axes keep their own.
+        if let Some(chosen) = style.color {
+            let minor_ratio = minor_color[3] / major_color[3];
+            major_color = crate::rendering::color::color32_to_rgba(chosen);
+            minor_color = major_color;
+            minor_color[3] *= minor_ratio;
+        }
+        // Points beyond the one-pixel width the grid has always had, in the
+        // physical pixels the shader measures in.
+        let extra_width = ((style.thickness - 1.0) * scale_factor).max(0.0);
 
         // Blender selects one grid level for the whole view from camera
         // distance/zoom, then draws the level below and above it. Keeping the
@@ -199,7 +287,7 @@ impl GridUniform {
             ],
             // y controls grazing-angle suppression. Fly mode deliberately
             // leaves the grid at full opacity even when viewed edge-on.
-            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, 0.0, 0.0],
+            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, extra_width as f32, 0.0],
             minor_color,
             major_color,
             x_axis_color,
@@ -208,60 +296,67 @@ impl GridUniform {
     }
 }
 
+/// The scene pass's inputs while it draws the cinematic view: the lit
+/// pipelines, the camera-plus-lighting bind group they take at group 0, the
+/// half-float multisample target they draw into.
+pub(crate) struct ActiveScene {
+    pub(crate) pipelines: Arc<scene_pipelines::ScenePipelines>,
+    pub(crate) camera_bind_group: wgpu::BindGroup,
+    pub(crate) msaa_view: wgpu::TextureView,
+}
+
 pub(crate) struct Graphics<'a> {
     // GPU resource owners are declared before device/surface/window so they
     // are dropped first during shutdown.
     pub(super) gui: Gui,
     pub(super) text_system: TextSystem,
-    pub(super) solid_surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_solid_surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
-    pub(super) grid_render_pipeline: wgpu::RenderPipeline,
-    pub(super) raster_plane_render_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_render_pipeline: wgpu::RenderPipeline,
+    /// The pipelines the ordinary scene pass and the editor overlay draw with.
+    pub(super) scene_pipelines: Arc<scene_pipelines::ScenePipelines>,
+    /// What the scene pass draws with and into while `frame::render` diverts
+    /// it into the cinematic view's lit target. `None` everywhere else, so
+    /// every other pass - the overlay, the previews, the plot - draws with the
+    /// ordinary view's pipelines; see [`Self::pipes`].
+    pub(super) active_scene: Option<ActiveScene>,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_beam_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_transparency_composite_pipeline: wgpu::RenderPipeline,
-    pub(super) block_model_volume_upscale_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_volume_upscale_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_fallback_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_transparency_composite_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) block_model_volume_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) surface_chunk_bind_group_layout: wgpu::BindGroupLayout,
+    /// Cinematic view's pipelines and shadow map, built the first time the
+    /// view is turned on and kept for the session. `None` until then, so a
+    /// session that never uses it pays nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic: Option<cinematic::CinematicPipelines>,
+    /// Its screen-sized attachments, retired and rebuilt on resize like the
+    /// block-model ones.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) render_pipeline: wgpu::RenderPipeline,
-    pub(super) transparent_document_fill_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_render_pipeline: wgpu::RenderPipeline,
-    pub(super) opaque_stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) stroke_render_pipeline: wgpu::RenderPipeline,
-    pub(super) edge_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_colored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) point_cloud_uncolored_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_hole_render_pipeline: wgpu::RenderPipeline,
-    pub(super) drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) xray_drill_collar_render_pipeline: wgpu::RenderPipeline,
-    pub(super) design_point_render_pipeline: wgpu::RenderPipeline,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) overlay_render_pipeline: wgpu::RenderPipeline,
+    pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
-    pub(super) stroke_vertex_gpu: wgpu::Buffer,
-    pub(super) stroke_index_gpu: wgpu::Buffer,
-    pub(super) overlay_vertex_gpu: wgpu::Buffer,
-    pub(super) overlay_index_gpu: wgpu::Buffer,
-    pub(super) dynamic_vertex_gpu: wgpu::Buffer,
-    pub(super) dynamic_index_gpu: wgpu::Buffer,
+    pub(super) stroke_gpu: wgpu::Buffer,
+    pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
     pub(super) camera_bind_group: wgpu::BindGroup,
+    /// Kept so passes built after startup - the cinematic chain - can lay out
+    /// their pipelines against the very same layout the scene's use. That
+    /// chain is native-only, so nothing reads this in the browser build.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) camera_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) grid_buffer: wgpu::Buffer,
     pub(super) grid_bind_group: wgpu::BindGroup,
+    pub(super) section_grid_buffer: wgpu::Buffer,
+    pub(super) section_grid_bind_group: wgpu::BindGroup,
     pub(super) msaa_color: wgpu::Texture,
     pub(super) msaa_view: wgpu::TextureView,
     pub(super) scene_cache: SceneCacheTarget,
@@ -309,20 +404,16 @@ pub(crate) struct Graphics<'a> {
     pub(super) polyline_fill_cache: PolylineFillCache,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
-    pub(super) stroke_vertex_buf: Vec<StrokeVertex>,
-    pub(super) stroke_index_buf: Vec<u32>,
-    pub(super) stroke_vertex_capacity: usize,
-    pub(super) stroke_index_capacity: usize,
-    pub(super) overlay_vertex_buf: Vec<StrokeVertex>,
-    pub(super) overlay_index_buf: Vec<u32>,
-    pub(super) overlay_vertex_capacity: usize,
-    pub(super) overlay_index_capacity: usize,
+    /// Document stroke instances outside the static chunks.
+    pub(super) strokes: Vec<StrokeInstance>,
+    pub(super) stroke_blocks: StrokeBlocks,
+    pub(super) stroke_capacity: usize,
+    pub(super) overlay_strokes: Vec<StrokeInstance>,
+    pub(super) overlay_stroke_capacity: usize,
     /// Per-frame stroke geometry for live drawing tools (batter/berm
     /// preview); see `rebuild_dynamic_scene`.
-    pub(super) dynamic_vertex_buf: Vec<StrokeVertex>,
-    pub(super) dynamic_index_buf: Vec<u32>,
-    pub(super) dynamic_vertex_capacity: usize,
-    pub(super) dynamic_index_capacity: usize,
+    pub(super) dynamic_strokes: Vec<StrokeInstance>,
+    pub(super) dynamic_stroke_capacity: usize,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,
@@ -334,9 +425,12 @@ pub(crate) struct Graphics<'a> {
     pub(super) fly_camera_controller: FlyCameraController,
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
+    touch_gesture: touch::TouchGesture,
     pub(super) fly_mode_enabled: bool,
     pub(super) slice_view: Option<SliceViewState>,
     pub(super) frame_index: u64,
+    /// Attachments awaiting destruction; see `RetiredAttachments`.
+    pub(super) retired_attachments: Vec<RetiredAttachments>,
     /// Last frame on which the shaped-text cache was trimmed. Tracking the
     /// elapsed interval avoids requiring a geometry rebuild to land on one
     /// exact multiple of the trim cadence.
@@ -346,10 +440,20 @@ pub(crate) struct Graphics<'a> {
     pub(super) last_interaction: Option<Instant>,
     pub(super) geometry_dirty: bool,
     pub(super) cached_document_revision: u64,
-    /// `EditorState::render_style_key` of the last static-scene build. The
-    /// renderer compares this itself so selection/style mutations cannot
-    /// leave stale baked geometry when a caller skipped invalidation.
+    /// `EditorState::render_style_key` of the last restyle. The renderer
+    /// compares this itself so a selection or style change always reaches
+    /// the style buffer and batches, even when a caller skipped invalidation.
     pub(super) cached_render_style_key: Option<u64>,
+    /// `build::document_scene_key` of the last stream tessellation; a
+    /// geometry pass that matches it only restyles.
+    pub(super) cached_document_scene_key: Option<u64>,
+    /// The batches and style buffer need rebuilding for the current editor
+    /// state.
+    pub(super) document_style_dirty: bool,
+    pub(super) document_style_slots: DocumentStyleSlots,
+    pub(super) document_style: DocumentStyleGpu,
+    /// Each stream object's ranges, restaged by `restyle_document_scene`.
+    pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
@@ -378,10 +482,17 @@ pub(crate) struct Graphics<'a> {
     /// screen-space markers without a display LOD.
     pub(super) design_point_gpu: DesignPointGpuCache,
     pub(super) raster_gpu: RasterGpuCache,
-    /// `(rendered, total)` surface-chunk counts from the last scene pass, for
-    /// the developer chunk-debug readout. One frame stale by the time the UI
+    /// Surface face and chunk counts from the last main scene pass, for the
+    /// developer chunk-debug readout. One frame stale by the time the UI
     /// reads it, which is fine for a debug counter.
-    pub(crate) chunk_render_stats: (u32, u32),
+    pub(crate) surface_render_stats: crate::rendering::scene::gpu_cache::SurfaceRenderStats,
+    /// Point-cloud counts from the last main scene pass, for the developer
+    /// point readout. One frame stale, like `surface_render_stats`.
+    pub(crate) point_render_stats: crate::rendering::scene::point_cloud_cache::PointRenderStats,
+    /// Line geometry outlining each surface chunk's AABB, rebuilt by the main
+    /// scene pass while the developer chunk-bounds view is on and drawn,
+    /// depth-tested, by the editor overlay pass.
+    pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,
@@ -422,6 +533,7 @@ impl SliceInputState {
 pub(crate) struct SliceViewState {
     /// Slice-line midpoint in display space (world XY, exaggerated Z);
     /// `z` is the current view-centre elevation.
+    /// Rides with the eye's foot on the plane (`set_eye`); Q/E turns about it.
     pub(super) center: DVec3,
     /// Unit direction of the slice line in XY ("strike"). Screen-right maps
     /// to `+direction`; the view direction (slab normal) is
@@ -439,21 +551,173 @@ pub(crate) struct SliceViewState {
     pub(super) pan: DVec2,
     /// Accumulated scroll deltas (pixels, 1 line ≈ 100 px).
     pub(super) scroll: f64,
+    pub(super) walk: f64,
+    pub(super) orbit: DVec2,
+    /// Whether a right drag has passed the click/drag threshold; below it a
+    /// right click still finishes the drawn polyline instead of moving the view.
+    pub(super) orbit_dragging: bool,
+    /// Orbit from square-on, radians: `yaw` about world Z, then `pitch` about
+    /// the yawed screen-right axis; both zero is the entered view.
+    pub(super) yaw: f64,
+    pub(super) pitch: f64,
+    /// Which side of the plane the camera is on (`true` = front, the entered
+    /// side); `walk_direction` reads it to keep the walk direction correct after an orbit.
+    pub(super) viewing_from_front: bool,
     /// Camera and ortho zoom to restore on exit.
     pub(super) saved_camera: Camera,
     pub(super) saved_zoom: f64,
+    /// The eye's offset from `center`, along the normal only: the depth the
+    /// slide onto the plane could not remove near edge-on, zero otherwise.
+    pub(super) view_offset: DVec3,
+    /// An in-flight turn to a standard view, eased over a moment.
+    pub(super) turn_to: Option<SliceTurn>,
+}
+
+/// A section on its way to a standard view: the gizmo's counterpart to the
+/// plan view's camera transition, held on the slice state because the section
+/// camera is rebuilt from that state every frame - a camera transition would
+/// simply be overwritten.
+#[derive(Debug)]
+pub(super) struct SliceTurn {
+    /// Total turn of the section line, radians, and how much of it is spent.
+    angle: f64,
+    turned: f64,
+    /// The orbit to unwind on the way: every standard view a section can be
+    /// turned to is square-on, so both of these ease to zero.
+    start_yaw: f64,
+    start_pitch: f64,
+    elapsed: Duration,
 }
 
 impl SliceViewState {
+    /// Whether the section still has work in hand: navigation the next tick
+    /// must consume, or a turn to finish. Drives the redraw loop, so a turn
+    /// counts even though nothing is touching the mouse.
     pub(super) fn has_pending_updates(&self) -> bool {
-        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0
+        self.has_pending_input() || self.turn_to.is_some()
+    }
+
+    fn has_pending_input(&self) -> bool {
+        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0 || self.orbit != DVec2::ZERO || self.walk != 0.0
+    }
+
+    /// Advance an in-flight turn: the section line's step for this tick and
+    /// the yaw/pitch to hold. `None` when no turn is running - and navigation
+    /// input takes over from one at once, as it does from the plan view's
+    /// transition.
+    pub(super) fn advance_turn(&mut self, dt: Duration) -> Option<(f64, f64, f64)> {
+        if self.has_pending_input() {
+            self.turn_to = None;
+        }
+        let turn = self.turn_to.as_mut()?;
+        turn.elapsed += dt;
+        let linear = (turn.elapsed.as_secs_f64() / crate::rendering::camera::VIEW_TRANSITION_DURATION.as_secs_f64()).clamp(0.0, 1.0);
+        let eased = crate::rendering::camera::ease_out_cubic(linear);
+        // The line is turned by steps rather than set outright, so each step goes through `turn` and keeps the eye and a fixed centre with it.
+        let step = turn.angle * eased - turn.turned;
+        turn.turned += step;
+        let (start_yaw, start_pitch) = (turn.start_yaw, turn.start_pitch);
+        if linear >= 1.0 {
+            self.turn_to = None;
+        }
+        Some((step, start_yaw * (1.0 - eased), start_pitch * (1.0 - eased)))
+    }
+
+    pub(super) fn slab(&self) -> SectionSlab {
+        SectionSlab {
+            point: self.center,
+            normal: self.normal(),
+            half_width: self.width * 0.5,
+        }
     }
 
     /// View direction of the section (the slab normal), horizontal by
     /// construction. Chosen so that screen-right equals `+direction`.
-    pub(super) fn forward(&self) -> DVec3 {
+    pub(super) fn normal(&self) -> DVec3 {
         slice_view_forward(self.direction)
     }
+
+    /// The eye: `center` plus `view_offset`.
+    pub(super) fn camera_position(&self) -> DVec3 {
+        self.center + self.view_offset
+    }
+
+    /// Place the eye: the anchor takes its foot, the offset keeps its depth.
+    pub(super) fn set_eye(&mut self, eye: DVec3) {
+        let normal = self.normal();
+        let offset = eye - self.center;
+        let depth = offset.dot(normal);
+        self.center += offset - normal * depth;
+        self.view_offset = normal * depth;
+    }
+
+    pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
+        camera_frame(self.normal(), self.yaw, self.pitch)
+    }
+
+    /// Turn the section line `angle` radians about `fixed_centre` when one is
+    /// set, else about the anchor, carrying the eye with it. A rigid turn
+    /// about a vertical axis, so a fixed centre keeps its pixel through it.
+    pub(super) fn turn(&mut self, angle: f64, fixed_centre: Option<DVec3>) {
+        let turn = DVec2::from_angle(angle);
+        self.direction = turn.rotate(self.direction).normalize_or(self.direction);
+        if let Some(centre) = fixed_centre {
+            let arm = turn.rotate((self.center - centre).truncate());
+            self.center = DVec3::new(centre.x + arm.x, centre.y + arm.y, self.center.z);
+        }
+        let eye = turn.rotate(self.view_offset.truncate());
+        self.view_offset = DVec3::new(eye.x, eye.y, self.view_offset.z);
+    }
+
+    pub(super) fn update_viewing_side(&mut self, forward: DVec3) {
+        self.viewing_from_front = settled_viewing_side(self.viewing_from_front, forward.dot(self.normal()));
+    }
+}
+
+/// Camera basis for a section `normal`, yawed about world Z then pitched
+/// about the resulting screen-right; right stays horizontal so the frame never collapses looking straight down.
+fn camera_frame(normal: DVec3, yaw: f64, pitch: f64) -> (DVec3, DVec3, DVec3) {
+    let yawed = DQuat::from_rotation_z(yaw) * normal;
+    let right = yawed.cross(DVec3::Z).normalize_or(DVec3::X);
+    let forward = DQuat::from_axis_angle(right, pitch) * yawed;
+    (forward, right, right.cross(forward).normalize_or(DVec3::Z))
+}
+
+/// Hysteresis around edge-on, in degrees: below this margin the camera's
+/// recorded side of the plane doesn't flip, since exactly edge-on the sign is arbitrary and would flicker under a barely-moving hand.
+const SIDE_FLIP_MARGIN_DEGREES: f64 = 5.0;
+
+fn settled_viewing_side(was_front: bool, incidence: f64) -> bool {
+    if incidence.abs() > SIDE_FLIP_MARGIN_DEGREES.to_radians().sin() {
+        incidence > 0.0
+    } else {
+        was_front
+    }
+}
+
+/// Direction a forward walk moves the plane, away from the eye: `normal`
+/// from the front side, `-normal` from the back.
+fn walk_direction(normal: DVec3, viewing_from_front: bool) -> DVec3 {
+    if viewing_from_front { normal } else { -normal }
+}
+
+/// Wheel delta as `(x, y)` pixels; one notch is 100 px on either axis.
+fn axis_pixels(delta: &MouseScrollDelta) -> (f64, f64) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (f64::from(*x) * 100.0, f64::from(*y) * 100.0),
+        MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
+    }
+}
+
+pub(crate) fn scroll_pixels(delta: &MouseScrollDelta) -> f64 {
+    axis_pixels(delta).1
+}
+
+/// Wheel delta in pixels, preferring `y` like `scroll_pixels`, but falling
+/// back to `x`: Shift+wheel arrives as a horizontal delta (`y` zero) on Chrome and on macOS.
+pub(crate) fn scroll_pixels_either_axis(delta: &MouseScrollDelta) -> f64 {
+    let (x, y) = axis_pixels(delta);
+    if y != 0.0 { y } else { x }
 }
 
 /// View direction for a slice line running along `direction`:
@@ -468,6 +732,26 @@ pub(crate) fn slice_view_forward(direction: DVec2) -> DVec3 {
 pub(super) fn slice_visible_half_length(zoom: f64, screen: Size) -> f64 {
     let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
     (zoom * aspect).max(1.0e-4)
+}
+
+/// Bound the infinite section slab over the scene's display-space extents.
+/// The overview's visible line length must not limit depth: orbiting can bring
+/// geometry farther along the section into view even at a very small zoom.
+fn slice_depth_half_extent(center: DVec3, strike: DVec3, forward: DVec3, half_width: f64, bounds: Option<(DVec3, DVec3)>) -> f64 {
+    let mut tilt_depth: f64 = 0.0;
+    if let Some((min, max)) = bounds {
+        for i in 0..8 {
+            let corner = DVec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            let delta = corner - center;
+            let depth = delta.dot(strike) * strike.dot(forward) + delta.z * forward.z;
+            tilt_depth = tilt_depth.max(depth.abs());
+        }
+    }
+    half_width + tilt_depth + 1.0
 }
 
 pub(super) struct BlockModelTransparencyTargets {
@@ -599,11 +883,15 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
-        self.camera_controller.end_orbit();
+        self.touch_gesture = Default::default();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
             slice.input = SliceInputState::default();
+            // Drop the armed orbit: otherwise the next pointer move would rotate the restored view.
+            slice.orbit_dragging = false;
+            slice.orbit = DVec2::ZERO;
         }
         self.sync_cursor_grab();
     }
@@ -647,12 +935,16 @@ impl<'a> Graphics<'a> {
     /// (right-mouse drag). Callers can skip expensive per-frame work like snap
     /// queries during camera movement.
     pub(crate) fn is_camera_active(&self) -> bool {
-        self.mouse_pressed == Some(MouseButton::Right)
+        self.mouse_pressed == Some(MouseButton::Right) || !self.touch_gesture.contacts.is_empty()
     }
 
     /// Record that the user is interacting with the view right now (camera
     /// drag or window resize), starting the volume raycaster's low-quality
     /// cooldown.
+    pub(crate) fn surface_size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.size
+    }
+
     pub(super) fn mark_interaction(&mut self) {
         self.last_interaction = Some(Instant::now());
     }
@@ -722,7 +1014,7 @@ impl<'a> Graphics<'a> {
         let saved_camera = self.camera.clone();
         let saved_zoom = self.projection.zoom;
         self.camera_controller.cancel_view_transition();
-        self.camera_controller.end_orbit();
+        self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
 
         // Frame the drawn line: it spans the view horizontally with padding.
@@ -740,11 +1032,24 @@ impl<'a> Graphics<'a> {
             input: SliceInputState::default(),
             pan: DVec2::ZERO,
             scroll: 0.0,
+            walk: 0.0,
+            orbit: DVec2::ZERO,
+            orbit_dragging: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            viewing_from_front: true,
             saved_camera,
             saved_zoom,
+            view_offset: DVec3::ZERO,
+            turn_to: None,
         };
-        self.camera.look_to(slice.center, slice.forward(), DVec3::Z, self.projection.zoom);
+        let (forward, _, up) = slice.camera_basis();
+        self.camera.look_to(slice.center, forward, up, self.projection.zoom);
         self.slice_view = Some(slice);
+    }
+
+    pub(crate) fn slice_view_moving(&self) -> bool {
+        self.slice_view.as_ref().is_some_and(SliceViewState::has_pending_updates)
     }
 
     /// Leave slice mode and restore the camera saved on entry. The clip
@@ -755,6 +1060,86 @@ impl<'a> Graphics<'a> {
         };
         self.camera = slice.saved_camera;
         self.projection.zoom = slice.saved_zoom;
+        if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled {
+            self.mouse_pressed = None;
+        }
+    }
+
+    pub(crate) fn begin_slice_orbit_drag(&mut self, initial: DVec2) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.orbit_dragging = true;
+        slice.orbit += initial;
+        self.begin_right_orbit_drag();
+        true
+    }
+
+    pub(crate) fn slice_walk_scroll(&mut self, delta: &MouseScrollDelta) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.walk += scroll_pixels_either_axis(delta);
+        self.mark_interaction();
+        true
+    }
+
+    pub(crate) fn section_slab(&self) -> Option<SectionSlab> {
+        self.slice_view.as_ref().map(SliceViewState::slab)
+    }
+
+    /// Turn the section camera to a standard view: the section line itself
+    /// turns, so the camera ends square-on looking along that axis - the turn
+    /// Q/E make, taken in one eased step.
+    ///
+    /// Straight up and down are refused. A vertical section cannot be turned
+    /// to face them, and a view that grazes the plane has no point under the
+    /// cursor, so the gizmo drops those arms while sliced rather than offer a
+    /// turn that lands nowhere.
+    pub(crate) fn set_slice_standard_view(&mut self, view: crate::ui::state::StandardView) -> bool {
+        let (forward, _) = camera::standard_view_basis(view);
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        let Some(target) = forward.truncate().try_normalize() else {
+            return false;
+        };
+        // The turn runs on the update tick, which reads the live rotation centre; the shortest way round, since `angle_to` never exceeds half a turn.
+        slice.turn_to = Some(SliceTurn {
+            angle: slice.normal().truncate().angle_to(target),
+            turned: 0.0,
+            start_yaw: slice.yaw,
+            start_pitch: slice.pitch,
+            elapsed: Duration::ZERO,
+        });
+        true
+    }
+
+    /// Squares the section camera to its plane; undoes only the orbit,
+    /// leaving direction, slab position, pan and zoom untouched.
+    pub(crate) fn reset_slice_view(&mut self, rotation_centre: Option<DVec3>) -> bool {
+        let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        // Squaring up outright takes over from a turn still in flight.
+        slice.turn_to = None;
+        // Squaring up is a turn like any other: a fixed centre keeps its pixel through it.
+        let anchored = fixed_centre.map(|centre| (centre, camera::eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
+        slice.yaw = 0.0;
+        slice.pitch = 0.0;
+        slice.orbit = DVec2::ZERO;
+        slice.orbit_dragging = false;
+        slice.viewing_from_front = true;
+        let (forward, right, up) = slice.camera_basis();
+        let eye = match anchored {
+            Some((centre, (screen_x, screen_y, depth))) => camera::eye_keeping_centre(centre, screen_x, screen_y, depth, (forward, right, up)),
+            None => slice.camera_position(),
+        };
+        // Square-on, the view meets the plane head-on, so the eye always lands back on it.
+        slice.set_eye(camera::slide_onto_plane(eye, slice.center, forward, slice.normal()));
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
+        true
     }
 
     /// Forward a held-key press/release to the slice navigation input:
@@ -787,6 +1172,29 @@ impl<'a> Graphics<'a> {
     /// egui hid or showed would be skipped as a no-op.
     fn sync_cursor_grab(&self) {
         let fly_active = self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right);
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+
+            let Some(canvas) = self.window.canvas() else { return };
+            let Some(document) = canvas.owner_document() else { return };
+            let has_method = |object: &wasm_bindgen::JsValue, name: &str| js_sys::Reflect::get(object, &name.into()).is_ok_and(|value| value.is_function());
+            // winit 0.30 calls these APIs without feature detection or exception
+            // handling. Mobile browsers can omit them, so even releasing an
+            // unused grab on focus loss (e.g. a file picker) would throw into JS.
+            if !has_method(document.as_ref(), "exitPointerLock") {
+                return;
+            }
+            let canvas_element: &web_sys::Element = canvas.as_ref();
+            let owns_lock = document.pointer_lock_element().as_ref() == Some(canvas_element);
+            if fly_active {
+                if owns_lock || !has_method(canvas.as_ref(), "requestPointerLock") {
+                    return;
+                }
+            } else if !owns_lock {
+                return;
+            }
+        }
         if fly_active {
             if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);

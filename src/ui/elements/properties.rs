@@ -10,7 +10,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32},
+            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -106,11 +106,11 @@ pub(crate) fn draw_selection_appearance(
         })
         .collect();
     objects.sort_by_key(|id| id.0);
-    let mut selected_types = [false; 7];
+    let mut selected_types = [false; 8];
     for handle in &editor.selected_handles {
         let kind = match handle {
             SceneEntityId::Object(id) => match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. }) => 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => 0,
                 Some(crate::model::Object::Point { .. }) => 1,
                 Some(crate::model::Object::Text { .. }) => 2,
                 None => continue,
@@ -119,6 +119,7 @@ pub(crate) fn draw_selection_appearance(
             SceneEntityId::BlockModel(_) => 4,
             SceneEntityId::DrillHole(_) => 5,
             SceneEntityId::PointCloud(_) => 6,
+            SceneEntityId::Raster(_) => 7,
         };
         selected_types[kind] = true;
     }
@@ -128,7 +129,7 @@ pub(crate) fn draw_selection_appearance(
             .iter()
             .copied()
             .filter(|id| match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. }) => kind == 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => kind == 0,
                 Some(crate::model::Object::Point { .. }) => kind == 1,
                 Some(crate::model::Object::Text { .. }) => kind == 2,
                 None => false,
@@ -154,6 +155,14 @@ pub(crate) fn draw_selection_appearance(
                 geometry_dirty,
             );
         });
+        // The object editor needs exactly one selected design object.
+        if editor.selected_handles.len() == 1
+            && let [object_id] = objects.as_slice()
+            && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
+        {
+            commands.push(UiCommand::OpenObjectEditDialog(*object_id));
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
         if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Move to Layer..."))
             .show(ui)
             .clicked()
@@ -225,34 +234,94 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         )
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| {
-            egui::Frame::window(ui.style()).show(ui, |ui| {
-                ui.set_width((canvas.width() - 32.0).clamp(240.0, 780.0));
-                egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
-                    MenuFieldCombo::new(
-                        "filter_model",
-                        tr!(literal = "Block model"),
-                        &mut editor.viewport_block_model_id,
-                        model.name.clone(),
-                        models.iter().filter(|model| model.state.loaded).map(|model| (Some(model.id), model.name.clone().into())),
-                    )
-                    .show(ui);
-                    if let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) {
-                        ui.push_id(model.id, |ui| {
-                            BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
+            // The menu-family card, so the panel matches the docked tool panels
+            // rather than egui's stock window.
+            let surface = menu::menu_surface(ui.visuals());
+            egui::Frame::new()
+                .fill(surface)
+                .stroke(menu::menu_border(ui.visuals()))
+                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
+                .show(ui, |ui| {
+                    menu::apply_menu_style(ui, surface);
+                    let width = (canvas.width() - 32.0).clamp(240.0, 780.0);
+                    ui.set_width(width);
+                    draw_block_model_title_bar(ui, editor, models, model, width, surface);
+                    let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
+                        return;
+                    };
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin {
+                            left: 12,
+                            right: 12,
+                            top: 6,
+                            bottom: 10,
+                        })
+                        .show(ui, |ui| {
+                            egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
+                                ui.push_id(model.id, |ui| {
+                                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
+                                });
+                            });
                         });
-                    }
                 });
-            });
         });
 }
 
-/// Whether a field's edit is finished, rather than mid-drag.
-///
-/// Preferences are written to the config file as they are applied, and object
-/// edits become undo entries, so a drag must land once rather than on every
-/// frame it moves.
-pub(crate) fn committed(response: &egui::Response) -> bool {
-    response.drag_stopped() || (response.changed() && !response.dragged())
+/// The block-model card's heading: its title, the model it is showing, and a
+/// close cross. Closing clears the shown model; selecting one reopens it.
+fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], model: &OpenBlockModel, width: f32, surface: egui::Color32) {
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+    ui.spacing_mut().item_spacing.y = spacing;
+    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!(literal = "Block model")), rect, surface);
+
+    let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
+    let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
+    let picker_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - menu::TITLE_BAR_HEIGHT - 2.0 - picker_width, rect.center().y - 11.0),
+        egui::vec2(picker_width, 22.0),
+    );
+    if loaded.len() > 1 {
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(picker_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().interact_size.y = 22.0;
+                egui::ComboBox::from_id_salt("filter_model")
+                    .selected_text(model.name.clone())
+                    .width(picker_width)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for option in &loaded {
+                            ui.selectable_value(&mut editor.viewport_block_model_id, Some(option.id), option.name.clone());
+                        }
+                    })
+                    .response
+                    .on_hover_text(model.name.clone());
+            },
+        );
+    } else {
+        // Nothing to switch to: name the model without offering a choice.
+        let mut job = egui::text::LayoutJob::single_section(
+            model.name.clone(),
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(12.0),
+                color: ui.visuals().weak_text_color(),
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(picker_width);
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(
+            egui::pos2(picker_rect.right() - galley.size().x, picker_rect.center().y - galley.size().y / 2.0),
+            galley,
+            ui.visuals().weak_text_color(),
+        );
+    }
+
+    if menu::title_bar_close_button(ui, rect, surface) {
+        editor.viewport_block_model_id = None;
+    }
 }
 
 /// Runs `add_fields` against the editor's preferences draft and applies it as
@@ -307,16 +376,17 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.dark_mode = defaults.dark_mode;
     draft.show_console = defaults.show_console;
     draft.panel_chrome = defaults.panel_chrome;
+    draft.ui_size_percent = defaults.ui_size_percent;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
-    draft.show_xy_grid = defaults.show_xy_grid;
     draft.show_scale_bar = defaults.show_scale_bar;
 }
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.frame_counter_enabled = defaults.frame_counter_enabled;
-    draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
+    draft.debug_surface_chunks = defaults.debug_surface_chunks;
     draft.debug_clip_planes = defaults.debug_clip_planes;
+    draft.debug_point_cloud_chunks = defaults.debug_point_cloud_chunks;
 }
 
 fn reset_camera_defaults(draft: &mut PreferencesDraft) {
@@ -371,8 +441,15 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Dark mode"), &mut draft.dark_mode).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
+            changed |= committed(
+                &MenuFieldF64::new(tr!("preferences-ui-size"), &mut draft.ui_size_percent, 50.0..=200.0)
+                    .suffix("%")
+                    .speed(1.0)
+                    .max_decimals(0)
+                    .show(ui)
+                    .on_hover_text(tr!("preferences-ui-size-help")),
+            );
             changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "XY grid"), &mut draft.show_xy_grid).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));
             changed
         },
@@ -512,13 +589,22 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             let mut changed = false;
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Frame counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Colour GPU chunks"), &mut draft.debug_chunk_coloring)
-                    .help_text(tr!(literal = "Visualises the Morton spatial chunking used for frustum culling."))
+                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
+                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
-                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
+                &MenuFieldBool::new(tr!(literal = "Surface chunk debug view"), &mut draft.debug_surface_chunks)
+                    .help_text(tr!(
+                        literal = "Colours each surface chunk, outlines the box it is frustum-culled by, and shows the faces drawn last frame against the visible total in the status bar."
+                    ))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new(tr!(literal = "Point cloud chunk debug view"), &mut draft.debug_point_cloud_chunks)
+                    .help_text(tr!(
+                        literal = "Colours each point-cloud chunk, outlines the box it is frustum-culled by, and shows the points drawn last frame against the level-of-detail target and the visible total in the status bar."
+                    ))
                     .show(ui),
             );
             changed
@@ -527,7 +613,26 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
     );
 }
 
-fn fill_style_label(style: FillStyle) -> String {
+/// A labelled value the panel only reports, laid out like the editable fields
+/// beside it so the columns line up.
+pub(crate) fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    let row_height = ui.spacing().interact_size.y;
+    let row_width = ui.available_width();
+    // The same column width the fields resolve for themselves, or the values
+    // would not line up under them.
+    let value_width = crate::ui::widgets::menu::field_column_for(ui, label, false);
+    ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).color(ui.visuals().weak_text_color()));
+        });
+        let label_width = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            menu_field_label(ui, label.into(), None);
+        });
+    });
+}
+
+pub(crate) fn fill_style_label(style: FillStyle) -> String {
     match style {
         FillStyle::Clear => tr!(literal = "Clear"),
         FillStyle::Crosses => tr!(literal = "Crosses"),
@@ -560,26 +665,36 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         return;
     }
 
-    let (first_closed, first_fill, first_line_weight) = match context.polylines.first().and_then(|&id| document.get_object(id)) {
-        Some(crate::model::Object::Polyline { closed, fill, line_weight, .. }) => (*closed, *fill, *line_weight),
-        _ => (false, FillStyle::Clear, 1.0),
-    };
+    // Circles share this group - they carry fill and line weight - so read
+    // those through the accessors rather than naming the polyline variant.
+    let first_object = context.polylines.first().and_then(|&id| document.get_object(id));
+    let first_closed = first_object.and_then(crate::model::Object::string_geometry).is_some_and(|(_, closed)| closed);
+    let first_fill = first_object.and_then(crate::model::Object::fill).unwrap_or(FillStyle::Clear);
+    let first_line_weight = first_object.and_then(crate::model::Object::line_weight).unwrap_or(1.0);
 
-    let closed_label = tr!(literal = "Closed");
-    let open_label = tr!(literal = "Open");
-    let mut closed = first_closed;
-    MenuFieldCombo::new(
-        "design_shape",
-        tr!(literal = "Shape"),
-        &mut closed,
-        if first_closed { closed_label.clone() } else { open_label.clone() },
-        [(true, closed_label.into()), (false, open_label.into())],
-    )
-    .width(FIELD_WIDTH)
-    .show(ui);
-    if closed != first_closed {
-        commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
-        *geometry_dirty = true;
+    // A circle is closed by definition, so the Shape row appears only when the
+    // selection holds something that can actually be opened.
+    let any_openable = context
+        .polylines
+        .iter()
+        .any(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })));
+    if any_openable {
+        let closed_label = tr!(literal = "Closed");
+        let open_label = tr!(literal = "Open");
+        let mut closed = first_closed;
+        MenuFieldCombo::new(
+            "design_shape",
+            tr!(literal = "Shape"),
+            &mut closed,
+            if first_closed { closed_label.clone() } else { open_label.clone() },
+            [(true, closed_label.into()), (false, open_label.into())],
+        )
+        .width(FIELD_WIDTH)
+        .show(ui);
+        if closed != first_closed {
+            commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
+            *geometry_dirty = true;
+        }
     }
 
     let mut fill = first_fill;

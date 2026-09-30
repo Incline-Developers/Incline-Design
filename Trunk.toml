@@ -1,5 +1,5 @@
 [build]
-target = "index.html"
+target = "web/index.html"
 dist = "dist"
 
 [serve]

@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::{tr, tr_format},
-    model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout, geometry::tessellate_polyline_bulges},
+    model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout},
     ui::{
         state::{EditorState, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldF64, MenuFieldText},
@@ -29,13 +29,7 @@ pub(crate) struct PatternPreviewKey {
 
 fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
     if let Some(id) = editor.drill_pattern_boundary_id
-        && document.get_object(id).is_none_or(|object| {
-            !matches!(
-                object,
-                Object::Polyline { verts, closed: true, .. }
-                    if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
-            )
-        })
+        && document.get_object(id).is_none_or(|object| !object.encloses_area())
     {
         editor.drill_pattern_boundary_id = None;
         editor.drill_pattern_boundary_name.clear();
@@ -57,11 +51,8 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
         let result = editor
             .drill_pattern_boundary_id
             .and_then(|id| document.get_object(id))
-            .and_then(|object| match object {
-                Object::Polyline { verts, closed: true, .. } if verts.len() >= 2 => Some(tessellate_polyline_bulges(verts, true)),
-                _ => None,
-            })
-            .ok_or_else(|| "Pick a closed polyline to define the blast shape".to_owned())
+            .and_then(Object::closed_boundary)
+            .ok_or_else(|| "Pick a closed polyline or circle to define the blast shape".to_owned())
             .and_then(|boundary| {
                 crate::model::drill_hole::generate_pattern_collars(
                     &boundary,
@@ -168,20 +159,37 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .suffix(tr!(literal = " m"))
                 .show(ui);
             MenuFieldF64::new(tr!(literal = "Rotation"), &mut editor.drill_pattern_rotation_deg, -360.0..=360.0)
-                .help_text(tr!(literal = "Counter-clockwise pattern rotation from the global X axis."))
+                .help_text(tr_format!(
+                    literal = "Counter-clockwise pattern rotation from the global %axis% axis.",
+                    axis = crate::model::survey::axis_name(0)
+                ))
                 .speed(1.0)
                 .suffix("°")
                 .show(ui);
-            MenuFieldF64::new(tr!(literal = "X offset"), &mut editor.drill_pattern_offset_x, -1_000_000.0..=1_000_000.0)
-                .help_text(tr!(literal = "Shift the pattern grid along the global X axis while keeping it clipped to the blast shape."))
-                .speed(0.1)
-                .suffix(tr!(literal = " m"))
-                .show(ui);
-            MenuFieldF64::new(tr!(literal = "Y offset"), &mut editor.drill_pattern_offset_y, -1_000_000.0..=1_000_000.0)
-                .help_text(tr!(literal = "Shift the pattern grid along the global Y axis while keeping it clipped to the blast shape."))
-                .speed(0.1)
-                .suffix(tr!(literal = " m"))
-                .show(ui);
+            MenuFieldF64::new(
+                tr_format!(literal = "%axis% offset", axis = crate::model::survey::axis_name(0)),
+                &mut editor.drill_pattern_offset_x,
+                -1_000_000.0..=1_000_000.0,
+            )
+            .help_text(tr_format!(
+                literal = "Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.",
+                axis = crate::model::survey::axis_name(0)
+            ))
+            .speed(0.1)
+            .suffix(tr!(literal = " m"))
+            .show(ui);
+            MenuFieldF64::new(
+                tr_format!(literal = "%axis% offset", axis = crate::model::survey::axis_name(1)),
+                &mut editor.drill_pattern_offset_y,
+                -1_000_000.0..=1_000_000.0,
+            )
+            .help_text(tr_format!(
+                literal = "Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.",
+                axis = crate::model::survey::axis_name(1)
+            ))
+            .speed(0.1)
+            .suffix(tr!(literal = " m"))
+            .show(ui);
             MenuFieldCombo::new(
                 "drill_pattern_layout",
                 tr!(literal = "Arrangement"),

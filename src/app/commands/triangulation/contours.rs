@@ -159,6 +159,8 @@ impl<'a> App<'a> {
                     color: [1.0, 1.0, 1.0, 1.0],
                     loaded: true,
                     elevation: 0.0,
+                    folder: None,
+                    section: SectionKind::natural_layer(),
                 };
                 crate::model::Command::AddLayerSnapshot { layer, objects }
             } else {

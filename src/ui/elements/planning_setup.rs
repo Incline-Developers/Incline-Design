@@ -23,7 +23,6 @@ use crate::{
     ui::{
         EditorState, UiProjectView, chrome,
         dialogs::solids::{block_model_label, block_model_options, kind_label, triangulation_label, triangulation_options},
-        elements::properties::committed,
         fonts::bold,
         state::{PlanningPage, SolidsStep, UiCommand},
         unthemed_icon,
@@ -32,7 +31,7 @@ use crate::{
             data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_choice_row, grid_color_row, grid_row, grid_separator_row, grid_value_row, property_table_height},
             explorer::{ExplorerEntry, ExplorerHeader, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
-            menu::{MenuFieldCombo, MenuFieldF64},
+            menu::{MenuFieldCombo, MenuFieldF64, committed},
         },
     },
 };
@@ -963,6 +962,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
                 image_rect,
                 forward.as_vec3().to_array(),
                 up.as_vec3().to_array(),
+                false,
             );
             if let Some(view) = gizmo.clicked {
                 editor.solid_preview_view.face(view);

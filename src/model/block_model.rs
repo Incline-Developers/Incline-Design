@@ -416,18 +416,23 @@ pub(crate) fn opaque_irregular_surface_block_count(blocks: &BlockBoundsSource, r
     Some(surface_blocks)
 }
 
-fn block_bounds_key(block: BlockBounds) -> [u64; 6] {
-    fn quantize(value: f64) -> u64 {
-        (value * 1_000_000.0).round().to_bits()
-    }
+/// Hashable identity of a block's bounds, equal for blocks that match to a micrometre.
+pub(crate) fn block_bounds_key(block: BlockBounds) -> [u64; 6] {
     [
-        quantize(block.lower.x),
-        quantize(block.lower.y),
-        quantize(block.lower.z),
-        quantize(block.upper.x),
-        quantize(block.upper.y),
-        quantize(block.upper.z),
+        quantize_micrometres(block.lower.x),
+        quantize_micrometres(block.lower.y),
+        quantize_micrometres(block.lower.z),
+        quantize_micrometres(block.upper.x),
+        quantize_micrometres(block.upper.y),
+        quantize_micrometres(block.upper.z),
     ]
+}
+
+/// A coordinate rounded to the micrometre as hashable bits. `-0.0` folds into
+/// `0.0` so a value rounding to zero from either side gives one key.
+pub(crate) fn quantize_micrometres(value: f64) -> u64 {
+    let rounded = (value * 1_000_000.0).round();
+    if rounded == 0.0 { 0.0_f64.to_bits() } else { rounded.to_bits() }
 }
 
 /// Positional tolerance for grid detection, as a fraction of the cell size.
@@ -1399,19 +1404,15 @@ impl OpenBlockModel {
         let Some(slice) = self.active_slice() else {
             return Some(full);
         };
-        let mut min = DVec3::splat(f64::INFINITY);
-        let mut max = DVec3::splat(f64::NEG_INFINITY);
-        for x in [slice.min.x, slice.max.x] {
-            for y in [slice.min.y, slice.max.y] {
-                for z in [slice.min.z, slice.max.z] {
-                    let point = self.model.local_to_world(DVec3::new(x, y, z));
-                    min = min.min(point);
-                    max = max.max(point);
-                }
-            }
-        }
-        min = min.max(full.0);
-        max = max.min(full.1);
+        let sliced = block_world_bounds(
+            &self.model,
+            BlockBounds {
+                lower: slice.min,
+                upper: slice.max,
+            },
+        );
+        let min = sliced.lower.max(full.0);
+        let max = sliced.upper.min(full.1);
         min.cmple(max).all().then_some((min, max))
     }
 
@@ -1458,8 +1459,7 @@ pub(crate) fn compute_world_bounds(model: &BlockModelData, blocks: &BlockBoundsS
 fn block_world_bounds(model: &BlockModelData, block: BlockBounds) -> BlockBounds {
     let mut min = DVec3::splat(f64::INFINITY);
     let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for corner in block_corners(block) {
-        let world = model.local_to_world(corner);
+    for world in block_world_corners(model, block) {
         min = min.min(world);
         max = max.max(world);
     }
@@ -1583,6 +1583,11 @@ pub(crate) fn render_value_range(values: &[f64], indices: &RenderableBlockIndice
     (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
+/// A block's eight corners in world space, through the model's rotation.
+pub(crate) fn block_world_corners(model: &BlockModelData, block: BlockBounds) -> [DVec3; 8] {
+    block_corners(block).map(|corner| model.local_to_world(corner))
+}
+
 fn block_corners(block: BlockBounds) -> [DVec3; 8] {
     let lo = block.lower;
     let hi = block.upper;
@@ -1596,4 +1601,51 @@ fn block_corners(block: BlockBounds) -> [DVec3; 8] {
         DVec3::new(hi.x, hi.y, hi.z),
         DVec3::new(lo.x, hi.y, hi.z),
     ]
+}
+
+impl BlockBoundsSource {
+    /// Scale local cell geometry while retaining implicit grids and file order.
+    pub(crate) fn scaled(&self, scale: f64, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Self> {
+        let out = match self {
+            Self::Regular(grid) => {
+                let mut grid = grid.clone();
+                grid.lower *= scale;
+                grid.cell *= scale;
+                anyhow::ensure!(
+                    grid.lower.is_finite() && grid.cell.is_finite() && grid.cell.min_element() > 0.0,
+                    "Invalid scaled block grid"
+                );
+                Self::Regular(grid)
+            }
+            Self::Explicit(blocks) => {
+                let mut out = Vec::with_capacity(blocks.len());
+                for (index, block) in blocks.iter().enumerate() {
+                    if index % 4096 == 0 {
+                        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                    }
+                    let block = BlockBounds {
+                        lower: block.lower * scale,
+                        upper: block.upper * scale,
+                    };
+                    anyhow::ensure!(
+                        block.lower.is_finite() && block.upper.is_finite() && block.upper.cmpgt(block.lower).all(),
+                        "Invalid scaled block bounds"
+                    );
+                    out.push(block);
+                }
+                Self::Explicit(out)
+            }
+        };
+        Ok(out)
+    }
+}
+
+impl UniformBlockGrid {
+    pub(crate) fn scaled(&self, scale: f64) -> Self {
+        Self {
+            origin: self.origin * scale,
+            inv_cell: self.inv_cell / scale,
+            dims: self.dims,
+        }
+    }
 }

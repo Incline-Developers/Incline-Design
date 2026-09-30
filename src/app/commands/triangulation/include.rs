@@ -407,7 +407,7 @@ pub(super) struct RingCoverage {
 
 pub(super) fn build_ring_coverage(rings: &[Vec<mesh_data::Vertex>]) -> Result<RingCoverage> {
     use rayon::prelude::*;
-    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+    use spade::Point2;
 
     let mut min = glam::DVec2::splat(f64::INFINITY);
     let mut max = glam::DVec2::splat(f64::NEG_INFINITY);
@@ -462,28 +462,8 @@ pub(super) fn build_ring_coverage(rings: &[Vec<mesh_data::Vertex>]) -> Result<Ri
             }
         }
     }
-    let mut edge_list: Vec<[usize; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
-    edge_list.sort_unstable();
-
-    let point_count = points.len();
-    let mut conflicting_edges: Vec<[usize; 2]> = Vec::new();
-    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(points, edge_list, |edge| conflicting_edges.push(edge))
-        .map_err(|error| anyhow::anyhow!("Cut ring CDT bulk load failed: {error:?}"))?;
-    if cdt.num_vertices() != point_count {
-        anyhow::bail!("Cut ring CDT dropped vertices unexpectedly during bulk load");
-    }
-    cuts::add_split_constraints(&mut cdt, conflicting_edges, "Cut ring coverage", origin);
-
+    let cells = cuts::constrained_cells(points, edges, "Cut ring", "Cut ring coverage", origin)?;
     let pips: Vec<RingPip> = rings.iter().map(|ring| RingPip::build(ring)).collect();
-    let cells: Vec<[glam::DVec2; 3]> = cdt
-        .inner_faces()
-        .map(|face| {
-            face.vertices().map(|vertex| {
-                let position = vertex.position();
-                glam::DVec2::new(position.x + origin.x, position.y + origin.y)
-            })
-        })
-        .collect();
     let classified: Vec<([mesh_data::Vertex; 3], bool)> = cells
         .par_iter()
         .filter_map(|corners| {
@@ -1940,7 +1920,7 @@ fn clip_shape_faces_by_cells(
                         // pit/stockpile surface - the shell fills the dip, it
                         // does not expose it. (Surveyed-out holes - covered
                         // cells with no topology - are handled identically.)
-                        append_shape_polyline(&piece, &mut vertices, &mut output_faces);
+                        cuts::append_polyline_fan(piece.iter().copied(), &mut vertices, &mut output_faces);
                         continue;
                     }
                     if !coverage.present[index] {
@@ -1966,7 +1946,7 @@ fn clip_shape_faces_by_cells(
                         continue;
                     }
                     if !any_discarded {
-                        append_shape_polyline(&piece, &mut vertices, &mut output_faces);
+                        cuts::append_polyline_fan(piece.iter().copied(), &mut vertices, &mut output_faces);
                         continue;
                     }
                     // The contact crosses this piece (it can wander off the
@@ -2144,7 +2124,7 @@ fn build_shape_cell_coverage(
     boundary_edges: &[[usize; 2]],
 ) -> Result<ShapeCellCoverage> {
     use rayon::prelude::*;
-    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+    use spade::Point2;
 
     let topology_vertices = topology.vertices();
     let mut min = glam::DVec2::splat(f64::INFINITY);
@@ -2208,27 +2188,7 @@ fn build_shape_cell_coverage(
             }
         }
     }
-    let mut edge_list: Vec<[usize; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
-    edge_list.sort_unstable();
-
-    let point_count = points.len();
-    let mut conflicting_edges: Vec<[usize; 2]> = Vec::new();
-    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(points, edge_list, |edge| conflicting_edges.push(edge))
-        .map_err(|error| anyhow::anyhow!("Boundary CDT bulk load failed: {error:?}"))?;
-    if cdt.num_vertices() != point_count {
-        anyhow::bail!("Boundary CDT dropped vertices unexpectedly during bulk load");
-    }
-    cuts::add_split_constraints(&mut cdt, conflicting_edges, "Shape cell coverage", origin);
-
-    let cells: Vec<[glam::DVec2; 3]> = cdt
-        .inner_faces()
-        .map(|face| {
-            face.vertices().map(|vertex| {
-                let position = vertex.position();
-                glam::DVec2::new(position.x + origin.x, position.y + origin.y)
-            })
-        })
-        .collect();
+    let cells = cuts::constrained_cells(points, edges, "Boundary", "Shape cell coverage", origin)?;
     let pips: Vec<RingPip> = rings.iter().map(|ring| RingPip::build(ring)).collect();
     let classified: Vec<([mesh_data::Vertex; 3], bool, bool)> = cells
         .par_iter()
@@ -2368,25 +2328,6 @@ pub(super) fn clip_surface_shape_triangle_to_topology(
                 output.surface_retained = true;
             }
         });
-}
-
-fn append_shape_polyline(polyline: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polyline.len() < 3 {
-        return;
-    }
-    let base = vertices.len() as u32;
-    vertices.extend(polyline.iter().map(|point| mesh_data::Vertex::new(point.x, point.y, point.z)));
-    for i in 1..polyline.len() - 1 {
-        let face = [base, base + i as u32, base + i as u32 + 1];
-        let a = vertices[face[0] as usize];
-        let b = vertices[face[1] as usize];
-        let c = vertices[face[2] as usize];
-        let ab = glam::DVec3::new(b.x - a.x, b.y - a.y, b.z - a.z);
-        let ac = glam::DVec3::new(c.x - a.x, c.y - a.y, c.z - a.z);
-        if ab.cross(ac).length_squared() > 1e-20 {
-            faces.push(face);
-        }
-    }
 }
 
 pub(super) fn clip_vertical_shape_triangle_to_topology(

@@ -13,7 +13,7 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        Command, ItemRef,
+        Command, ItemRef, MemberKind,
         raster::{OpenRasterTexture, RasterTextureId},
     },
     userspace_log,
@@ -152,7 +152,7 @@ impl<'a> App<'a> {
         );
         self.raster_textures.push(OpenRasterTexture {
             id,
-            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Raster, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
             name,
             source_size: loaded.source_size,
             preview_size: loaded.preview_size,

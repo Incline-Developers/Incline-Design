@@ -268,7 +268,7 @@ impl App<'_> {
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
-            app.apply_generated_triangulation_job(result);
+            app.apply_generated_triangulation_job(result, &[]);
         };
         self.spawn_job_reporting_progress(
             tr!(literal = "Building solid from surfaces…"),
