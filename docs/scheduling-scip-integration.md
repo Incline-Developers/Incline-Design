@@ -330,8 +330,17 @@ inside the run's one time limit:
    pass it again against the whole horizon. The windows share half the time
    limit.
 2. **Completing the seed.** A second copy of the whole-horizon model is solved
-   with every movement and segment duration fixed at the stitched values, which
-   fills in the state and indicator columns. SCIP's own `completesol` heuristic
+   with every movement and segment duration held to the stitched values, which
+   fills in the state and indicator columns. A value may move by 1e-3 t or
+   1e-3 of itself, whichever is larger; a movement the seed does not make is
+   held at zero. Pinned exactly, a real week's seed had no completion: a
+   window's answer, mapped back from SCIP's presolved problem, can miss an
+   original row by more than SCIP's tolerance. One loader was over its rate row
+   by a 0.0002 t tail from the previous block, and each hour's dig from a mixed
+   block was split between materials only to within the tolerance, so no one
+   extraction total satisfied every `portion` row. A relative band of 1e-5
+   still failed and 1e-4 completed. The band moves only the start SCIP is given;
+   what is published is always a replayed schedule. SCIP's own `completesol` heuristic
    was tried with the stitched movements as a partial solution and is not
    used: it searched a neighbourhood of them instead, spent the whole budget,
    and returned 1.09M (with `boundwidening = 0` as well).
@@ -340,6 +349,14 @@ inside the run's one time limit:
    seeded-mode workaround (`misc/allowweakdualreds = false`) applies. The
    published schedule is whichever replayed schedule is worth more, with the
    whole-horizon dual bound when there is one.
+
+The stitched schedule is published as soon as it has passed the
+whole-horizon replay, before the whole-horizon solve starts, under the same
+currentness checks as any other answer. The status says the day-by-day
+schedule is shown while a better one is sought, and the Stop button keeps
+it. The run's final answer replaces it and is never worth less, because it
+is the better of the two. If the whole-horizon solve fails, the early
+schedule stays, alongside the failure.
 
 The stitched schedule has no bound of its own: each window is optimal at best
 given the days already kept. A run whose whole-horizon solve found nothing
@@ -376,6 +393,15 @@ DreamLand week, 300 s limit, after both changes: five windows in 73 s, the
 first four proven optimal. The stitched week replays at 74,628,305.71. The
 seed completes in 1.4 s and SCIP accepts it. The whole-horizon root LP
 finishes at 112 s, and at the limit the bound is 74,708,782, a gap of 0.11%.
+
+Run to run, window times vary. Windows are solved optimally but not
+identically, and on other runs the last window reached its limit, which made
+the windows take up to 150 s. The whole-horizon solve then had too little
+time left for its root LP, and published the day-by-day schedule with SCIP's
+pseudo-solution bound only. The whole-horizon root LP needs 110-120 s here.
+SCIP's bundled LP solver, SoPlex 8.0.2, has no barrier method. On this week's
+LP, HiGHS's interior-point method took 36 s against 93 s for its simplex, with
+the same optimum.
 
 A fault this exposed is also fixed. SCIP reports "no dual bound" as its
 infinity, 1e20, and a solve stopped before its first root LP used to publish

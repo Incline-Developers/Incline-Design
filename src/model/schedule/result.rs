@@ -263,10 +263,25 @@ pub(crate) struct DayByDaySummary {
     /// Replayed value of the stitched schedule; `None` when no window
     /// sequence produced one.
     pub(crate) value: Option<f64>,
-    /// The published schedule is the stitched one: the whole-horizon solve
-    /// found nothing better in its time.
-    pub(crate) kept: bool,
+    pub(crate) role: DayByDayRole,
     pub(crate) failure: Option<String>,
+}
+
+/// What became of the stitched day-by-day schedule.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DayByDayRole {
+    /// It seeded the whole-horizon solve, whose schedule is the one
+    /// published.
+    #[default]
+    Improved,
+    /// It is the published schedule: the whole-horizon solve found nothing
+    /// better in its time.
+    Kept,
+    /// It is published while the whole-horizon solve still looks for a
+    /// better one.
+    Early,
+    /// It is published because the user stopped the whole-horizon solve.
+    Stopped,
 }
 
 /// How the answer was found, and the approximations it rests on.

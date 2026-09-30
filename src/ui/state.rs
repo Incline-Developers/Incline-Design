@@ -2648,6 +2648,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_stale: bool,
     /// Whether a schedule run is in flight, so the controls can offer Cancel.
     pub(crate) schedule_run_working: bool,
+    /// Whether the run in flight is showing its day-by-day schedule while
+    /// the whole-horizon solve looks for a better one, so Cancel keeps it.
+    pub(crate) schedule_run_improving: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
@@ -3131,6 +3134,7 @@ impl EditorState {
         self.schedule_run_details.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
+        self.schedule_run_improving = false;
         self.schedule_run_repair = None;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
@@ -3751,6 +3755,7 @@ impl EditorState {
             schedule_run_details: Vec::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
+            schedule_run_improving: false,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden_solids: HashSet::new(),

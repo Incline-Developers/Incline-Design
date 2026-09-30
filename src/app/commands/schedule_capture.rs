@@ -2378,7 +2378,7 @@ mod project_capture_checks {
             time_limit: Some(Duration::from_secs(60)),
             ..Default::default()
         };
-        let result = execute_scip_blend(Arc::clone(&input), identity, options, &CancelFlag::default(), &ScipActivity::default());
+        let result = execute_scip_blend(Arc::clone(&input), identity, options, &CancelFlag::default(), &ScipActivity::default(), &|_| {});
         assert!(result.usable(), "the mixed block did not solve: {:?} / {:?}", result.termination, result.diagnostic);
         let replay = result.replay.as_ref().expect("a replay");
         assert!(replay.is_valid(), "replay issues: {:?} / {:?}", replay.issues, replay.grade_issues);
@@ -2442,7 +2442,7 @@ mod project_capture_checks {
             time_limit: Some(Duration::from_secs(30)),
             ..Default::default()
         };
-        let result = execute_scip_blend(Arc::clone(&input), identity, options, &CancelFlag::default(), &ScipActivity::default());
+        let result = execute_scip_blend(Arc::clone(&input), identity, options, &CancelFlag::default(), &ScipActivity::default(), &|_| {});
         assert!(result.usable(), "the captured project did not solve: {:?} / {:?}", result.termination, result.diagnostic);
         assert_eq!(result.termination, ScipTermination::Optimal);
         let replay = result.replay.as_ref().expect("a replay");

@@ -490,7 +490,11 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &EditorState,
             working,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, working)),
-                tr!("schedule-run-cancel-note"),
+                if editor.schedule_run_improving {
+                    tr!("schedule-run-stop-early-note")
+                } else {
+                    tr!("schedule-run-cancel-note")
+                },
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_cancel")),

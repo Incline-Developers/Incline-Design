@@ -37,7 +37,7 @@ use crate::model::schedule::{
             experiments::extract_solution,
         },
     },
-    result::DayByDaySummary,
+    result::{DayByDayRole, DayByDaySummary},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,7 +188,20 @@ impl ScipActivity {
 
 /// Runs on one existing compute-pool worker. No SCIP model, pointer or
 /// solution wrapper leaves this function; only owned, replayed rows do.
-pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdentity, options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> ScipCompletion {
+///
+/// `early` is handed the day-by-day schedule, completed as a publishable
+/// answer, as soon as it has passed the whole-horizon replay and before the
+/// whole-horizon solve starts, so a caller can show it while the rest of the
+/// run looks for a better one. It is called at most once, and never for a
+/// run that is not solved day by day.
+pub(crate) fn execute_scip_blend(
+    input: Arc<BlendInput>,
+    identity: ScipRunIdentity,
+    options: ScipSolveOptions,
+    cancel: &CancelFlag,
+    activity: &ScipActivity,
+    early: &dyn Fn(&ScipCompletion),
+) -> ScipCompletion {
     let mut out = ScipCompletion::new(identity, options, input);
     if cancel.is_cancelled() {
         out.stop(ScipTermination::Cancelled, "cancelled before validation");
@@ -215,14 +228,21 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
     let mut seed = None;
     if let Some(windows) = rolling::plan(&out.input) {
         match solve_day_by_day(&mut out, &windows, options, cancel, activity) {
-            DayByDay::Seed(found) => seed = Some(*found),
+            DayByDay::Seed(found) => {
+                let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
+                shown.sizes = out.sizes;
+                shown.timings = out.timings;
+                adopt_seed(&mut shown, (*found).clone(), None, DayByDayRole::Early);
+                early(&shown);
+                seed = Some(*found);
+            }
             DayByDay::Failed(reason) => {
                 log::warn!("schedule run {}: day-by-day start abandoned: {reason}", out.identity.run_id);
                 out.day_by_day = Some(DayByDaySummary {
                     windows: windows.len(),
                     seconds: budget_started.elapsed().as_secs_f64(),
                     value: None,
-                    kept: false,
+                    role: DayByDayRole::Improved,
                     failure: Some(reason),
                 });
             }
@@ -238,7 +258,7 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
             "schedule run {}: no time left for a whole-horizon solve; keeping the day-by-day schedule",
             out.identity.run_id
         );
-        adopt_seed(&mut out, found, None);
+        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
         return out;
     }
 
@@ -248,7 +268,10 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
         let started = Instant::now();
         let limit = remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE));
         match complete_seed(&out.input, &found.solution, limit, cancel) {
-            Ok(values) => completed = Some(values),
+            Ok(values) => {
+                log::info!("schedule run {}: day-by-day seed completed in {:.2?}", out.identity.run_id, started.elapsed());
+                completed = Some(values);
+            }
             Err(_) if cancel.is_cancelled() => {
                 out.stop(ScipTermination::Cancelled, "cancelled while completing the day-by-day seed");
                 return out;
@@ -256,11 +279,10 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
             Err(problem) => log::warn!("schedule run {}: day-by-day seed not offered to SCIP: {problem}", out.identity.run_id),
         }
         out.timings.solver += started.elapsed();
-        log::info!("schedule run {}: day-by-day seed completed in {:.2?}", out.identity.run_id, started.elapsed());
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
-        adopt_seed(&mut out, found, None);
+        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
         return out;
     }
 
@@ -359,7 +381,7 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
         if let Some(found) = seed {
             // A dual bound needs no incumbent, so it still bounds the seed.
             let bound = out.primary_bound;
-            adopt_seed(&mut out, found, bound);
+            adopt_seed(&mut out, found, bound, DayByDayRole::Kept);
             return out;
         }
         out.termination = classify_status(report.status, false);
@@ -385,7 +407,7 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: whole-horizon incumbent rejected by replay: {issue}", out.identity.run_id);
         }
-        adopt_seed(&mut out, found, None);
+        adopt_seed(&mut out, found, None, DayByDayRole::Kept);
         return out;
     }
     out.published_objective = Some(checked.replayed_objective);
@@ -410,7 +432,7 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
         let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
         if !improved && termination != ScipTermination::Optimal {
             let bound = out.primary_bound;
-            adopt_seed(&mut out, found, bound);
+            adopt_seed(&mut out, found, bound, DayByDayRole::Kept);
             return out;
         }
         out.day_by_day = Some(found.summary);
@@ -439,6 +461,7 @@ const SEED_COMPLETION_SHARE: f64 = 0.25;
 const WHOLE_HORIZON_MINIMUM: Duration = Duration::from_secs(2);
 
 /// The stitched day-by-day schedule, replayed against the whole horizon.
+#[derive(Clone)]
 struct Seed {
     solution: BlendSolution,
     replay: ReplayReport,
@@ -575,7 +598,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
         windows: windows.len(),
         seconds: started.elapsed().as_secs_f64(),
         value: Some(checked.replayed_objective),
-        kept: false,
+        role: DayByDayRole::Improved,
         failure: None,
     };
     log::info!(
@@ -594,7 +617,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
 
 /// Publish the day-by-day schedule. `bound` is a whole-horizon dual bound
 /// that still stands, if there is one.
-fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>) {
+fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>, role: DayByDayRole) {
     let published = found.replay.replayed_objective;
     let raw = found.solution.reported_objective;
     if let Some(bound) = bound
@@ -614,9 +637,12 @@ fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>) {
     out.adjustments = Some(found.solution.adjustments);
     out.replay = Some(Arc::new(found.replay));
     out.solution = Some(Arc::new(found.solution));
-    out.day_by_day = Some(DayByDaySummary { kept: true, ..found.summary });
+    out.day_by_day = Some(DayByDaySummary { role, ..found.summary });
     out.termination = ScipTermination::FeasibleLimit;
-    log_outcome(out);
+    // Shown early, it is not the run's outcome yet.
+    if role != DayByDayRole::Early {
+        log_outcome(out);
+    }
 }
 
 fn exceeds_bound(published: f64, bound: f64) -> Option<String> {
@@ -662,12 +688,36 @@ fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relativ
     Ok(model)
 }
 
+/// How far completion may move a seed value, in tonnes or hours: an absolute
+/// part for values near zero and a relative part for large ones.
+///
+/// SCIP checks a window's answer in its presolved problem, and mapped back
+/// onto the original columns it can miss an original row by more than
+/// SCIP's feasibility tolerance. The independent replay accepts such a
+/// schedule, but pinned exactly it can leave the whole-horizon model with no
+/// feasible completion. On a real week this happened two ways:
+///
+/// - a loader dug its full rate from one block plus a 0.0002 t tail from the
+///   block before it, over its rate row by that tail;
+/// - each cell's dig from a mixed block was split between its materials in
+///   proportion only to within that tolerance, so no one extraction total
+///   satisfied every material's `portion` row at once.
+///
+/// A relative band of 1e-5 still left that week infeasible and 1e-4 did not;
+/// the value used is ten times that. It moves only the seed SCIP starts from:
+/// what is published is always a replayed schedule.
+const SEED_BAND_ABSOLUTE: f64 = 1e-3;
+const SEED_BAND_RELATIVE: f64 = 1e-3;
+
 /// Complete the stitched schedule into a full solution of the whole-horizon
 /// model, as values by variable name.
 ///
 /// A second copy of the model is built with every movement and segment
-/// duration fixed at the seed's value, so what is left for SCIP is to fill in
-/// the state and indicator columns those imply. SCIP's own completion
+/// duration held to the seed's value, give or take [`SEED_BAND_ABSOLUTE`]
+/// and [`SEED_BAND_RELATIVE`], and a movement the seed does not make held at
+/// zero, so what is left for SCIP is to fill in the state and indicator
+/// columns those imply. The completed solution is SCIP's own, so it
+/// satisfies the model as SCIP checks it. SCIP's own completion
 /// heuristic was tried first and is not used: given the same values as a
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
@@ -681,12 +731,16 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duratio
     }
     let scip = built.model.scip_ptr();
     let fix = |column: &Variable, value: f64| {
-        let value = value.clamp(column.lb(), column.ub());
+        let band = if value == 0.0 { 0.0 } else { SEED_BAND_ABSOLUTE.max(value.abs() * SEED_BAND_RELATIVE) };
+        let (lb, ub) = (column.lb(), column.ub());
+        let lower = (value - band).clamp(lb, ub);
+        let upper = (value + band).clamp(lb, ub);
         // SAFETY: problem-stage bound changes on this model's own original
-        // variables, on the thread that owns the model.
+        // variables, on the thread that owns the model. Both lie inside the
+        // original bounds, so they never cross.
         unsafe {
-            ffi::SCIPchgVarLb(scip, column.inner(), value);
-            ffi::SCIPchgVarUb(scip, column.inner(), value);
+            ffi::SCIPchgVarLb(scip, column.inner(), lower);
+            ffi::SCIPchgVarUb(scip, column.inner(), upper);
         }
     };
     for (key, column) in &built.columns.movement {
@@ -1103,7 +1157,7 @@ mod developer_checks {
     #[test]
     fn developer_scip_worker_validates_and_reports_limits() {
         let input = Arc::new(graded_blend_world(3));
-        let result = execute_scip_blend(input, identity(1), ScipSolveOptions::default(), &CancelFlag::default(), &ScipActivity::default());
+        let result = execute_scip_blend(input, identity(1), ScipSolveOptions::default(), &CancelFlag::default(), &ScipActivity::default(), &|_| {});
         assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
         assert_eq!(result.backend_status, Some(Status::Optimal));
         assert!(result.replay.as_ref().is_some_and(|report| report.is_valid()));
@@ -1118,6 +1172,7 @@ mod developer_checks {
             ScipSolveOptions::default(),
             &CancelFlag::default(),
             &ScipActivity::default(),
+            &|_| {},
         );
         assert_eq!(rejected.termination, ScipTermination::InvalidInput);
         assert_eq!(rejected.timings.solver, Duration::ZERO);
@@ -1131,6 +1186,7 @@ mod developer_checks {
             ScipSolveOptions::default(),
             &cancelled,
             &ScipActivity::default(),
+            &|_| {},
         );
         assert_eq!(before.termination, ScipTermination::Cancelled);
         assert_eq!(before.sizes.variables, 0);
@@ -1156,6 +1212,7 @@ mod developer_checks {
                 },
                 &CancelFlag::default(),
                 &ScipActivity::default(),
+                &|_| {},
             );
             println!(
                 "SCIP limit={limit:?} status={:?} termination={:?} usable={} objective={:?} solver={:?} overshoot={:?}",
@@ -1194,6 +1251,7 @@ mod developer_checks {
             ScipSolveOptions::default(),
             &CancelFlag::default(),
             &ScipActivity::default(),
+            &|_| {},
         );
         assert!(result.usable());
         let mut replay = (**result.replay.as_ref().expect("replay")).clone();
@@ -1224,6 +1282,7 @@ mod developer_checks {
                 },
                 &worker_cancel,
                 &worker_activity,
+                &|_| {},
             );
             tx.send(result).expect("developer receiver");
         });
@@ -1256,8 +1315,15 @@ mod developer_checks {
         let worker_activity = Arc::clone(&activity);
         let (tx, rx) = mpsc::channel();
         super::super::jobs::spawn_pool_task(move || {
-            tx.send(execute_scip_blend(input, identity(30), ScipSolveOptions::default(), &worker_cancel, &worker_activity))
-                .expect("developer receiver");
+            tx.send(execute_scip_blend(
+                input,
+                identity(30),
+                ScipSolveOptions::default(),
+                &worker_cancel,
+                &worker_activity,
+                &|_| {},
+            ))
+            .expect("developer receiver");
         });
         let waiting = Instant::now();
         while activity.formulation_checks.load(Ordering::Acquire) < 4 {

@@ -25,6 +25,17 @@
 //! when there is none - and reoptimises the whole of that longer horizon, so
 //! days it calculated before may change. It never asks past the planning end.
 //!
+//! # Day-by-day schedules shown early
+//!
+//! A horizon long enough to be solved day by day first (see
+//! [`crate::model::schedule::optimisation::blended::rolling`]) has a valid,
+//! replayed schedule well before its whole-horizon solve ends. The worker
+//! publishes it then, and it is shown - under the same currentness checks as
+//! any other answer - while the whole-horizon solve looks for a better one.
+//! Stopping the run at that point keeps it; the run's final answer replaces
+//! it, and is never worth less, because the whole-horizon solve starts from
+//! it and the better of the two is the one published.
+//!
 //! # Currentness
 //!
 //! A result is current while [`crate::app::App::schedule_semantic_key`] is
@@ -36,7 +47,7 @@
 
 use std::{
     hash::{Hash, Hasher},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -44,7 +55,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
-        result::{CalculatedSchedule, SolveQuality},
+        result::{CalculatedSchedule, DayByDayRole, SolveQuality},
     },
     ui::state::{ScheduleRepairTarget, ScheduleStep},
 };
@@ -66,6 +77,10 @@ pub(crate) struct PendingScheduleRun {
     inputs: ScheduleRunInputs,
     semantic: u64,
     pub(crate) requested_end_h: f64,
+    /// Where the worker leaves the day-by-day schedule for the UI thread.
+    early: Arc<Mutex<Option<Arc<CalculatedSchedule>>>>,
+    /// Whether the held result is this run's day-by-day schedule.
+    showing_early: bool,
 }
 
 /// Why the last attempt published nothing.
@@ -358,12 +373,17 @@ impl crate::app::App<'_> {
         let serial = self.schedule_run_serial;
         let plan_revision = snapshot.plan_revision;
         let generation = snapshot.generation;
+        let early_slot = Arc::new(Mutex::new(None));
+        let worker_slot = Arc::clone(&early_slot);
+        let window = self.window.clone();
         self.pending_schedule_run = Some(PendingScheduleRun {
             serial,
             runtime,
             inputs,
             semantic,
             requested_end_h,
+            early: early_slot,
+            showing_early: false,
         });
         let identity = ScipRunIdentity {
             run_id: serial,
@@ -395,31 +415,51 @@ impl crate::app::App<'_> {
                     }
                 };
                 let input = Arc::new(capture.input);
-                let completion = execute_scip_blend(Arc::clone(&input), identity, options, cancel, &ScipActivity::default());
-                if !completion.usable() {
-                    return Ok(not_published(&completion));
-                }
-                let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
-                    return Ok(not_published(&completion));
-                };
                 let mut notes = capture.notes;
                 if capture.stats.event_budget_restricted {
                     notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
                 }
-                let meta = PublishMeta {
-                    run: serial,
-                    semantic,
-                    generation,
-                    requested_end_h,
-                    completion: &completion,
-                    capture_s: capture.stats.duration.as_secs_f64(),
-                    model_identity: capture.fingerprint,
-                    candidates: capture.stats.candidates,
-                    ground_sources: capture.stats.ground_sources,
-                    event_budget_restricted: capture.stats.event_budget_restricted,
-                    notes,
+                let publish_completion = |completion: &super::scip_blend::ScipCompletion| {
+                    let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
+                        return Err("the run holds no replayed schedule".to_owned());
+                    };
+                    let meta = PublishMeta {
+                        run: serial,
+                        semantic,
+                        generation,
+                        requested_end_h,
+                        completion,
+                        capture_s: capture.stats.duration.as_secs_f64(),
+                        model_identity: capture.fingerprint,
+                        candidates: capture.stats.candidates,
+                        ground_sources: capture.stats.ground_sources,
+                        event_budget_restricted: capture.stats.event_budget_restricted,
+                        notes: notes.clone(),
+                    };
+                    publish(&input, solution, replay, &capture.identities, meta, cancel)
                 };
-                Ok(match publish(&input, solution, replay, &capture.identities, meta, cancel) {
+                let early = |completion: &super::scip_blend::ScipCompletion| {
+                    if !completion.usable() {
+                        return;
+                    }
+                    match publish_completion(completion) {
+                        Ok(schedule) => {
+                            *worker_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(schedule));
+                            if let Some(window) = window.as_ref() {
+                                window.request_redraw();
+                            }
+                        }
+                        // The whole-horizon answer is still to come; a
+                        // day-by-day schedule that cannot be published is
+                        // simply not shown early.
+                        Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
+                    }
+                };
+                let completion = execute_scip_blend(Arc::clone(&input), identity, options, cancel, &ScipActivity::default(), &early);
+                if !completion.usable() {
+                    return Ok(not_published(&completion));
+                }
+                Ok(match publish_completion(&completion) {
                     Ok(schedule) => RunOutcome::Published(Arc::new(schedule)),
                     Err(_) if cancel.is_cancelled() => RunOutcome::NotPublished {
                         outcome: AttemptOutcome::Cancelled,
@@ -441,7 +481,7 @@ impl crate::app::App<'_> {
                 if !same_request {
                     return;
                 }
-                app.pending_schedule_run = None;
+                let showing_early = app.pending_schedule_run.take().is_some_and(|pending| pending.showing_early);
                 // Checked again here, not only when the run started: an edit
                 // that landed while it was solving retires it, and a late
                 // answer is never published under inputs it did not read.
@@ -459,20 +499,33 @@ impl crate::app::App<'_> {
                         app.schedule_run_diagnostics = None;
                         app.schedule_calculation = Some(schedule);
                     }
-                    Ok(RunOutcome::NotPublished { outcome, messages, repair }) => app.record_attempt(ScheduleAttempt {
-                        serial,
-                        semantic,
-                        outcome,
-                        messages,
-                        repair,
-                    }),
-                    Err(error) => app.record_attempt(ScheduleAttempt {
-                        serial,
-                        semantic,
-                        outcome: AttemptOutcome::Failed,
-                        messages: vec![format!("{error:#}")],
-                        repair: None,
-                    }),
+                    Ok(RunOutcome::NotPublished { outcome, messages, repair }) => {
+                        // The day-by-day schedule already on screen was
+                        // replayed on its own; the whole-horizon solve
+                        // failing does not retract it.
+                        if showing_early {
+                            app.settle_early_schedule(serial, DayByDayRole::Kept);
+                        }
+                        app.record_attempt(ScheduleAttempt {
+                            serial,
+                            semantic,
+                            outcome,
+                            messages,
+                            repair,
+                        })
+                    }
+                    Err(error) => {
+                        if showing_early {
+                            app.settle_early_schedule(serial, DayByDayRole::Kept);
+                        }
+                        app.record_attempt(ScheduleAttempt {
+                            serial,
+                            semantic,
+                            outcome: AttemptOutcome::Failed,
+                            messages: vec![format!("{error:#}")],
+                            repair: None,
+                        })
+                    }
                 }
                 app.redraw_requested = true;
             },
@@ -491,11 +544,16 @@ impl crate::app::App<'_> {
         self.redraw_requested = true;
     }
 
-    /// Stop a run in flight. The held result is untouched.
+    /// Stop a run in flight. The held result is untouched: when that is the
+    /// run's own day-by-day schedule, stopping is how it is kept.
     pub(crate) fn cancel_schedule_run_calculation(&mut self) {
         if let Some(pending) = self.pending_schedule_run.as_ref() {
-            let (serial, semantic) = (pending.serial, pending.semantic);
+            let (serial, semantic, showing_early) = (pending.serial, pending.semantic, pending.showing_early);
             self.cancel_schedule_run_calculation_quietly();
+            if showing_early {
+                crate::userspace_log!("{}", tr!("schedule-run-stopped-early", run = serial.to_string()));
+                return;
+            }
             self.record_attempt(ScheduleAttempt {
                 serial,
                 semantic,
@@ -511,11 +569,28 @@ impl crate::app::App<'_> {
     pub(crate) fn cancel_schedule_run_calculation_quietly(&mut self) {
         if let Some(pending) = self.pending_schedule_run.take() {
             self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { serial, runtime } if *serial == pending.serial && *runtime == pending.runtime));
+            if pending.showing_early {
+                self.settle_early_schedule(pending.serial, DayByDayRole::Stopped);
+            }
             self.redraw_requested = true;
         }
     }
 
-    /// Retire a background run as soon as its inputs move.
+    /// Say what became of a run's day-by-day schedule once no whole-horizon
+    /// solve is looking for a better one.
+    fn settle_early_schedule(&mut self, serial: u64, role: DayByDayRole) {
+        let Some(held) = self.schedule_calculation.as_ref().filter(|held| held.run == serial) else {
+            return;
+        };
+        let mut settled = CalculatedSchedule::clone(held);
+        if let Some(summary) = settled.report.day_by_day.as_mut() {
+            summary.role = role;
+        }
+        self.schedule_calculation = Some(Arc::new(settled));
+    }
+
+    /// Retire a background run as soon as its inputs move, and show its
+    /// day-by-day schedule once the worker has one.
     pub(crate) fn advance_schedule_calculation(&mut self) {
         let Some(pending) = self.pending_schedule_run.as_ref() else {
             return;
@@ -524,6 +599,21 @@ impl crate::app::App<'_> {
         if self.schedule_run_inputs().ok() != Some(inputs) || self.schedule_semantic_key() != semantic || self.planning_end_h() < requested_end_h - 1e-9 {
             self.cancel_schedule_run_calculation_quietly();
             crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+            return;
+        }
+        let early = pending.early.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(schedule) = early {
+            let serial = pending.serial;
+            crate::userspace_log!(
+                "{}",
+                tr!("schedule-run-early", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string())
+            );
+            self.schedule_run_diagnostics = None;
+            self.schedule_calculation = Some(schedule);
+            if let Some(pending) = self.pending_schedule_run.as_mut() {
+                pending.showing_early = true;
+            }
+            self.redraw_requested = true;
         }
     }
 
@@ -536,6 +626,7 @@ impl crate::app::App<'_> {
     pub(crate) fn mirror_schedule_calculation(&mut self) {
         let current = self.schedule_calculation_is_current();
         let running = self.pending_schedule_run.as_ref().map(|pending| pending.requested_end_h);
+        let improving = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.showing_early) && current;
         let result = self.schedule_calculation.clone().filter(|_| current);
         let semantic = self.schedule_semantic_key();
         let attempt = self.schedule_run_diagnostics.as_ref().filter(|attempt| attempt.semantic == semantic);
@@ -547,10 +638,11 @@ impl crate::app::App<'_> {
             }
         });
         let status = match (running, attempt, held_status) {
+            (Some(end_h), _, _) if improving => tr!("schedule-run-improving", day = day_of(end_h).to_string()),
             (Some(end_h), _, _) => tr!("schedule-run-working", day = day_of(end_h).to_string()),
             // The newest attempt failed: say so first, then what is still
             // shown.
-            (None, Some(attempt), Some(held)) if self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run < attempt.serial) => {
+            (None, Some(attempt), Some(held)) if self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial) => {
                 format!("{} {}", attempt_headline(attempt), held)
             }
             (None, Some(attempt), None) => attempt_headline(attempt),
@@ -567,7 +659,7 @@ impl crate::app::App<'_> {
             }
         };
         let mut details = Vec::new();
-        if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run < attempt.serial)) {
+        if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial)) {
             details.extend(attempt.messages.iter().cloned());
         }
         if let Some(calculation) = self.schedule_calculation.as_ref().filter(|_| current) {
@@ -597,6 +689,7 @@ impl crate::app::App<'_> {
             || self.editor.schedule_run_details != details
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running.is_some()
+            || self.editor.schedule_run_improving != improving
             || self.editor.schedule_run_repair != repair
         {
             self.editor.schedule_result = result;
@@ -604,6 +697,7 @@ impl crate::app::App<'_> {
             self.editor.schedule_run_details = details;
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running.is_some();
+            self.editor.schedule_run_improving = improving;
             self.editor.schedule_run_repair = repair;
             self.redraw_requested = true;
         }
@@ -703,10 +797,11 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
         lines.push(match (start.value, start.failure.as_ref()) {
             (Some(value), _) => {
                 let value = crate::ui::elements::schedule_calendar::format_money(value);
-                if start.kept {
-                    tr!("schedule-detail-day-by-day-kept", windows = windows, seconds = seconds, value = value)
-                } else {
-                    tr!("schedule-detail-day-by-day-improved", windows = windows, seconds = seconds, value = value)
+                match start.role {
+                    DayByDayRole::Improved => tr!("schedule-detail-day-by-day-improved", windows = windows, seconds = seconds, value = value),
+                    DayByDayRole::Kept => tr!("schedule-detail-day-by-day-kept", windows = windows, seconds = seconds, value = value),
+                    DayByDayRole::Early => tr!("schedule-detail-day-by-day-early", windows = windows, seconds = seconds, value = value),
+                    DayByDayRole::Stopped => tr!("schedule-detail-day-by-day-stopped", windows = windows, seconds = seconds, value = value),
                 }
             }
             (None, reason) => tr!("schedule-detail-day-by-day-failed", reason = reason.cloned().unwrap_or_default()),
