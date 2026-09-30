@@ -19,6 +19,11 @@
 //!   independent replay of the window. Receipts in the last committed
 //!   interval join the released blend at that boundary, exactly as they
 //!   would inside one model.
+//! - **Chunks.** Each chunk's closing tonnes and contained quantity, again
+//!   from the replay, and whether it was closed in the last kept interval. A
+//!   closed chunk opens the next window closed, so an emptied slot is never
+//!   reused; an open one may be closed at the boundary or keep filling, as it
+//!   could inside one model.
 //! - **Horizon-wide allowances.** What is left of each reclaim bar's cap and
 //!   each dump's capacity, and what each crusher day has already taken.
 //!
@@ -32,15 +37,15 @@
 //! starting point for a whole-horizon solve that can improve on it and bound
 //! it.
 //!
-//! Chunked piles are not solved this way: a chunk's open, closed and emptied
-//! state would have to cross the boundary too, and the model has no opening
-//! form for a partly filled open chunk.
+//! Every lifecycle rule a boundary could break - a chunk reopening, a fill
+//! out of sequence - is checked again when the stitched schedule is replayed
+//! against the whole horizon.
 
 use std::collections::BTreeMap;
 
 use super::{
     input::{BlendInput, BlendPile},
-    replay::{BlendSolution, ExtractionAdjustments, MovementRow, ReplayReport},
+    replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport},
 };
 use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, IntervalRate, SourceId, StockpileId, TaskKind};
 
@@ -66,14 +71,11 @@ pub(crate) struct Window {
 }
 
 /// The windows a horizon is solved in, or `None` when one window would cover
-/// it all or a pile is chunked.
+/// it all.
 ///
 /// Days are counted from the horizon's first interval. The last window keeps
 /// everything it solves, because nothing lies beyond its look-ahead.
 pub(crate) fn plan(input: &BlendInput) -> Option<Vec<Window>> {
-    if input.piles.iter().any(|pile| !pile.chunks.is_empty()) {
-        return None;
-    }
     let origin = input.intervals.first()?.start_h;
     let count = input.intervals.len();
     let until = |first: usize, hours: f64| first + input.intervals[first..].iter().take_while(|interval| interval.start_h < hours - 1e-9).count();
@@ -108,6 +110,9 @@ pub(crate) struct Carry {
     ground: BTreeMap<GroundId, f64>,
     /// Released opening tonnes and contained quantity per grade.
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
+    /// A chunked pile's chunks: tonnes, contained quantity per grade, and
+    /// whether the chunk is closed.
+    chunks: BTreeMap<StockpileId, Vec<(f64, Vec<f64>, bool)>>,
     /// Keyed by task index; only bars with an authored cap.
     reclaim_left: BTreeMap<usize, f64>,
     dump_left: BTreeMap<DestinationId, f64>,
@@ -121,6 +126,25 @@ impl Carry {
         Self {
             ground: input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect(),
             piles: input.piles.iter().map(|pile| (pile.id, pile.total_opening(grades))).collect(),
+            chunks: input
+                .piles
+                .iter()
+                .filter(|pile| !pile.chunks.is_empty())
+                .map(|pile| {
+                    let chunks = (0..pile.chunks.len())
+                        .map(|c| {
+                            let (tonnes, mut contained) = match pile.chunk_opening.get(c) {
+                                Some(opening) => opening.clone(),
+                                None if pile.chunk_opening.is_empty() && c == 0 => (pile.opening_t, pile.opening_q.clone()),
+                                None => (0.0, Vec::new()),
+                            };
+                            contained.resize(grades, 0.0);
+                            (tonnes, contained, pile.chunk_starts_closed(c))
+                        })
+                        .collect();
+                    (pile.id, chunks)
+                })
+                .collect(),
             reclaim_left: input
                 .tasks
                 .iter()
@@ -216,6 +240,26 @@ impl Carry {
             .piles
             .iter()
             .map(|pile| {
+                if let Some(chunks) = self.chunks.get(&pile.id) {
+                    let mut opening_t = 0.0;
+                    let mut opening_q = vec![0.0; grades];
+                    for (tonnes, contained, _) in chunks {
+                        opening_t += tonnes;
+                        for (slot, value) in opening_q.iter_mut().zip(contained) {
+                            *slot += value;
+                        }
+                    }
+                    return BlendPile {
+                        id: pile.id,
+                        capacity_t: pile.capacity_t,
+                        opening_t,
+                        opening_q,
+                        chunks: pile.chunks.clone(),
+                        order: pile.order,
+                        chunk_opening: chunks.iter().map(|(tonnes, contained, _)| (*tonnes, contained.clone())).collect(),
+                        chunk_closed: chunks.iter().map(|(_, _, closed)| *closed).collect(),
+                    };
+                }
                 let (tonnes, contained) = self.piles.get(&pile.id).cloned().unwrap_or_else(|| pile.total_opening(grades));
                 BlendPile {
                     id: pile.id,
@@ -225,6 +269,7 @@ impl Carry {
                     chunks: Vec::new(),
                     order: pile.order,
                     chunk_opening: Vec::new(),
+                    chunk_closed: Vec::new(),
                 }
             })
             .collect();
@@ -304,6 +349,20 @@ impl Carry {
                 let contained = state.closing_q.iter().map(|quantity| quantity.max(0.0)).collect();
                 self.piles.insert(pile.id, (state.closing_t.max(0.0), contained));
             }
+            let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
+            for (c, chunk) in chunks.iter_mut().enumerate() {
+                if let Some((tonnes, contained)) = replay.chunk_intervals.get(&(pile.id, c, last)) {
+                    // Never above the chunk's capacity: the model's own
+                    // opening row would otherwise have no solution for a
+                    // tolerance's worth of overfill.
+                    let tonnes = tonnes.clamp(0.0, pile.chunks[c]);
+                    chunk.0 = tonnes;
+                    chunk.1 = contained.iter().map(|quantity| quantity.clamp(0.0, tonnes)).collect();
+                }
+                if let Some(row) = solution.chunks.iter().find(|row| row.pile == pile.id && row.chunk == c && row.interval == last) {
+                    chunk.2 |= row.closed;
+                }
+            }
         }
     }
 }
@@ -343,6 +402,12 @@ impl Stitched {
             if interval < window.committed {
                 self.solution.durations.insert((interval + window.first, segment), duration);
             }
+        }
+        for row in solution.chunks.iter().filter(|row| row.interval < window.committed) {
+            self.solution.chunks.push(ChunkRow {
+                interval: row.interval + window.first,
+                ..row.clone()
+            });
         }
         self.solution.reported_objective += paid;
         // Omitted dust is not attributed to intervals when extracted, so the

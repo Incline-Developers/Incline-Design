@@ -612,6 +612,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 ProjectReclaimOrder::Lifo => ReclaimOrder::Lifo,
             },
             chunk_opening: Vec::new(),
+            chunk_closed: Vec::new(),
         };
         match representation {
             StockpileRepresentation::NotConfigured => unreachable!("refused above"),

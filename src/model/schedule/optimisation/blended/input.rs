@@ -110,6 +110,12 @@ pub(crate) struct BlendPile {
     /// immediately reclaimable. Empty means every chunk starts empty and
     /// [`Self::opening_t`] goes into chunk 0.
     pub(crate) chunk_opening: Vec<(f64, Vec<f64>)>,
+    /// Which chunks start closed, aligned with [`Self::chunks`]. Empty means
+    /// the authored rule: a chunk holding opening material starts closed and
+    /// every other chunk starts open. A day-by-day window sets it from the
+    /// state the day before left, where a partly filled chunk may still be
+    /// open and an emptied one is closed for good.
+    pub(crate) chunk_closed: Vec<bool>,
 }
 
 impl BlendPile {
@@ -138,6 +144,15 @@ impl BlendPile {
         (tonnes, contained)
     }
 
+    /// Whether chunk `c` is closed from the start.
+    pub(crate) fn chunk_starts_closed(&self, c: usize) -> bool {
+        if self.chunk_closed.is_empty() {
+            self.chunk_opening.get(c).is_some_and(|(tonnes, _)| *tonnes > 0.0) || (self.chunk_opening.is_empty() && c == 0 && self.opening_t > 0.0)
+        } else {
+            self.chunk_closed.get(c).copied().unwrap_or(false)
+        }
+    }
+
     /// Combine authored opening lots explicitly. The caller must pass the
     /// lots' material grades; this never guesses one.
     pub(crate) fn combine(id: StockpileId, capacity_t: f64, lots: &[(f64, Vec<f64>)], grades: usize) -> Self {
@@ -157,6 +172,7 @@ impl BlendPile {
             chunks: Vec::new(),
             order: ReclaimOrder::Fifo,
             chunk_opening: Vec::new(),
+            chunk_closed: Vec::new(),
         }
     }
 }

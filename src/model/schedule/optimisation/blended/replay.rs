@@ -175,6 +175,12 @@ pub(crate) struct ReplayReport {
     /// `(pile, interval)`, so publication reads balances and blends off the
     /// replay instead of recomputing them a second way.
     pub(crate) pile_intervals: BTreeMap<(StockpileId, usize), PileInterval>,
+    /// Every chunk's replayed closing tonnes and contained quantity per
+    /// grade, keyed `(pile, chunk, interval)`: walked forward from the opening
+    /// through the chunk's own published receipts and draws, so a day-by-day
+    /// window opens from state the replay recomputed rather than the model's
+    /// own figures.
+    pub(crate) chunk_intervals: BTreeMap<(StockpileId, usize, usize), (f64, Vec<f64>)>,
 }
 
 /// One pile's replayed balance over one interval.
@@ -1188,6 +1194,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                     .iter()
                     .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval)
                 else {
+                    checker.report.chunk_intervals.insert((pile.id, chunk, interval), (held_t[chunk], held_q[chunk].clone()));
                     continue;
                 };
                 checker.residual(
@@ -1226,6 +1233,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                         .issues
                         .push(format!("pile {} chunk {chunk} closes interval {interval} at {:.6} t", pile.id.0, held_t[chunk]));
                 }
+                checker.report.chunk_intervals.insert((pile.id, chunk, interval), (held_t[chunk], held_q[chunk].clone()));
             }
         }
 
@@ -1242,6 +1250,14 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             };
             for chunk in 0..count {
                 let Some(state) = row(chunk) else { continue };
+
+                // A chunk the input closes from the start cannot begin open.
+                if interval == 0 && pile.chunk_starts_closed(chunk) && !state.closed {
+                    checker
+                        .report
+                        .issues
+                        .push(format!("pile {} chunk {chunk} opens the horizon open but must start closed", pile.id.0));
+                }
 
                 // Capacity is authored per chunk.
                 checker.breach(

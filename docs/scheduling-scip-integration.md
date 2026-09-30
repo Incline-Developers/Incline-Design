@@ -364,9 +364,26 @@ better publishes the stitched schedule, with the whole-horizon bound when that
 solve produced one and no bound otherwise. The run details state which of
 the two was published.
 
-Chunked piles are not solved this way. A chunk's open, closed and emptied
-state would have to cross the boundary, and the model has no opening form for
-a partly filled open chunk.
+Chunked piles are solved this way too. Each chunk's tonnes and contained
+quantity cross the boundary from the window's replay, and whether it was
+closed in the last kept interval crosses from the window's schedule: a closed
+chunk opens the next window closed (`BlendPile::chunk_closed`), so an emptied
+slot is never reused, and an open one may still close at the boundary or keep
+filling. Authored piles are unaffected: without the flags, a chunk holding
+opening material starts closed as before. The replay now also reports each
+chunk's closing state and checks that a chunk required to start closed does.
+On the four chunk fixtures over 96 h (dynamic FIFO/LIFO, released FIFO/LIFO,
+40 s each) every seeded run reached a proven optimum; the dynamic FIFO one
+unseeded had ended at its limit with nothing better than 0.
+
+Seeded solves, and the seed's completion, run with SCIP's MPEC heuristic
+switched off (`heuristics/mpec/freq = -1`). On the dynamic FIFO fixture the
+seeded solve hung four runs out of four: MPEC passed Ipopt an NLP whose MUMPS
+ordering (METIS) corrupted the heap, glibc aborted inside `malloc`, and the
+solver thread was left waiting forever. With MPEC off the same runs finished
+three times out of three. Unseeded solves keep SCIP's default. A day-by-day
+window's derived input is also validated like a captured one before SCIP
+sees it.
 
 Two exact changes came with this:
 

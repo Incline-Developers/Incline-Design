@@ -1661,7 +1661,9 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 ///
 /// **Opening stock** occupies chunk 0, which is closed from the start, so an
 /// authored opening is immediately reclaimable and receipts begin at chunk 1.
-/// When a pile opens empty, chunk 0 is an ordinary fill target instead.
+/// When a pile opens empty, chunk 0 is an ordinary fill target instead. A
+/// day-by-day window opens in the state the day before left: any chunk may
+/// hold material, and whether it is closed is stated rather than inferred.
 ///
 /// The throughput consequence of "no slot reuse" is real and worth stating:
 /// total material the pile can pass over the whole horizon is bounded by
@@ -1792,8 +1794,9 @@ fn chunked_pile<R: Rows>(
             // A chunk holding authored opening material is closed from the
             // start, so it is immediately reclaimable and the authored order
             // has something to choose between. A chunk that opens empty is an
-            // ordinary fill target.
-            if opening.get(c).is_some_and(|(tonnes, _)| *tonnes > 0.0) {
+            // ordinary fill target. A day-by-day window says instead which
+            // chunks the day before left closed; see `BlendPile::chunk_closed`.
+            if pile.chunk_starts_closed(c) {
                 rows.eq(vec![(close.clone(), 1.0)], 1.0, &format!("cOpenFull_{}_{c}_{k}", pile.id.0));
             }
 

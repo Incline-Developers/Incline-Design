@@ -494,6 +494,13 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
             return DayByDay::Failed(format!("{label}: no time left"));
         }
         let input = carry.window_input(&full, window);
+        // A window's input is derived, not captured, so it is held to the
+        // same checks before SCIP sees it.
+        match validate_input(&input, options, cancel) {
+            Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Ok(()) => {}
+            Err(problem) => return DayByDay::Failed(format!("{label}: invalid window input: {problem}")),
+        }
 
         activity.set(2);
         let phase = Instant::now();
@@ -752,6 +759,7 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duratio
         }
     }
     let mut model = configure(built.model.hide_output(), limit, None)?;
+    model = without_mpec(model)?;
     adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
@@ -780,7 +788,23 @@ fn offer_seed(model: Model<ProblemCreated>, values: &HashMap<String, f64>) -> Re
     let model = model
         .set_bool_param("misc/allowweakdualreds", false)
         .map_err(|error| format!("configuring the seeded solve: {error:?}"))?;
+    let model = without_mpec(model)?;
     Ok((model, stored))
+}
+
+/// Switch off SCIP's MPEC heuristic, in the seeded solve and the seed's
+/// completion only.
+///
+/// On the chunked fixtures solved day by day, the seeded whole-horizon solve
+/// hung in four runs out of four: MPEC handed Ipopt an NLP whose MUMPS
+/// ordering (METIS) corrupted the heap, glibc aborted inside `malloc`, and
+/// the abort left the solver thread waiting forever. With MPEC off the same
+/// runs completed three times out of three, and the seed took the dynamic
+/// FIFO fixture to its proven optimum. Unseeded solves keep SCIP's default.
+fn without_mpec(model: Model<ProblemCreated>) -> Result<Model<ProblemCreated>, String> {
+    model
+        .set_int_param("heuristics/mpec/freq", -1)
+        .map_err(|error| format!("switching off SCIP's MPEC heuristic: {error:?}"))
 }
 
 /// One line per finished solve, whatever became of it.
@@ -954,6 +978,9 @@ fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &Cancel
         }
         if pile.chunks.is_empty() && !pile.chunk_opening.is_empty() {
             return Err(format!("chunk opening without chunks on pile {}", pile.id.0));
+        }
+        if !pile.chunk_closed.is_empty() && pile.chunk_closed.len() != pile.chunks.len() {
+            return Err(format!("chunk closure flags do not match the chunks on pile {}", pile.id.0));
         }
         if pile.chunk_opening.len() > pile.chunks.len() || pile.chunks.iter().any(|cap| !cap.is_finite() || *cap <= 0.0) {
             return Err(format!("invalid chunks on pile {}", pile.id.0));
