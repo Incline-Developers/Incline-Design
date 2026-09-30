@@ -378,7 +378,7 @@ pub(crate) fn execute_scip_blend(
 
     activity.set(1);
     let started = Instant::now();
-    let validation = validate_input(&out.input, options, cancel);
+    let validation = validate_input(&out.input, None, options, cancel);
     out.timings.input_validation = started.elapsed();
     if cancel.is_cancelled() {
         out.stop(ScipTermination::Cancelled, "cancelled during input validation");
@@ -760,7 +760,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
         let input = carry.window_input(&full, window);
         // A window's input is derived, not captured, so it is held to the
         // same checks before SCIP sees it.
-        match validate_input(&input, options, cancel) {
+        match validate_input(&input, Some(&full), options, cancel) {
             Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into()),
             Ok(()) => {}
             Err(problem) => return DayByDay::Failed(format!("{label}: invalid window input: {problem}")),
@@ -1276,7 +1276,12 @@ fn request_current(pending: Option<ScipRunIdentity>, completed: ScipRunIdentity,
     pending == Some(completed) && current_inputs == Some(completed.inputs) && current_plan == completed.plan_revision && current_semantic == completed.semantic
 }
 
-fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &CancelFlag) -> Result<(), String> {
+/// `horizon` is the whole horizon a day-by-day window was cut from, or `None`
+/// when `input` is the captured horizon itself. A window may still name a
+/// block its horizon holds and an earlier window finished: the window leaves
+/// that block out, and the formulation gives it no columns. A block neither
+/// holds is an error either way.
+fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: ScipSolveOptions, cancel: &CancelFlag) -> Result<(), String> {
     if options.time_limit.is_some_and(|limit| limit.is_zero() || !limit.as_secs_f64().is_finite()) {
         return Err("SCIP time limit must be positive and finite".into());
     }
@@ -1356,6 +1361,7 @@ fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &Cancel
             return Err(format!("invalid material shares on ground source {}", source.id.0));
         }
     }
+    let referable: BTreeSet<_> = ground_ids.iter().copied().chain(horizon.into_iter().flat_map(|full| full.ground.iter().map(|source| source.id))).collect();
     let loaders: BTreeSet<_> = input.loaders.iter().map(|loader| loader.id).collect();
     if loaders.len() != input.loaders.len() {
         return Err("duplicate loader".into());
@@ -1413,7 +1419,7 @@ fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &Cancel
             return Err(format!("invalid task {}", task.id.0));
         }
         match &task.kind {
-            TaskKind::Dig { sequence } if sequence.is_empty() || sequence.iter().any(|id| !ground_ids.contains(id)) => {
+            TaskKind::Dig { sequence } if sequence.is_empty() || sequence.iter().any(|id| !referable.contains(id)) => {
                 return Err(format!("invalid dig sequence on task {}", task.id.0));
             }
             TaskKind::Reclaim { approved_sources, maximum_t }
@@ -1429,7 +1435,7 @@ fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &Cancel
             return Ok(());
         }
         let source_exists = match movement.source {
-            SourceId::Ground(id) => ground_ids.contains(&id),
+            SourceId::Ground(id) => referable.contains(&id),
             SourceId::Stockpile(id) => pile_ids.contains(&id),
         };
         if !source_exists
