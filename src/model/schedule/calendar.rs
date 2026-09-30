@@ -260,6 +260,8 @@ impl LoaderCalendar {
     }
 }
 
+// Compiled calendars are read by the native schedule capture.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 impl CompiledRateCalendar {
     pub(crate) fn rate_at(&self, hour: f64) -> f64 {
         let index = self.changes.partition_point(|change| change.at_h <= hour);
@@ -268,18 +270,6 @@ impl CompiledRateCalendar {
 
     pub(crate) fn next_change_after(&self, hour: f64) -> Option<f64> {
         self.changes.iter().find(|change| change.at_h > hour).map(|change| change.at_h)
-    }
-
-    pub(crate) fn has_positive_rate_between(&self, start_h: f64, end_h: Option<f64>) -> bool {
-        if end_h.is_some_and(|end| end <= start_h) {
-            return false;
-        }
-        if self.rate_at(start_h) > 0.0 {
-            return true;
-        }
-        self.changes
-            .iter()
-            .any(|change| change.at_h > start_h && end_h.is_none_or(|end| change.at_h < end) && change.rate_tph > 0.0)
     }
 }
 

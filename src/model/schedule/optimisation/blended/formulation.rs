@@ -7,13 +7,15 @@
 //! That is what makes the §7 comparison a comparison of *methods* rather than
 //! of two independently drifting formulations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
-    BlendInput, BlendPile, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, authored_tasks, delivers_to_pile, flat_cell, interval_rate,
-    loader_rate, task_active, task_authorises, task_operable,
+    BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, authored_tasks, delivers_to_pile,
+    flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
-use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, ReclaimOrder, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{
+    Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
+};
 
 /// Column handles, kept so the solution can be read back by meaning rather
 /// than by index.
@@ -52,6 +54,10 @@ pub(crate) struct BlendColumns<V> {
     pub(crate) chunk_closed: BTreeMap<(StockpileId, usize, usize), V>,
     /// Keyed (pile, chunk, interval, movement).
     pub(crate) chunk_recv: BTreeMap<(StockpileId, usize, usize, usize), V>,
+    /// Tonnes paid under a grade-conditional value, keyed (position in
+    /// [`BlendInput::conditional_values`], interval, segment). Read back only
+    /// to value part of a horizon on the model's own terms.
+    pub(crate) paid: BTreeMap<(usize, usize, usize), V>,
 }
 
 impl<V> BlendColumns<V> {
@@ -71,6 +77,7 @@ impl<V> BlendColumns<V> {
             chunk_recl_t: BTreeMap::new(),
             chunk_closed: BTreeMap::new(),
             chunk_recv: BTreeMap::new(),
+            paid: BTreeMap::new(),
         }
     }
 }
@@ -82,6 +89,9 @@ pub(crate) struct BlendSizes {
     pub(crate) binaries: usize,
     pub(crate) linear_constraints: usize,
     pub(crate) nonlinear_constraints: usize,
+    /// Nonzero coefficient entries submitted in linear/indicator rows, before
+    /// SCIP merges duplicate variables or adds indicator slack variables.
+    pub(crate) linear_coefficient_entries: usize,
 }
 
 /// The row sink both blended solvers write into.
@@ -137,6 +147,20 @@ pub(crate) trait Rows {
     #[allow(clippy::too_many_arguments)]
     fn mix(&mut self, pile: StockpileId, interval: usize, grade: usize, recl_q: Self::Var, open_t: Self::Var, recl_t: Self::Var, open_q: Self::Var, name: &str);
 
+    /// `flag = 1  =>  terms . x <= rhs`, with nothing implied when `flag = 0`.
+    ///
+    /// The default posts the textbook big-M row, `terms . x + M flag <= rhs +
+    /// M`, where `big_m` must bound `terms . x - rhs` over the whole model.
+    /// That is correct and portable, but a backend checks the row to a
+    /// tolerance relative to its own magnitude - which is `M` - so the
+    /// implication can be violated by `M x tolerance`. SCIP overrides this
+    /// with its native indicator constraint, which enforces the linear part
+    /// at its own scale instead.
+    fn implies(&mut self, flag: Self::Var, mut terms: Vec<(Self::Var, f64)>, rhs: f64, big_m: f64, name: &str) {
+        terms.push((flag, big_m));
+        self.leq(terms, rhs + big_m, name);
+    }
+
     fn cont(&mut self, upper: f64, name: &str) -> Self::Var {
         self.valued(upper, 0.0, name)
     }
@@ -155,7 +179,6 @@ pub(crate) trait Rows {
 // (`open_q`, `recl_q`, `ceilings`, `empty`, ...). Clippy suggests iterating one
 // of them, which would only move the indexing to the others and lose the
 // symmetry these rows are easiest to read with.
-#[allow(clippy::needless_range_loop)]
 /// Build the blended model.
 ///
 /// The objective is movement value, maximised - the same primary objective
@@ -165,9 +188,10 @@ pub(crate) trait Rows {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FormulationCancelled;
 
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
     let grades = input.grades.count();
-    let ceilings = input.grades.ceilings();
+    let ceilings = super::input::grade_ceilings(input);
     let segments = input.segments_per_interval.max(1);
 
     let destination_index: BTreeMap<DestinationId, &Destination> = input.destinations.iter().map(|entry| (entry.id, entry)).collect();
@@ -195,9 +219,20 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // One column per (candidate, interval, segment). A candidate is a
     // resolved destination/truck combination, so routing and cashflow are
     // already decided; only the tonnage is a decision here.
+    let reach = DigReach::new(input);
+    let held: BTreeSet<GroundId> = input.ground.iter().map(|source| source.id).collect();
     for (index, candidate) in input.movements.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
+        }
+        // A block the input does not hold has no ground balance to draw its
+        // tonnes from, so it gets no columns. Capture never names one; a
+        // later day of a day-by-day solve names every block that an earlier
+        // day finished.
+        if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
+            && !held.contains(&ground)
+        {
+            continue;
         }
         let value = candidate.value_per_tonne().unwrap_or(0.0);
         for interval in &input.intervals {
@@ -206,6 +241,16 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
             let Some(rate) = loader_rate(input, candidate, interval.index) else { continue };
             if rate <= 0.0 {
+                continue;
+            }
+            // These columns would be forced to zero by mvsel below. Omit
+            // them before building the model, preserving every feasible
+            // movement while avoiding inactive-window routing columns.
+            if !input.tasks.iter().any(|task| task_active(task, *interval) && task_authorises(task, candidate)) {
+                continue;
+            }
+            // Likewise columns that authored block order forces to zero.
+            if !reach.allows(candidate, *interval) {
                 continue;
             }
             let bound = rate * interval.duration_h();
@@ -296,6 +341,21 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // duration, and may only happen under the *selected* bar for the source
     // they draw on. Without the second half the selection binaries would be
     // decorative and priority would not bind on anything.
+    let loader_tasks: Vec<Vec<usize>> = (0..input.loaders.len()).map(|loader_index| authored_tasks(input, loader_index)).collect();
+    let by_source: Vec<Vec<(SourceId, Vec<usize>)>> = input
+        .loaders
+        .iter()
+        .map(|loader| {
+            let mut groups: Vec<(SourceId, Vec<usize>)> = Vec::new();
+            for (index, candidate) in input.movements.iter().enumerate().filter(|(_, candidate)| candidate.loader == loader.id) {
+                match groups.iter_mut().find(|(source, _)| *source == candidate.source) {
+                    Some((_, indices)) => indices.push(index),
+                    None => groups.push((candidate.source, vec![index])),
+                }
+            }
+            groups
+        })
+        .collect();
     for (loader_index, loader) in input.loaders.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
@@ -326,31 +386,41 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     }
                 }
 
-                // movement <= rate x interval duration x sum of the selection
-                // binaries of the bars that authorise its source. Several bars
-                // may authorise one source; any of them permits the movement,
-                // and `one_task` already forbids selecting more than one.
-                for (index, candidate) in input.movements.iter().enumerate() {
-                    if candidate.loader != loader.id {
+                // Movements from one source <= rate x interval duration x sum
+                // of the selection binaries of the bars that authorise that
+                // source. Several bars may authorise one source; any of them
+                // permits the movement, and `one_task` already forbids
+                // selecting more than one.
+                //
+                // One row per source rather than per candidate: bar
+                // authority depends only on (loader, source), and the loader's
+                // `rate` row already caps the sum, so whole-number solutions
+                // are unchanged while a fractional selection admits the
+                // candidates' combined tonnage once instead of once each.
+                for (source, indices) in &by_source[loader_index] {
+                    let terms: Vec<(R::Var, f64)> = indices
+                        .iter()
+                        .filter_map(|&index| rows.columns().movement.get(&(index, interval.index, segment)).cloned())
+                        .map(|column| (column, 1.0))
+                        .collect();
+                    if terms.is_empty() {
                         continue;
                     }
-                    let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)).cloned() else {
-                        continue;
-                    };
-                    let Some(rate) = loader_rate(input, candidate, interval.index).filter(|value| *value > 0.0) else {
+                    let exemplar = &input.movements[indices[0]];
+                    let Some(rate) = loader_rate(input, exemplar, interval.index).filter(|value| *value > 0.0) else {
                         continue;
                     };
                     let big_m = rate * interval.duration_h();
-                    let mut terms = vec![(column, 1.0)];
-                    for &task_index in &authored_tasks(input, loader_index) {
-                        if !task_authorises(&input.tasks[task_index], candidate) {
+                    let mut terms = terms;
+                    for &task_index in &loader_tasks[loader_index] {
+                        if !task_authorises(&input.tasks[task_index], exemplar) {
                             continue;
                         }
                         if let Some(selected) = rows.columns().active.get(&(loader_index, task_index, interval.index, segment)) {
                             terms.push((selected.clone(), -big_m));
                         }
                     }
-                    rows.leq(terms, 0.0, &format!("mvsel_{index}_{}_{segment}", interval.index));
+                    rows.leq(terms, 0.0, &format!("mvsel_{loader_index}_{}_{}_{segment}", source_key(*source), interval.index));
                 }
             }
         }
@@ -359,12 +429,45 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // ---- ground conservation ------------------------------------------------
     // Shared ground cannot be depleted twice: one balance per source carried
     // across segments, so several loaders digging the same block compete.
+    //
+    // Before the first interval with a dig column a block is untouched: its
+    // remaining tonnage is the authored figure and it is not exhausted. That
+    // state is a constant, so it gets no columns; the state begins in the
+    // first interval anything can dig it, and a block nothing can dig in the
+    // horizon has none at all. Consumers below read a missing state as
+    // "untouched". An empty block is exhausted from the start, so it keeps
+    // its state from the first cell.
+    let mut dig_candidates: Vec<Vec<usize>> = vec![Vec::new(); input.ground.len()];
+    for (index, candidate) in input.movements.iter().enumerate() {
+        if candidate.activity != Activity::Dig {
+            continue;
+        }
+        let SourceId::Ground(ground) = candidate.source else { continue };
+        if let Some(source_index) = input.ground.iter().position(|source| source.id == ground) {
+            dig_candidates[source_index].push(index);
+        }
+    }
+    let dug_in = |rows: &mut R, source_index: usize, interval: usize| {
+        dig_candidates[source_index]
+            .iter()
+            .any(|&index| (0..segments).any(|segment| rows.columns().movement.contains_key(&(index, interval, segment))))
+    };
+    let mut state_from: Vec<Option<usize>> = vec![None; input.ground.len()];
+    for (source_index, source) in input.ground.iter().enumerate() {
+        state_from[source_index] = if source.tonnes_t <= 0.0 {
+            input.intervals.first().map(|interval| interval.index)
+        } else {
+            input.intervals.iter().map(|interval| interval.index).find(|&interval| dug_in(rows, source_index, interval))
+        };
+    }
+
     for (source_index, source) in input.ground.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
+        let Some(first) = state_from[source_index] else { continue };
         let mut previous: Option<R::Var> = None;
-        for interval in &input.intervals {
+        for interval in input.intervals.iter().filter(|interval| interval.index >= first) {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
@@ -431,6 +534,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
+            // No column can draw on the block here, so every portion sum is
+            // empty and `extract` would only be forced to zero.
+            if !dug_in(rows, source_index, interval.index) {
+                continue;
+            }
             for segment in 0..segments {
                 let extract = rows.cont(source.tonnes_t, &format!("ext_{source_index}_{}_{segment}", interval.index));
                 for share in &source.material {
@@ -459,6 +567,16 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // of cell `c`; the implication runs one way (remaining > 0 forces it to
     // 0), which is all the ordering needs, and leaving the converse free
     // costs nothing because nothing rewards setting it.
+    //
+    // A loader may work through several blocks of its own sequence inside
+    // one segment: back to back, in authored order, at its dig rate. So the
+    // later block needs the earlier one exhausted by the end of the *same*
+    // cell, and a segment boundary is only spent on a change of bar. The
+    // loader's `rate` row already makes the blocks fit the segment one after
+    // another. The exception is an earlier block another loader can also
+    // dig: when that loader finishes it inside the segment cannot be
+    // recovered from segment totals, so the later block still waits for the
+    // end of the previous cell.
     let cells: Vec<(usize, usize)> = input
         .intervals
         .iter()
@@ -473,9 +591,12 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
+            // An untouched block is not exhausted: no flag.
+            let Some(remaining) = rows.columns().ground_remaining.get(&(source_index, flat_cell(interval, segment, segments))).cloned() else {
+                continue;
+            };
             let flag = rows.binary(&format!("exh_{source_index}_{interval}_{segment}"));
             rows.columns().exhausted.insert((source_index, position), flag.clone());
-            let remaining = rows.columns().ground_remaining[&(source_index, flat_cell(interval, segment, segments))].clone();
             // remaining <= tonnes * (1 - flag)
             rows.leq(
                 vec![(remaining, 1.0), (flag, source.tonnes_t)],
@@ -490,6 +611,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             return Err(FormulationCancelled);
         }
         let TaskKind::Dig { sequence } = &task.kind else { continue };
+        let Some(loader) = input.loaders.iter().find(|entry| entry.id == task.loader) else {
+            continue;
+        };
         for window in sequence.windows(2) {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
@@ -498,52 +622,60 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             let Some(earlier_index) = input.ground.iter().position(|entry| entry.id == *earlier) else {
                 continue;
             };
+            let shared = dig_candidates[earlier_index].iter().any(|&index| input.movements[index].loader != task.loader);
+            let later_candidates: Vec<usize> = input
+                .movements
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| candidate.activity == Activity::Dig && candidate.source == SourceId::Ground(*later) && candidate.loader == task.loader)
+                .map(|(index, _)| index)
+                .collect();
+            if later_candidates.is_empty() {
+                continue;
+            }
             for (position, &(interval, segment)) in cells.iter().enumerate() {
-                // Digging `later` in this cell requires `earlier` to have been
-                // exhausted by the END of the previous cell.
-                let Some(previous) = position.checked_sub(1) else {
-                    // In the very first cell nothing can be exhausted yet, so
-                    // the later block is simply unavailable.
-                    for (index, candidate) in input.movements.iter().enumerate() {
-                        if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(*later) {
-                            continue;
-                        }
-                        if candidate.loader != task.loader {
-                            continue;
-                        }
-                        if let Some(column) = rows.columns().movement.get(&(index, interval, segment)).cloned() {
-                            rows.leq(vec![(column, 1.0)], 0.0, &format!("order0_{index}_{interval}_{segment}"));
-                        }
-                    }
+                let mut terms: Vec<(R::Var, f64)> = later_candidates
+                    .iter()
+                    .filter_map(|&index| rows.columns().movement.get(&(index, interval, segment)).cloned())
+                    .map(|column| (column, 1.0))
+                    .collect();
+                if terms.is_empty() {
+                    continue;
+                }
+                let name = format!("{}_{}_{}_{}_{interval}_{segment}", task.id.0, earlier.0, later.0, task.loader.0);
+                // Digging `later` in this cell requires `earlier` to be
+                // exhausted by the end of this cell, or of the previous one
+                // when `earlier` is shared. Before the first cell nothing can
+                // be exhausted, and an untouched earlier block has no flag
+                // because it cannot be: either way the later block is
+                // unavailable here.
+                let flag = if shared { position.checked_sub(1) } else { Some(position) }.and_then(|cell| rows.columns().exhausted.get(&(earlier_index, cell)).cloned());
+                let Some(flag) = flag else {
+                    rows.leq(terms, 0.0, &format!("order0_{name}"));
                     continue;
                 };
-                let flag = rows.columns().exhausted[&(earlier_index, previous)].clone();
-                for (index, candidate) in input.movements.iter().enumerate() {
-                    if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(*later) {
-                        continue;
-                    }
-                    if candidate.loader != task.loader {
-                        continue;
-                    }
-                    let Some(column) = rows.columns().movement.get(&(index, interval, segment)).cloned() else {
-                        continue;
-                    };
-                    let Some(bound) = loader_rate(input, candidate, interval) else { continue };
-                    let big_m = bound * input.intervals[interval].duration_h();
-                    // column <= big_m * flag
-                    rows.leq(vec![(column, 1.0), (flag.clone(), -big_m)], 0.0, &format!("order_{index}_{interval}_{segment}"));
-                }
+                // One row for all of this loader's candidates on `later`:
+                // sum <= rate x interval x flag. The loader's `rate` row caps
+                // the sum at that anyway, so this admits the same schedules as
+                // a row per candidate, and binds harder on a fractional flag.
+                let Some(rate) = interval_rate(loader, interval).map(|rate| rate.dig_tph).filter(|rate| *rate > 0.0) else {
+                    continue;
+                };
+                terms.push((flag, -rate * input.intervals[interval].duration_h()));
+                rows.leq(terms, 0.0, &format!("order_{name}"));
             }
         }
     }
 
     // ---- blended inventory --------------------------------------------------
+    let receipt_peaks = piles_with_receipt_peaks(input, &destination_index);
     for pile in &input.piles {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
+        let receipt_peak = receipt_peaks.contains(&pile.id);
         if !pile.chunks.is_empty() {
-            chunked_pile(rows, input, pile, grades, &ceilings, segments, &destination_index)?;
+            chunked_pile(rows, input, pile, grades, &ceilings, segments, &destination_index, receipt_peak)?;
             continue;
         }
         let capacity = pile.capacity_t;
@@ -669,7 +801,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
 
             // Physical occupancy throughout the interval (§3).
-            occupancy_rows(rows, input, pile, k, segments, &destination_index, vec![(open_t.clone(), 1.0)]);
+            occupancy_rows(rows, input, pile, k, segments, &destination_index, vec![(open_t.clone(), 1.0)], receipt_peak);
 
             open_t_prev = Some(open_t.clone());
             for g in 0..grades {
@@ -733,16 +865,28 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                             // Ready while any block in the authored sequence
                             // still holds material at the start of this cell.
                             let Some(previous) = position.checked_sub(1) else {
-                                // Nothing can have been exhausted before the
-                                // first cell.
-                                rows.eq(vec![(ready, 1.0)], 1.0, &format!("rdydig0_{loader_index}_{task_index}_{position}"));
+                                // Before the first cell the input's own
+                                // tonnages are the state: ready exactly when
+                                // some block of the sequence holds material.
+                                let holds = sequence.iter().any(|source| input.ground.iter().any(|entry| entry.id == *source && entry.tonnes_t > 0.0));
+                                rows.eq(
+                                    vec![(ready, 1.0)],
+                                    if holds { 1.0 } else { 0.0 },
+                                    &format!("rdydig0_{loader_index}_{task_index}_{position}"),
+                                );
                                 continue;
                             };
-                            let flags: Vec<R::Var> = sequence
+                            let blocks: Vec<usize> = sequence.iter().filter_map(|source| input.ground.iter().position(|entry| entry.id == *source)).collect();
+                            let flags: Vec<R::Var> = blocks
                                 .iter()
-                                .filter_map(|source| input.ground.iter().position(|entry| entry.id == *source))
-                                .filter_map(|source_index| rows.columns().exhausted.get(&(source_index, previous)).cloned())
+                                .filter_map(|&source_index| rows.columns().exhausted.get(&(source_index, previous)).cloned())
                                 .collect();
+                            // A block without an exhaustion flag is untouched
+                            // and still holds material, so the bar has work.
+                            if flags.len() < blocks.len() {
+                                rows.eq(vec![(ready, 1.0)], 1.0, &format!("rdydigleft_{loader_index}_{task_index}_{position}"));
+                                continue;
+                            }
                             if flags.is_empty() {
                                 rows.eq(vec![(ready, 1.0)], 0.0, &format!("rdydignone_{loader_index}_{task_index}_{position}"));
                                 continue;
@@ -886,7 +1030,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     rows.leq(terms, *budget, &format!("crusher_{}_{day}", destination.id.0));
                 }
             }
-            DestinationKind::Dump | DestinationKind::Stockpile(_) => {
+            DestinationKind::Dump => {
                 let Some(capacity) = destination.capacity_t else { continue };
                 let mut terms = Vec::new();
                 for interval in &input.intervals {
@@ -903,6 +1047,10 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 }
                 rows.leq(terms, capacity, &format!("dest_{}", destination.id.0));
             }
+            // Storage capacity is enforced by occupancy_rows, not by lifetime
+            // receipts: reclaim frees space for later deliveries. Chunk slot
+            // non-reuse remains a separate, intentional lifecycle constraint.
+            DestinationKind::Stockpile(_) => {}
         }
     }
 
@@ -1097,33 +1245,39 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // A value that depends on the blend cannot ride on the movement column,
     // because that column earns its coefficient whatever the grade turns out
     // to be. Each conditional contribution gets its own paid-tonnes column,
-    // earning the authored value per tonne, tied to the movement by a
-    // *truth* indicator for the rule's predicate:
+    // earning the authored value per tonne, tied to the movement by an
+    // indicator whose direction depends on the value's sign:
     //
     // ```text
-    // 0 <= paid <= moved
-    // paid <= M * qualifies
-    // paid >= moved - M * (1 - qualifies)
-    // qualifies = 1  <=>  every bound of the rule holds on this blend
+    // reward (value > 0):  paid <= moved,  paid <= M * earns
+    //                      earns = 1  =>  every bound holds, tightened inward
+    // cost   (value < 0):  paid <= moved,  paid >= moved - M * (1 - owes)
+    //                      owes >= 1 - sum(fails)
+    //                      fails[i] = 1  =>  bound i is broken, tightened outward
     // ```
     //
-    // The last two rows are what make this a cost the optimiser cannot
-    // decline and a reward it cannot claim: with the predicate true, `paid`
-    // is forced up to the whole movement; with it false, down to zero. A
-    // one-way permission would have let a negative rule simply not apply.
+    // A reward can therefore only be claimed on a blend that clears every
+    // bound by [`GRADE_MARGIN`], and a cost can only be escaped on a blend
+    // that breaks some bound by the same margin - so the optimiser can
+    // neither claim a nonmatching positive payment nor evade a matching
+    // negative one.
     //
-    // The indicator's truth is built from elementary half-space tests, one
-    // binary each, ANDed - which is exact in both directions and is why the
-    // separation band on [`GRADE_MARGIN`] exists.
+    // No blend is *forbidden* by this. An earlier revision built an exact
+    // two-sided truth indicator, which cannot hold at all for a blend within
+    // a margin of the boundary; that excluded those blends from every
+    // reclaim of the pile in the interval, whether or not the valued
+    // movement was used. The one-way form only values such a blend
+    // conservatively, and the replay publishes the authored value.
     for (position, conditional) in input.conditional_values.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
         let Some(candidate) = input.movements.get(conditional.candidate) else { continue };
         let SourceId::Stockpile(pile) = candidate.source else { continue };
-        if candidate.activity != Activity::Reclaim {
+        if candidate.activity != Activity::Reclaim || conditional.value_per_tonne == 0.0 {
             continue;
         }
+        let reward = conditional.value_per_tonne > 0.0;
         for interval in &input.intervals {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
@@ -1136,23 +1290,33 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 continue;
             }
             let ceiling_t = reclaim_ceiling(input, pile, k, segments);
-            // One truth indicator per interval: the blend is the interval's,
-            // so every segment of it answers the predicate the same way.
-            let truth = predicate_truth(rows, pile, k, &conditional.half_spaces(), &ceilings, ceiling_t, &format!("cvtrue_{position}_{k}"));
-            let Some(truth) = truth else { continue };
+            // One indicator per interval: the blend is the interval's, so
+            // every segment of it answers the predicate the same way.
+            let tests = conditional.half_spaces();
+            let name = format!("cv_{position}_{k}");
+            let indicator = if reward {
+                predicate_earned(rows, pile, k, &tests, &ceilings, ceiling_t, &name)
+            } else {
+                predicate_owed(rows, pile, k, &tests, &ceilings, ceiling_t, &name)
+            };
+            let Some(indicator) = indicator else { continue };
             let big_m = rate * interval.duration_h();
             for segment in 0..segments {
                 let Some(moved) = rows.columns().movement.get(&(conditional.candidate, k, segment)).cloned() else {
                     continue;
                 };
                 let paid = rows.valued(big_m, conditional.value_per_tonne, &format!("paid_{position}_{k}_{segment}"));
+                rows.columns().paid.insert((position, k, segment), paid.clone());
                 rows.leq(vec![(paid.clone(), 1.0), (moved.clone(), -1.0)], 0.0, &format!("paidcap_{position}_{k}_{segment}"));
-                rows.leq(vec![(paid.clone(), 1.0), (truth.clone(), -big_m)], 0.0, &format!("paidoff_{position}_{k}_{segment}"));
-                rows.geq(
-                    vec![(paid, 1.0), (moved, -1.0), (truth.clone(), -big_m)],
-                    -big_m,
-                    &format!("paidon_{position}_{k}_{segment}"),
-                );
+                if reward {
+                    rows.leq(vec![(paid, 1.0), (indicator.clone(), -big_m)], 0.0, &format!("paidoff_{position}_{k}_{segment}"));
+                } else {
+                    rows.geq(
+                        vec![(paid, 1.0), (moved, -1.0), (indicator.clone(), -big_m)],
+                        -big_m,
+                        &format!("paidon_{position}_{k}_{segment}"),
+                    );
+                }
             }
         }
     }
@@ -1250,73 +1414,230 @@ fn reclaim_ceiling(input: &BlendInput, pile: StockpileId, interval: usize, segme
     capacity.min(reachable).max(0.0)
 }
 
-/// `flag = 1  =>  the interval's blend satisfies this half-space`.
+/// Which dig columns authored block order already forces to zero.
 ///
-/// One-way, and tightened by [`GRADE_MARGIN`] so the solver's own feasibility
-/// slack eats the cushion rather than the authored boundary. An exclusive
-/// endpoint is tightened by a second margin, which is how a strict inequality
-/// is represented by rows that can only express closed half-spaces.
+/// Loader `L` may dig block `b` in a cell only once every block authored
+/// immediately ahead of `b` in `L`'s sequences is exhausted by the end of the
+/// previous cell (the `order` rows). A block cannot be exhausted before the
+/// loaders able to dig it could have lifted its tonnes, and each of those
+/// loaders can only start on it once *its own* predecessors are exhausted.
+/// That recursion gives a lower bound on every block's exhaustion time, and a
+/// column in an interval that ends before some predecessor's bound is zero in
+/// every feasible schedule. Omitting it therefore removes no schedule.
 ///
-/// Written on the cleared form - `Q` against `threshold x T` - because the
-/// blend itself is a ratio the model must not divide.
-fn implies_half_space<R: Rows>(rows: &mut R, flag: R::Var, recl_q: R::Var, recl_t: R::Var, test: GradeHalfSpace, ceiling: f64, ceiling_t: f64, name: &str) {
-    let margin = if test.endpoint.inclusive { GRADE_MARGIN } else { 2.0 * GRADE_MARGIN };
-    if test.above {
-        // Q - (v + margin) T >= -M (1 - flag)
-        let threshold = test.endpoint.value + margin;
-        let big_m = (threshold.abs().max(1.0) * ceiling_t).max(1.0);
-        rows.geq(vec![(recl_q, 1.0), (recl_t, -threshold), (flag, -big_m)], -big_m, name);
-    } else {
-        // Q - (v - margin) T <= M (1 - flag)
-        let threshold = test.endpoint.value - margin;
-        let big_m = ((ceiling + threshold.abs()).max(1.0) * ceiling_t).max(1.0);
-        rows.leq(vec![(recl_q, 1.0), (recl_t, -threshold), (flag, big_m)], big_m, name);
+/// The bound is deliberately optimistic wherever it simplifies: bar windows
+/// are ignored, a loader's capacity is counted in full for every block it
+/// could dig, and the within-interval arrival of capacity is taken at the
+/// interval's fastest combined rate. A tolerance covers the solver's own
+/// feasibility slack on "exhausted". Each of these only keeps more columns.
+struct DigReach {
+    /// Keyed (loader, block): the blocks authored immediately ahead of it.
+    predecessors: BTreeMap<(LoaderId, GroundId), Vec<GroundId>>,
+    /// Lower bound on the hour each block can be exhausted; infinite when no
+    /// loader could remove it within the horizon.
+    exhausted_from_h: BTreeMap<GroundId, f64>,
+}
+
+/// Relative and absolute slack on "exhausted", comfortably above the
+/// solver's integrality and feasibility tolerances on the `exhlink` row.
+const REACH_RELATIVE_SLACK: f64 = 1e-5;
+const REACH_ABSOLUTE_SLACK_T: f64 = 1e-3;
+const REACH_TIME_SLACK_H: f64 = 1e-9;
+
+impl DigReach {
+    fn new(input: &BlendInput) -> Self {
+        let mut predecessors: BTreeMap<(LoaderId, GroundId), Vec<GroundId>> = BTreeMap::new();
+        let mut authorised: BTreeSet<(LoaderId, GroundId)> = BTreeSet::new();
+        for task in &input.tasks {
+            let TaskKind::Dig { sequence } = &task.kind else { continue };
+            authorised.extend(sequence.iter().map(|ground| (task.loader, *ground)));
+            for pair in sequence.windows(2) {
+                // A predecessor the capture did not include has no order row.
+                if input.ground.iter().any(|source| source.id == pair[0]) {
+                    predecessors.entry((task.loader, pair[1])).or_default().push(pair[0]);
+                }
+            }
+        }
+        let mut diggers: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+        for candidate in &input.movements {
+            let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
+                continue;
+            };
+            if !authorised.contains(&(candidate.loader, ground)) {
+                continue;
+            }
+            let Some(loader_index) = input.loaders.iter().position(|loader| loader.id == candidate.loader) else {
+                continue;
+            };
+            let entry = diggers.entry(ground).or_default();
+            if !entry.contains(&loader_index) {
+                entry.push(loader_index);
+            }
+        }
+
+        let mut exhausted_from_h: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, 0.0)).collect();
+        // Every pass keeps each figure a valid lower bound, so stopping early
+        // (an authored cycle) is safe; an acyclic order settles well within
+        // one pass per block.
+        for _ in 0..=input.ground.len() {
+            let mut changed = false;
+            for source in &input.ground {
+                let starts: Vec<(usize, f64)> = diggers
+                    .get(&source.id)
+                    .map(|loaders| {
+                        loaders
+                            .iter()
+                            .map(|&loader_index| {
+                                let loader = input.loaders[loader_index].id;
+                                let start = predecessors
+                                    .get(&(loader, source.id))
+                                    .map(|ahead| ahead.iter().map(|block| exhausted_from_h[block]).fold(0.0, f64::max))
+                                    .unwrap_or(0.0);
+                                (loader_index, start)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let bound = earliest_removal_h(input, &starts, source.tonnes_t);
+                if bound > exhausted_from_h[&source.id] {
+                    exhausted_from_h.insert(source.id, bound);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Self { predecessors, exhausted_from_h }
+    }
+
+    /// Whether a movement column can be nonzero in this interval.
+    fn allows(&self, candidate: &MovementCandidate, interval: Interval) -> bool {
+        let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
+            return true;
+        };
+        let Some(ahead) = self.predecessors.get(&(candidate.loader, ground)) else { return true };
+        ahead
+            .iter()
+            .all(|block| self.exhausted_from_h.get(block).is_none_or(|&from| from <= interval.end_h + REACH_TIME_SLACK_H))
     }
 }
 
-/// A binary that is 1 **exactly when** every one of these half-spaces holds on
-/// the interval's blend.
+/// A lower bound on when `tonnes` can have been removed by these loaders,
+/// each starting at its own hour. Infinite when the horizon is too short.
+fn earliest_removal_h(input: &BlendInput, starts: &[(usize, f64)], tonnes: f64) -> f64 {
+    let need = tonnes * (1.0 - REACH_RELATIVE_SLACK) - REACH_ABSOLUTE_SLACK_T;
+    if need <= 0.0 {
+        return 0.0;
+    }
+    let mut removed = 0.0;
+    for interval in &input.intervals {
+        let mut through_end = 0.0;
+        let mut fastest = 0.0;
+        for &(loader_index, start) in starts {
+            let rate = interval_rate(&input.loaders[loader_index], interval.index).map(|rate| rate.dig_tph).unwrap_or(0.0);
+            if rate <= 0.0 || start >= interval.end_h {
+                continue;
+            }
+            through_end += rate * (interval.end_h - start.max(interval.start_h));
+            fastest += rate;
+        }
+        if removed + through_end >= need && fastest > 0.0 {
+            // Before the interval `removed < need`; no loader can do better
+            // than every one of them running from the interval's start.
+            return (interval.start_h + (need - removed) / fastest).min(interval.end_h);
+        }
+        removed += through_end;
+    }
+    f64::INFINITY
+}
+
+/// `flag = 1  =>  the interval's blend satisfies this half-space`.
 ///
-/// Truth, not permission. Each elementary test gets its own binary with both
-/// implications posted - `t = 1` forces the test, `t = 0` forces its exact
-/// negation - and the conjunction is the standard pair of AND rows. Returns
-/// `None` when the pile has no reclaim columns in this interval.
+/// One-way, and tightened by [`GRADE_MARGIN`] so the solver's own feasibility
+/// slack eats the cushion rather than the authored boundary. Inclusive and
+/// exclusive endpoints take the same margin: either way the boundary value
+/// itself lies inside the cushion, so the operator only decides which side of
+/// the authored value the replay counts it on.
 ///
-/// The cost of exactness is the separation band documented on
-/// [`GRADE_MARGIN`]: a blend within one margin of a boundary satisfies
-/// neither a test nor its negation, so the model forbids it.
-fn predicate_truth<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tests: &[GradeHalfSpace], ceilings: &[f64], ceiling_t: f64, name: &str) -> Option<R::Var> {
+/// Written on the cleared form - `Q` against `threshold x T` - because the
+/// blend itself is a ratio the model must not divide. The cleared form is
+/// checked by the solver in *contained tonnes*, not in grade, so a fraction
+/// margin alone stops protecting a small reclaim: at `T = 0.5 t` a solver
+/// slack of 1e-6 t of component is 2e-6 of grade, twice the margin. Each test
+/// therefore also clears the boundary by [`GRADE_CUSHION_T`] of contained
+/// quantity, which a solver's slack cannot eat whatever `T` is. The price is a
+/// band of `GRADE_CUSHION_T / T` in grade - negligible above a few tonnes -
+/// and that no test can be claimed on an interval with no reclaim at all.
+#[allow(clippy::too_many_arguments)]
+fn implies_half_space<R: Rows>(rows: &mut R, flag: R::Var, recl_q: R::Var, recl_t: R::Var, test: GradeHalfSpace, ceiling: f64, ceiling_t: f64, name: &str) {
+    let margin = GRADE_MARGIN;
+    if test.above {
+        // flag = 1  =>  Q - (v + margin) T >= cushion
+        let threshold = test.endpoint.value + margin;
+        let big_m = (threshold.abs().max(1.0) * ceiling_t).max(1.0) + GRADE_CUSHION_T;
+        rows.implies(flag, vec![(recl_q, -1.0), (recl_t, threshold)], -GRADE_CUSHION_T, big_m, name);
+    } else {
+        // flag = 1  =>  Q - (v - margin) T <= -cushion
+        let threshold = test.endpoint.value - margin;
+        let big_m = ((ceiling + threshold.abs()).max(1.0) * ceiling_t).max(1.0) + GRADE_CUSHION_T;
+        rows.implies(flag, vec![(recl_q, 1.0), (recl_t, -threshold)], -GRADE_CUSHION_T, big_m, name);
+    }
+}
+
+/// A binary that may be 1 **only when** every one of these half-spaces holds
+/// on the interval's blend, tightened inward by [`GRADE_MARGIN`].
+///
+/// One-way on purpose: it gates a reward, and a reward the optimiser does
+/// not claim is merely value left on the table - the replay publishes what
+/// the authored rule actually pays. Returns `None` when the pile has no
+/// reclaim columns in this interval.
+fn predicate_earned<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tests: &[GradeHalfSpace], ceilings: &[f64], ceiling_t: f64, name: &str) -> Option<R::Var> {
     let recl_t = rows.columns().recl_t.get(&(pile, interval)).cloned()?;
-    let truth = rows.binary(name);
-    let mut parts: Vec<R::Var> = Vec::with_capacity(tests.len());
+    let earned = rows.binary(name);
     for (index, test) in tests.iter().enumerate() {
         let Some(recl_q) = rows.columns().recl_q.get(&(pile, interval, test.grade)).cloned() else {
             continue;
         };
         let ceiling = ceilings.get(test.grade).copied().unwrap_or(1.0);
-        let part = rows.binary(&format!("{name}_t{index}"));
-        implies_half_space(rows, part.clone(), recl_q.clone(), recl_t.clone(), *test, ceiling, ceiling_t, &format!("{name}_on{index}"));
-        // The other direction, against the exact complement of the test.
-        let negation = rows.binary(&format!("{name}_n{index}"));
-        rows.eq(vec![(part.clone(), 1.0), (negation.clone(), 1.0)], 1.0, &format!("{name}_x{index}"));
-        implies_half_space(rows, negation, recl_q, recl_t.clone(), test.negated(), ceiling, ceiling_t, &format!("{name}_off{index}"));
-        parts.push(part);
+        implies_half_space(rows, earned.clone(), recl_q, recl_t.clone(), *test, ceiling, ceiling_t, &format!("{name}_on{index}"));
     }
-    if parts.is_empty() {
-        // Nothing to test: the predicate is vacuously true.
-        rows.eq(vec![(truth.clone(), 1.0)], 1.0, &format!("{name}_vacuous"));
-        return Some(truth);
+    Some(earned)
+}
+
+/// A binary that must be 1 **unless** some half-space is broken on the
+/// interval's blend by at least [`GRADE_MARGIN`].
+///
+/// The mirror of [`predicate_earned`], for a cost: the optimiser can only set
+/// it to zero by exhibiting a bound the blend clearly fails, so a matching
+/// negative rule cannot be declined. A blend within a margin of every
+/// failing boundary owes the cost in the model; the replay publishes what the
+/// authored rule actually charges.
+fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tests: &[GradeHalfSpace], ceilings: &[f64], ceiling_t: f64, name: &str) -> Option<R::Var> {
+    let recl_t = rows.columns().recl_t.get(&(pile, interval)).cloned()?;
+    let owed = rows.binary(name);
+    // owes + sum(fails) >= 1: with no failure exhibited the cost applies.
+    let mut cover = vec![(owed.clone(), 1.0)];
+    for (index, test) in tests.iter().enumerate() {
+        let Some(recl_q) = rows.columns().recl_q.get(&(pile, interval, test.grade)).cloned() else {
+            continue;
+        };
+        let ceiling = ceilings.get(test.grade).copied().unwrap_or(1.0);
+        let fails = rows.binary(&format!("{name}_f{index}"));
+        implies_half_space(
+            rows,
+            fails.clone(),
+            recl_q,
+            recl_t.clone(),
+            test.negated(),
+            ceiling,
+            ceiling_t,
+            &format!("{name}_off{index}"),
+        );
+        cover.push((fails, 1.0));
     }
-    // truth <= part for every part, and truth >= sum(parts) - (n - 1).
-    for (index, part) in parts.iter().enumerate() {
-        rows.leq(vec![(truth.clone(), 1.0), (part.clone(), -1.0)], 0.0, &format!("{name}_and{index}"));
-    }
-    let mut terms = vec![(truth.clone(), 1.0)];
-    for part in &parts {
-        terms.push((part.clone(), -1.0));
-    }
-    rows.geq(terms, -(parts.len() as f64 - 1.0), &format!("{name}_all"));
-    Some(truth)
+    rows.geq(cover, 1.0, &format!("{name}_owed"));
+    Some(owed)
 }
 
 /// §8 - the chunked blended pile.
@@ -1355,6 +1676,7 @@ fn chunked_pile<R: Rows>(
     ceilings: &[f64],
     segments: usize,
     destinations: &BTreeMap<DestinationId, &Destination>,
+    receipt_peak: bool,
 ) -> Result<(), FormulationCancelled> {
     let count = pile.chunks.len();
     let horizon = input.intervals.len();
@@ -1626,7 +1948,7 @@ fn chunked_pile<R: Rows>(
             return Err(FormulationCancelled);
         }
         let opening: Vec<(R::Var, f64)> = (0..count).map(|c| (take(&open_t[c][k]), 1.0)).collect();
-        occupancy_rows(rows, input, pile, k, segments, destinations, opening);
+        occupancy_rows(rows, input, pile, k, segments, destinations, opening, receipt_peak);
     }
 
     // Tie each delivering movement's chunk split to its own tonnage, and
@@ -1728,6 +2050,20 @@ fn chunked_pile<R: Rows>(
 /// clock: a source transition that is a boundary for one loader but not for
 /// another would break the constant-rate premise.
 ///
+/// **Blocks worked back to back.** A loader that works several blocks of its
+/// sequence inside one segment delivers each block's tonnes in turn, so its
+/// receipts are not at a constant rate and occupancy can peak inside the
+/// segment. Where that can happen (`receipt_peak`), a pile that is also
+/// reclaimed is checked conservatively as well, with no credit for the
+/// segment's own reclaim:
+///
+/// ```text
+/// occupancy(s - 1) + receipts(s) <= capacity
+/// ```
+///
+/// A pile nothing reclaims only fills inside a segment, so its endpoint is
+/// already its peak.
+///
 /// The previous revision omitted the reclaim term. That made the row an upper
 /// bound on true occupancy rather than the occupancy itself, and it refused
 /// valid schedules: a pile that opens at capacity could not receive anything,
@@ -1745,9 +2081,20 @@ fn occupancy_rows<R: Rows>(
     segments: usize,
     destinations: &BTreeMap<DestinationId, &Destination>,
     opening: Vec<(R::Var, f64)>,
+    receipt_peak: bool,
 ) {
+    // Carried as a running occupancy column per segment rather than restating
+    // every earlier segment's flows in each row: the column's own bounds are
+    // the capacity and nonnegative-occupancy rows, and each balance row holds
+    // one segment's flows, so the rows stay linear in segments instead of
+    // quadratic.
+    let mut previous = opening;
     for segment in 0..segments {
-        let mut terms = opening.clone();
+        let occupancy = rows.cont(pile.capacity_t, &format!("occ_{}_{interval}_{segment}", pile.id.0));
+        let mut terms = vec![(occupancy.clone(), -1.0)];
+        let previous_len = previous.len();
+        let mut peak = if receipt_peak { previous.clone() } else { Vec::new() };
+        terms.extend(previous);
         for (index, candidate) in input.movements.iter().enumerate() {
             let receipt = delivers_to_pile(candidate, pile.id, destinations);
             let draw = candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id);
@@ -1767,19 +2114,50 @@ fn occupancy_rows<R: Rows>(
             if coefficient == 0.0 {
                 continue;
             }
-            for earlier in 0..=segment {
-                if let Some(column) = rows.columns().movement.get(&(index, interval, earlier)) {
-                    terms.push((column.clone(), coefficient));
+            if let Some(column) = rows.columns().movement.get(&(index, interval, segment)).cloned() {
+                if receipt_peak && coefficient > 0.0 {
+                    peak.push((column.clone(), coefficient));
                 }
+                terms.push((column, coefficient));
             }
         }
-        rows.leq(terms.clone(), pile.capacity_t, &format!("pilecap_{}_{interval}_{segment}", pile.id.0));
-        // Nonnegative occupancy. Implied by `reclcap` (the interval's whole
-        // reclaim cannot exceed its opening tonnage) plus nonnegative
-        // receipts, but the brief asks for it explicitly and one row per
-        // segment is not worth economising on.
-        rows.geq(terms, 0.0, &format!("pilefloor_{}_{interval}_{segment}", pile.id.0));
+        if peak.len() > previous_len {
+            rows.leq(peak, pile.capacity_t, &format!("occpeak_{}_{interval}_{segment}", pile.id.0));
+        }
+        // occupancy(s) = occupancy(s - 1) + receipts(s) - reclaim(s), with
+        // 0 <= occupancy(s) <= capacity carried by the column bounds.
+        // Nonnegativity is also implied by `reclcap` plus nonnegative
+        // receipts, but the brief asks for it explicitly.
+        rows.eq(terms, 0.0, &format!("occbal_{}_{interval}_{segment}", pile.id.0));
+        previous = vec![(occupancy, 1.0)];
     }
+}
+
+/// Piles whose occupancy can peak inside a segment: they are reclaimed, and
+/// they receive from a loader that can work two blocks of one sequence back
+/// to back within a segment.
+fn piles_with_receipt_peaks(input: &BlendInput, destinations: &BTreeMap<DestinationId, &Destination>) -> BTreeSet<StockpileId> {
+    input
+        .piles
+        .iter()
+        .filter(|pile| {
+            let reclaimed = input
+                .movements
+                .iter()
+                .any(|candidate| candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id));
+            reclaimed
+                && input.movements.iter().any(|candidate| {
+                    let SourceId::Ground(ground) = candidate.source else { return false };
+                    candidate.activity == Activity::Dig
+                        && delivers_to_pile(candidate, pile.id, destinations)
+                        && input
+                            .tasks
+                            .iter()
+                            .any(|task| task.loader == candidate.loader && matches!(&task.kind, TaskKind::Dig { sequence } if sequence.len() > 1 && sequence.contains(&ground)))
+                })
+        })
+        .map(|pile| pile.id)
+        .collect()
 }
 
 /// The columns that make up a pile's opening tonnage in an interval: one
@@ -1797,6 +2175,97 @@ fn pile_opening_terms<R: Rows>(rows: &mut R, pile: &BlendPile, interval: usize) 
         .filter_map(|chunk| rows.columns().chunk_open_t.get(&(pile.id, chunk, interval)).cloned())
         .map(|column| (column, 1.0))
         .collect()
+}
+
+/// Model size of one formulation family: every column or row whose name
+/// starts with the same prefix before its first `_`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FamilySize {
+    pub(crate) columns: usize,
+    pub(crate) binaries: usize,
+    pub(crate) rows: usize,
+    pub(crate) entries: usize,
+}
+
+/// A sink that builds no solver model and only tallies what [`formulate`]
+/// posts, by family. It exists to answer "which part of the model is large"
+/// on a real project without paying for a solver build.
+struct FamilyRows {
+    columns: BlendColumns<()>,
+    sizes: BlendSizes,
+    families: BTreeMap<String, FamilySize>,
+}
+
+impl FamilyRows {
+    fn family(&mut self, name: &str) -> &mut FamilySize {
+        let prefix = name.split('_').next().unwrap_or(name);
+        if !self.families.contains_key(prefix) {
+            self.families.insert(prefix.to_owned(), FamilySize::default());
+        }
+        self.families.get_mut(prefix).expect("just inserted")
+    }
+}
+
+impl Rows for FamilyRows {
+    type Var = ();
+
+    fn columns(&mut self) -> &mut BlendColumns<()> {
+        &mut self.columns
+    }
+
+    fn sizes(&mut self) -> &mut BlendSizes {
+        &mut self.sizes
+    }
+
+    fn valued(&mut self, _upper: f64, _value: f64, name: &str) {
+        self.family(name).columns += 1;
+    }
+
+    fn binary(&mut self, name: &str) {
+        let family = self.family(name);
+        family.columns += 1;
+        family.binaries += 1;
+    }
+
+    fn linear(&mut self, terms: Vec<((), f64)>, _lhs: f64, _rhs: f64, name: &str) {
+        if terms.is_empty() {
+            return;
+        }
+        let family = self.family(name);
+        family.rows += 1;
+        family.entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+    }
+
+    fn implies(&mut self, _flag: (), terms: Vec<((), f64)>, _rhs: f64, _big_m: f64, name: &str) {
+        self.linear(terms, 0.0, 0.0, name);
+    }
+
+    fn mix(&mut self, _pile: StockpileId, _interval: usize, _grade: usize, _recl_q: (), _open_t: (), _recl_t: (), _open_q: (), name: &str) {
+        let family = self.family(name);
+        family.rows += 1;
+        family.entries += 4;
+    }
+}
+
+/// Per-family model sizes, largest first by columns plus rows.
+pub(crate) fn family_sizes(input: &BlendInput) -> Vec<(String, FamilySize)> {
+    let mut rows = FamilyRows {
+        columns: BlendColumns::new(),
+        sizes: BlendSizes::default(),
+        families: BTreeMap::new(),
+    };
+    formulate(&mut rows, input).expect("the counting sink never cancels");
+    let mut families: Vec<(String, FamilySize)> = rows.families.into_iter().collect();
+    families.sort_by_key(|(_, size)| std::cmp::Reverse(size.columns + size.rows));
+    families
+}
+
+/// A source as it appears in a row name.
+fn source_key(source: SourceId) -> String {
+    match source {
+        SourceId::Ground(ground) => format!("g{}", ground.0),
+        SourceId::Stockpile(pile) => format!("p{}", pile.0),
+    }
 }
 
 /// A chunked pile needs one grade estimate per *chunk* and interval, not just

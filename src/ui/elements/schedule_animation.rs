@@ -1,8 +1,8 @@
 //! Controls belonging to Schedule's main-viewport animation page.
 
 use crate::{
-    i18n::tr_format,
-    model::schedule::SCHEDULE_PERIOD_H,
+    i18n::{tr, tr_format},
+    model::{Document, schedule::SCHEDULE_PERIOD_H},
     ui::{EditorState, chrome},
 };
 
@@ -20,7 +20,7 @@ const READOUT_ROW_H: f32 = 22.0;
 const READOUT_SIZE: f32 = 16.0;
 const STATUS_SIZE: f32 = 12.0;
 
-pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState) -> egui::Rect {
+pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document) -> egui::Rect {
     egui::Panel::bottom(TIMELINE_PANEL_ID)
         .resizable(false)
         .show_separator_line(chrome::show_separator_line(ui))
@@ -40,7 +40,24 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState) -> egui
             // as the cursor is dragged, and an indicator that comes and goes
             // with the work, both shift a laid-out row - and the band and the
             // slider under it then shake for the length of the drag.
-            let (readout, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), READOUT_ROW_H), egui::Sense::hover());
+            let (readout, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), READOUT_ROW_H), egui::Sense::hover());
+            if editor.schedule_animation_enabled {
+                response.on_hover_ui(|ui| {
+                    if let Some(schedule) = &editor.schedule_result {
+                        let destinations = crate::model::schedule::destinations::available(document.solids(), document.schedule().routing());
+                        for pile in &schedule.piles {
+                            if let Some((tonnes, _)) = schedule.inventory_at(pile.destination, editor.schedule_animation_shown_h) {
+                                let name = destinations
+                                    .iter()
+                                    .find(|entry| entry.id == pile.destination)
+                                    .map(|entry| entry.name.clone())
+                                    .unwrap_or_default();
+                                ui.label(tr!("schedule-animation-inventory", stockpile = name, tonnes = format!("{tonnes:.1}")));
+                            }
+                        }
+                    }
+                });
+            }
             if editor.schedule_animation_enabled || editor.schedule_animation_status.is_empty() {
                 // The instant the geometry was cut for, not the instant the
                 // slider is at: while a batch is in flight those differ, and

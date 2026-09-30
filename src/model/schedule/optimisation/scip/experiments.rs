@@ -11,6 +11,7 @@
 
 use std::{
     path::Path,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -22,7 +23,7 @@ use super::{
         input::BlendInput,
         replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay},
     },
-    adapter::{SolveReport, SolveTuning},
+    adapter::{self, InterruptAudit, SolveReport, SolveTuning},
     blend::formulate_scip,
 };
 
@@ -31,6 +32,7 @@ pub(crate) struct BlendRun {
     pub(crate) report: SolveReport,
     pub(crate) sizes: BlendSizes,
     pub(crate) formulation_time: Duration,
+    pub(crate) diagnostics: crate::model::schedule::result::SolveDiagnostics,
     pub(crate) solution: Option<BlendSolution>,
     pub(crate) replay: Option<ReplayReport>,
 }
@@ -46,9 +48,12 @@ pub(crate) fn solve_blend(input: &BlendInput, tuning: SolveTuning) -> BlendRun {
     let sizes = formulation.sizes;
     let columns = formulation.columns;
 
-    let model = tuning.apply(formulation.model);
+    let mut model = tuning.apply(formulation.model);
+    let audit = Arc::new(InterruptAudit::default());
+    adapter::install_cancellation(&mut model, Arc::new(AtomicBool::new(false)), Arc::clone(&audit));
     let solved = model.solve();
     let report = SolveReport::read(&solved);
+    let diagnostics = adapter::diagnostics(&solved, &audit);
 
     let solution = extract_solution(&solved, &columns, || false).expect("uncancelled extraction");
 
@@ -58,6 +63,7 @@ pub(crate) fn solve_blend(input: &BlendInput, tuning: SolveTuning) -> BlendRun {
         report,
         sizes,
         formulation_time,
+        diagnostics,
         solution,
         replay,
     }

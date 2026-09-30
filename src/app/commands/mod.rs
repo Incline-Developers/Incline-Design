@@ -20,10 +20,9 @@ pub(crate) mod scene_selection; // What the selection-driven tools take from the
 pub(crate) mod schedule;
 /// Real-project capture for the experimental blended optimiser. Native only
 /// and off by default; nothing in the ordinary schedule run reaches it.
-#[cfg(all(not(target_arch = "wasm32"), feature = "blend-experiment"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod schedule_capture;
 pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
-pub(crate) mod schedule_routing; // Resolves the ordered destination rules into routed material.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).
@@ -146,9 +145,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunScheduleStage(_)
                 | UiCommand::RunAllScheduleStages
                 | UiCommand::RunSchedulePeriod
-                | UiCommand::RunWholeSchedule
-                | UiCommand::RunExperimentalOptimisation
-                | UiCommand::CancelExperimentalOptimisation
+                | UiCommand::RunAllSchedulePeriods
                 | UiCommand::FocusScheduleAnimationSolid(_)
                 | UiCommand::Schedule { .. }
         );
@@ -458,26 +455,15 @@ impl<'a> App<'a> {
                 self.run_all_schedule_steps();
                 Ok(())
             }
-            UiCommand::RunExperimentalOptimisation => {
-                #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-                if let Err(problems) = self.start_experimental_project_blend() {
-                    for problem in problems {
-                        crate::userspace_warn!("{problem}");
-                    }
-                }
-                Ok(())
-            }
-            UiCommand::CancelExperimentalOptimisation => {
-                #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-                self.cancel_experimental_scip_blend();
-                Ok(())
-            }
+            // Refused on the browser build inside `start_schedule_run` itself,
+            // not only by the disabled button: a command can arrive from
+            // anywhere.
             UiCommand::RunSchedulePeriod => {
                 self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Period);
                 Ok(())
             }
-            UiCommand::RunWholeSchedule => {
-                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Whole);
+            UiCommand::RunAllSchedulePeriods => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::All);
                 Ok(())
             }
             UiCommand::CancelScheduleCalculation => {

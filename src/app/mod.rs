@@ -7,9 +7,11 @@ pub(crate) mod memory; // Browser address-space budgeting for large allocations
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
-pub(crate) mod schedule_run; // The Gantt's explicit Run Schedule and what it holds
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-pub(crate) mod scip_blend; // Developer-only blended SCIP job on the existing pool
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod schedule_publish; // A validated solution, translated into the shared calculated schedule
+pub(crate) mod schedule_run; // Run Period / Run All Periods: capture, solve, publish, currentness
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod scip_blend; // The SCIP solve of one owned blended model, on the compute pool
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -430,37 +432,26 @@ pub(crate) struct App<'a> {
     /// The Schedule Setup pipeline's state for the active project; see
     /// [`crate::app::schedule_pipeline`]. `None` until a project is open.
     pub(crate) schedule_pipeline: Option<crate::app::schedule_pipeline::SchedulePipeline>,
-    /// What the last finished Run Schedule calculated, with the inputs it
-    /// captured. Kept across edits and cancellations - an edit marks it stale,
-    /// nothing deletes it - so the page can always say what was true when it
-    /// was last run. See [`crate::app::schedule_run`].
-    pub(crate) schedule_calculation: Option<crate::app::schedule_run::ScheduleCalculation>,
-    /// A Run Schedule in flight on the bounded worker pool. Dropping it and
-    /// cancelling its job publishes nothing.
+    /// What the last accepted Run Period or Run All Periods calculated. Kept
+    /// across edits and failed runs - an edit marks it stale, nothing but a
+    /// newer accepted run or the project closing replaces it - so the pages
+    /// can always say what was true when it was last run. Its indexes are
+    /// built once, when it is published. See [`crate::app::schedule_run`].
+    pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// A run in flight on the bounded worker pool. Dropping it and cancelling
+    /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    pub(crate) pending_experimental_scip: Option<crate::app::scip_blend::ScipRunIdentity>,
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    pub(crate) experimental_scip_result: Option<std::sync::Arc<crate::app::scip_blend::ScipCompletion>>,
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    pub(crate) experimental_scip_diagnostics: Option<std::sync::Arc<crate::app::scip_blend::ScipCompletion>>,
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    pub(crate) experimental_scip_serial: u64,
-    /// Why the last Run produced no schedule, owned by the exact project and
-    /// scheduling inputs that produced the refusal.
-    pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleRunDiagnostics>,
+    /// Why the last run published nothing, owned by the semantic inputs it
+    /// was made against.
+    pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleAttempt>,
     pub(crate) schedule_report_cache: Option<crate::app::commands::schedule_readiness::ScheduleReportCache>,
     pub(crate) schedule_plan_revision_cache: std::cell::Cell<Option<(u32, u64, u64)>>,
-    /// Per-period production aggregated from the held result, keyed by the
-    /// project runtime and the run that produced it. Derived display data: it
-    /// is never saved and never enters undo history.
-    pub(crate) schedule_production_cache: Option<(u32, u64, std::sync::Arc<crate::model::schedule::PeriodProduction>)>,
-    /// The same, for what each destination received. Cached beside the loader
-    /// figures rather than with them so a project with routing off pays nothing
-    /// for it.
-    pub(crate) schedule_destination_cache: Option<(u32, u64, std::sync::Arc<crate::model::schedule::DestinationProduction>)>,
+    /// [`Self::schedule_semantic_key`], keyed by project, document revision
+    /// and the Setup gate, because currentness is asked every frame.
+    pub(crate) schedule_semantic_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) schedule_run_serial: u64,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
@@ -588,19 +579,10 @@ impl<'a> Default for App<'a> {
             schedule_pipeline: None,
             schedule_calculation: None,
             pending_schedule_run: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            pending_experimental_scip: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            experimental_scip_result: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            experimental_scip_diagnostics: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            experimental_scip_serial: 0,
             schedule_run_diagnostics: None,
             schedule_report_cache: None,
             schedule_plan_revision_cache: std::cell::Cell::new(None),
-            schedule_production_cache: None,
-            schedule_destination_cache: None,
+            schedule_semantic_cache: std::cell::Cell::new(None),
             schedule_report_key_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
             schedule_animation: Default::default(),
@@ -1291,12 +1273,11 @@ impl<'a> App<'a> {
         self.cancel_jobs(|key| !matches!(key, jobs::JobKey::BrowserProjectSave { .. }));
         #[cfg(not(target_arch = "wasm32"))]
         self.cancel_jobs(|_| true);
-        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-        {
-            self.pending_experimental_scip = None;
-            self.experimental_scip_result = None;
-            self.experimental_scip_diagnostics = None;
-        }
+        // A calculated schedule describes one project's ground and does not
+        // outlive it; a run in flight was cancelled with every other job above.
+        self.pending_schedule_run = None;
+        self.schedule_calculation = None;
+        self.schedule_run_diagnostics = None;
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
@@ -2298,8 +2279,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-        self.cancel_experimental_scip_blend();
+        // SCIP polls this flag from its own thread; cancelling here lets a
+        // solve in flight stop at its next callback instead of holding exit.
+        self.cancel_schedule_run_calculation_quietly();
         self.teardown_window();
     }
 

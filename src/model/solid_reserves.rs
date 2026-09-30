@@ -188,6 +188,7 @@ pub(crate) struct MaterialCapture {
     pub(crate) portions: Vec<Vec<MaterialPortion>>,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 impl MaterialCapture {
     /// Where one field's value sits in every portion's value list.
     pub(crate) fn position(&self, field: ReserveFieldId) -> Option<usize> {

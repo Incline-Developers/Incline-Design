@@ -166,7 +166,7 @@ impl StartPolicy {
             .map(|g| supply.iter().map(|(_, fractions)| fractions[g]).fold(f64::INFINITY, f64::min))
             .map(|value| if value.is_finite() { value } else { 0.0 })
             .collect();
-        let ceiling = input.grades.ceilings();
+        let ceiling = super::input::grade_ceilings(input);
 
         let fallback: BTreeMap<usize, f64> = (0..grades)
             .map(|g| {
@@ -316,12 +316,14 @@ impl IterationBudget {
 
 /// The good_lp row sink. Columns must all exist before the model is built, so
 /// rows are collected here and posted afterwards.
+type LinearRow = (Vec<(Variable, f64)>, f64, f64);
+
 struct HighsRows {
     variables: ProblemVariables,
     columns: BlendColumns<Variable>,
     sizes: BlendSizes,
     objective: Expression,
-    rows: Vec<(Vec<(Variable, f64)>, f64, f64)>,
+    rows: Vec<LinearRow>,
     estimates: Estimates,
 }
 
@@ -360,6 +362,7 @@ impl Rows for HighsRows {
             return;
         }
         self.sizes.linear_constraints += 1;
+        self.sizes.linear_coefficient_entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
         self.rows.push((terms, lhs, rhs));
     }
 

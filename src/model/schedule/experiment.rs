@@ -1,31 +1,27 @@
-//! Explicit configuration for the experimental blended-stockpile optimiser.
+//! Explicit configuration for the schedule optimiser.
 //!
 //! Everything here is authored, never inferred. The blended model in
-//! [`crate::model::schedule::optimisation::blended`] needs three things a
-//! project does not otherwise state:
+//! [`crate::model::schedule::optimisation::blended`] needs things a project
+//! does not otherwise state:
 //!
-//! - **How long to plan for, and at what resolution.** The dispatcher runs to
-//!   a period boundary; the optimiser solves a bounded horizon and has to be
-//!   told where it ends, because a bar may be open-ended and "the last bar's
-//!   end" is then not a number.
+//! - **How long to plan for, and at what resolution.** Run All Periods solves
+//!   a bounded horizon and has to be told where it ends, because a bar may be
+//!   open-ended and "the last bar's end" is then not a number.
 //! - **What a stockpile *is*.** Authored FIFO/LIFO lots are an ordered
 //!   inventory. The blended model is not, and the chunked variant is a third
 //!   thing again. Converting one into another silently would change what a
 //!   planner authored, so the representation is chosen per pile and defaults
-//!   to [`StockpileRepresentation::NotConfigured`] - which blocks capture of
-//!   a pile the run actually uses and blocks nothing else.
+//!   to [`StockpileRepresentation::NotConfigured`] - which blocks a run that
+//!   uses that pile and blocks nothing else.
 //! - **What a grade column means.** Nothing in a project records whether `Fe`
 //!   is `0.62` or `62`, and guessing from the name or the magnitude would
 //!   produce a blend that is wrong by two orders of magnitude while looking
 //!   plausible. The unit is stated per field.
 //!
 //! This is persisted with the plan and edited through ordinary undoable
-//! commands. It is *not* feature-gated: a project written by a build with the
-//! experiment enabled must round-trip through one without it, and a setting
-//! silently dropped on load is a setting the user cannot trust. Only the UI
-//! that shows it and the capture that reads it are gated.
-
-#![allow(dead_code, reason = "read by the feature-gated experimental capture and its Optimisation section; persisted in every build")]
+//! commands in every build, including the browser, where schedule
+//! calculation itself is unavailable. The persisted field keeps its original
+//! name, `experiment`, so older files open unchanged.
 
 use std::hash::Hash;
 
@@ -67,7 +63,7 @@ impl GradeUnit {
     }
 }
 
-/// How one stockpile's inventory is represented to the experimental model.
+/// How one stockpile's inventory is represented to the optimiser.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) enum StockpileRepresentation {
@@ -96,7 +92,7 @@ impl StockpileRepresentation {
     }
 }
 
-/// One stockpile's experimental settings.
+/// One stockpile's optimisation settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct StockpileExperiment {
@@ -117,8 +113,8 @@ impl StockpileExperiment {
     }
 }
 
-/// Everything the experimental optimiser is told that the rest of the plan
-/// does not already say.
+/// Everything the schedule optimiser is told that the rest of the plan does
+/// not already say.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ExperimentConfig {
@@ -129,6 +125,10 @@ pub(crate) struct ExperimentConfig {
     /// is *not* a limit of one dig block per interval, and a loader may move
     /// through several sources inside one interval.
     pub(crate) interval_h: f64,
+    /// Explicit maximum execution positions per calendar interval. None keeps
+    /// the derived budget and its existing model-size ceiling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) event_capacity: Option<usize>,
     /// Solver wall-clock budget. Preparation and replay sit outside it.
     pub(crate) solve_seconds: f64,
     pub(crate) relative_gap: f64,
@@ -145,6 +145,7 @@ impl Default for ExperimentConfig {
         Self {
             planning_end_day: DEFAULT_END_DAY,
             interval_h: DEFAULT_INTERVAL_H,
+            event_capacity: None,
             solve_seconds: DEFAULT_SOLVE_SECONDS,
             relative_gap: DEFAULT_RELATIVE_GAP,
             grades: Vec::new(),
@@ -162,7 +163,7 @@ fn checked_positive(value: f64) -> ScheduleResult<f64> {
 
 impl ExperimentConfig {
     /// Whether this says nothing a default would not, so an untouched project
-    /// carries no experimental settings into its file.
+    /// carries no optimisation settings into its file.
     pub(crate) fn is_pristine(&self) -> bool {
         *self == Self::default()
     }
@@ -195,6 +196,14 @@ impl ExperimentConfig {
 
     pub(crate) fn set_interval_h(&mut self, hours: f64) -> ScheduleResult {
         self.interval_h = checked_positive(hours)?;
+        Ok(())
+    }
+
+    pub(crate) fn set_event_capacity(&mut self, capacity: Option<usize>) -> ScheduleResult {
+        if capacity.is_some_and(|value| !(1..=super::optimisation::SEGMENT_CEILING).contains(&value)) {
+            return Err(ScheduleError::InvalidExperimentSetting);
+        }
+        self.event_capacity = capacity;
         Ok(())
     }
 
@@ -251,13 +260,37 @@ impl ExperimentConfig {
         self.stockpiles.retain(|(_, entry)| !entry.is_pristine());
     }
 
-    /// Everything that can change what the experimental model *is*. Ordered
-    /// and id-based; no name reaches this.
+    /// Every persisted setting, for the plan's own content hash. Ordered and
+    /// id-based; no name reaches this.
     pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
         self.planning_end_day.hash(hasher);
         self.interval_h.to_bits().hash(hasher);
+        self.event_capacity.hash(hasher);
         self.solve_seconds.to_bits().hash(hasher);
         self.relative_gap.to_bits().hash(hasher);
+        for (field, unit) in &self.grades {
+            field.0.hash(hasher);
+            unit.hash(hasher);
+        }
+        for (id, entry) in &self.stockpiles {
+            id.hash(hasher);
+            entry.representation.hash(hasher);
+            for capacity in &entry.receiving_chunks {
+                capacity.to_bits().hash(hasher);
+            }
+        }
+    }
+
+    /// Everything that can change what a calculated schedule *means*:
+    /// resolution, grade units and stockpile representation.
+    ///
+    /// Deliberately without the solve limits, which change how hard the
+    /// optimiser looks rather than the model it looks at, and without the
+    /// planning end day, which bounds a run's horizon rather than entering
+    /// the model.
+    pub(crate) fn hash_semantics<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        self.interval_h.to_bits().hash(hasher);
+        self.event_capacity.hash(hasher);
         for (field, unit) in &self.grades {
             field.0.hash(hasher);
             unit.hash(hasher);

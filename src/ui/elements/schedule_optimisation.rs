@@ -1,14 +1,10 @@
-//! The experimental Optimisation section: what the blended optimiser is told,
-//! and what its last run said.
+//! The Optimisation settings: what the schedule optimiser is told that the
+//! rest of the plan does not already say.
 //!
-//! Developer configuration, not final production UI. It reuses the property
-//! table every other Schedule page uses and builds nothing of its own: there
-//! is no stockpile designer here, and there is no second reporting tab.
-//!
-//! Nothing on this page reaches the dispatcher. Run Period, Run All Periods,
-//! the Gantt, the calendar production rows and the animation are unchanged by
-//! everything below; the answer is retained separately and labelled stale the
-//! moment an edit can have changed it.
+//! Settings only. Runs start from the Gantt and Calendar run controls, and
+//! their status is reported there; nothing here calculates. The settings are
+//! authored and persisted in every build, including the browser, where
+//! schedule calculation itself is unavailable.
 
 use crate::{
     i18n::tr,
@@ -21,7 +17,6 @@ use crate::{
     },
     ui::{
         EditorState,
-        fonts::bold,
         state::{ScheduleEdit, ScheduleExperimentDraft, UiCommand},
         widgets::data_grid::{PropertyTable, property_table_height},
     },
@@ -37,7 +32,7 @@ fn parse_positive(text: &str) -> Option<f64> {
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
-/// The settings table, the run controls, and the last result.
+/// The settings table.
 ///
 /// Returns the rect it consumed so the caller can lay out beneath it.
 pub(crate) fn draw_optimisation(
@@ -55,6 +50,7 @@ pub(crate) fn draw_optimisation(
         experiment.interval_h.to_bits(),
         experiment.solve_seconds.to_bits(),
         experiment.relative_gap.to_bits(),
+        experiment.event_capacity,
     );
     if editor.schedule_experiment_draft.as_ref().is_none_or(|draft| draft.source != source) {
         editor.schedule_experiment_draft = Some(ScheduleExperimentDraft {
@@ -63,11 +59,23 @@ pub(crate) fn draw_optimisation(
             interval_h: experiment.interval_h.to_string(),
             solve_seconds: experiment.solve_seconds.to_string(),
             relative_gap: experiment.relative_gap.to_string(),
+            event_capacity: experiment.event_capacity.map(|value| value.to_string()).unwrap_or_default(),
         });
     }
     let draft = editor.schedule_experiment_draft.as_mut().expect("just ensured");
     let end_day = draft.end_day.trim().parse::<u32>().ok().filter(|day| *day > 0);
     let interval_h = parse_positive(&draft.interval_h);
+    let event_capacity = if draft.event_capacity.trim().is_empty() {
+        Some(None)
+    } else {
+        draft
+            .event_capacity
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|value| (1..=crate::model::schedule::optimisation::SEGMENT_CEILING).contains(value))
+            .map(Some)
+    };
     let solve_seconds = parse_positive(&draft.solve_seconds);
     let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
@@ -80,13 +88,14 @@ pub(crate) fn draw_optimisation(
         .iter()
         .filter(|field| matches!(field.aggregation, ReserveAggregation::WeightedAverage { .. }))
         .collect();
-    let rows_used = 6 + candidates.len() + usize::from(candidates.is_empty());
+    let rows_used = 7 + candidates.len() + usize::from(candidates.is_empty());
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
     PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-section")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let response = rows.field(&tr!("experiment-end-day"), &mut draft.end_day, end_day.is_none().then_some(invalid.as_str()));
         let horizon_committed = response.lost_focus();
+        response.on_hover_text(tr!("experiment-end-day-help"));
         let response = rows.field(&tr!("experiment-interval"), &mut draft.interval_h, interval_h.is_none().then_some(invalid.as_str()));
         let interval_committed = response.lost_focus();
         response.on_hover_text(interval_help());
@@ -108,6 +117,19 @@ pub(crate) fn draw_optimisation(
             && (seconds != experiment.solve_seconds || relative_gap != experiment.relative_gap)
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap }));
+        }
+        let response = rows.field(
+            &tr!("experiment-event-capacity"),
+            &mut draft.event_capacity,
+            event_capacity.is_none().then_some(invalid.as_str()),
+        );
+        let committed = response.lost_focus();
+        response.on_hover_text(tr!("experiment-event-capacity-help"));
+        if committed
+            && let Some(capacity) = event_capacity
+            && capacity != experiment.event_capacity
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentEventCapacity { capacity }));
         }
         // A unit per grade, stated. Nothing here infers one from the field's
         // name or from how big its values happen to be.
@@ -134,63 +156,10 @@ pub(crate) fn draw_optimisation(
         }
     });
     commands.append(&mut edits);
-
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), table_rect.bottom() + ui.spacing().item_spacing.y),
-        egui::pos2(rect.right(), rect.bottom()),
-    );
-    if !body.is_positive() {
-        return table_rect;
-    }
-    let view = editor.experimental_blend.clone();
-    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
-        ui.set_clip_rect(ui.clip_rect().intersect(body));
-        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!view.running, egui::Button::new(tr!("experiment-run"))).clicked() {
-                    commands.push(UiCommand::RunExperimentalOptimisation);
-                }
-                if ui.add_enabled(view.running, egui::Button::new(tr!("experiment-cancel"))).clicked() {
-                    commands.push(UiCommand::CancelExperimentalOptimisation);
-                }
-                let phase = if view.running {
-                    tr!("experiment-phase-running")
-                } else if !view.have_result {
-                    tr!("experiment-phase-idle")
-                } else if view.current {
-                    tr!("experiment-phase-current")
-                } else {
-                    tr!("experiment-phase-stale")
-                };
-                ui.label(phase);
-            });
-            ui.add_space(6.0);
-            for (label, value) in &view.rows {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(bold(label)).truncate());
-                    ui.add(egui::Label::new(value).wrap());
-                });
-            }
-            if !view.notes.is_empty() {
-                ui.add_space(6.0);
-                ui.add(egui::Label::new(bold(&tr!("experiment-limitations"))).wrap());
-                for note in &view.notes {
-                    ui.add(egui::Label::new(egui::RichText::new(note).color(ui.visuals().weak_text_color())).wrap());
-                }
-            }
-            if !view.diagnostics.is_empty() {
-                ui.add_space(6.0);
-                ui.add(egui::Label::new(bold(&tr!("experiment-diagnostics"))).wrap());
-                for diagnostic in &view.diagnostics {
-                    ui.add(egui::Label::new(egui::RichText::new(diagnostic).color(ui.visuals().error_fg_color)).wrap());
-                }
-            }
-        });
-    });
     table_rect
 }
 
-/// The two experimental rows on one stockpile's Setup page.
+/// The optimisation rows on one stockpile's Setup page.
 ///
 /// Appended to the pile's own property table rather than given a page of
 /// their own: a representation is a property of one stockpile, exactly as its

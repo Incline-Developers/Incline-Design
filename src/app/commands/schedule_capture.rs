@@ -38,9 +38,10 @@
 //! rows exist.
 //!
 //! Conditions on *dug* material are not approximated at all: the contributing
-//! rows' own values are known at capture, exactly as
-//! [`super::schedule_routing`] reads them, so every rule form is supported
-//! there.
+//! block-model rows' own values are known at capture - each portion's mapped
+//! values before spatial proration, so a rule naming a category and a grade
+//! asks whether they occur in the *same* material - and every rule form is
+//! supported there.
 
 use std::{
     collections::BTreeMap,
@@ -75,6 +76,7 @@ use crate::{
             trucking,
         },
     },
+    ui::state::ScheduleStep,
 };
 
 /// One reason capture stopped, against the item a planner can act on.
@@ -88,6 +90,8 @@ pub(crate) struct CaptureDiagnostic {
     pub(crate) message: String,
     /// How many items produced this same diagnostic. `1` for most.
     pub(crate) occurrences: usize,
+    /// The Schedule Setup step that owns the repair, when there is one.
+    pub(crate) repair: Option<ScheduleStep>,
 }
 
 impl CaptureDiagnostic {
@@ -96,15 +100,23 @@ impl CaptureDiagnostic {
             subject: Some(subject.into()),
             message: message.into(),
             occurrences: 1,
+            repair: None,
         }
     }
 
-    fn global(message: impl Into<String>) -> Self {
+    pub(crate) fn global(message: impl Into<String>) -> Self {
         Self {
             subject: None,
             message: message.into(),
             occurrences: 1,
+            repair: None,
         }
+    }
+
+    /// Name the setup step that repairs this.
+    pub(crate) fn at(mut self, step: ScheduleStep) -> Self {
+        self.repair = Some(step);
+        self
     }
 
     pub(crate) fn describe(&self) -> String {
@@ -150,7 +162,21 @@ pub(crate) struct CaptureIdentities {
     /// Each captured ground source: the dig block it came from and how many
     /// distinct captured materials that block holds.
     pub(crate) ground: Vec<(GroundId, String, usize)>,
+    /// The Solids-run block each captured ground source is.
+    pub(crate) ground_blocks: BTreeMap<GroundId, crate::model::DigBlockId>,
     pub(crate) grades: Vec<(ReserveFieldId, String, GradeUnit)>,
+    /// Each scoped dig bar's resolved blocks, in authored order.
+    pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
+    /// Each scoped reclaim bar's cap.
+    pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
+    /// Every stockpile's authored opening tonnes, whether or not the run uses
+    /// it, so an untouched pile still reports the stock it holds.
+    pub(crate) pile_openings: Vec<(ProjectDestinationId, f64)>,
+    /// What each chunk of a chunked pile is, by position.
+    pub(crate) chunk_labels: BTreeMap<StockpileId, Vec<String>>,
+    /// How many of a chunked pile's chunks hold opening lots; the rest
+    /// receive.
+    pub(crate) opening_chunks: BTreeMap<StockpileId, usize>,
 }
 
 /// Measured facts about the capture itself, for the completion report.
@@ -160,13 +186,12 @@ pub(crate) struct CaptureStats {
     pub(crate) candidates: usize,
     pub(crate) ground_sources: usize,
     /// Dig blocks holding more than one captured material, each captured as
-    /// one block dug in its measured proportions.
+    /// one block dug in its measured proportions. Stated to the user through
+    /// the capture notes; the count is what the capture checks assert.
+    #[cfg_attr(not(test), allow(dead_code, reason = "asserted by the capture checks; the user reads the note"))]
     pub(crate) mixed_blocks: usize,
     /// Whether the derived event budget hit [`SEGMENT_CEILING`].
     pub(crate) event_budget_restricted: bool,
-    /// Estimated model size, so an unbounded capture is refused rather than
-    /// allocated.
-    pub(crate) estimated_columns: usize,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -188,28 +213,16 @@ pub(crate) struct BlendCapture {
 /// against this and consults no live project state.
 pub(crate) struct CaptureSnapshot {
     pub(crate) runtime: u32,
+    /// The horizon this run was asked to cover, from project hour zero.
+    pub(crate) horizon_h: f64,
     pub(crate) generation: u64,
     pub(crate) plan_revision: u64,
-    pub(crate) fleet_revision: u64,
     plan: SchedulePlan,
     fields: Vec<ReserveField>,
     tonnage_field: ReserveFieldId,
     destinations: Vec<DestinationView>,
     snapshot: Arc<PlanningSnapshot>,
     reports: Arc<Vec<BarReport>>,
-}
-
-impl CaptureSnapshot {
-    /// The Setup run this capture was taken against, so the caller can gate
-    /// publication on exactly the inputs the model was built from.
-    pub(crate) fn inputs(&self) -> crate::app::schedule_pipeline::ScheduleRunInputs {
-        crate::app::schedule_pipeline::ScheduleRunInputs {
-            runtime: self.runtime,
-            generation: self.generation,
-            fleet_revision: self.fleet_revision,
-            tonnage_field: self.tonnage_field,
-        }
-    }
 }
 
 /// Cap on the estimated column count, so a horizon somebody typed three extra
@@ -251,8 +264,8 @@ struct GroundContext {
 }
 
 impl GroundContext {
-    /// One field's value on this material, read exactly as
-    /// [`super::schedule_routing`] reads it.
+    /// One field's value on this material: the portion's own mapped value,
+    /// never the block's average.
     fn value(&self, field: ReserveFieldId) -> Option<PortionValue> {
         let position = self.capture.position(field)?;
         let value = self.values[position];
@@ -270,11 +283,11 @@ impl GroundContext {
 }
 
 impl crate::app::App<'_> {
-    /// Take the owned configuration snapshot one experimental run reads.
+    /// Take the owned configuration snapshot one schedule run reads.
     ///
     /// Bounded: it clones the plan and the field list, borrows the cached
     /// planning snapshot and reports through `Arc`, and resolves no candidate.
-    pub(crate) fn capture_experimental_snapshot(&mut self) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
+    pub(crate) fn capture_schedule_snapshot(&mut self, horizon_h: f64) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => return Err(vec![CaptureDiagnostic::global(reason.describe())]),
@@ -295,8 +308,8 @@ impl crate::app::App<'_> {
         let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
         Ok(CaptureSnapshot {
             runtime: project.runtime_id,
+            horizon_h,
             generation: inputs.generation,
-            fleet_revision: inputs.fleet_revision,
             plan_revision,
             plan,
             fields: document.reserve_fields().to_vec(),
@@ -321,14 +334,39 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let routing = plan.routing();
 
     // ---- horizon -----------------------------------------------------------
-    let horizon_h = f64::from(experiment.planning_end_day) * SCHEDULE_PERIOD_H;
-    if experiment.planning_end_day == 0 || !horizon_h.is_finite() || horizon_h <= 0.0 {
-        return Err(vec![CaptureDiagnostic::global(
-            "the experimental planning horizon is not a finite, positive number of days",
-        )]);
+    // Requested by the run, never inferred from where the bars end: an
+    // open-ended bar has no end, and the planning end day bounds it.
+    let horizon_h = source.horizon_h;
+    if !horizon_h.is_finite() || horizon_h <= 0.0 {
+        return Err(vec![
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-horizon")).at(ScheduleStep::Configuration),
+        ]);
     }
     if !experiment.interval_h.is_finite() || experiment.interval_h <= 0.0 {
-        return Err(vec![CaptureDiagnostic::global("the experimental calendar interval is not finite and positive")]);
+        return Err(vec![
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-interval")).at(ScheduleStep::Configuration),
+        ]);
+    }
+    // The optimiser accounts for every tonne by destination. An older project
+    // that switched routing off is told so and pointed at the switch; it is
+    // never switched on for it, and there is no dig-only fallback.
+    if !routing.enabled {
+        return Err(vec![
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-routing-off")).at(ScheduleStep::Configuration),
+        ]);
+    }
+    // Every report must come from the one Solids run the Setup gate named: a
+    // model assembled from two runs would describe ground that was never all
+    // there at once.
+    if source.reports.len() != plan.bars().len()
+        || source
+            .reports
+            .iter()
+            .any(|report| report.generation.is_some_and(|generation| generation != source.generation))
+    {
+        return Err(vec![
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-dispatch-generation-changed")).at(ScheduleStep::Readiness),
+        ]);
     }
 
     // ---- bars in scope -----------------------------------------------------
@@ -394,7 +432,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         });
     }
     if scoped.is_empty() && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global("no assigned bar has work inside the experimental horizon"));
+        problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-work")));
     }
 
     // ---- grades ------------------------------------------------------------
@@ -408,7 +446,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         match GradeField::accept(*field, basis, &source.fields, Some(source.tonnage_field)) {
             Ok(accepted) => grade_fields.push(accepted),
-            Err(rejection) => problems.push(CaptureDiagnostic::new(field_name(&source.fields, *field), rejection.message())),
+            Err(rejection) => problems.push(CaptureDiagnostic::new(field_name(&source.fields, *field), rejection.message()).at(ScheduleStep::Configuration)),
         }
     }
 
@@ -417,7 +455,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let mut destinations: Vec<Destination> = Vec::new();
     let mut pile_ids: BTreeMap<ProjectDestinationId, StockpileId> = BTreeMap::new();
     let mut identities = CaptureIdentities::default();
-    let days = experiment.planning_end_day as usize;
+    let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as usize;
     for view in &source.destinations {
         let dense = DestinationId(destinations.len() as u32);
         destination_ids.insert(view.id, dense);
@@ -428,6 +466,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             ProjectDestinationKind::Stockpile => {
                 let pile = StockpileId(pile_ids.len() as u32);
                 pile_ids.insert(view.id, pile);
+                identities.pile_openings.push((view.id, view.opening_t));
                 identities.piles.push((pile, view.id, view.name.clone()));
                 DestinationKind::Stockpile(pile)
             }
@@ -445,6 +484,20 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             capacity_t: view.capacity_t,
             crusher_daily_t,
         });
+    }
+
+    // A rule restricted to ground the Solids run cannot place no longer
+    // restricts what it was written to restrict: a configuration error, not a
+    // rule that quietly widened.
+    for rule in routing.rules.iter().filter(|rule| rule.enabled) {
+        if let crate::model::schedule::MovementSourceSelection::Only(scopes) = &rule.sources
+            && scopes
+                .iter()
+                .filter_map(|scope| scope.ground())
+                .any(|scope| !scope_is_placeable(scope, &source.snapshot.blocks))
+        {
+            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("routing-problem-scope-unplaced", rule = rule.name.clone())).at(ScheduleStep::Destinations));
+        }
     }
 
     // ---- which stockpiles this run actually uses ---------------------------
@@ -482,20 +535,20 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let Some(&pile) = pile_ids.get(project_id) else { continue };
         let representation = experiment.representation(*project_id);
         if representation == StockpileRepresentation::NotConfigured {
-            problems.push(CaptureDiagnostic::new(view.name.clone(), "choose a stockpile representation"));
+            problems.push(CaptureDiagnostic::new(view.name.clone(), crate::i18n::tr!("schedule-capture-representation")).at(ScheduleStep::Stockpiles));
             continue;
         }
         let Some(capacity_t) = view.capacity_t else {
-            problems.push(CaptureDiagnostic::new(
-                view.name.clone(),
-                "the blended model needs a finite pile capacity, because occupancy is a constraint in it",
-            ));
+            problems.push(
+                CaptureDiagnostic::new(view.name.clone(), "the blended model needs a finite pile capacity, because occupancy is a constraint in it").at(ScheduleStep::Stockpiles),
+            );
             continue;
         };
         // Opening lots, read exactly as authored. A missing grade is missing,
         // never zero.
         let inventory = routing.inventory(*project_id);
         let mut lots: Vec<(f64, Vec<f64>)> = Vec::new();
+        let mut lot_names: Vec<String> = Vec::new();
         for lot in inventory.map(|inventory| inventory.lots.as_slice()).unwrap_or_default() {
             let mut tonnes = 0.0;
             let mut contained = vec![0.0; grades];
@@ -505,20 +558,26 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     let value = match portion.value(grade.field).map(|value| value.portion_value()) {
                         Some(PortionValue::Number(value)) => value,
                         _ => {
-                            problems.push(CaptureDiagnostic::new(
-                                format!("{} · {}", view.name.clone(), lot.name.clone()),
-                                format!("'{}' is missing on an opening portion; a missing grade cannot be read as zero", grade.name),
-                            ));
+                            problems.push(
+                                CaptureDiagnostic::new(
+                                    format!("{} · {}", view.name.clone(), lot.name.clone()),
+                                    format!("'{}' is missing on an opening portion; a missing grade cannot be read as zero", grade.name),
+                                )
+                                .at(ScheduleStep::Stockpiles),
+                            );
                             sound = false;
                             continue;
                         }
                     };
                     let fraction = grade.basis.to_fraction(value);
                     if !(0.0..=1.0).contains(&fraction) {
-                        problems.push(CaptureDiagnostic::new(
-                            format!("{} · {}", view.name.clone(), lot.name.clone()),
-                            format!("'{}' is {value}, which is outside the range its declared unit allows", grade.name),
-                        ));
+                        problems.push(
+                            CaptureDiagnostic::new(
+                                format!("{} · {}", view.name.clone(), lot.name.clone()),
+                                format!("'{}' is {value}, which is outside the range its declared unit allows", grade.name),
+                            )
+                            .at(ScheduleStep::Stockpiles),
+                        );
                         sound = false;
                         continue;
                     }
@@ -528,14 +587,18 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
             if sound {
                 lots.push((tonnes, contained));
+                lot_names.push(lot.name.clone());
             }
         }
         let total_opening: f64 = lots.iter().map(|(tonnes, _)| tonnes).sum();
         if total_opening > capacity_t + 1e-6 {
-            problems.push(CaptureDiagnostic::new(
-                view.name.clone(),
-                format!("opening stock of {total_opening:.2} t exceeds the pile capacity of {capacity_t:.2} t"),
-            ));
+            problems.push(
+                CaptureDiagnostic::new(
+                    view.name.clone(),
+                    format!("opening stock of {total_opening:.2} t exceeds the pile capacity of {capacity_t:.2} t"),
+                )
+                .at(ScheduleStep::Stockpiles),
+            );
             continue;
         }
         let mut blend = BlendPile {
@@ -578,6 +641,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 if receiving.is_empty() {
                     notes.push(format!("{}: no receiving chunks are configured, so this pile can only be drawn down", view.name));
                 }
+                let mut labels: Vec<String> = lot_names.iter().map(|name| crate::i18n::tr!("schedule-chunk-opening", lot = name.clone())).collect();
+                labels.extend((1..=receiving.len()).map(|number| crate::i18n::tr!("schedule-chunk-receiving", number = number.to_string())));
+                identities.chunk_labels.insert(pile, labels);
+                identities.opening_chunks.insert(pile, lots.len());
                 blend.chunks = capacities;
                 blend.chunk_opening = openings;
             }
@@ -597,11 +664,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let mut context: BTreeMap<(GroundId, MaterialId), GroundContext> = BTreeMap::new();
     let mut mixed_blocks = 0;
     let mut wanted_blocks: Vec<usize> = Vec::new();
+    let mut measured: BTreeMap<usize, f64> = BTreeMap::new();
     for bar in &scoped {
         if let ScopedWork::Dig { members } = &bar.work {
-            for (position, _) in members {
+            for (position, tonnes) in members {
                 if !wanted_blocks.contains(position) {
                     wanted_blocks.push(*position);
+                    measured.insert(*position, *tonnes);
                 }
             }
         }
@@ -705,6 +774,23 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             problems.push(CaptureDiagnostic::new(block.name.clone(), "this block measured no tonnes of the nominated field"));
             continue;
         }
+        // The portions come from the same scan as the block's measured total,
+        // so a disagreement beyond rounding means they are not describing the
+        // same measurement - and the model would dig tonnes nobody measured.
+        if let Some(&total) = measured.get(&position)
+            && (block_tonnes - total).abs() > 1e-6 + 1e-6 * total.abs()
+        {
+            problems.push(
+                CaptureDiagnostic::global(crate::i18n::tr!(
+                    "routing-problem-unreconciled",
+                    block = block.name.clone(),
+                    portions = format!("{block_tonnes:.3}"),
+                    total = format!("{total:.3}")
+                ))
+                .at(ScheduleStep::Readiness),
+            );
+            continue;
+        }
         for share in &mut shares {
             share.fraction /= block_tonnes;
         }
@@ -718,6 +804,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             material: shares,
         });
         block_ground.insert(position, id);
+        identities.ground_blocks.insert(id, block.id);
     }
     if mixed_blocks > 0 {
         notes.push(format!(
@@ -750,11 +837,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             continue;
         }
         let Some(agent) = plan.agent(bar.agent) else {
-            problems.push(CaptureDiagnostic::new(bar.name.clone(), "this bar's loader is no longer in the project"));
+            problems.push(CaptureDiagnostic::new(bar.name.clone(), "this bar's loader is no longer in the project").at(ScheduleStep::LoaderAgents));
             continue;
         };
         let Some(class) = plan.class(agent.class_id) else {
-            problems.push(CaptureDiagnostic::new(agent.name.clone(), "this loader's class is no longer in the project"));
+            problems.push(CaptureDiagnostic::new(agent.name.clone(), "this loader's class is no longer in the project").at(ScheduleStep::LoaderAgents));
             continue;
         };
         let dig = match agent.calendar.compile_rate(RateKind::Dig, class.default_dig_rate_tph) {
@@ -826,7 +913,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let intervals = match build_intervals(spec, &windows, &rate_changes) {
         Ok(intervals) => intervals,
         Err(error) => {
-            problems.push(CaptureDiagnostic::global(format!("the experimental calendar could not be built: {error:?}")));
+            problems.push(CaptureDiagnostic::global(format!("the schedule calendar could not be built: {error:?}")).at(ScheduleStep::Configuration));
             Vec::new()
         }
     };
@@ -860,7 +947,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             match trucking::available_truck_hours(&class.calendar, interval.start_h, interval.end_h) {
                 Ok(value) => hours.push(value),
                 Err(error) => {
-                    problems.push(CaptureDiagnostic::new(class.name.clone(), error.message()));
+                    problems.push(CaptureDiagnostic::new(class.name.clone(), error.message()).at(ScheduleStep::TruckClasses));
                     hours.push(0.0);
                 }
             }
@@ -883,6 +970,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 if sequence.is_empty() {
                     continue;
                 }
+                identities
+                    .bar_blocks
+                    .push((bar.bar, members.iter().map(|(position, _)| source.snapshot.blocks[*position].id).collect()));
                 TaskKind::Dig { sequence }
             }
             ScopedWork::Reclaim { sources, maximum_t } => {
@@ -902,6 +992,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 if approved_sources.len() != sources.len() {
                     continue;
                 }
+                identities.reclaim_caps.push((bar.bar, *maximum_t));
                 TaskKind::Reclaim {
                     approved_sources,
                     maximum_t: *maximum_t,
@@ -924,6 +1015,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // preference the optimiser is free to trade against capacity, not a
     // reason to leave a later permitted destination out.
     let mut movements: Vec<MovementCandidate> = Vec::new();
+    let mut rehandle_rules: Vec<crate::model::schedule::RuleId> = Vec::new();
     let mut qualifications: Vec<GradeQualification> = Vec::new();
     let mut conditional_values: Vec<ConditionalValue> = Vec::new();
     let cashflow = plan.cashflow();
@@ -968,10 +1060,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             // A block moves in proportion, so an unroutable
                             // portion stops the whole block rather than leaving
                             // its share behind.
-                            problems.push(CaptureDiagnostic::new(
-                                format!("{} · {}", loader_name.clone(), portion_name(&identities, source, held.portion)),
-                                "no enabled destination rule accepts this part of the block, and the rest of the block cannot be dug without it",
-                            ));
+                            problems.push(
+                                CaptureDiagnostic::new(
+                                    format!("{} · {}", loader_name.clone(), portion_name(&identities, source, held.portion)),
+                                    "no enabled destination rule accepts this part of the block, and the rest of the block cannot be dug without it",
+                                )
+                                .at(ScheduleStep::Destinations),
+                            );
                             continue;
                         }
                         for (destination, rule, preference) in offered {
@@ -1026,11 +1121,22 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             continue;
                         }
                         for destination in &rule.destinations {
+                            // Rehandling from one pile into another (or into
+                            // itself) is not modelled: a reclaimed blend has
+                            // no captured material for the receiving pile to
+                            // hold. Stated, never silently dropped.
+                            if pile_ids.contains_key(destination) {
+                                if !rehandle_rules.contains(&rule.id) {
+                                    rehandle_rules.push(rule.id);
+                                    notes.push(crate::i18n::tr!("schedule-capture-rehandle", rule = rule.name.clone()));
+                                }
+                                continue;
+                            }
                             let dense = destination_ids[destination];
                             let bounds = match reclaim_conditions(&rule.conditions, &grade_fields, fields) {
                                 Ok(bounds) => bounds,
                                 Err(reason) => {
-                                    problems.push(CaptureDiagnostic::new(rule.name.clone(), reason));
+                                    problems.push(CaptureDiagnostic::new(rule.name.clone(), reason).at(ScheduleStep::Destinations));
                                     continue;
                                 }
                             };
@@ -1060,10 +1166,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                         }
                     }
                     if offered.is_empty() {
-                        problems.push(CaptureDiagnostic::new(
-                            format!("{} · {}", loader_name.clone(), pile_name.clone()),
-                            "no enabled destination rule accepts material reclaimed from this stockpile",
-                        ));
+                        problems.push(
+                            CaptureDiagnostic::new(
+                                format!("{} · {}", loader_name.clone(), pile_name.clone()),
+                                "no enabled destination rule accepts material reclaimed from this stockpile",
+                            )
+                            .at(ScheduleStep::Destinations),
+                        );
                         continue;
                     }
                     for (destination, rule, preference) in offered {
@@ -1104,16 +1213,22 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
 
     // ---- event budget and size guard ---------------------------------------
     let derived = derived_segments(&intervals, &loaders, &tasks, &movements);
-    let event_budget_restricted = derived > SEGMENT_CEILING;
-    let segments_per_interval = derived.clamp(1, SEGMENT_CEILING);
+    let event_capacity = experiment.event_capacity.unwrap_or(SEGMENT_CEILING);
+    if !(1..=SEGMENT_CEILING).contains(&event_capacity) {
+        return Err(vec![
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-event-capacity")).at(ScheduleStep::Configuration),
+        ]);
+    }
+    let event_budget_restricted = derived > event_capacity;
+    let segments_per_interval = derived.clamp(1, event_capacity);
     let estimated_columns = movements.len().saturating_mul(intervals.len()).saturating_mul(segments_per_interval);
     if estimated_columns > COLUMN_CEILING {
         problems.push(CaptureDiagnostic::global(format!(
-            "this horizon and resolution would build about {estimated_columns} movement columns, beyond the {COLUMN_CEILING} this experiment allows; shorten the horizon or widen the interval"
-        )));
+            "this horizon and resolution would build about {estimated_columns} movement columns, beyond the {COLUMN_CEILING} a run allows; shorten the horizon or widen the interval"
+        )).at(ScheduleStep::Configuration));
     }
     if movements.is_empty() && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global("no movement is permitted by the current rules, so there is nothing to optimise"));
+        problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
     }
     if !problems.is_empty() {
         return Err(problems.entries);
@@ -1140,7 +1255,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         ground_sources: input.ground.len(),
         mixed_blocks,
         event_budget_restricted,
-        estimated_columns,
     };
     let fingerprint = fingerprint(source, &input);
     Ok(BlendCapture {
@@ -1199,10 +1313,13 @@ fn expand_candidate(
     };
     let classes = fleet.allowed_classes(context);
     if classes.is_empty() {
-        problems.push(CaptureDiagnostic::new(
-            format!("{} · {}", args.loader_name, args.subject),
-            "no compatible truck class serves this route, so nothing can be hauled on it",
-        ));
+        problems.push(
+            CaptureDiagnostic::new(
+                format!("{} · {}", args.loader_name, args.subject),
+                "no compatible truck class serves this route, so nothing can be hauled on it",
+            )
+            .at(ScheduleStep::TruckingRules),
+        );
         return;
     }
     let distance_km = routing.distance_km(args.destination);
@@ -1227,7 +1344,7 @@ fn expand_candidate(
             } else {
                 match reclaim_conditions(&rule.conditions, grades, fields) {
                     Ok(bounds) => conditioned.push((CashflowRuleId(rule.id.0 as u32), rule.value_per_tonne, bounds)),
-                    Err(reason) => problems.push(CaptureDiagnostic::new(rule.name.clone(), reason)),
+                    Err(reason) => problems.push(CaptureDiagnostic::new(rule.name.clone(), reason).at(ScheduleStep::Cashflow)),
                 }
             }
         }
@@ -1243,7 +1360,7 @@ fn expand_candidate(
                 })
                 .collect(),
             Err(error) => {
-                problems.push(CaptureDiagnostic::new(args.subject.clone(), error.message()));
+                problems.push(CaptureDiagnostic::new(args.subject.clone(), error.message()).at(ScheduleStep::Cashflow));
                 return;
             }
         }
@@ -1253,7 +1370,7 @@ fn expand_candidate(
         let coefficients = match trucking::coefficients(definition, context, distance_km) {
             Ok(coefficients) => coefficients,
             Err(error) => {
-                problems.push(CaptureDiagnostic::new(definition.name.clone(), error.message()));
+                problems.push(CaptureDiagnostic::new(definition.name.clone(), error.message()).at(ScheduleStep::TruckClasses));
                 continue;
             }
         };
@@ -1325,12 +1442,19 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
 
 /// The per-interval execution-segment budget, by the same union-bound rule
 /// the accepted backend derives its own from: one, plus each loader's own
-/// internal source transitions, because the event clock is shared and
-/// distinct loaders' boundaries need not coincide.
+/// internal transitions, because the event clock is shared and distinct
+/// loaders' boundaries need not coincide.
+///
+/// A loader works the blocks of one bar's sequence back to back inside a
+/// segment, so a dig bar needs a segment of its own, not one per block. The
+/// exception is a block another loader can also dig: the next block waits
+/// for a segment boundary after it, so that transition still counts. A
+/// reclaim bar keeps one per approved pile.
 ///
 /// Returns the derived figure *before* the shared [`SEGMENT_CEILING`] guard
 /// is applied, so the caller can report that the budget was restricted.
 fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], movements: &[MovementCandidate]) -> usize {
+    let digs = |loader: LoaderId, ground: GroundId| movements.iter().any(|candidate| candidate.loader == loader && candidate.source == SourceId::Ground(ground));
     let mut highest = 1;
     for interval in intervals {
         let mut budget = 1;
@@ -1338,32 +1462,36 @@ fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], 
             let rate = loader.rates.get(interval.index);
             let can_dig = rate.is_some_and(|rate| rate.dig_tph > 0.0);
             let can_reclaim = rate.is_some_and(|rate| rate.reclaim_tph > 0.0);
-            let mut sources: Vec<SourceId> = Vec::new();
+            let mut phases = 0usize;
+            let mut piles: Vec<StockpileId> = Vec::new();
             for task in tasks.iter().filter(|task| task.loader == loader.id) {
                 if task.window_start_h > interval.start_h + 1e-9 || task.window_end_h < interval.end_h - 1e-9 {
                     continue;
                 }
                 match &task.kind {
                     TaskKind::Dig { sequence } if can_dig => {
-                        for ground in sequence {
-                            let source = SourceId::Ground(*ground);
-                            if !sources.contains(&source) && movements.iter().any(|candidate| candidate.loader == loader.id && candidate.source == source) {
-                                sources.push(source);
-                            }
+                        let worked: Vec<GroundId> = sequence.iter().copied().filter(|ground| digs(loader.id, *ground)).collect();
+                        if worked.is_empty() {
+                            continue;
                         }
+                        let shared = worked
+                            .windows(2)
+                            .filter(|pair| loaders.iter().any(|other| other.id != loader.id && digs(other.id, pair[0])))
+                            .count();
+                        phases += 1 + shared;
                     }
                     TaskKind::Reclaim { approved_sources, .. } if can_reclaim => {
                         for pile in approved_sources {
                             let source = SourceId::Stockpile(*pile);
-                            if !sources.contains(&source) && movements.iter().any(|candidate| candidate.loader == loader.id && candidate.source == source) {
-                                sources.push(source);
+                            if !piles.contains(pile) && movements.iter().any(|candidate| candidate.loader == loader.id && candidate.source == source) {
+                                piles.push(*pile);
                             }
                         }
                     }
                     _ => {}
                 }
             }
-            budget += sources.len().saturating_sub(1);
+            budget += (phases + piles.len()).saturating_sub(1);
         }
         highest = highest.max(budget);
     }
@@ -1537,6 +1665,18 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     hasher.finish()
 }
 
+/// Whether one scope is placeable against the blocks a run produced.
+///
+/// A scope that is not is reported against the rule that names it rather than
+/// repaired: a scope whose bench has been re-cut is a rule that no longer
+/// restricts what it was written to restrict, and silently widening it would
+/// route material somewhere nobody chose.
+fn scope_is_placeable(scope: crate::model::schedule::SourceScope, blocks: &[crate::app::commands::solids_view::DigBlockRecord]) -> bool {
+    blocks
+        .iter()
+        .any(|block| scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top)))
+}
+
 fn field_name(fields: &[ReserveField], id: ReserveFieldId) -> String {
     fields
         .iter()
@@ -1563,9 +1703,10 @@ impl CaptureSnapshot {
     ) -> Self {
         Self {
             runtime: 1,
+            // Run All Periods: the whole configured horizon.
+            horizon_h: f64::from(plan.experiment().planning_end_day) * SCHEDULE_PERIOD_H,
             generation: 9,
             plan_revision: 5,
-            fleet_revision: 3,
             plan,
             fields,
             tonnage_field,
@@ -2054,7 +2195,7 @@ mod project_capture_checks {
             .iter()
             .map(CaptureDiagnostic::describe)
             .collect();
-        assert!(described.iter().any(|entry| entry.starts_with("SP01: choose a stockpile representation")), "{described:?}");
+        assert!(described.iter().any(|entry| entry.starts_with("SP01: Choose a representation")), "{described:?}");
 
         // A grade with no unit mapping: the opening lot's Fe is then not a
         // tracked grade at all, and the crusher rule can no longer be
@@ -2174,7 +2315,6 @@ mod project_capture_checks {
     /// cut so the horizon stops it partway through that block. The solver
     /// must not take only the attractive half, and what it leaves behind must
     /// still be the block's measured composition.
-    #[cfg(feature = "scip-code")]
     #[test]
     fn a_mixed_block_is_mined_in_proportion_even_when_only_part_of_it_pays() {
         use std::time::Duration;
@@ -2277,7 +2417,6 @@ mod project_capture_checks {
     ///
     /// Also item 3 in its strongest form: the tonnes and grades the answer
     /// moves are reconciled against the project's own figures.
-    #[cfg(feature = "scip-code")]
     #[test]
     fn the_captured_model_solves_and_replays_against_the_project_figures() {
         use std::time::Duration;

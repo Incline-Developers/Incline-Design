@@ -18,12 +18,12 @@
 //! disagreement between them is detectable.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, task_authorises};
-use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -146,6 +146,50 @@ pub(crate) struct ReplayReport {
     pub(crate) chunk_dust_tonnes_t: f64,
     pub(crate) chunk_dust_threshold_t: f64,
     pub(crate) closing: Vec<ClosingState>,
+    /// Conditional-value deliveries whose blend lay within
+    /// [`super::input::GRADE_MARGIN`] of one of the rule's boundaries, where
+    /// the model values the rule conservatively (see `GRADE_MARGIN`). The
+    /// published objective uses the authored boundary; `boundary_value_slack`
+    /// bounds how far that can exceed the model's own objective.
+    pub(crate) boundary_rows: usize,
+    pub(crate) boundary_tonnes_t: f64,
+    pub(crate) boundary_value_slack: f64,
+    /// How far the model's own objective can overstate the published one
+    /// through conditional-value indicators, derived rather than chosen.
+    ///
+    /// Each conditional payment is gated by a big-M row, `paid <= M x
+    /// indicator` (or its mirror for a cost), and a binary may sit one
+    /// integrality tolerance off its value; so a row can be credited up to
+    /// `M x tolerance` tonnes the authored rule would not pay - never more
+    /// than the row itself moved. This is that leak, summed, at the authored
+    /// value per tonne. The published objective is still the authored one;
+    /// this only bounds how far the solver's raw figure may sit above it.
+    pub(crate) indicator_leak_value: f64,
+    /// The authored bar each published movement row was worked under,
+    /// aligned with [`BlendSolution::movements`] and recomputed from the
+    /// replayed physical state: the highest-priority ready bar that
+    /// authorises the row's source. `None` only for a row no bar authorises,
+    /// which is itself reported as an issue.
+    pub(crate) row_tasks: Vec<Option<crate::model::schedule::optimisation::TaskId>>,
+    /// Every pile's replayed state across every interval, keyed
+    /// `(pile, interval)`, so publication reads balances and blends off the
+    /// replay instead of recomputing them a second way.
+    pub(crate) pile_intervals: BTreeMap<(StockpileId, usize), PileInterval>,
+}
+
+/// One pile's replayed balance over one interval.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PileInterval {
+    pub(crate) opening_t: f64,
+    pub(crate) received_t: f64,
+    pub(crate) reclaimed_t: f64,
+    pub(crate) closing_t: f64,
+    /// Contained quantity per grade at the interval's close.
+    pub(crate) closing_q: Vec<f64>,
+    /// The blend this interval's reclaim actually carried: the released
+    /// opening blend for an unchunked pile, the drawn chunks' blend for a
+    /// chunked one. Empty when nothing was reclaimed.
+    pub(crate) delivered_blend: Vec<f64>,
 }
 
 impl ReplayReport {
@@ -338,6 +382,64 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
     }
 
+    // ---- authored dig-block order -------------------------------------------
+    // Walked cell by cell from the rows. A loader may work several blocks of
+    // its sequence back to back inside one segment, so the later block needs
+    // the earlier one gone by the end of the same cell - unless another
+    // loader also dug the earlier block in that cell, when nothing says who
+    // finished it first and the earlier block must be gone a cell before.
+    {
+        let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+        let tolerance = |ground| {
+            input
+                .ground
+                .iter()
+                .find(|source| source.id == ground)
+                .map_or(REPLAY_TOLERANCE_T, |source| indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T))
+        };
+        for interval in &input.intervals {
+            if checker.cancelled() {
+                return None;
+            }
+            for segment in 0..segments {
+                let before = remaining.clone();
+                // Tonnes each (loader, block) dug in this cell.
+                let mut dug: BTreeMap<_, f64> = BTreeMap::new();
+                for row in by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default() {
+                    let Some(candidate) = input.movements.get(row.candidate) else { continue };
+                    let SourceId::Ground(ground) = candidate.source else { continue };
+                    if candidate.activity != Activity::Dig {
+                        continue;
+                    }
+                    *dug.entry((candidate.loader, ground)).or_default() += row.tonnes_t;
+                    if let Some(slot) = remaining.get_mut(&ground) {
+                        *slot -= row.tonnes_t;
+                    }
+                }
+                for task in &input.tasks {
+                    let TaskKind::Dig { sequence } = &task.kind else { continue };
+                    for pair in sequence.windows(2) {
+                        let [earlier, later] = pair else { continue };
+                        if dug.get(&(task.loader, *later)).copied().unwrap_or(0.0) <= REPLAY_TOLERANCE_T {
+                            continue;
+                        }
+                        let Some(&left) = remaining.get(earlier) else { continue };
+                        let shared = dug
+                            .iter()
+                            .any(|(&(loader, ground), &tonnes)| loader != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
+                        let left = if shared { before.get(earlier).copied().unwrap_or(0.0) } else { left };
+                        if left > tolerance(*earlier) {
+                            checker.report.issues.push(format!(
+                                "authored order broken: loader {} dug block {} in interval {} segment {segment} while block {} still held {left:.6} t",
+                                task.loader.0, later.0, interval.index, earlier.0
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ---- loader and truck capacity per segment ------------------------------
     for interval in &input.intervals {
         if checker.cancelled() {
@@ -427,11 +529,14 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                     checker.breach(&format!("crusher {} budget on day {day}", destination.id.0), used, *budget);
                 }
             }
-            DestinationKind::Dump | DestinationKind::Stockpile(_) => {
+            DestinationKind::Dump => {
                 let Some(capacity) = destination.capacity_t else { continue };
                 let used = delivered(&|_| true);
                 checker.breach(&format!("destination {} capacity", destination.id.0), used, capacity);
             }
+            // Independently reconstructed segment occupancy in replay_pile
+            // checks storage capacity, including opening stock and reclaim.
+            DestinationKind::Stockpile(_) => {}
         }
     }
 
@@ -518,12 +623,21 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         .fold(0.0_f64, f64::max);
     let extraction_effect = solution.adjustments.movement_total_t * largest_unit_value;
     let arithmetic_effect = 1e-10 * solution.reported_objective.abs().max(1.0);
-    if !solution.reported_objective.is_finite() || checker.report.objective_difference.abs() > extraction_effect + arithmetic_effect {
+    // The model values a conditional rule conservatively within one margin of
+    // its boundary, so the authored (published) value may exceed the raw
+    // objective by at most what those deliveries could shift - never fall
+    // below it.
+    let difference = checker.report.objective_difference;
+    let below = -(extraction_effect + arithmetic_effect + checker.report.indicator_leak_value);
+    let above = extraction_effect + arithmetic_effect + checker.report.boundary_value_slack;
+    if !solution.reported_objective.is_finite() || difference < below || difference > above {
         checker.report.issues.push(format!(
-            "published cashflow {:.9} does not reconcile with raw solver objective {:.9}; extraction permits {:.3e}",
+            "published cashflow {:.9} does not reconcile with raw solver objective {:.9}; extraction permits {:.3e}, grade boundaries {:.3e} and indicator tolerance {:.3e}",
             checker.report.replayed_objective,
             solution.reported_objective,
-            extraction_effect + arithmetic_effect
+            extraction_effect + arithmetic_effect,
+            checker.report.boundary_value_slack,
+            checker.report.indicator_leak_value
         ));
     }
 
@@ -554,6 +668,14 @@ fn covers(task: &crate::model::schedule::optimisation::Task, interval: crate::mo
 fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openings: &BTreeMap<(StockpileId, usize), f64>, segments: usize) {
     let input = checker.input;
     let loaders: Vec<_> = input.loaders.iter().map(|entry| entry.id).collect();
+    checker.report.row_tasks = vec![None; solution.movements.len()];
+    // Rows by cell, once: walking every published row for every loader and
+    // every cell is the horizon squared.
+    let mut cell_rows: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    for (index, row) in solution.movements.iter().enumerate() {
+        cell_rows.entry((row.interval, row.segment)).or_default().push(index);
+    }
+    let empty = Vec::new();
 
     for loader in loaders {
         if checker.cancelled() {
@@ -568,9 +690,12 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                 .partial_cmp(&(right.priority, right.window_start_h, right.id))
                 .expect("authored windows are finite")
         });
-        if bars.len() < 2 {
+        if bars.is_empty() {
             continue;
         }
+        // Priority can only be broken between two bars; a single bar still
+        // needs its rows attributed.
+        let check = bars.len() > 1;
 
         // Physical state walked forward, cell by cell.
         let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
@@ -612,18 +737,27 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                 };
 
                 let highest = bars.iter().copied().find(|bar| ready(*bar, &remaining, &spent));
+                let rows = cell_rows.get(&(interval.index, segment)).unwrap_or(&empty);
 
                 // What this loader actually moved in this cell, by bar.
-                for row in solution.movements.iter().filter(|row| row.interval == interval.index && row.segment == segment) {
-                    if row.tonnes_t <= REPLAY_TOLERANCE_T {
-                        continue;
-                    }
+                for &index in rows {
+                    let row = solution.movements[index];
                     let Some(candidate) = input.movements.get(row.candidate) else { continue };
                     if candidate.loader != loader {
                         continue;
                     }
-                    let worked: Vec<usize> = bars.iter().copied().filter(|bar| task_authorises(&input.tasks[*bar], candidate)).collect();
-                    if worked.is_empty() {
+                    let worked: Vec<usize> = bars
+                        .iter()
+                        .copied()
+                        .filter(|bar| covers(&input.tasks[*bar], *interval) && task_authorises(&input.tasks[*bar], candidate))
+                        .collect();
+                    // The bar the row was worked under: the highest-priority
+                    // ready one when it authorises the row, and otherwise the
+                    // first authorising bar - which only a row the checks
+                    // below reject can need.
+                    let attributed = highest.filter(|bar| worked.contains(bar)).or_else(|| worked.first().copied());
+                    checker.report.row_tasks[index] = attributed.map(|bar| input.tasks[bar].id);
+                    if row.tonnes_t <= REPLAY_TOLERANCE_T || worked.is_empty() || !check {
                         continue;
                     }
                     match highest {
@@ -639,8 +773,10 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                     }
                 }
 
-                // Advance the physical state past this cell.
-                for row in solution.movements.iter().filter(|row| row.interval == interval.index && row.segment == segment) {
+                // Advance the physical state past this cell. Ground is shared
+                // by every loader; a reclaim cap is this loader's own.
+                for &index in rows {
+                    let row = solution.movements[index];
                     let Some(candidate) = input.movements.get(row.candidate) else { continue };
                     if let SourceId::Ground(ground) = candidate.source
                         && candidate.activity == Activity::Dig
@@ -664,7 +800,7 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
 }
 
 /// Walk one pile forward through the horizon, recomputing its blend.
-#[allow(clippy::needless_range_loop)]
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 fn replay_pile(
     checker: &mut Checker<'_>,
     pile: &BlendPile,
@@ -683,6 +819,7 @@ fn replay_pile(
             break;
         }
         let k = interval.index;
+        let interval_duration = interval.duration_h();
         openings.insert((pile.id, k), open_t);
 
         // Receipts and reclaims inside this interval, from the rows alone.
@@ -691,12 +828,26 @@ fn replay_pile(
         let mut reclaimed_t = 0.0;
         let mut per_segment_receipts = vec![0.0; segments];
         let mut per_segment_reclaim = vec![0.0; segments];
+        // Blocks each loader dug per segment, and which loaders delivered
+        // here: a loader that worked two blocks back to back delivered at an
+        // uneven rate, so occupancy can peak inside that segment.
+        let mut blocks_dug: BTreeMap<(usize, LoaderId), BTreeSet<GroundId>> = BTreeMap::new();
+        let mut delivering: BTreeSet<(usize, LoaderId)> = BTreeSet::new();
 
         for row in movements.iter().filter(|row| row.interval == k) {
             let Some(candidate) = input.movements.get(row.candidate) else { continue };
             let to_pile = destinations
                 .get(&candidate.destination)
                 .is_some_and(|destination| matches!(destination.kind, DestinationKind::Stockpile(target) if target == pile.id));
+            if candidate.activity == Activity::Dig
+                && row.tonnes_t > REPLAY_TOLERANCE_T
+                && let SourceId::Ground(ground) = candidate.source
+            {
+                blocks_dug.entry((row.segment, candidate.loader)).or_default().insert(ground);
+            }
+            if to_pile && row.tonnes_t > REPLAY_TOLERANCE_T {
+                delivering.insert((row.segment, candidate.loader));
+            }
             if to_pile {
                 received_t += row.tonnes_t;
                 if let Some(slot) = per_segment_receipts.get_mut(row.segment) {
@@ -734,9 +885,21 @@ fn replay_pile(
         //
         // Rates are constant inside an execution segment, so occupancy is
         // linear across a segment's interior and the endpoint values bound
-        // it throughout.
+        // it throughout - except where a loader delivering here worked blocks
+        // back to back. There the segment's receipts must fit on top of its
+        // opening occupancy, with no credit for its own reclaim.
         let mut occupied = open_t;
         for segment in 0..segments {
+            let uneven = delivering
+                .iter()
+                .any(|&(cell, loader)| cell == segment && blocks_dug.get(&(segment, loader)).is_some_and(|blocks| blocks.len() > 1));
+            if uneven && per_segment_reclaim[segment] > REPLAY_TOLERANCE_T {
+                checker.breach(
+                    &format!("pile {} capacity while blocks were worked back to back in interval {k} segment {segment}", pile.id.0),
+                    occupied + per_segment_receipts[segment],
+                    pile.capacity_t,
+                );
+            }
             occupied += per_segment_receipts[segment] - per_segment_reclaim[segment];
             checker.breach(&format!("pile {} capacity in interval {k} segment {segment}", pile.id.0), occupied, pile.capacity_t);
             if occupied < -REPLAY_TOLERANCE_T {
@@ -823,11 +986,22 @@ fn replay_pile(
                 if payment.holds(&delivered_blend) {
                     checker.report.replayed_objective += row.tonnes_t * payment.value_per_tonne;
                 }
+                // The model's `M` for this payment's rows is the loader's rate
+                // over the interval; see `formulate`.
+                let big_m = super::input::loader_rate(checker.input, candidate, k).unwrap_or(0.0) * interval_duration;
+                checker.report.indicator_leak_value += row.tonnes_t.min(big_m * INTEGRALITY_TOLERANCE * INTEGRALITY_MARGIN) * payment.value_per_tonne.abs();
+                if payment.near_boundary(&delivered_blend, reclaimed_t) {
+                    checker.report.boundary_rows += 1;
+                    checker.report.boundary_tonnes_t += row.tonnes_t;
+                    checker.report.boundary_value_slack += row.tonnes_t * payment.value_per_tonne.abs();
+                }
             }
         }
 
         // Conservation across the interval boundary.
         let closing_t = open_t + received_t - reclaimed_t;
+        let opening_t = open_t;
+        let delivered = if reclaimed_t > REPLAY_TOLERANCE_T { delivered_blend.clone() } else { Vec::new() };
         if closing_t < -REPLAY_TOLERANCE_T {
             checker.report.issues.push(format!("pile {} closes interval {k} at {closing_t:.6} t", pile.id.0));
         }
@@ -849,6 +1023,17 @@ fn replay_pile(
             open_q[g] = closing_q;
         }
         open_t = closing_t;
+        checker.report.pile_intervals.insert(
+            (pile.id, k),
+            PileInterval {
+                opening_t,
+                received_t,
+                reclaimed_t,
+                closing_t,
+                closing_q: open_q.clone(),
+                delivered_blend: delivered,
+            },
+        );
     }
 
     ClosingState {
@@ -953,6 +1138,7 @@ fn check_grade_limits(
 ///
 /// Every rule here is checked from the published chunk state, not from the
 /// constraints that were supposed to enforce it.
+#[allow(clippy::needless_range_loop)]
 fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap<(StockpileId, usize), (f64, Vec<f64>)> {
     let mut drawn: BTreeMap<(StockpileId, usize), (f64, Vec<f64>)> = BTreeMap::new();
     if solution.chunks.is_empty() {

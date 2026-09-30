@@ -29,10 +29,11 @@
 //! number" never render alike. A finite capacity must be non-negative; zero
 //! is a real answer - a destination that cannot receive.
 //!
+//! Stockpile capacity bounds physical stock on hand, including opening stock:
+//! reclaim frees room for new receipts. Dump capacity instead bounds total
+//! deliveries over the run. Crusher budgets are daily throughput limits.
 //! Volume is never converted into tonnes and no density is assumed: a linked
-//! solid supplies identity and geometry, and nothing else. Opening
-//! inventories and reclaim are not modelled, which is why a calculated
-//! stockpile figure is *scheduled inventory* rather than stock on hand.
+//! solid supplies identity and geometry, and nothing else.
 //!
 //! # Rules are ordered, and order is the whole resolution
 //!
@@ -185,6 +186,7 @@ impl CrusherCalendar {
     ///
     /// Only periods carrying an override, and the period after each of them,
     /// can differ - everywhere else inherits the one default.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn next_change_after(&self, period: CalendarPeriod) -> Option<CalendarPeriod> {
         let current = self.limit_at(period);
         self.periods
@@ -325,6 +327,7 @@ impl MovementSourceScope {
     /// Ground and stockpiles are disjoint: a stockpile scope never matches
     /// ex-pit ground, and an ex-pit scope never matches a reclaim, however the
     /// material in that pile originally got there.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn covers(self, source: super::RouteSource) -> bool {
         match (self, source) {
             (Self::Ground(ground), super::RouteSource::Ground { solid, bench, flitch }) => ground.covers(solid, bench, flitch),
@@ -614,6 +617,7 @@ impl DestinationRule {
     /// `source` is where the material is being loaded from *now*: a reclaim's
     /// source is its stockpile, so a rule written for ex-pit ground cannot
     /// route material a second time on its way out of a pile.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn accepts(&self, loader: LoaderAgentId, source: super::RouteSource, value: impl Fn(ReserveFieldId) -> Option<PortionValue>) -> bool {
         self.accepts_identity(loader, source) && self.conditions.iter().all(|condition| condition.accepts(value(condition.field).as_ref()))
     }
@@ -627,6 +631,7 @@ impl DestinationRule {
     /// allowed it" is a different and answerable question from "does it
     /// apply". Callers that know the material use [`Self::accepts`], which is
     /// this plus the conditions and is the only path routing takes.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn accepts_identity(&self, loader: LoaderAgentId, source: super::RouteSource) -> bool {
         if !self.enabled {
             return false;

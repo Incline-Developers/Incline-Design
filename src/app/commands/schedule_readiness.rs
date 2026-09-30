@@ -41,7 +41,7 @@ use crate::{
     model::{
         Document, ReserveAggregation, ReserveFieldId,
         schedule::{
-            BarId, DigBlockPick, DispatchAgent, DispatchBar, DispatchBlock, DispatchError, DispatchInput,
+            BarId, DigBlockPick,
             sequence::{BlockGround, GroundIndex},
         },
         solid_reserves::ReserveTotals,
@@ -189,6 +189,7 @@ pub(crate) struct MemberReport {
     pub(crate) tonnes: Option<f64>,
     /// Identity in the current run, used to detect two persistent references
     /// that resolve to the same occupied ground across different bars.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) resolved: Option<crate::model::DigBlockId>,
 }
 
@@ -243,13 +244,6 @@ impl BarReport {
     }
 }
 
-/// One reason a schedule could not be calculated, and which bars it is about.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScheduleRunProblem {
-    pub(crate) bars: Vec<BarId>,
-    pub(crate) message: String,
-}
-
 /// Scheduling ground and readiness derived for one exact set of inputs.
 /// Shared by the Gantt, run preparation, and the sequence inspector so an
 /// unchanged frame neither recollects blocks nor resolves references again.
@@ -275,246 +269,6 @@ enum TonnageField {
     None,
     Missing,
     NotSum(String),
-}
-
-/// Join persistent assignments to one set of readiness reports and hand back
-/// the entirely validated evaluator input, or every reason it cannot be built.
-///
-/// Nothing partial: a schedule assembled from the bars that happened to be
-/// ready would draw calculated spans beside silently omitted work, which reads
-/// as a complete answer and is not one.
-///
-/// `expected` is the Solids run the completed Schedule Setup run was validated
-/// against. Reports measured against any other run are refused rather than
-/// evaluated: the gate that let this be calculated named one run, and a
-/// schedule assembled from two of them would describe ground that was never
-/// all there at once.
-/// `blocks` is the same run's dig-block records, which is where the material
-/// behind each block's tonnage comes from. Routing needs them; a dig-only run
-/// reads nothing from them, and both take the same path so there is one place a
-/// bar becomes work.
-pub(crate) fn dispatch_input(
-    document: &Document,
-    reports: &[BarReport],
-    blocks: &[DigBlockRecord],
-    expected: u64,
-    horizon_limit_h: Option<f64>,
-) -> Result<DispatchInput, Vec<ScheduleRunProblem>> {
-    let plan = document.schedule();
-    let mut problems = Vec::new();
-    // The current dispatcher cannot execute reclaim, and a plan holding reclaim
-    // bars is refused whole rather than run without them. Leaving them out
-    // would publish a schedule that reads as complete and is not - the pile
-    // would never be drawn down, and the crusher it feeds would look starved.
-    // Stage 5's optimised run is what lifts this.
-    let reclaim: Vec<BarId> = plan.bars().iter().filter(|bar| bar.is_reclaim()).map(|bar| bar.id).collect();
-    if !reclaim.is_empty() {
-        return Err(vec![ScheduleRunProblem {
-            bars: reclaim,
-            message: tr!("reclaim-unsupported"),
-        }]);
-    }
-    // A bar holding no blocks is not work, so it is not a fault either: it
-    // describes nothing to dig, contributes nothing to the schedule, and the
-    // loader carrying it moves on to its next bar or idles. It is left out of
-    // every check below - an empty bar names no loader and measures no
-    // tonnes, and demanding either of it would block a run over a sequence
-    // the user has not filled in yet.
-    let scheduled = || plan.bars().iter().zip(reports).filter(|(bar, _)| !bar.members().is_empty());
-    if scheduled().next().is_none() {
-        problems.push(ScheduleRunProblem {
-            bars: Vec::new(),
-            message: tr!("schedule-run-no-bars"),
-        });
-        return Err(problems);
-    }
-    for (bar, _) in scheduled() {
-        if bar.agent.is_none() {
-            problems.push(ScheduleRunProblem {
-                bars: vec![bar.id],
-                message: tr!("schedule-dispatch-unassigned", bar = bar.name().to_owned()),
-            });
-        }
-    }
-    for (bar, report) in scheduled() {
-        if !report.is_ready() {
-            problems.push(ScheduleRunProblem {
-                bars: vec![bar.id],
-                message: tr!("schedule-run-bar-not-ready", bar = bar.name().to_owned()),
-            });
-        }
-    }
-    let generations = scheduled()
-        .filter(|(_, report)| report.is_ready())
-        .filter_map(|(_, report)| report.generation)
-        .collect::<std::collections::HashSet<_>>();
-    if reports.len() != plan.bars().len() || generations.len() > 1 || generations.iter().any(|generation| *generation != expected) {
-        problems.push(ScheduleRunProblem {
-            bars: plan.bars().iter().map(|bar| bar.id).collect(),
-            message: tr!("schedule-dispatch-generation-changed"),
-        });
-    }
-    if !problems.is_empty() {
-        return Err(problems);
-    }
-
-    let mut agents = Vec::with_capacity(plan.agents().len());
-    for agent in plan.agents() {
-        let Some(class) = plan.class(agent.class_id) else {
-            problems.push(ScheduleRunProblem {
-                bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent.id)).map(|bar| bar.id).collect(),
-                message: tr!("schedule-error-unknown-class"),
-            });
-            continue;
-        };
-        match agent.calendar.compile(class.default_dig_rate_tph) {
-            Ok(calendar) => agents.push(DispatchAgent {
-                agent: agent.id,
-                rate_tph: class.default_dig_rate_tph,
-                calendar,
-            }),
-            Err(error) => problems.push(ScheduleRunProblem {
-                bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent.id)).map(|bar| bar.id).collect(),
-                message: error.message(),
-            }),
-        }
-    }
-    if !problems.is_empty() {
-        return Err(problems);
-    }
-    // Destinations and routing. Off, the table is still built and the portions
-    // are left empty: the evaluator then has nothing to route and behaves
-    // exactly as it did before routing existed.
-    let routing = plan.routing();
-    let enabled = routing.enabled;
-    let destinations = super::schedule_routing::destination_table(document);
-    let tonnage_field = match tonnage_field_of(document) {
-        TonnageField::Chosen(field) => field,
-        _ => {
-            problems.push(ScheduleRunProblem {
-                bars: Vec::new(),
-                message: tr!("schedule-stage-no-tonnage-field"),
-            });
-            return Err(problems);
-        }
-    };
-    let mut dispatch_bars = Vec::new();
-    for (bar, report) in scheduled() {
-        let agent = bar.agent.expect("checked above");
-        let loader_name = plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent"));
-        let mut dispatch_blocks = Vec::new();
-        for (block, member) in bar.members().iter().copied().zip(&report.members) {
-            let resolved = member.resolved.expect("ready members resolve");
-            let tonnes = member.tonnes.expect("ready members have tonnes");
-            let portions = if !enabled {
-                Vec::new()
-            } else {
-                let Some(record) = blocks.iter().find(|record| record.id == resolved) else {
-                    problems.push(ScheduleRunProblem {
-                        bars: vec![bar.id],
-                        message: tr!("schedule-dispatch-generation-changed"),
-                    });
-                    continue;
-                };
-                match super::schedule_routing::prepare_block(record, tonnes, agent, &loader_name, tonnage_field, routing, &destinations) {
-                    Ok(prepared) => super::schedule_routing::dispatch_portions(prepared),
-                    Err(reasons) => {
-                        problems.extend(reasons.into_iter().map(|reason| ScheduleRunProblem {
-                            bars: vec![bar.id],
-                            message: reason.message(),
-                        }));
-                        continue;
-                    }
-                }
-            };
-            dispatch_blocks.push(DispatchBlock {
-                block,
-                resolved,
-                tonnes,
-                portions,
-            });
-        }
-        dispatch_bars.push(DispatchBar {
-            bar: bar.id,
-            agent,
-            priority: bar.priority,
-            window: bar.window,
-            blocks: dispatch_blocks,
-        });
-    }
-    // Source scopes the run cannot place: a rule that no longer restricts what
-    // it was written to restrict is a configuration error, not a rule that
-    // quietly widened.
-    if enabled {
-        for rule in routing.rules.iter().filter(|rule| rule.enabled) {
-            if let crate::model::schedule::MovementSourceSelection::Only(scopes) = &rule.sources
-                // Ground only: whether a stockpile exists is the destination
-                // list's answer and is reported on the Destinations step, while
-                // whether a band was cut is the Solids run's.
-                && scopes
-                    .iter()
-                    .filter_map(|scope| scope.ground())
-                    .any(|scope| !super::schedule_routing::scope_is_placeable(scope, blocks))
-            {
-                problems.push(ScheduleRunProblem {
-                    bars: Vec::new(),
-                    message: tr!("routing-problem-scope-unplaced", rule = rule.name.clone()),
-                });
-            }
-        }
-    }
-    if !problems.is_empty() {
-        return Err(problems);
-    }
-    Ok(DispatchInput {
-        generation: expected,
-        horizon_limit_h,
-        agents,
-        bars: dispatch_bars,
-        routing: enabled,
-        destinations,
-    })
-}
-
-/// The project's tonnage field, or what is wrong with the choice.
-fn tonnage_field_of(document: &Document) -> TonnageField {
-    let Some(chosen) = document.schedule().tonnage_field() else {
-        return TonnageField::None;
-    };
-    match document.reserve_fields().iter().find(|field| field.id == chosen) {
-        None => TonnageField::Missing,
-        Some(field) if field.aggregation != ReserveAggregation::Sum => TonnageField::NotSum(field.name.clone()),
-        Some(_) => TonnageField::Chosen(chosen),
-    }
-}
-
-/// Turn one evaluator refusal into something the Gantt can say, against the
-/// bars it is about.
-pub(crate) fn dispatch_problem(plan: &crate::model::schedule::SchedulePlan, error: DispatchError) -> ScheduleRunProblem {
-    match error {
-        DispatchError::UnknownAgent { bar, .. }
-        | DispatchError::InvalidWindow(bar)
-        | DispatchError::EmptyBar(bar)
-        | DispatchError::InvalidTonnes { bar, .. }
-        | DispatchError::ClockDidNotAdvance(bar) => ScheduleRunProblem {
-            bars: vec![bar],
-            message: tr!("schedule-dispatch-invalid-input"),
-        },
-        DispatchError::DuplicateAgent(agent) | DispatchError::InvalidRate(agent) => ScheduleRunProblem {
-            bars: plan.bars().iter().filter(|bar| bar.agent == Some(agent)).map(|bar| bar.id).collect(),
-            message: tr!("schedule-dispatch-invalid-input"),
-        },
-        DispatchError::UnknownDestination { bar, .. } | DispatchError::UnbalancedPortions { bar, .. } => ScheduleRunProblem {
-            bars: vec![bar],
-            message: tr!("schedule-dispatch-invalid-input"),
-        },
-        DispatchError::InvalidCapacity(_) | DispatchError::InconsistentPortions { .. } | DispatchError::InconsistentTonnes { .. } | DispatchError::IterationCap => {
-            ScheduleRunProblem {
-                bars: Vec::new(),
-                message: tr!("schedule-dispatch-invalid-input"),
-            }
-        }
-    }
 }
 
 impl crate::app::App<'_> {
@@ -671,6 +425,7 @@ impl crate::app::App<'_> {
     /// The cached snapshot the reports were measured against, so run
     /// preparation reads the *same* ground the reports did rather than
     /// collecting it a second time.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn schedule_snapshot(&mut self) -> Option<Arc<PlanningSnapshot>> {
         self.ensure_schedule_report_cache();
         self.schedule_report_cache.as_ref().and_then(|cache| cache.snapshot.clone())
@@ -699,13 +454,8 @@ impl crate::app::App<'_> {
             // currentness gate - rather than being taken off the page.
             if self.editor.is_schedule_calendar() {
                 self.mirror_schedule_calculation();
-            } else {
-                let dropped = self.editor.schedule_dispatch.take().is_some();
-                let dropped_production = self.editor.schedule_production.take().is_some();
-                let dropped_received = self.editor.schedule_received.take().is_some();
-                if dropped || dropped_production || dropped_received {
-                    self.redraw_requested = true;
-                }
+            } else if self.editor.schedule_result.take().is_some() {
+                self.redraw_requested = true;
             }
             if let Some(cache) = self.schedule_report_cache.as_mut() {
                 cache.bar_views_key = None;
@@ -729,20 +479,8 @@ impl crate::app::App<'_> {
         // readiness of each bar is a read; the timed schedule comes only from
         // an explicit Run, and what that run found is mirrored separately by
         // `mirror_schedule_calculation`.
-        let diagnostics_are_current = self
-            .schedule_run_diagnostics
-            .as_ref()
-            .is_some_and(|diagnostics| self.schedule_run_inputs().ok() == Some(diagnostics.inputs) && self.schedule_plan_revision() == diagnostics.plan_revision);
-        if !diagnostics_are_current {
-            self.schedule_run_diagnostics = None;
-        }
-        let dispatch_problems: &[ScheduleRunProblem] = self.schedule_run_diagnostics.as_ref().map_or(&[], |diagnostics| &diagnostics.problems);
         let mut views_hasher = std::collections::hash_map::DefaultHasher::new();
         self.schedule_report_cache.as_ref().map(|cache| cache.key).hash(&mut views_hasher);
-        for problem in dispatch_problems {
-            problem.bars.hash(&mut views_hasher);
-            problem.message.hash(&mut views_hasher);
-        }
         let views_key = views_hasher.finish();
         if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.bar_views_key == Some(views_key)) {
             self.mirror_schedule_calculation();
@@ -751,13 +489,7 @@ impl crate::app::App<'_> {
         let views = reports
             .iter()
             .map(|report| {
-                let mut problems = report.problems.iter().map(|problem| problem.message()).collect::<Vec<_>>();
-                problems.extend(
-                    dispatch_problems
-                        .iter()
-                        .filter(|problem| problem.bars.contains(&report.bar))
-                        .map(|problem| problem.message.clone()),
-                );
+                let problems = report.problems.iter().map(|problem| problem.message()).collect::<Vec<_>>();
                 let default_name = match &report.reclaim {
                     // A reclaim bar is named by its pile, which is what the user
                     // chose when they created it.
@@ -778,10 +510,6 @@ impl crate::app::App<'_> {
                                 .collect()
                         })
                         .unwrap_or_default(),
-                    // A refused attempt is historical evidence about these
-                    // still-current inputs, not part of live readiness. The
-                    // messages remain available, while repairs immediately
-                    // restore the readiness computed above.
                     ready: report.is_ready(),
                     tonnes: report.tonnes,
                     members: report

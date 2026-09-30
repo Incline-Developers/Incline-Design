@@ -16,23 +16,20 @@ pub(crate) mod animation;
 pub(crate) mod calendar;
 pub(crate) mod cashflow;
 pub(crate) mod destinations;
-pub(crate) mod dispatch;
 pub(crate) mod experiment;
 pub(crate) mod inventory;
 pub(crate) mod optimisation;
-pub(crate) mod production;
+pub(crate) mod result;
 pub(crate) mod sequence;
 pub(crate) mod trucking;
 
-pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CompiledRateCalendar, LoaderCalendar, RateKind, SCHEDULE_PERIOD_H};
+pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, LoaderCalendar, RateKind, SCHEDULE_PERIOD_H};
 pub(crate) use cashflow::{Activity, ActivitySelection, CashflowConfig, CashflowRuleId};
 pub(crate) use destinations::{
     Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationSelection, FieldCondition, LoaderSelection,
     MovementSourceScope, MovementSourceSelection, PortionValue, RoutingConfig, RuleId, SourceScope, StandaloneDestinationId,
 };
-pub(crate) use dispatch::{DispatchAgent, DispatchBar, DispatchBlock, DispatchDestination, DispatchError, DispatchInput, DispatchOutcome, DispatchPortion, DispatchSchedule};
 pub(crate) use inventory::{OpeningLotId, OpeningPortionId, OpeningValue, ReclaimOrder};
-pub(crate) use production::{DestinationProduction, PeriodProduction};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 pub(crate) use trucking::{RouteContext, RouteSource, TruckCellEdit, TruckClassId, TruckField, TruckFleetConfig, TruckingRuleId};
 
@@ -99,11 +96,6 @@ impl WorkWindow {
     /// boundary and again on load, never clamped into shape.
     pub(crate) fn is_valid(self) -> bool {
         self.start_h.is_finite() && self.start_h >= 0.0 && self.end_h.is_none_or(|end| end.is_finite() && end > self.start_h)
-    }
-
-    /// Start-inclusive, end-exclusive.
-    pub(crate) fn contains(self, hour: f64) -> bool {
-        hour >= self.start_h && self.end_h.is_none_or(|end| hour < end)
     }
 }
 
@@ -329,6 +321,7 @@ impl ScheduleBar {
         }
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn is_reclaim(&self) -> bool {
         matches!(self.work, BarWork::Reclaim(_))
     }
@@ -663,24 +656,22 @@ pub(crate) struct SchedulePlan {
     bar_height: f32,
     /// Destinations, their capacities and the ordered routing rules; see
     /// [`destinations`]. Default-empty and default-off, so a project saved
-    /// before routing existed opens with the dig-only behaviour it was
-    /// authored against.
+    /// before routing existed preserves its authored settings. Normal
+    /// optimisation requires the user to enable routing explicitly.
     #[serde(default)]
     routing: RoutingConfig,
-    /// Truck classes, their fleet calendars and the trucking rules. Empty and
-    /// inert: nothing in the current dispatcher reads them, so a project that
-    /// has never opened the Trucks pages behaves exactly as it did.
+    /// Truck classes, fleet calendars and trucking rules consumed by capture
+    /// and enforced by the optimiser. No fleet is invented for older projects.
     #[serde(default)]
     trucks: TruckFleetConfig,
-    /// What movements are worth, and what the money is called. Empty and
-    /// inert: nothing in the current dispatcher reads a value.
+    /// Movement values consumed by capture and replay; empty means no authored
+    /// movement value, not an invented objective coefficient.
     #[serde(default)]
     cashflow: CashflowConfig,
     #[serde(default = "default_currency")]
     currency: String,
-    /// Explicit settings for the experimental blended optimiser; see
-    /// [`experiment`]. Persisted in every build so a project written by one
-    /// with the experiment enabled round-trips through one without it.
+    /// Explicit settings for schedule optimisation; see [`experiment`].
+    /// Persisted in every build, including WASM where calculation is unavailable.
     #[serde(default)]
     experiment: experiment::ExperimentConfig,
 }
@@ -1016,11 +1007,6 @@ impl SchedulePlan {
 
     pub(crate) fn bars(&self) -> &[ScheduleBar] {
         &self.bars
-    }
-
-    /// Whether the current dig-only dispatcher must refuse this plan.
-    pub(crate) fn has_reclaim_bars(&self) -> bool {
-        self.bars.iter().any(|bar| bar.reclaim().is_some())
     }
 
     pub(crate) fn bar(&self, id: BarId) -> Option<&ScheduleBar> {

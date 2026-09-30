@@ -345,7 +345,7 @@ impl crate::app::App<'_> {
         let identity = self.schedule_calculation.as_ref().zip(runtime).map(|(calculation, runtime)| Identity {
             runtime,
             run: calculation.run,
-            solids_generation: calculation.schedule.generation,
+            solids_generation: calculation.generation,
         });
 
         // Ahead of the page gate, because the cursor is not this page's: the
@@ -373,7 +373,7 @@ impl crate::app::App<'_> {
             self.schedule_animation.cursor_identity = cursor_identity;
             // Built before the result is stored, so the borrow of the held
             // calculation ends before the animation state is written.
-            let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(&calculation.schedule));
+            let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(calculation));
             match index {
                 Some(Ok(index)) => self.schedule_animation.index = Some(index),
                 Some(Err(error)) => self.schedule_animation.error = Some(error.to_string()),
@@ -407,7 +407,7 @@ impl crate::app::App<'_> {
             .schedule_calculation
             .as_ref()
             .filter(|_| current)
-            .map_or(0.0, |calculation| calculation.schedule.horizon_h.max(0.0));
+            .map_or(0.0, |calculation| calculation.requested_end_h.max(0.0));
         self.editor.schedule_animation_enabled = current && solids_ready && self.schedule_animation.index.is_some() && self.editor.schedule_animation_horizon_h > 0.0;
 
         // Ahead of the branch below, because the navigator's eyes work whether
@@ -436,9 +436,9 @@ impl crate::app::App<'_> {
             } else if !solids_ready {
                 crate::i18n::tr!(literal = "Calculated solids are unavailable. Run Solids through Dig Strips.")
             } else if self.schedule_calculation.is_some() {
-                crate::i18n::tr!(literal = "The schedule result is stale. Run Schedule again.")
+                crate::i18n::tr!("schedule-animation-stale")
             } else {
-                crate::i18n::tr!(literal = "Run Schedule to enable time scrubbing.")
+                crate::i18n::tr!("schedule-animation-never")
             };
             self.refresh_animation_scene();
             return;
@@ -571,22 +571,15 @@ impl crate::app::App<'_> {
                 .iter()
                 .filter_map(|block| crate::model::arrangement::representative_point(&block.face).map(|center| (block.id, center)))
                 .collect();
-            // One lookup per authored member rather than a walk of every
-            // balance in the run for each of them.
-            let resolved: HashMap<_, _> = calculation
-                .schedule
-                .balances
-                .iter()
-                .map(|balance| (balance.block.ground_identity().key(), balance.resolved))
-                .collect();
-            // Which block each one is dug toward. `None` marks ground the bars
+            // Which block each one is dug toward, in each dig bar's resolved
+            // order as the run captured it. `None` marks ground the bars
             // disagree about: a block two of them name has no one successor,
-            // and the answer must not be whichever bar the document happens to
-            // list first. Those keep the +Y fallback, which is what the
-            // fallback is for.
+            // and the answer must not be whichever bar happens to be listed
+            // first. Those keep the +Y fallback, which is what the fallback is
+            // for.
             let mut successors: HashMap<DigBlockId, Option<DigBlockId>> = HashMap::new();
-            for bar in document.schedule().bars() {
-                let mut ordered: Vec<_> = bar.members().iter().filter_map(|member| resolved.get(&member.ground_identity().key()).copied()).collect();
+            for (_, blocks) in &calculation.bar_blocks {
+                let mut ordered = blocks.clone();
                 ordered.dedup();
                 for pair in ordered.windows(2) {
                     successors

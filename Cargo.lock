@@ -1907,6 +1907,7 @@ dependencies = [
  "robust",
  "russcip",
  "rust-embed",
+ "scip-sys",
  "serde",
  "serde_json",
  "spade",

@@ -162,6 +162,7 @@ impl crate::app::App<'_> {
                 plan.experiment_mut().set_relative_gap(relative_gap)
             }),
             ScheduleEdit::SetExperimentGradeUnit { field, unit } => self.edit_schedule(|plan| plan.experiment_mut().set_grade_unit(field, unit)),
+            ScheduleEdit::SetExperimentEventCapacity { capacity } => self.edit_schedule(|plan| plan.experiment_mut().set_event_capacity(capacity)),
             ScheduleEdit::SetStockpileRepresentation { destination, representation } => {
                 self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_representation(destination, representation))
             }

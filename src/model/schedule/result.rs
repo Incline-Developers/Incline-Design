@@ -1,0 +1,686 @@
+//! The one calculated schedule every view reads.
+//!
+//! Run Period and Run All Periods publish exactly one of these per accepted
+//! calculation. The Gantt, the Calendar and the animation all read it; none
+//! of them reads the solver, the replay or the project's rules, and none of
+//! them re-derives a figure this already holds.
+//!
+//! # What is in it
+//!
+//! Everything here is in project terms - loader agents, bars, dig blocks and
+//! destinations by their stable ids - so a rename changes a label and never a
+//! number. Presentation names are resolved by whoever draws.
+//!
+//! - [`Execution`]: one loader working one source over one solved span. Dig
+//!   and reclaim are both executions, told apart by [`Activity`] and by
+//!   [`WorkSource`]; reclaim is never dressed up as a dig block.
+//! - [`Delivery`]: one movement to one destination on one truck class, with
+//!   its truck-hours, its movement value and its contained quantity.
+//! - [`GroundBalance`], [`PileTrack`], [`ChunkDraw`]: the balances.
+//! - [`SolveReport`]: how the answer was found and what it does not claim.
+//!
+//! # Timing
+//!
+//! Every span is a solved execution segment: its start and end are the
+//! model's own event times, and a loader's rate across it is its tonnes over
+//! its duration. Nothing here divides tonnes by a nominal loader rate - a
+//! truck-limited loader works below that rate for the whole span, and the
+//! span says so. Adjacent spans are merged only when their identities and
+//! rates agree, so a merge never smears one rate across another.
+//!
+//! Indexes the views need are built once, in [`CalculatedSchedule::new`], and
+//! the result is shared immutably behind an `Arc` from then on.
+
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(dead_code, reason = "the browser build draws this type but never builds one: schedule calculation is desktop-only")
+)]
+
+use std::collections::{BTreeMap, HashMap};
+
+use super::{BarId, DestinationId, LoaderAgentId, SCHEDULE_PERIOD_H, cashflow::Activity, experiment::GradeUnit, trucking::TruckClassId};
+use crate::model::{DigBlockId, ReserveFieldId};
+
+/// What an execution span or delivery takes its material from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum WorkSource {
+    /// Ground: one physical dig block of the Solids run.
+    Block(DigBlockId),
+    /// Material taken back out of a stockpile.
+    Stockpile(DestinationId),
+}
+
+/// One loader working one source over one solved span.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Execution {
+    pub(crate) agent: LoaderAgentId,
+    pub(crate) bar: BarId,
+    pub(crate) activity: Activity,
+    pub(crate) source: WorkSource,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    pub(crate) tonnes: f64,
+}
+
+impl Execution {
+    /// The rate this loader actually worked at across the span.
+    pub(crate) fn rate_tph(&self) -> f64 {
+        let duration = self.end_h - self.start_h;
+        if duration > 0.0 { self.tonnes / duration } else { 0.0 }
+    }
+}
+
+/// One movement of material to one destination.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Delivery {
+    pub(crate) agent: LoaderAgentId,
+    pub(crate) bar: BarId,
+    pub(crate) activity: Activity,
+    pub(crate) source: WorkSource,
+    pub(crate) destination: DestinationId,
+    pub(crate) truck: TruckClassId,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    pub(crate) tonnes: f64,
+    pub(crate) truck_hours: f64,
+    /// Signed movement value, every matching rule added, conditional rules
+    /// valued at their authored boundaries.
+    pub(crate) value: f64,
+    /// Contained quantity per tracked grade, in tonnes of the component,
+    /// aligned with [`CalculatedSchedule::grades`].
+    pub(crate) contained: Vec<f64>,
+}
+
+/// What one dig block started with and what it had left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GroundBalance {
+    pub(crate) block: DigBlockId,
+    pub(crate) started_t: f64,
+    pub(crate) remaining_t: f64,
+    /// When the block ran out, if it did.
+    pub(crate) emptied_h: Option<f64>,
+}
+
+/// One stockpile's balance over the calculation.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PileTrack {
+    pub(crate) destination: DestinationId,
+    pub(crate) opening_t: f64,
+    /// Contained quantity per grade at hour zero. Empty when the pile was not
+    /// in the model and so has no captured composition.
+    pub(crate) opening_q: Vec<f64>,
+    /// Balance at the close of each calendar interval, in time order.
+    pub(crate) steps: Vec<PileStep>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PileStep {
+    pub(crate) end_h: f64,
+    pub(crate) closing_t: f64,
+    pub(crate) closing_q: Vec<f64>,
+}
+
+/// Balance and net movement rate at a solved event boundary. Receipts enter
+/// physical inventory immediately even though reclaim eligibility changes
+/// only at calendar interval boundaries.
+#[derive(Clone, Debug)]
+struct InventoryKnot {
+    hour: f64,
+    tonnes: f64,
+    contained: Vec<f64>,
+    rate: f64,
+    contained_rate: Vec<f64>,
+}
+
+fn inventory_curves(piles: &[PileTrack], deliveries: &[Delivery]) -> HashMap<DestinationId, Vec<InventoryKnot>> {
+    let mut events: HashMap<DestinationId, Vec<(f64, f64, Vec<f64>)>> = HashMap::new();
+    for delivery in deliveries {
+        let duration = delivery.end_h - delivery.start_h;
+        if duration <= 0.0 {
+            continue;
+        }
+        let incoming = std::iter::once((delivery.destination, 1.0));
+        let outgoing = match delivery.source {
+            WorkSource::Stockpile(pile) => Some((pile, -1.0)),
+            WorkSource::Block(_) => None,
+        };
+        for (pile, sign) in incoming.chain(outgoing) {
+            let rate = sign * delivery.tonnes / duration;
+            let contained: Vec<_> = delivery.contained.iter().map(|quantity| sign * quantity / duration).collect();
+            let entries = events.entry(pile).or_default();
+            entries.push((delivery.start_h, rate, contained.clone()));
+            entries.push((delivery.end_h, -rate, contained.into_iter().map(|quantity| -quantity).collect()));
+        }
+    }
+    piles
+        .iter()
+        .map(|pile| {
+            let mut entries = events.remove(&pile.destination).unwrap_or_default();
+            entries.sort_by(|left, right| left.0.total_cmp(&right.0));
+            let mut curve = vec![InventoryKnot {
+                hour: 0.0,
+                tonnes: pile.opening_t,
+                contained: pile.opening_q.clone(),
+                rate: 0.0,
+                contained_rate: vec![0.0; pile.opening_q.len()],
+            }];
+            for (hour, rate, contained_rate) in entries {
+                let last = curve.last_mut().expect("opening inventory");
+                if hour > last.hour {
+                    let elapsed = hour - last.hour;
+                    let next = InventoryKnot {
+                        hour,
+                        tonnes: last.tonnes + elapsed * last.rate,
+                        contained: last.contained.iter().zip(&last.contained_rate).map(|(quantity, rate)| quantity + elapsed * rate).collect(),
+                        rate: last.rate,
+                        contained_rate: last.contained_rate.clone(),
+                    };
+                    curve.push(next);
+                }
+                let last = curve.last_mut().expect("inventory event");
+                last.rate += rate;
+                for (net, change) in last.contained_rate.iter_mut().zip(contained_rate) {
+                    *net += change;
+                }
+            }
+            (pile.destination, curve)
+        })
+        .collect()
+}
+
+impl PileTrack {
+    /// The balance at `hour`, read off the last interval closed by then.
+    ///
+    /// Intervals split at every midnight, so a period end is always an
+    /// interval end and this is exact there.
+    pub(crate) fn balance_at(&self, hour: f64) -> (f64, &[f64]) {
+        let closed = self.steps.partition_point(|step| step.end_h <= hour + 1e-9);
+        match closed.checked_sub(1).and_then(|index| self.steps.get(index)) {
+            Some(step) => (step.closing_t, &step.closing_q),
+            None => (self.opening_t, &self.opening_q),
+        }
+    }
+}
+
+/// Material a reclaim drew from one chunk of an ordered chunked pile.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChunkDraw {
+    pub(crate) pile: DestinationId,
+    pub(crate) chunk: usize,
+    /// "Opening lot <name>" or "Receiving chunk <n>", resolved at capture.
+    pub(crate) label: String,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    pub(crate) tonnes: f64,
+}
+
+/// How the backend finished, for an accepted calculation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolveQuality {
+    /// Optimal for the encoded model within the configured gap.
+    Optimal,
+    /// A time or gap limit was reached with a valid schedule in hand.
+    Limited,
+}
+
+/// Solver observations, not independent feasibility or optimality claims.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SolveDiagnostics {
+    /// SCIP elapsed solve time at its first solution event; replay occurs later.
+    pub(crate) first_incumbent_s: Option<f64>,
+    pub(crate) incumbent_improvements: u64,
+    pub(crate) presolve_rounds: u64,
+    pub(crate) presolve_s: f64,
+    /// First root initial LP event with a completed (not time/iteration-limited) LP.
+    pub(crate) root_initial_lp_s: Option<f64>,
+    /// First completed cut-and-price LP event at the root. Not root-node completion.
+    pub(crate) root_cut_price_s: Option<f64>,
+    /// A root NODE_SOLVED event was observed, or a non-root node was focused.
+    pub(crate) root_node_finished: bool,
+    /// Active transformed problem at first root focus, after presolve.
+    pub(crate) presolved_variables: Option<usize>,
+    pub(crate) presolved_constraints: Option<usize>,
+    /// Initial completed root LP snapshot; absent if no such event occurred.
+    pub(crate) root_lp_columns: Option<usize>,
+    pub(crate) root_lp_rows: Option<usize>,
+    pub(crate) root_lp_nonzeros: Option<usize>,
+    pub(crate) nodes: usize,
+    pub(crate) lp_iterations: u64,
+    pub(crate) root_lp_iterations: u64,
+    /// Final transformed size is distinct from the post-presolve snapshot.
+    pub(crate) final_variables: usize,
+    pub(crate) final_constraints: usize,
+    pub(crate) final_nonzeros: u64,
+}
+
+/// The day-by-day start of a long horizon: each day solved with a look-ahead,
+/// the kept days stitched and replayed against the whole horizon, then used
+/// to seed the whole-horizon solve.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DayByDaySummary {
+    pub(crate) windows: usize,
+    pub(crate) seconds: f64,
+    /// Replayed value of the stitched schedule; `None` when no window
+    /// sequence produced one.
+    pub(crate) value: Option<f64>,
+    /// The published schedule is the stitched one: the whole-horizon solve
+    /// found nothing better in its time.
+    pub(crate) kept: bool,
+    pub(crate) failure: Option<String>,
+}
+
+/// How the answer was found, and the approximations it rests on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SolveReport {
+    pub(crate) quality: Option<SolveQuality>,
+    /// Movement value recomputed from the published rows, authored
+    /// boundaries applied.
+    pub(crate) objective: f64,
+    pub(crate) raw_objective: Option<f64>,
+    pub(crate) bound: Option<f64>,
+    pub(crate) gap: Option<f64>,
+    pub(crate) capture_s: f64,
+    pub(crate) formulation_s: f64,
+    pub(crate) solve_s: f64,
+    pub(crate) extraction_s: f64,
+    pub(crate) replay_s: f64,
+    pub(crate) publication_s: f64,
+    pub(crate) backend: String,
+    /// The captured model's own fingerprint: every rate, window, capacity,
+    /// coefficient and grade conversion the solver was handed.
+    pub(crate) model_identity: u64,
+    pub(crate) candidates: usize,
+    pub(crate) ground_sources: usize,
+    pub(crate) variables: usize,
+    pub(crate) binaries: usize,
+    pub(crate) constraints: usize,
+    pub(crate) linear_coefficient_entries: usize,
+    pub(crate) diagnostics: SolveDiagnostics,
+    pub(crate) day_by_day: Option<DayByDaySummary>,
+    pub(crate) intervals: usize,
+    pub(crate) segments_per_interval: usize,
+    /// The derived execution-event budget hit its ceiling, so some source
+    /// transitions inside an interval may have been unavailable.
+    pub(crate) event_budget_restricted: bool,
+    pub(crate) chunk_slots: usize,
+    /// Every receiving chunk of some pile filled, which is the point at which
+    /// non-reusable slots can start to limit receipts.
+    pub(crate) chunk_slots_full: bool,
+    pub(crate) grade_margin: f64,
+    pub(crate) boundary_rows: usize,
+    pub(crate) boundary_tonnes_t: f64,
+    pub(crate) boundary_value_slack: f64,
+    /// How far the solver's own objective may sit above the published one
+    /// through conditional-value indicator tolerance.
+    pub(crate) indicator_leak_value: f64,
+    /// Tiny solver columns and zero-duration rows left out of the timeline.
+    pub(crate) omitted_rows: usize,
+    pub(crate) omitted_tonnes_t: f64,
+    /// Stated approximations from capture, verbatim.
+    pub(crate) notes: Vec<String>,
+}
+
+/// Per-period aggregates, built once per accepted calculation.
+///
+/// Every figure is a sum of published spans, never a rate multiplied back
+/// out. A covered period with nothing in it reads zero; a period the
+/// calculation does not reach reads `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PeriodTotals {
+    coverage_end_h: f64,
+    dig: BTreeMap<(LoaderAgentId, u32), f64>,
+    reclaim: BTreeMap<(LoaderAgentId, u32), f64>,
+    received: BTreeMap<(DestinationId, u32), f64>,
+    reclaimed: BTreeMap<(DestinationId, u32), f64>,
+    closing: BTreeMap<(DestinationId, u32), (f64, Vec<f64>)>,
+    truck_hours: BTreeMap<(TruckClassId, u32), f64>,
+    value: BTreeMap<u32, f64>,
+}
+
+/// Which period an instant belongs to. Periods are half-open.
+fn period_of(hour: f64) -> u32 {
+    (hour / SCHEDULE_PERIOD_H).floor().max(0.0) as u32
+}
+
+/// Split `[start, end)` across the periods it touches, by duration.
+///
+/// Solved spans never cross a midnight - the calendar splits there - so this
+/// is almost always one period; the split is kept so a merged span that did
+/// cross one is still apportioned by time, with the rounding remainder in the
+/// last period so the span's total survives.
+fn apportion(start_h: f64, end_h: f64, amount: f64, mut add: impl FnMut(u32, f64)) {
+    let first = period_of(start_h);
+    let last = (((end_h / SCHEDULE_PERIOD_H).ceil().max(0.0)) as u32).saturating_sub(1).max(first);
+    let duration = end_h - start_h;
+    if first == last || duration <= 0.0 {
+        add(first, amount);
+        return;
+    }
+    let mut assigned = 0.0;
+    for period in first..last {
+        let from = f64::from(period) * SCHEDULE_PERIOD_H;
+        let to = from + SCHEDULE_PERIOD_H;
+        let share = amount * (to.min(end_h) - from.max(start_h)).max(0.0) / duration;
+        assigned += share;
+        add(period, share);
+    }
+    add(last, amount - assigned);
+}
+
+impl PeriodTotals {
+    fn build(coverage_end_h: f64, executions: &[Execution], deliveries: &[Delivery], piles: &[PileTrack]) -> Self {
+        let mut totals = Self {
+            coverage_end_h: if coverage_end_h.is_finite() { coverage_end_h.max(0.0) } else { 0.0 },
+            ..Self::default()
+        };
+        for execution in executions {
+            let map = match execution.activity {
+                Activity::Dig => &mut totals.dig,
+                Activity::Reclaim => &mut totals.reclaim,
+            };
+            apportion(execution.start_h, execution.end_h, execution.tonnes, |period, share| {
+                *map.entry((execution.agent, period)).or_default() += share;
+            });
+        }
+        for delivery in deliveries {
+            apportion(delivery.start_h, delivery.end_h, delivery.tonnes, |period, share| {
+                *totals.received.entry((delivery.destination, period)).or_default() += share;
+            });
+            if let WorkSource::Stockpile(pile) = delivery.source {
+                apportion(delivery.start_h, delivery.end_h, delivery.tonnes, |period, share| {
+                    *totals.reclaimed.entry((pile, period)).or_default() += share;
+                });
+            }
+            apportion(delivery.start_h, delivery.end_h, delivery.truck_hours, |period, share| {
+                *totals.truck_hours.entry((delivery.truck, period)).or_default() += share;
+            });
+            apportion(delivery.start_h, delivery.end_h, delivery.value, |period, share| {
+                *totals.value.entry(period).or_default() += share;
+            });
+        }
+        let periods = totals.covered_periods();
+        for pile in piles {
+            for period in 0..periods {
+                let close = (f64::from(period + 1) * SCHEDULE_PERIOD_H).min(totals.coverage_end_h);
+                let (tonnes, contained) = pile.balance_at(close);
+                totals.closing.insert((pile.destination, period), (tonnes, contained.to_vec()));
+            }
+        }
+        totals
+    }
+
+    pub(crate) fn coverage_end_h(&self) -> f64 {
+        self.coverage_end_h
+    }
+
+    /// How many periods the calculation reaches into, whole or partial.
+    pub(crate) fn covered_periods(&self) -> u32 {
+        if self.coverage_end_h <= 0.0 {
+            return 0;
+        }
+        (self.coverage_end_h / SCHEDULE_PERIOD_H).ceil().max(0.0) as u32
+    }
+
+    pub(crate) fn covers(&self, period: u32) -> bool {
+        self.coverage_end_h > 0.0 && f64::from(period) * SCHEDULE_PERIOD_H < self.coverage_end_h
+    }
+
+    /// Whether coverage stops part-way through this period.
+    pub(crate) fn is_partial(&self, period: u32) -> bool {
+        self.covers(period) && self.coverage_end_h < f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H
+    }
+
+    fn flow<K: Ord>(&self, map: &BTreeMap<K, f64>, key: K, period: u32) -> Option<f64> {
+        self.covers(period).then(|| map.get(&key).copied().unwrap_or(0.0))
+    }
+
+    pub(crate) fn dig(&self, agent: LoaderAgentId, period: u32) -> Option<f64> {
+        self.flow(&self.dig, (agent, period), period)
+    }
+
+    pub(crate) fn reclaim(&self, agent: LoaderAgentId, period: u32) -> Option<f64> {
+        self.flow(&self.reclaim, (agent, period), period)
+    }
+
+    pub(crate) fn received(&self, destination: DestinationId, period: u32) -> Option<f64> {
+        self.flow(&self.received, (destination, period), period)
+    }
+
+    pub(crate) fn reclaimed(&self, pile: DestinationId, period: u32) -> Option<f64> {
+        self.flow(&self.reclaimed, (pile, period), period)
+    }
+
+    /// Everything a destination has received up to and including `period`.
+    pub(crate) fn cumulative(&self, destination: DestinationId, period: u32) -> Option<f64> {
+        self.covers(period)
+            .then(|| self.received.range((destination, 0)..=(destination, period)).map(|(_, tonnes)| tonnes).sum())
+    }
+
+    /// A stockpile's balance at the period's close, opening stock included.
+    /// A balance, not a flow: a period with no movement holds what the one
+    /// before it closed with.
+    pub(crate) fn closing(&self, pile: DestinationId, period: u32) -> Option<(f64, &[f64])> {
+        self.covers(period)
+            .then(|| self.closing.get(&(pile, period)).map(|(tonnes, contained)| (*tonnes, contained.as_slice())))
+            .flatten()
+    }
+
+    pub(crate) fn truck_hours(&self, truck: TruckClassId, period: u32) -> Option<f64> {
+        self.flow(&self.truck_hours, (truck, period), period)
+    }
+
+    pub(crate) fn value(&self, period: u32) -> Option<f64> {
+        self.covers(period).then(|| self.value.get(&period).copied().unwrap_or(0.0))
+    }
+}
+
+/// One accepted calculation, in project terms.
+#[derive(Clone, Debug)]
+pub(crate) struct CalculatedSchedule {
+    /// Which run produced it, so a held result can be named.
+    pub(crate) run: u64,
+    /// The semantic input identity it was calculated from.
+    pub(crate) semantic: u64,
+    /// The Solids run its ground came from.
+    pub(crate) generation: u64,
+    /// The horizon the run was asked to cover, from hour zero. Recorded
+    /// independently of when the last movement happened: a requested day
+    /// with nothing in it is still a calculated day.
+    pub(crate) requested_end_h: f64,
+    pub(crate) executions: Vec<Execution>,
+    pub(crate) deliveries: Vec<Delivery>,
+    pub(crate) ground: Vec<GroundBalance>,
+    pub(crate) piles: Vec<PileTrack>,
+    pub(crate) chunk_draws: Vec<ChunkDraw>,
+    /// Loader time inside the requested horizon with no execution, per agent.
+    /// A fact about the timeline and nothing more: no reason is attached.
+    pub(crate) idle: Vec<(LoaderAgentId, f64, f64)>,
+    /// Each dig bar's resolved blocks, in authored order.
+    pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    /// Each reclaim bar's cap, as captured.
+    pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
+    pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
+    pub(crate) report: SolveReport,
+    pub(crate) periods: PeriodTotals,
+    by_bar: HashMap<BarId, Vec<usize>>,
+    by_block: HashMap<DigBlockId, usize>,
+    inventory: HashMap<DestinationId, Vec<InventoryKnot>>,
+}
+
+/// Everything [`CalculatedSchedule::new`] indexes.
+pub(crate) struct ScheduleParts {
+    pub(crate) run: u64,
+    pub(crate) semantic: u64,
+    pub(crate) generation: u64,
+    pub(crate) requested_end_h: f64,
+    pub(crate) executions: Vec<Execution>,
+    pub(crate) deliveries: Vec<Delivery>,
+    pub(crate) ground: Vec<GroundBalance>,
+    pub(crate) piles: Vec<PileTrack>,
+    pub(crate) chunk_draws: Vec<ChunkDraw>,
+    pub(crate) agents: Vec<LoaderAgentId>,
+    pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
+    pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
+    pub(crate) report: SolveReport,
+}
+
+impl CalculatedSchedule {
+    pub(crate) fn new(parts: ScheduleParts) -> Self {
+        let mut executions = parts.executions;
+        executions.sort_by(|left, right| (left.agent, left.start_h).partial_cmp(&(right.agent, right.start_h)).unwrap_or(std::cmp::Ordering::Equal));
+        let mut idle = Vec::new();
+        for agent in &parts.agents {
+            let mut at = 0.0_f64;
+            for execution in executions.iter().filter(|execution| execution.agent == *agent) {
+                if execution.start_h > at + 1e-6 {
+                    idle.push((*agent, at, execution.start_h));
+                }
+                at = at.max(execution.end_h);
+            }
+            if parts.requested_end_h > at + 1e-6 {
+                idle.push((*agent, at, parts.requested_end_h));
+            }
+        }
+        let mut by_bar: HashMap<BarId, Vec<usize>> = HashMap::new();
+        for (index, execution) in executions.iter().enumerate() {
+            by_bar.entry(execution.bar).or_default().push(index);
+        }
+        let by_block = parts.ground.iter().enumerate().map(|(index, balance)| (balance.block, index)).collect();
+        let periods = PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles);
+        let inventory = inventory_curves(&parts.piles, &parts.deliveries);
+        Self {
+            run: parts.run,
+            semantic: parts.semantic,
+            generation: parts.generation,
+            requested_end_h: parts.requested_end_h,
+            executions,
+            deliveries: parts.deliveries,
+            ground: parts.ground,
+            piles: parts.piles,
+            chunk_draws: parts.chunk_draws,
+            idle,
+            bar_blocks: parts.bar_blocks,
+            reclaim_caps: parts.reclaim_caps,
+            grades: parts.grades,
+            report: parts.report,
+            periods,
+            by_bar,
+            by_block,
+            inventory,
+        }
+    }
+
+    /// The spans worked under one bar, in time order per loader.
+    pub(crate) fn bar_executions(&self, bar: BarId) -> impl Iterator<Item = &Execution> {
+        self.by_bar.get(&bar).into_iter().flatten().map(|index| &self.executions[*index])
+    }
+
+    pub(crate) fn bar_tonnes(&self, bar: BarId) -> f64 {
+        self.bar_executions(bar).map(|execution| execution.tonnes).sum()
+    }
+
+    pub(crate) fn ground(&self, block: DigBlockId) -> Option<&GroundBalance> {
+        self.by_block.get(&block).map(|index| &self.ground[*index])
+    }
+
+    fn blocks_of(&self, bar: BarId) -> Option<&[DigBlockId]> {
+        self.bar_blocks.iter().find(|(id, _)| *id == bar).map(|(_, blocks)| blocks.as_slice())
+    }
+
+    /// What this bar's ground still holds at the end of the calculation.
+    /// Material left in the block, not lost work: any bar naming that ground
+    /// may take it later.
+    pub(crate) fn bar_left_behind(&self, bar: BarId) -> f64 {
+        let Some(blocks) = self.blocks_of(bar) else { return 0.0 };
+        let mut seen = Vec::with_capacity(blocks.len());
+        blocks
+            .iter()
+            .filter(|block| {
+                let fresh = !seen.contains(*block);
+                seen.push(**block);
+                fresh
+            })
+            .filter_map(|block| self.ground(*block))
+            .map(|balance| balance.remaining_t)
+            .sum()
+    }
+
+    /// When every block this bar names had run out, through any bar or
+    /// loader, or `None` while one still holds material.
+    pub(crate) fn bar_completion_h(&self, bar: BarId) -> Option<f64> {
+        let blocks = self.blocks_of(bar)?;
+        let mut completion = 0.0_f64;
+        for block in blocks {
+            let balance = self.ground(*block)?;
+            if balance.remaining_t > 1e-6 {
+                return None;
+            }
+            completion = completion.max(balance.emptied_h.unwrap_or(0.0));
+        }
+        (!blocks.is_empty()).then_some(completion)
+    }
+
+    /// What one reclaim bar had drawn by `hour`, and its cap.
+    pub(crate) fn reclaim_progress(&self, bar: BarId, hour: f64) -> (f64, Option<f64>) {
+        let drawn = self
+            .bar_executions(bar)
+            .filter(|execution| execution.activity == Activity::Reclaim)
+            .map(|execution| {
+                if execution.end_h <= hour {
+                    execution.tonnes
+                } else if execution.start_h >= hour {
+                    0.0
+                } else {
+                    execution.rate_tph() * (hour - execution.start_h)
+                }
+            })
+            .sum();
+        let cap = self.reclaim_caps.iter().find(|(id, _)| *id == bar).and_then(|(_, cap)| *cap);
+        (drawn, cap)
+    }
+
+    /// Deliveries made by one loader under one bar from one source over one
+    /// span, for a tooltip.
+    pub(crate) fn deliveries_of<'a>(&'a self, execution: &'a Execution) -> impl Iterator<Item = &'a Delivery> + 'a {
+        self.deliveries.iter().filter(move |delivery| {
+            delivery.agent == execution.agent
+                && delivery.bar == execution.bar
+                && delivery.source == execution.source
+                && delivery.start_h < execution.end_h - 1e-9
+                && delivery.end_h > execution.start_h + 1e-9
+        })
+    }
+
+    /// Physical inventory at the cursor, interpolated at actual solved rates.
+    /// Binary search over an index built once when the result is published.
+    pub(crate) fn inventory_at(&self, pile: DestinationId, hour: f64) -> Option<(f64, Vec<f64>)> {
+        let curve = self.inventory.get(&pile)?;
+        let hour = hour.clamp(0.0, self.requested_end_h);
+        let index = curve.partition_point(|knot| knot.hour <= hour).saturating_sub(1);
+        let knot = &curve[index];
+        let elapsed = hour - knot.hour;
+        Some((
+            (knot.tonnes + elapsed * knot.rate).max(0.0),
+            knot.contained
+                .iter()
+                .zip(&knot.contained_rate)
+                .map(|(quantity, rate)| (quantity + elapsed * rate).max(0.0))
+                .collect(),
+        ))
+    }
+
+    /// Which chunks of an ordered chunked pile were drawn during the calendar
+    /// intervals a span falls in. Pile-wide per interval: when two loaders
+    /// reclaim one pile in the same interval, the draw is theirs together.
+    pub(crate) fn chunk_draws_during(&self, pile: DestinationId, start_h: f64, end_h: f64) -> impl Iterator<Item = &ChunkDraw> {
+        self.chunk_draws
+            .iter()
+            .filter(move |draw| draw.pile == pile && draw.start_h < end_h - 1e-9 && draw.end_h > start_h + 1e-9)
+    }
+
+    /// The last hour anything was worked, for framing a view.
+    pub(crate) fn last_activity_h(&self) -> f64 {
+        self.executions.iter().map(|execution| execution.end_h).fold(0.0, f64::max)
+    }
+}

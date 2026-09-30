@@ -2264,6 +2264,7 @@ pub(crate) struct DigBlockRecord {
     /// mapped values, grouped, as the scan retained them. `None` for a block
     /// nothing was measured against - a capacity-only solid, or a project with
     /// no reserve schema - which is not the same as a block made of nothing.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) portions: Option<BlockPortions>,
 }
 
@@ -2273,12 +2274,14 @@ pub(crate) struct DigBlockRecord {
 /// copy of that slot: a snapshot is rebuilt whenever the report cache is, and a
 /// capture is the size of the model's intersections with the partition.
 #[derive(Clone)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 pub(crate) struct BlockPortions {
     pub(crate) capture: Arc<crate::model::solid_reserves::MaterialCapture>,
     pub(crate) slot: usize,
 }
 
 impl BlockPortions {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn portions(&self) -> &[crate::model::solid_reserves::MaterialPortion] {
         self.capture.portions.get(self.slot).map_or(&[][..], Vec::as_slice)
     }

@@ -96,12 +96,11 @@ pub(crate) enum JobKey {
         request: u64,
     },
     /// One explicit schedule calculation, owned by its project and serial.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(dead_code, reason = "started only by the native schedule run; the browser build does not calculate")
+    )]
     ScheduleRun {
-        runtime: u32,
-        serial: u64,
-    },
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    ExperimentalScip {
         runtime: u32,
         serial: u64,
     },
@@ -138,7 +137,7 @@ impl CancelFlag {
         self.0.load(Ordering::Acquire)
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }
@@ -260,11 +259,7 @@ impl<'a> App<'a> {
             JobKey::ScheduleRun { runtime, serial } => self
                 .pending_schedule_run
                 .as_ref()
-                .is_some_and(|pending| pending.inputs.runtime == runtime && pending.serial == serial),
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            JobKey::ExperimentalScip { runtime, serial } => self
-                .pending_experimental_scip
-                .is_some_and(|pending| pending.inputs.runtime == runtime && pending.run_id == serial),
+                .is_some_and(|pending| pending.runtime == runtime && pending.serial == serial),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace

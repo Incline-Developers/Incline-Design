@@ -24,26 +24,26 @@ exclude = [
 winresource = "0.1.31"
 
 [features]
-default = []
-# Experimental native SCIP backend for blended-stockpile formulations. Off by
-# default. Never compiled for wasm - the dependency is declared native-only
-# below. Pick exactly one of the two linking features:
+default = ["scip-bundled"]
+# Schedule calculation links SCIP on every native build; wasm never sees it
+# (the dependency is declared native-only below). Pick exactly one of the two
+# linking features:
 #
-#   scip-experiment  the preserved baseline. russcip's `bundled` path downloads
-#                    a prebuilt SCIP 10.0.2 at build time.
-#   scip-system      link whatever SCIP the environment provides, through
-#                    russcip's `bindgen` path and $SCIPOPTDIR. Used to verify
-#                    the seeded-solution finding against SCIP 10.1.0.
+#   scip-bundled  the supported default. russcip's `bundled` path downloads the
+#                 pinned scipoptsuite-deploy v0.12.0 build (SCIP 10.0.2, SoPlex
+#                 8.0.2) at build time and embeds an rpath to it, so `cargo run`
+#                 needs no SCIP install and no library path.
+#   scip-system   link whatever SCIP the environment provides, through
+#                 russcip's `bindgen` path and $SCIPOPTDIR. Build it with
+#                 `--no-default-features --features scip-system`; the runtime
+#                 library path must then reach that installation.
 #
 # Enabling both leaves `bundled` in charge, because scip-sys checks it first.
-scip-experiment = ["scip-code", "russcip/bundled"]
-scip-system = ["scip-code", "russcip/bindgen"]
-# Internal: compiles the experimental SCIP module. Not useful on its own - it
-# selects no SCIP build, so linking fails.
-scip-code = ["dep:russcip", "blend-experiment"]
-# The blended-stockpile model, its independent replay and the iterative
-# fixed-grade HiGHS solver for it. Needs no SCIP, so it can be built and run
-# on its own; the SCIP features turn it on as well because they extend it.
+scip-bundled = ["russcip/bundled"]
+scip-system = ["russcip/bindgen"]
+# Developer comparison only: the iterative fixed-grade HiGHS method for the
+# blended model, and the solver scenario and benchmark checks built on it.
+# Off by default and never reachable from Run Period or Run All Periods.
 blend-experiment = []
 
 [dependencies]
@@ -95,7 +95,10 @@ egui-winit = "0.36.2"
 good_lp = { version = "1.15.0", default-features = false, features = ["highs"] }
 highs = "2.4.0"
 highs-sys = "1.15.0"
-russcip = { version = "0.10.0", default-features = false, optional = true }
+russcip = { version = "=0.10.0", default-features = false }
+# Not called directly: declared so its `links = "scip"` metadata reaches
+# build.rs, which puts SCIP's library directory on the binary's runtime path.
+scip-sys = { version = "=0.1.28", default-features = false }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"

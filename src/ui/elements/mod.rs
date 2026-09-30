@@ -21,11 +21,10 @@ pub(crate) mod schedule_animation;
 pub(crate) mod schedule_calendar;
 pub(crate) mod schedule_cashflow;
 pub(crate) mod schedule_destinations;
-/// The experimental blended-optimiser configuration and its last result.
-/// Feature-gated: an ordinary build has no Optimisation section.
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-pub(crate) mod schedule_experiment;
 pub(crate) mod schedule_gantt;
+/// The schedule optimiser's settings: horizon, resolution, solve limits,
+/// grade units and stockpile representation.
+pub(crate) mod schedule_optimisation;
 pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;
 pub(crate) mod solids_view;

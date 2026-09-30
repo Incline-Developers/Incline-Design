@@ -342,13 +342,14 @@ impl GradeQualification {
 /// pile's grade is a decision variable, so only this contract needs a value
 /// that is contingent on one.
 ///
-/// # Both directions, not permission
+/// # Conservative sign-aware permissions
 ///
 /// The rule applies exactly when its bounds hold. A positive value may not be
 /// claimed on a blend that fails them, and a negative one may not be avoided
 /// on a blend that meets them - the optimiser does not get to decide whether
-/// an otherwise matching rule applies. That is why the model builds a *truth*
-/// indicator for the predicate rather than a one-way permission.
+/// an otherwise matching rule applies. The model uses inward reward permission
+/// and outward cost-escape permission rather than two-sided truth indicators,
+/// so near-boundary blends remain feasible and are priced conservatively.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConditionalValue {
     /// Index into [`BlendInput::movements`].
@@ -368,6 +369,20 @@ impl ConditionalValue {
 
     pub(crate) fn half_spaces(&self) -> Vec<GradeHalfSpace> {
         self.bounds.iter().flat_map(|bound| bound.half_spaces()).collect()
+    }
+
+    /// Whether this blend lies within [`GRADE_MARGIN`] of any of this rule's
+    /// boundaries - the band in which the model values the rule
+    /// conservatively and the published (authored) value can differ from it.
+    ///
+    /// `tonnes` is what the interval reclaimed from the pile, over which the
+    /// contained-quantity cushion [`GRADE_CUSHION_T`] is spread.
+    pub(crate) fn near_boundary(&self, blend: &[f64], tonnes: f64) -> bool {
+        let band = GRADE_MARGIN + GRADE_CUSHION_T / tonnes.max(GRADE_CUSHION_T) + 1e-9;
+        self.half_spaces().into_iter().any(|test| {
+            let value = blend.get(test.grade).copied().unwrap_or(0.0);
+            (value - test.endpoint.value).abs() <= band
+        })
     }
 }
 
@@ -397,53 +412,84 @@ pub(crate) struct BlendInput {
     pub(crate) grade_limits: Vec<GradeLimit>,
 }
 
-/// Numerical convention for a grade boundary.
+/// Numerical convention for a grade boundary, in mass fraction.
 ///
 /// SCIP satisfies constraints to `numerics/feastol` (1e-6 by default), so a
 /// bare `>=` on a blended grade can be *met* with up to that much violation:
-/// ask for 0.62 and the answer can genuinely be 0.619999.
-///
-/// The condition is therefore always tightened, never relaxed - the model
-/// asks for `minimum + GRADE_MARGIN` so that after the solver's own slack the
-/// delivered grade still clears `minimum`. An exclusive bound is tightened by
-/// a further margin so the boundary value itself fails.
+/// ask for 0.62 and the answer can genuinely be 0.619999. Every model row that
+/// tests a blend is therefore written one margin inside the authored
+/// boundary, so that after the solver's own slack the replayed blend is still
+/// on the side the row claimed.
 ///
 /// The replay deliberately does **not** use this margin. It checks the
 /// authored boundary itself, with only enough slack for floating-point
 /// arithmetic, because its job is to catch a violated boundary rather than to
-/// agree with the model's safety cushion. An earlier revision had the sign of
-/// this margin the wrong way round; the replay reported deliveries at
-/// 0.619999 against a 0.62 minimum, which is how the error was found.
+/// agree with the model's cushion.
 ///
-/// # The separation convention, stated once
+/// # What the margin does to each kind of rule
 ///
-/// One margin is used for every grade boundary in this model - destination
-/// eligibility, conditional cashflow, and both backends - so there is a
-/// single documented answer to "where exactly is the boundary".
+/// Operators are never rewritten: `>=`, `>`, `<=` and `<` keep their meaning
+/// in the replay and in every published figure. In the model, every operator
+/// takes the same single margin - the boundary value itself sits inside the
+/// cushion either way, so inclusive and exclusive differ only in which side
+/// the replay counts the exact boundary on. For a threshold `v`:
 ///
-/// * **Eligibility** (§5) is tightened only. A route admitted by `Fe >= 0.62`
-///   is modelled as `Fe >= 0.62 + margin`, and by `Fe > 0.62` as
-///   `Fe >= 0.62 + 2 x margin`, so after the solver's own feasibility slack
-///   the delivered grade still clears what was authored. An upper bound is
-///   tightened downwards by the same amounts. A destination is never opened
-///   on a grade that fails the rule; it may, by at most one margin, be closed
-///   on a grade that passes it.
+/// | rule | model row | effect of the margin |
+/// |---|---|---|
+/// | route admitted by `Fe >= v` or `Fe > v` | open only when `blend >= v + m` | the route is **closed** for blends in `[v, v + m)`; a restriction, never an admission |
+/// | route admitted by `Fe <= v` or `Fe < v` | open only when `blend <= v - m` | closed for blends in `(v - m, v]` |
+/// | conditional **reward** on `Fe >= v` | earned only when `blend >= v + m` | a blend in `[v, v + m)` is not credited *by the optimiser*; the published value pays it |
+/// | conditional **cost** on `Fe >= v` | escaped only when `blend <= v - m` | a blend in `(v - m, v)` is charged *by the optimiser*; the published value does not charge it |
 ///
-/// * **Conditional cashflow** (§6) needs the predicate's *truth*, not a
-///   permission, because a negative rule the solver could decline to apply
-///   would not be a cost at all. The indicator is therefore exact on both
-///   sides, and that has a price which is stated rather than hidden: a blend
-///   within one margin of a payment boundary satisfies neither the "true" nor
-///   the "false" rows, so the model excludes a band of width `2 x margin`
-///   around each such boundary. At 1e-6 in mass fraction that is 0.0001% Fe.
-///   It is a real restriction on the blends a schedule may hold, and it is
-///   the price of making a conditional cost impossible to avoid.
+/// So eligibility carries a genuine modelling restriction of width `m` inside
+/// each authored bound, and conditional values carry none: no blend is
+/// forbidden by a cashflow boundary, the optimiser merely values a blend
+/// within `m` of one conservatively. The replay counts those deliveries and
+/// the value they could shift (`ReplayReport::boundary_value_slack`) so the
+/// difference between the model's objective and the published one is
+/// reported rather than hidden.
 ///
-/// Strict inequalities are not representable as open sets by ordinary solver
-/// rows, so `>` is modelled as `>=` one margin further in. The operator the
-/// planner wrote is preserved; only the numerical separation is introduced,
-/// and the replay still checks the authored boundary itself.
+/// At `m = 1e-6` in mass fraction the band is 0.0001 percentage points of a
+/// percent-unit grade - far below assay precision, but stated because it is
+/// not zero.
 pub(crate) const GRADE_MARGIN: f64 = 1e-6;
+
+/// The same convention in contained quantity: every model row testing a
+/// blend also clears its boundary by this many tonnes of the graded
+/// component. See `formulation::implies_half_space` for why a fraction margin
+/// alone does not protect a small reclaim. For a delivery of `T` tonnes the
+/// band this adds is `GRADE_CUSHION_T / T` in grade: 1e-8 at 1,000 t.
+pub(crate) const GRADE_CUSHION_T: f64 = 1e-5;
+/// The highest mass fraction any material in the scenario can carry, per
+/// grade: the upper bound the model places on contained quantity.
+///
+/// Every source of material counts - the captured dig materials *and* the
+/// authored opening stock of every pile and chunk. An earlier revision read
+/// the dig materials alone, so a pile opening richer than every block in scope
+/// (or any pile in a reclaim-only run, where there are no dig materials at
+/// all) had its opening contained quantity bounded below its own authored
+/// value, and every run was infeasible at hour zero.
+pub(crate) fn grade_ceilings(input: &BlendInput) -> Vec<f64> {
+    let grades = input.grades.count();
+    let mut ceilings = input.grades.ceilings();
+    ceilings.resize(grades, 0.0);
+    let mut raise = |tonnes: f64, contained: &[f64]| {
+        if tonnes > 0.0 {
+            for (ceiling, quantity) in ceilings.iter_mut().zip(contained) {
+                *ceiling = ceiling.max((quantity / tonnes).clamp(0.0, 1.0));
+            }
+        }
+    };
+    for pile in &input.piles {
+        let (tonnes, contained) = pile.total_opening(grades);
+        raise(tonnes, &contained);
+        for (tonnes, contained) in &pile.chunk_opening {
+            raise(*tonnes, contained);
+        }
+    }
+    ceilings
+}
+
 pub(crate) fn flat_cell(interval: usize, segment: usize, segments: usize) -> usize {
     interval * segments + segment
 }

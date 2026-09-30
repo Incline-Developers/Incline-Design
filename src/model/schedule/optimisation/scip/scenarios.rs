@@ -132,6 +132,10 @@ fn dig_task(id: u32, loader: u32, ground: &[u32], end_h: f64) -> Task {
 
 fn run(input: &BlendInput, seconds: u64) -> super::experiments::BlendRun {
     let finished = solve_blend(input, SolveTuning::new(Some(Duration::from_secs(seconds))));
+    println!(
+        "DIAGNOSTICS {:?}; posted coefficient entries {}",
+        finished.diagnostics, finished.sizes.linear_coefficient_entries
+    );
     let replay = finished.replay.as_ref();
     println!(
         "SOLVE status={:?} obj={:?} bound={:.4} gap={:?} nodes={} vars={} bin={} lin={} nonlin={} form={:?} solve={:.3}s replay_issues={} max_abs_resid={:.3e} obj_diff={:.3e}",
@@ -1573,14 +1577,23 @@ fn chunks_fill_close_and_reclaim_from_empty() {
         assert!(received > 1.0, "{order:?} never filled a chunk");
         assert!(reclaimed > 1.0, "{order:?} never reclaimed from a filled chunk");
 
-        // And the blend the replay recomputed for a drawn chunk must clear
-        // the crusher's minimum, since that is the only paid route.
+        // And the blend drawn from the pile in each interval must clear the
+        // crusher's minimum, since that is the only paid route. Grade limits
+        // apply to the interval's draw as a whole, not to each chunk: a dirty
+        // chunk may be blended out with the richer chunks drawn beside it.
         let drawn: Vec<_> = solution.chunks.iter().filter(|row| row.reclaimed_t > 1e-6).collect();
         assert!(!drawn.is_empty());
+        let mut per_interval: std::collections::BTreeMap<_, (f64, f64)> = std::collections::BTreeMap::new();
         for row in drawn {
             let key = crate::model::schedule::optimisation::blended::formulation::chunk_key(row.chunk, row.interval, input.intervals.len());
             let blend = replay.blends.get(&(row.pile, key, FE)).copied().unwrap_or(0.0);
-            assert!(blend >= 0.62 - 1e-9, "chunk {} drew at {blend} in interval {}", row.chunk, row.interval);
+            let (tonnes, metal) = per_interval.entry((row.pile, row.interval)).or_default();
+            *tonnes += row.reclaimed_t;
+            *metal += row.reclaimed_t * blend;
+        }
+        for ((_, interval), (tonnes, metal)) in per_interval {
+            let blend = metal / tonnes;
+            assert!(blend >= 0.62 - 1e-9, "{order:?} drew at {blend} in interval {interval}");
         }
     }
 }

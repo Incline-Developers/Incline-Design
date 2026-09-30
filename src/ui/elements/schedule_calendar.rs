@@ -1,4 +1,14 @@
-//! Virtualized period calendar for loader availability, utilisation and rate.
+//! Virtualized period calendar: the authored inputs per period - loader
+//! availability, utilisation and rates, truck fleets, crusher budgets - and
+//! beneath them the calculated figures one accepted schedule run reports.
+//!
+//! Every calculated figure is read off the one shared
+//! [`CalculatedSchedule`]'s per-period aggregates, which were built once when
+//! it was published: dig and reclaim tonnes per loader, truck-hours per class,
+//! receipts, reclaim and closing stock per destination, and movement value.
+//! Nothing here applies a rate or an availability factor a second time.
+//! A covered period with no activity reads zero for a flow and its standing
+//! balance for a stock; a period the run did not reach is blank.
 
 use thousands::Separable;
 
@@ -7,8 +17,8 @@ use crate::{
     model::{
         Document,
         schedule::{
-            CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationProduction,
-            LoaderAgent, PeriodProduction, SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations,
+            CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, LoaderAgent,
+            SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations, experiment::GradeUnit, result::CalculatedSchedule,
         },
     },
     ui::{
@@ -37,6 +47,7 @@ const NEST_INDENT: f32 = 16.0;
 /// as much part of the rectangle as a loader row is.
 #[derive(Clone, Copy)]
 enum Row {
+    Schedule,
     Loaders,
     Trucks,
     Destinations,
@@ -51,6 +62,67 @@ struct DestinationRow {
     id: DestinationId,
     name: String,
     kind: DestinationKind,
+}
+
+/// The calculated half of the grid for one frame: the held result, when it is
+/// current, and the names its figures are labelled with.
+///
+/// Names are resolved here, per frame, rather than stored in the result: a
+/// renamed grade field relabels a closing-grade hover without recalculating
+/// anything.
+struct Figures<'a> {
+    result: Option<&'a CalculatedSchedule>,
+    /// Grade names and units, aligned with the result's grades.
+    grades: Vec<(String, GradeUnit)>,
+    currency: String,
+}
+
+impl Figures<'_> {
+    /// One calculated cell's figure and whether its period is only partly
+    /// covered, or `None` where the calculation answers for nothing: no
+    /// current result, a period beyond the calculated horizon, or the Default
+    /// column, which no calculation has an opinion about.
+    fn figure(&self, address: CalendarCellAddress, kind: Option<DestinationKind>) -> Option<(f64, bool)> {
+        let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
+        let periods = &self.result?.periods;
+        let value = match address.row {
+            CalendarRow::DigTonnes => periods.dig(address.agent()?, period)?,
+            CalendarRow::ReclaimTonnes => periods.reclaim(address.agent()?, period)?,
+            CalendarRow::TruckHours => periods.truck_hours(address.truck()?, period)?,
+            CalendarRow::Received => periods.received(address.destination()?, period)?,
+            CalendarRow::Reclaimed => periods.reclaimed(address.destination()?, period)?,
+            CalendarRow::Cumulative => match kind {
+                Some(DestinationKind::Stockpile) => periods.closing(address.destination()?, period)?.0,
+                _ => periods.cumulative(address.destination()?, period)?,
+            },
+            CalendarRow::Value => periods.value(period)?,
+            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit => return None,
+        };
+        Some((value, periods.is_partial(period)))
+    }
+
+    /// A stockpile's closing grades for a period, for the hover. Only on
+    /// demand: a row per grade would bury the grid.
+    fn closing_grades(&self, address: CalendarCellAddress) -> Option<String> {
+        let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
+        let (tonnes, contained) = self.result?.periods.closing(address.destination()?, period)?;
+        if tonnes <= 1e-6 || contained.is_empty() || self.grades.is_empty() {
+            return None;
+        }
+        let grades: Vec<String> = self
+            .grades
+            .iter()
+            .zip(contained)
+            .map(|((name, unit), contained)| {
+                let fraction = contained / tonnes;
+                match unit {
+                    GradeUnit::Percent => format!("{name} {}%", trimmed_number(fraction * 100.0)),
+                    GradeUnit::Fraction => format!("{name} {}", trimmed_number(fraction)),
+                }
+            })
+            .collect();
+        Some(tr!("schedule-calendar-closing-grades", grades = grades.join(" · ")))
+    }
 }
 
 /// Every destination the Calendar shows, in the order the Setup pages list them.
@@ -83,7 +155,8 @@ fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
         // A crusher has no storage, so it has no inventory to report - and it
         // has the one editable destination row, its daily budget.
         DestinationKind::Crusher => &[CalendarRow::CrusherLimit, CalendarRow::Received],
-        DestinationKind::Stockpile | DestinationKind::Dump => &[CalendarRow::Received, CalendarRow::Cumulative],
+        DestinationKind::Stockpile => &[CalendarRow::Received, CalendarRow::Reclaimed, CalendarRow::Cumulative],
+        DestinationKind::Dump => &[CalendarRow::Received, CalendarRow::Cumulative],
     }
 }
 
@@ -95,12 +168,30 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     let plan = &project.schedule;
     // Held by value for the frame: the grid needs the mirrored result while it
     // also holds the editor mutably, and the clone is one refcount.
-    let production = editor.schedule_production.clone();
-    let production = production.as_deref();
-    let received = editor.schedule_received.clone();
-    let received = received.as_deref();
+    let result = editor.schedule_result.clone();
+    let figures = Figures {
+        result: result.as_deref(),
+        grades: result
+            .as_deref()
+            .map(|result| {
+                result
+                    .grades
+                    .iter()
+                    .map(|(field, unit)| {
+                        let name = document
+                            .reserve_fields()
+                            .iter()
+                            .find(|entry| entry.id == *field)
+                            .map_or_else(|| format!("{}", field.0), |entry| entry.name.clone());
+                        (name, *unit)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        currency: plan.currency().to_owned(),
+    };
     let destinations = destination_rows(plan, document);
-    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, production, received));
+    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
     egui::CentralPanel::default()
         .frame(chrome::region_frame(ui))
         .show(ui, |ui| {
@@ -111,7 +202,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             if plan.agents().is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
-                draw_grid(ui, grid, editor, plan, &destinations, production, received, project.active_session, commands);
+                draw_grid(ui, grid, editor, plan, &destinations, &figures, project.active_session, commands);
             }
             ui.allocate_rect(rect, egui::Sense::hover());
         })
@@ -132,12 +223,11 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
         super::schedule_gantt::draw_calculation_controls(ui, editor, "calendar", commands);
-        if editor.schedule_run_stale {
-            // Said once, here: the alternative is repeating it in every
-            // calculated row of every loader.
-            ui.add_space(8.0);
-            ui.colored_label(ui.visuals().warn_fg_color, tr!("schedule-calendar-results-stale"));
-        }
+        // Said once, here: the alternative is repeating it in every
+        // calculated row. The same status the Gantt shows, with the same
+        // detail behind it.
+        ui.add_space(8.0);
+        super::schedule_gantt::draw_run_status(ui, editor);
         if let Some(error) = &editor.schedule_calendar.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -158,7 +248,7 @@ fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
     });
 }
 
-fn required_days(plan: &SchedulePlan, production: Option<&PeriodProduction>, received: Option<&DestinationProduction>) -> u32 {
+fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u32 {
     let override_day = plan
         .agents()
         .iter()
@@ -179,14 +269,12 @@ fn required_days(plan: &SchedulePlan, production: Option<&PeriodProduction>, rec
         .unwrap_or(0);
     // Whatever the calculation answers for has to be reachable, or its own
     // figures would sit past the end of the grid.
-    let calculated_day = production
-        .map_or(0, PeriodProduction::covered_periods)
-        .max(received.map_or(0, DestinationProduction::covered_periods));
+    let calculated_day = result.map_or(0, |result| result.periods.covered_periods());
     14_u32.max(override_day).max(bar_day).max(calculated_day)
 }
 
 fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<Row> {
-    let mut rows = vec![Row::Loaders];
+    let mut rows = vec![Row::Schedule, Row::Field(CalendarOwner::Schedule, CalendarRow::Value), Row::Loaders];
     for agent in plan.agents() {
         let owner = CalendarOwner::Loader(agent.id);
         rows.push(Row::Group(owner));
@@ -217,12 +305,13 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
     rows
 }
 
-/// The rows one truck class shows, in drawn order. All three are authored;
-/// calculated truck rows need an optimised result, which does not exist yet.
-const TRUCK_ROWS: [CalendarRow; 3] = [
+/// The rows one truck class shows, in drawn order: three authored, and the
+/// truck-hours a calculated schedule used beneath them.
+const TRUCK_ROWS: [CalendarRow; 4] = [
     CalendarRow::Truck(TruckField::Units),
     CalendarRow::Truck(TruckField::Availability),
     CalendarRow::Truck(TruckField::Utilisation),
+    CalendarRow::TruckHours,
 ];
 
 /// The rows one loader group shows, in drawn order.
@@ -230,12 +319,16 @@ const TRUCK_ROWS: [CalendarRow; 3] = [
 /// Two rates, one beneath the other: availability and utilisation are the
 /// machine's and apply to both, so they stay above the pair rather than being
 /// repeated under each.
-const LOADER_ROWS: [CalendarRow; 5] = [
+///
+/// Dig and reclaim tonnes are two rows, never summed: reclaim moves material
+/// that was already mined.
+const LOADER_ROWS: [CalendarRow; 6] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
     CalendarRow::Input(CalendarField::ReclaimRate),
-    CalendarRow::Tonnes,
+    CalendarRow::DigTonnes,
+    CalendarRow::ReclaimTonnes,
 ];
 
 #[allow(clippy::too_many_arguments)]
@@ -245,8 +338,7 @@ fn draw_grid(
     editor: &mut EditorState,
     plan: &SchedulePlan,
     destinations: &[DestinationRow],
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
+    figures: &Figures<'_>,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
@@ -266,7 +358,7 @@ fn draw_grid(
     editor.schedule_calendar.scroll_y = editor.schedule_calendar.scroll_y.clamp(0.0, max_y);
     editor.schedule_calendar.scroll_x = editor.schedule_calendar.scroll_x.clamp(0.0, max_x);
 
-    handle_keyboard(ui, editor, plan, destinations, production, received, session, commands);
+    handle_keyboard(ui, editor, plan, destinations, figures, session, commands);
     let visuals = ui.visuals().clone();
     let stroke = visuals.widgets.noninteractive.bg_stroke;
     ui.painter().rect_filled(rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
@@ -308,8 +400,7 @@ fn draw_grid(
             editor,
             plan,
             destinations,
-            production,
-            received,
+            figures,
             first_period..last_period,
             period_left,
             session,
@@ -397,8 +488,7 @@ fn draw_row(
     editor: &mut EditorState,
     plan: &SchedulePlan,
     destinations: &[DestinationRow],
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
+    figures: &Figures<'_>,
     periods: std::ops::Range<u32>,
     period_left: f32,
     session: u32,
@@ -414,8 +504,8 @@ fn draw_row(
     // in that level's own colour. Unbroken down the column, so a loader's
     // three settings read as being inside the loader, which is inside Loaders.
     let depth = match row {
-        Row::Loaders | Row::Trucks | Row::Destinations => 0,
-        Row::Group(_) => 1,
+        Row::Schedule | Row::Loaders | Row::Trucks | Row::Destinations => 0,
+        Row::Group(_) | Row::Field(CalendarOwner::Schedule, _) => 1,
         Row::Field(..) => 2,
     };
     for level in 0..depth {
@@ -428,8 +518,9 @@ fn draw_row(
     let indent = depth as f32 * NEST_INDENT;
     let label_start = hierarchy.left() + indent;
     match row {
-        Row::Loaders | Row::Trucks | Row::Destinations => {
+        Row::Schedule | Row::Loaders | Row::Trucks | Row::Destinations => {
             let label = match row {
+                Row::Schedule => tr!("schedule-calendar-schedule"),
                 Row::Loaders => tr!("schedule-calendar-loaders"),
                 Row::Trucks => tr!("schedule-calendar-trucks"),
                 _ => tr!("destination-destinations"),
@@ -439,6 +530,7 @@ fn draw_row(
         }
         Row::Group(owner) => {
             let name = match owner {
+                CalendarOwner::Schedule => return,
                 CalendarOwner::Loader(id) => match plan.agent(id) {
                     Some(agent) => agent.name.clone(),
                     None => return,
@@ -471,6 +563,7 @@ fn draw_row(
         }
         Row::Field(owner, kind) => {
             let agent = match owner {
+                CalendarOwner::Schedule => None,
                 CalendarOwner::Loader(id) => match plan.agent(id) {
                     Some(agent) => Some(agent),
                     None => return,
@@ -490,10 +583,10 @@ fn draw_row(
             };
             let destination_kind = match owner {
                 CalendarOwner::Destination(id) => destinations.iter().find(|entry| entry.id == id).map(|entry| entry.kind),
-                CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
+                CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
             };
             let text_left = label_start + 18.0;
-            let label = row_label(kind, destination_kind);
+            let label = row_label(kind, destination_kind, &figures.currency);
             if kind.is_calculated() {
                 // A lock beside a quieter label: the tint alone would be the
                 // only thing saying this row cannot be typed into, and colour
@@ -516,8 +609,7 @@ fn draw_row(
                 plan,
                 destinations,
                 agent,
-                production,
-                received,
+                figures,
                 session,
                 commands,
             );
@@ -537,8 +629,7 @@ fn draw_row(
                     plan,
                     destinations,
                     agent,
-                    production,
-                    received,
+                    figures,
                     session,
                     commands,
                 );
@@ -547,10 +638,9 @@ fn draw_row(
     }
 }
 
-/// What one row is called. A crusher's receipts are what it *processed*, since
-/// nothing is buffered in this increment; a stockpile's cumulative figure is
-/// scheduled inventory rather than stock on hand, because nothing is reclaimed.
-fn row_label(row: CalendarRow, destination: Option<DestinationKind>) -> String {
+/// What one row is called. A crusher's receipts are what it *processed*, and a
+/// stockpile's balance is its closing inventory, opening stock included.
+fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &str) -> String {
     match row {
         CalendarRow::Input(CalendarField::Availability) => tr!("schedule-calendar-availability"),
         CalendarRow::Input(CalendarField::Utilisation) => tr!("schedule-calendar-utilisation"),
@@ -559,16 +649,20 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>) -> String {
         CalendarRow::Truck(TruckField::Units) => tr!("truck-calendar-units"),
         CalendarRow::Truck(TruckField::Availability) => tr!("truck-calendar-availability"),
         CalendarRow::Truck(TruckField::Utilisation) => tr!("truck-calendar-utilisation"),
-        CalendarRow::Tonnes => tr!("schedule-calendar-tonnes"),
+        CalendarRow::TruckHours => tr!("truck-calendar-hours-used"),
+        CalendarRow::DigTonnes => tr!("schedule-calendar-dig-tonnes"),
+        CalendarRow::ReclaimTonnes => tr!("schedule-calendar-reclaim-tonnes"),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
         CalendarRow::Received => match destination {
             Some(DestinationKind::Crusher) => tr!("destination-calendar-processed"),
             _ => tr!("destination-calendar-received"),
         },
+        CalendarRow::Reclaimed => tr!("destination-calendar-reclaimed"),
         CalendarRow::Cumulative => match destination {
             Some(DestinationKind::Dump) => tr!("destination-calendar-deposited"),
-            _ => tr!("destination-calendar-inventory"),
+            _ => tr!("destination-calendar-closing"),
         },
+        CalendarRow::Value => tr!("schedule-calendar-value", currency = currency.to_owned()),
     }
 }
 
@@ -641,8 +735,7 @@ fn draw_cell(
     plan: &SchedulePlan,
     destinations: &[DestinationRow],
     agent: Option<&LoaderAgent>,
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
+    figures: &Figures<'_>,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
@@ -730,78 +823,76 @@ fn draw_cell(
         ui.painter().with_clip_rect(rect).text(
             rect.right_center() - egui::vec2(6.0, 0.0),
             egui::Align2::RIGHT_CENTER,
-            display_text(plan, agent, production, received, address),
+            display_text(plan, destinations, agent, figures, address),
             egui::TextStyle::Body.resolve(ui.style()),
             color,
         );
     }
-    if let Some(hover) = hover_text(plan, agent, production, received, address) {
+    if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
         response.on_hover_text(hover);
     }
 }
 
+fn destination_kind(destinations: &[DestinationRow], address: CalendarCellAddress) -> Option<DestinationKind> {
+    let id = address.destination()?;
+    destinations.iter().find(|entry| entry.id == id).map(|entry| entry.kind)
+}
+
+/// A calculated figure as the grid paints it: tonnes and money with
+/// separators, hours with one decimal.
+fn format_figure(row: CalendarRow, value: f64) -> String {
+    match row {
+        CalendarRow::TruckHours => format_hours(value),
+        CalendarRow::Value => format_money(value),
+        _ => format_tonnes(value),
+    }
+}
+
+/// The same figure as plain digits, for the clipboard.
+fn raw_figure(row: CalendarRow, value: f64) -> String {
+    match row {
+        CalendarRow::Value => format!("{:.2}", if value == 0.0 { 0.0 } else { value }),
+        _ => tonnes_number(value),
+    }
+}
+
 /// What a cell shows. A calculated cell says nothing at all outside the
-/// calculated interval, and marks a period the interval stops part-way through.
-fn display_text(
-    plan: &SchedulePlan,
-    agent: Option<&LoaderAgent>,
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
-    address: CalendarCellAddress,
-) -> String {
-    let marked = |figure: Option<(f64, bool)>| match figure {
-        Some((tonnes, true)) => format!("{} *", format_tonnes(tonnes)),
-        Some((tonnes, false)) => format_tonnes(tonnes),
-        None => String::new(),
-    };
+/// calculated horizon, and marks a period the horizon stops part-way through.
+fn display_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Option<&LoaderAgent>, figures: &Figures<'_>, address: CalendarCellAddress) -> String {
     match address.row {
         CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
         CalendarRow::Truck(field) => truck_text(plan, address, field),
-        CalendarRow::Tonnes => marked(calculated(production, address)),
         CalendarRow::CrusherLimit => crusher_text(plan, address),
-        CalendarRow::Received => marked(destination_figure(received, address, false)),
-        CalendarRow::Cumulative => marked(destination_figure(received, address, true)),
+        row => match figures.figure(address, destination_kind(destinations, address)) {
+            Some((value, true)) => format!("{} *", format_figure(row, value)),
+            Some((value, false)) => format_figure(row, value),
+            None => String::new(),
+        },
     }
 }
 
-fn hover_text(
-    plan: &SchedulePlan,
-    agent: Option<&LoaderAgent>,
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
-    address: CalendarCellAddress,
-) -> Option<String> {
+fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Option<&LoaderAgent>, figures: &Figures<'_>, address: CalendarCellAddress) -> Option<String> {
     match address.row {
         CalendarRow::Input(_) => agent.map(|agent| resolved_hover(plan, agent, address)),
-        CalendarRow::Tonnes => {
-            let production = production?;
-            calculated(Some(production), address)?
-                .1
-                .then(|| tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(production.coverage_end_h())))
-        }
         CalendarRow::Truck(field) => Some(truck_hover(plan, address, field)),
         CalendarRow::CrusherLimit => Some(crusher_hover(plan, address)),
-        CalendarRow::Received | CalendarRow::Cumulative => {
-            let received = received?;
-            let cumulative = address.row == CalendarRow::Cumulative;
-            destination_figure(Some(received), address, cumulative)?
-                .1
-                .then(|| tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(received.coverage_end_h())))
+        row => {
+            let kind = destination_kind(destinations, address);
+            let (_, partial) = figures.figure(address, kind)?;
+            let mut lines = Vec::new();
+            if partial {
+                let covered = figures.result.map_or(0.0, |result| result.periods.coverage_end_h());
+                lines.push(tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(covered)));
+            }
+            if row == CalendarRow::Cumulative
+                && kind == Some(DestinationKind::Stockpile)
+                && let Some(grades) = figures.closing_grades(address)
+            {
+                lines.push(grades);
+            }
+            (!lines.is_empty()).then(|| lines.join("\n"))
         }
     }
-}
-
-/// One destination row's figure and whether its period is only partly covered.
-fn destination_figure(received: Option<&DestinationProduction>, address: CalendarCellAddress, cumulative: bool) -> Option<(f64, bool)> {
-    let CalendarCell::Period(period) = address.cell else { return None };
-    let received = received?;
-    let destination = address.destination()?;
-    let tonnes = if cumulative {
-        received.cumulative(destination, period)?
-    } else {
-        received.received(destination, period)?
-    };
-    Some((tonnes, received.is_partial(period)))
 }
 
 /// A truck cell's own text.
@@ -952,28 +1043,24 @@ fn crusher_target(address: CalendarCellAddress) -> Option<StandaloneDestinationI
     }
 }
 
-/// This cell's calculated tonnes and whether its period is only partly
-/// covered, or `None` where the calculation answers for nothing: no current
-/// result, a period beyond the calculated interval, or the Default column,
-/// which no calculation has an opinion about.
-fn calculated(production: Option<&PeriodProduction>, address: CalendarCellAddress) -> Option<(f64, bool)> {
-    let CalendarCell::Period(period) = address.cell else { return None };
-    let production = production?;
-    Some((production.tonnes(address.agent()?, period)?, production.is_partial(period)))
-}
-
 fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {
     ui.id().with(("calendar_cell", address.owner, address.row, address.cell))
 }
 
 fn editable(address: CalendarCellAddress) -> bool {
     match address.row {
-        // Calculated: selectable so it can be copied, and nothing more.
-        CalendarRow::Tonnes | CalendarRow::Received | CalendarRow::Cumulative => false,
         CalendarRow::Truck(_) => address.truck().is_some(),
         CalendarRow::CrusherLimit => crusher_target(address).is_some(),
         // Both default rates are the class's, shown here and edited in Setup.
         CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate)),
+        // Calculated: selectable so it can be copied, and nothing more.
+        CalendarRow::DigTonnes
+        | CalendarRow::ReclaimTonnes
+        | CalendarRow::TruckHours
+        | CalendarRow::Received
+        | CalendarRow::Reclaimed
+        | CalendarRow::Cumulative
+        | CalendarRow::Value => false,
     }
 }
 
@@ -1173,6 +1260,20 @@ pub(crate) fn format_tonnes(value: f64) -> String {
     tonnes_number(value).separate_with_commas()
 }
 
+fn format_hours(value: f64) -> String {
+    let rounded = (value * 10.0).round() / 10.0;
+    let rounded = if rounded == 0.0 { 0.0 } else { rounded };
+    format!("{rounded:.1}").separate_with_commas()
+}
+
+/// A movement value to the cent, with separators. Signed: a cost reads
+/// negative. Never described as profit.
+pub(crate) fn format_money(value: f64) -> String {
+    let rounded = (value * 100.0).round() / 100.0;
+    let rounded = if rounded == 0.0 { 0.0 } else { rounded };
+    format!("{rounded:.2}").separate_with_commas()
+}
+
 fn format_value(field: CalendarField, value: f64) -> String {
     let text = trimmed_number(scaled(field, value)).separate_with_commas();
     match field {
@@ -1325,7 +1426,7 @@ enum Nav {
 /// included. Row numbers are what a pasted rectangle is measured against, so
 /// leaving it out here would land pasted values on the wrong loader.
 fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<(CalendarOwner, CalendarRow)> {
-    let mut rows = Vec::new();
+    let mut rows = vec![(CalendarOwner::Schedule, CalendarRow::Value)];
     for agent in plan.agents() {
         let owner = CalendarOwner::Loader(agent.id);
         if editor.schedule_calendar.collapsed.contains(&owner) {
@@ -1422,8 +1523,7 @@ fn handle_keyboard(
     editor: &mut EditorState,
     plan: &SchedulePlan,
     destinations: &[DestinationRow],
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
+    figures: &Figures<'_>,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
@@ -1445,7 +1545,7 @@ fn handle_keyboard(
                 }
             }
             egui::Event::Paste(text) => paste(editor, plan, destinations, session, commands, &text),
-            egui::Event::Copy => copy(editor, plan, destinations, production, received, ui),
+            egui::Event::Copy => copy(editor, plan, destinations, figures, ui),
             egui::Event::Key {
                 key, pressed: true, modifiers, ..
             } => match key {
@@ -1610,14 +1710,7 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     }
 }
 
-fn copy(
-    editor: &EditorState,
-    plan: &SchedulePlan,
-    destinations: &[DestinationRow],
-    production: Option<&PeriodProduction>,
-    received: Option<&DestinationProduction>,
-    ui: &egui::Ui,
-) {
+fn copy(editor: &EditorState, plan: &SchedulePlan, destinations: &[DestinationRow], figures: &Figures<'_>, ui: &egui::Ui) {
     let Some((r0, r1, c0, c1)) = selection_bounds(editor, plan, destinations) else { return };
     let mut lines = Vec::new();
     for row in r0..=r1 {
@@ -1627,12 +1720,11 @@ fn copy(
             // and the partial-period mark are things the grid paints, not
             // things a clipboard should carry.
             let text = match address_at(editor, plan, destinations, row, column) {
-                Some(address) => match address.row {
-                    CalendarRow::Tonnes => calculated(production, address).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
-                    CalendarRow::Received => destination_figure(received, address, false).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
-                    CalendarRow::Cumulative => destination_figure(received, address, true).map(|(tonnes, _)| tonnes_number(tonnes)).unwrap_or_default(),
-                    CalendarRow::CrusherLimit | CalendarRow::Truck(_) | CalendarRow::Input(_) => raw_cell_text(plan, address),
-                },
+                Some(address) if address.row.is_calculated() => figures
+                    .figure(address, destination_kind(destinations, address))
+                    .map(|(value, _)| raw_figure(address.row, value))
+                    .unwrap_or_default(),
+                Some(address) => raw_cell_text(plan, address),
                 None => String::new(),
             };
             cells.push(text);

@@ -146,7 +146,7 @@ const PREFERENCE_STAGE_MINIMUM: Duration = Duration::from_millis(250);
 /// without being rewritten for it. It changes nothing about how this module
 /// solves: when no path has been requested the hook is a single `Option`
 /// check, and the whole module compiles away without the feature.
-#[cfg(feature = "scip-code")]
+#[cfg(feature = "blend-experiment")]
 pub(super) mod mps_export {
     use std::{cell::RefCell, path::PathBuf};
 
@@ -2039,7 +2039,7 @@ pub(super) fn solve(input: &OptimisationInput, limits: SolveLimits, cancellation
     // Experimental: hand this exact model to another backend (see
     // `mps_export`). Unrestricted here - the seed rows have been relaxed - so
     // the file holds the model this call is about to solve.
-    #[cfg(feature = "scip-code")]
+    #[cfg(feature = "blend-experiment")]
     if let Some(path) = mps_export::take()
         && let Ok(target) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
     {

@@ -68,9 +68,24 @@ impl Rows for ScipRows<'_> {
             return;
         }
         self.sizes.linear_constraints += 1;
+        self.sizes.linear_coefficient_entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
         let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
         let coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
         self.model.add_cons(vars, &coefs, lhs, rhs, name);
+    }
+
+    /// SCIP's own indicator constraint rather than a big-M row: the linear
+    /// part is then checked at its own scale, so the implication cannot be
+    /// bent by `M x feastol`.
+    fn implies(&mut self, flag: Variable, terms: Vec<(Variable, f64)>, rhs: f64, _big_m: f64, name: &str) {
+        if terms.is_empty() {
+            return;
+        }
+        self.sizes.linear_constraints += 1;
+        self.sizes.linear_coefficient_entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+        let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
+        let mut coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
+        self.model.add_cons_indicator(&flag, vars, &mut coefs, rhs, name);
     }
 
     /// `Q_recl * T_open - T_recl * Q_open = 0`, posted through

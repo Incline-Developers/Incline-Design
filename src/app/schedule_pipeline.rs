@@ -368,8 +368,6 @@ impl crate::app::App<'_> {
             // A calculated schedule describes one project's ground; it does
             // not outlive the project it was calculated for.
             self.schedule_calculation = None;
-            self.schedule_production_cache = None;
-            self.schedule_destination_cache = None;
             self.pending_schedule_run = None;
             self.schedule_run_diagnostics = None;
             self.mirror_schedule_stages();
@@ -380,6 +378,8 @@ impl crate::app::App<'_> {
             self.pending_schedule_run = None;
             self.schedule_pipeline = Some(SchedulePipeline::new(runtime));
             self.schedule_run_diagnostics = None;
+            // Another project's calculation says nothing about this one.
+            self.schedule_calculation = None;
         }
         let fingerprints = self.schedule_fingerprints();
         let mut earliest_change = None;
@@ -413,8 +413,6 @@ impl crate::app::App<'_> {
         // against the gate as it stands now, and this is where "now" is
         // established.
         self.advance_schedule_calculation();
-        #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-        self.advance_experimental_scip_blend();
         self.mirror_schedule_stages();
     }
 
@@ -440,7 +438,7 @@ impl crate::app::App<'_> {
                 .find(|field| field.id == id)
                 .map(|field| (id.0, format!("{:?}", field.aggregation)))
         });
-        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field));
+        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field, plan.routing().enabled));
 
         let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits())).collect();
         let classes_step = hash_of((configuration, classes));
@@ -473,11 +471,10 @@ impl crate::app::App<'_> {
             .collect();
         let agents_step = hash_of((classes_step, agents));
 
-        // Transport inputs hang off the fleet and go no further: nothing
-        // downstream reads them yet, and folding them into the destination or
-        // readiness fingerprints would retire a dig-only calculation the
-        // moment a truck was rostered - implying it had used truck constraints
-        // it never saw.
+        // Transport inputs hang off the fleet and go no further in the Setup
+        // chain. A calculated schedule's own currentness reads them through
+        // `App::schedule_semantic_key`, which is where a truck edit retires
+        // it.
         let trucks = plan.trucks();
         let truck_classes: Vec<_> = trucks
             .classes
@@ -615,12 +612,8 @@ impl crate::app::App<'_> {
                 field.id.0.hash(&mut hasher);
                 format!("{:?}", field.aggregation).hash(&mut hasher);
             }
-            // The reclaim half of the optimised inputs rides this chain too, and
-            // for the same reason: a reclaim rate, a lot of opening stock or a
-            // FIFO/LIFO choice is read by nothing the current dispatcher does,
-            // so folding any of it into the dig-only chain would retire a result
-            // that never consulted it - and make the dispatcher look as though
-            // it had used opening inventory.
+            // Include reclaim rates and opening inventory in readiness identity;
+            // normal optimisation consumes these inputs as well as digging.
             for class in plan.classes() {
                 class.id.0.hash(&mut hasher);
                 class.default_reclaim_rate_tph.to_bits().hash(&mut hasher);
@@ -897,6 +890,16 @@ impl crate::app::App<'_> {
             }),
             Some((_, Some(_))) => {}
         }
+        // The optimiser accounts for every tonne by destination, so a project
+        // that switched routing off is stopped here, on the page that holds
+        // the switch - never switched on for it, and never run without it.
+        if self.workspace.active_document().is_some_and(|document| !document.schedule().routing().enabled) {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("schedule-capture-routing-off"),
+                blocking: true,
+            });
+        }
         StageOutcome::Settled { diagnostics, entities: 1 }
     }
 
@@ -1058,8 +1061,8 @@ impl crate::app::App<'_> {
                     diagnostics.push(StageDiagnostic {
                         entity: Some(entry.name.clone()),
                         message: tr!("inventory-stage-invalid-fields", count = invalid.to_string()),
-                        // The present dispatcher reads no inventory. The
-                        // optimiser input builder will require this clean.
+                        // Capture refuses invalid fields on stockpiles actually
+                        // used by the requested horizon, not on unused stockpiles.
                         blocking: false,
                     });
                 }
@@ -1100,9 +1103,8 @@ impl crate::app::App<'_> {
 
     /// The truck classes and their fleet calendars.
     ///
-    /// Never blocking. Empty truck configuration is a valid project at this
-    /// stage - nothing in the current dispatcher reads a truck - so what this
-    /// step reports is information, not a gate on Run Schedule.
+    /// Setup reports configuration; horizon-specific capture validates matching
+    /// truck rules and coefficients. Empty configuration is not unrestricted haul.
     fn evaluate_truck_classes(&self) -> StageOutcome {
         let Some(document) = self.workspace.active_document() else {
             return StageOutcome::Settled {
@@ -1205,10 +1207,8 @@ impl crate::app::App<'_> {
 
     /// The cashflow rules: does each enabled one still resolve what it names.
     ///
-    /// Never blocking. Nothing in the current dispatcher reads a value, so an
-    /// empty or broken cashflow configuration cannot stop a dig-only run - it
-    /// is reported here and nothing is repaired, because deleting a
-    /// destination must not silently widen a rule that priced it.
+    /// Empty cashflow is valid. Capture refuses unresolved enabled rules when
+    /// constructing the run. Nothing is silently repaired or widened here.
     fn evaluate_cashflow(&self) -> StageOutcome {
         use crate::model::schedule::{DestinationSelection, LoaderSelection, MovementSourceScope, MovementSourceSelection, destinations};
         let Some(document) = self.workspace.active_document() else {

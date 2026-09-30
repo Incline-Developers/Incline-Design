@@ -1,8 +1,17 @@
-//! Developer-only, in-process SCIP job. Project capture and the Run Schedule
-//! command remain separate work; this accepts an owned synthetic BlendInput.
+//! The SCIP solve of one owned blended model, run on a compute-pool worker.
+//!
+//! [`execute_scip_blend`] validates the input, builds the model, solves it,
+//! extracts owned rows and runs the independent replay, polling cancellation
+//! throughout. A horizon longer than one day-by-day window is first solved a
+//! day at a time; the stitched schedule is replayed against the whole
+//! horizon and seeds the whole-horizon solve, and whichever replayed schedule
+//! is worth more is the one kept. No SCIP model, pointer or solution
+//! wrapper leaves it; only owned, replayed rows do. Run Period and Run All
+//! Periods reach it through [`crate::app::schedule_run`], which owns the
+//! job, currentness and publication.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -10,25 +19,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-use russcip::Status;
+use russcip::{Model, ProblemCreated, Status, Variable, ffi, prelude::*};
 
-use super::{
-    App,
-    jobs::{CancelFlag, JobKey},
-    schedule_pipeline::ScheduleRunInputs,
-};
-use crate::model::schedule::optimisation::{
-    Activity, DestinationKind, SourceId, TaskKind,
-    blended::{
-        formulation::BlendSizes,
-        input::BlendInput,
-        replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
+use super::{jobs::CancelFlag, schedule_pipeline::ScheduleRunInputs};
+use crate::model::schedule::{
+    optimisation::{
+        Activity, DestinationKind, SourceId, TaskKind,
+        blended::{
+            formulation::BlendSizes,
+            input::BlendInput,
+            replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
+            rolling::{self, Carry, Stitched, Window},
+        },
+        scip::{
+            adapter::{self, InterruptAudit, SolveReport},
+            blend::formulate_scip_with_cancel,
+            experiments::extract_solution,
+        },
     },
-    scip::{
-        adapter::{self, InterruptAudit, SolveReport},
-        blend::formulate_scip_with_cancel,
-        experiments::extract_solution,
-    },
+    result::DayByDaySummary,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,9 +82,6 @@ pub(crate) enum ScipTermination {
     Infeasible,
     Unbounded,
     Cancelled,
-    /// The project could not be resolved into a model. The diagnostics name
-    /// what to fix; nothing was solved and the previous result is untouched.
-    CaptureFailure,
     InvalidInput,
     ValidationFailure,
     BackendFailure,
@@ -88,16 +94,6 @@ pub(crate) struct ScipPhaseTimings {
     pub(crate) solver: Duration,
     pub(crate) extraction: Duration,
     pub(crate) replay: Duration,
-}
-
-/// Captured model approximations, never a claim of continuous mixing.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ScipModelSettings {
-    pub(crate) intervals: usize,
-    pub(crate) segments_per_interval: usize,
-    pub(crate) chunk_slots: usize,
-    pub(crate) receipt_release_at_boundary: bool,
-    pub(crate) chunk_slot_reuse: bool,
 }
 
 pub(crate) struct ScipCompletion {
@@ -118,45 +114,18 @@ pub(crate) struct ScipCompletion {
     pub(crate) adjustments: Option<ExtractionAdjustments>,
     pub(crate) sizes: BlendSizes,
     pub(crate) timings: ScipPhaseTimings,
+    pub(crate) diagnostics: crate::model::schedule::result::SolveDiagnostics,
     pub(crate) solver_limit_overshoot: Option<Duration>,
     pub(crate) backend_version: String,
     pub(crate) wrapper_version: &'static str,
-    pub(crate) settings: ScipModelSettings,
     pub(crate) event_callbacks: u64,
     pub(crate) interrupt_calls: u64,
-    /// What real-project capture produced, when this run came from a project
-    /// rather than from a developer fixture.
-    pub(crate) capture: Option<CaptureSummary>,
-    /// Why capture refused, when it did. Never mixed with a solved result.
-    pub(crate) capture_diagnostics: Vec<String>,
-}
-
-/// What capture resolved, kept with the result so the summary can be read in
-/// the project's own terms without re-deriving anything.
-#[derive(Clone, Debug)]
-pub(crate) struct CaptureSummary {
-    pub(crate) duration: Duration,
-    pub(crate) fingerprint: u64,
-    pub(crate) candidates: usize,
-    pub(crate) ground_sources: usize,
-    pub(crate) mixed_blocks: usize,
-    pub(crate) event_budget_restricted: bool,
-    pub(crate) estimated_columns: usize,
-    /// Stated approximations this capture applied, verbatim.
-    pub(crate) notes: Vec<String>,
-    /// Dense stockpile id to the name the project gives it.
-    pub(crate) pile_names: Vec<(u32, String)>,
+    /// Present when the horizon was first solved day by day.
+    pub(crate) day_by_day: Option<DayByDaySummary>,
 }
 
 impl ScipCompletion {
     fn new(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>) -> Self {
-        let settings = ScipModelSettings {
-            intervals: input.intervals.len(),
-            segments_per_interval: input.segments_per_interval,
-            chunk_slots: input.piles.iter().map(|pile| pile.chunks.len()).sum(),
-            receipt_release_at_boundary: true,
-            chunk_slot_reuse: false,
-        };
         Self {
             identity,
             options,
@@ -173,14 +142,13 @@ impl ScipCompletion {
             adjustments: None,
             sizes: BlendSizes::default(),
             timings: ScipPhaseTimings::default(),
+            diagnostics: Default::default(),
             solver_limit_overshoot: None,
             backend_version: adapter::version(),
             wrapper_version: "russcip 0.10.0",
-            settings,
             event_callbacks: 0,
             interrupt_calls: 0,
-            capture: None,
-            capture_diagnostics: Vec::new(),
+            day_by_day: None,
         }
     }
 
@@ -189,6 +157,7 @@ impl ScipCompletion {
         self.diagnostic = Some(diagnostic.into());
         self.solution = None;
         self.published_objective = None;
+        log_outcome(self);
     }
 
     pub(crate) fn usable(&self) -> bool {
@@ -239,37 +208,110 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
         return out;
     }
 
+    // The whole run shares one solve budget: day-by-day windows first, when
+    // the horizon is long enough to need them, then the whole horizon with
+    // whatever is left.
+    let budget_started = Instant::now();
+    let mut seed = None;
+    if let Some(windows) = rolling::plan(&out.input) {
+        match solve_day_by_day(&mut out, &windows, options, cancel, activity) {
+            DayByDay::Seed(found) => seed = Some(*found),
+            DayByDay::Failed(reason) => {
+                log::warn!("schedule run {}: day-by-day start abandoned: {reason}", out.identity.run_id);
+                out.day_by_day = Some(DayByDaySummary {
+                    windows: windows.len(),
+                    seconds: budget_started.elapsed().as_secs_f64(),
+                    value: None,
+                    kept: false,
+                    failure: Some(reason),
+                });
+            }
+            DayByDay::Stop(reason, diagnostic) => {
+                out.stop(reason, diagnostic);
+                return out;
+            }
+        }
+    }
+    let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
+    if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
+        log::info!(
+            "schedule run {}: no time left for a whole-horizon solve; keeping the day-by-day schedule",
+            out.identity.run_id
+        );
+        adopt_seed(&mut out, found, None);
+        return out;
+    }
+
+    let mut completed = None;
+    if let Some(found) = seed.as_ref() {
+        activity.set(3);
+        let started = Instant::now();
+        let limit = remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE));
+        match complete_seed(&out.input, &found.solution, limit, cancel) {
+            Ok(values) => completed = Some(values),
+            Err(_) if cancel.is_cancelled() => {
+                out.stop(ScipTermination::Cancelled, "cancelled while completing the day-by-day seed");
+                return out;
+            }
+            Err(problem) => log::warn!("schedule run {}: day-by-day seed not offered to SCIP: {problem}", out.identity.run_id),
+        }
+        out.timings.solver += started.elapsed();
+        log::info!("schedule run {}: day-by-day seed completed in {:.2?}", out.identity.run_id, started.elapsed());
+    }
+    let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
+    if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
+        adopt_seed(&mut out, found, None);
+        return out;
+    }
+
     activity.set(2);
     let started = Instant::now();
     let built = formulate_scip_with_cancel(&out.input, Some(&cancel.signal()), Some(&activity.formulation_checks));
-    out.timings.formulation = started.elapsed();
+    out.timings.formulation += started.elapsed();
     if cancel.is_cancelled() || built.is_err() {
         out.stop(ScipTermination::Cancelled, "cancelled during formulation");
         return out;
     }
     let built = built.expect("checked formulation result");
     out.sizes = built.sizes;
+    log::info!(
+        "schedule run {}: model of {} variables ({} binary), {} linear and {} nonlinear constraints over {} intervals x {} event positions, built in {:?}",
+        out.identity.run_id,
+        out.sizes.variables,
+        out.sizes.binaries,
+        out.sizes.linear_constraints,
+        out.sizes.nonlinear_constraints,
+        out.input.intervals.len(),
+        out.input.segments_per_interval,
+        started.elapsed()
+    );
     let columns = built.columns;
+    if options.diagnostic_logging {
+        log_model_structure(out.identity.run_id, &out.input);
+    }
 
-    let mut model = if options.diagnostic_logging {
+    let model = if options.diagnostic_logging {
         built.model.show_output()
     } else {
         built.model.hide_output()
     };
-    if let Some(limit) = options.time_limit {
-        model = match model.set_real_param("limits/time", limit.as_secs_f64()) {
-            Ok(model) => model,
-            Err(error) => {
-                out.stop(ScipTermination::BackendFailure, format!("setting SCIP time limit: {error:?}"));
-                return out;
+    let mut model = match configure(model, remaining.or(options.time_limit), options.relative_gap) {
+        Ok(model) => model,
+        Err(problem) => {
+            out.stop(ScipTermination::BackendFailure, problem);
+            return out;
+        }
+    };
+    if let Some(values) = completed.as_ref() {
+        model = match offer_seed(model, values) {
+            Ok((model, stored)) => {
+                if !stored {
+                    log::warn!("schedule run {}: SCIP rejected the completed day-by-day seed", out.identity.run_id);
+                }
+                model
             }
-        };
-    }
-    if let Some(gap) = options.relative_gap {
-        model = match model.set_real_param("limits/gap", gap) {
-            Ok(model) => model,
-            Err(error) => {
-                out.stop(ScipTermination::BackendFailure, format!("setting SCIP gap: {error:?}"));
+            Err(problem) => {
+                out.stop(ScipTermination::BackendFailure, problem);
                 return out;
             }
         };
@@ -283,11 +325,13 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
     activity.set(3);
     let started = Instant::now();
     let solved = model.solve();
-    out.timings.solver = started.elapsed();
-    if let Some(limit) = options.time_limit {
-        out.solver_limit_overshoot = out.timings.solver.checked_sub(limit);
+    let solve_time = started.elapsed();
+    out.timings.solver += solve_time;
+    if let Some(limit) = remaining.or(options.time_limit) {
+        out.solver_limit_overshoot = solve_time.checked_sub(limit);
     }
     let report = SolveReport::read(&solved);
+    out.diagnostics = adapter::diagnostics(&solved, &activity.interrupt);
     out.backend_status = Some(report.status);
     out.raw_objective = report.objective;
     out.primary_bound = report.bound.is_finite().then_some(report.bound);
@@ -306,50 +350,477 @@ pub(crate) fn execute_scip_blend(input: Arc<BlendInput>, identity: ScipRunIdenti
     activity.set(4);
     let started = Instant::now();
     let extracted = extract_solution(&solved, &columns, || cancel.is_cancelled());
-    out.timings.extraction = started.elapsed();
+    out.timings.extraction += started.elapsed();
     if cancel.is_cancelled() || extracted.is_err() {
         out.stop(ScipTermination::Cancelled, "cancelled during extraction");
         return out;
     }
     let Some(solution) = extracted.expect("checked extraction result") else {
+        if let Some(found) = seed {
+            // A dual bound needs no incumbent, so it still bounds the seed.
+            let bound = out.primary_bound;
+            adopt_seed(&mut out, found, bound);
+            return out;
+        }
         out.termination = classify_status(report.status, false);
+        log_outcome(&out);
         return out;
     };
+    drop(solved);
     out.adjustments = Some(solution.adjustments);
 
     activity.set(5);
     let started = Instant::now();
     let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
-    out.timings.replay = started.elapsed();
+    out.timings.replay += started.elapsed();
     if cancel.is_cancelled() || checked.is_none() {
         out.stop(ScipTermination::Cancelled, "cancelled during replay");
         return out;
     }
     let checked = checked.expect("checked replay result");
-    out.published_objective = Some(checked.replayed_objective);
     let valid = checked.is_valid();
+    if !valid && let Some(found) = seed {
+        // SCIP's answer failed the replay, so neither it nor the bound that
+        // came with it is trusted; the seed was replayed on its own.
+        for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
+            log::warn!("schedule run {}: whole-horizon incumbent rejected by replay: {issue}", out.identity.run_id);
+        }
+        adopt_seed(&mut out, found, None);
+        return out;
+    }
+    out.published_objective = Some(checked.replayed_objective);
     out.replay = Some(Arc::new(checked));
     if !valid {
         out.stop(ScipTermination::ValidationFailure, "independent blended replay rejected the incumbent");
         return out;
     }
     if let Some(bound) = out.primary_bound {
-        let published = out.published_objective.expect("replayed objective");
-        let tolerance = 1e-4_f64.max(bound.abs() * 1e-8);
-        if published > bound + tolerance {
-            out.stop(
-                ScipTermination::ValidationFailure,
-                format!("published objective {published} exceeds SCIP bound {bound} beyond {tolerance}"),
-            );
+        // The bound is on the model's objective, which values deliveries near
+        // a conditional grade boundary conservatively; the published figure
+        // uses the authored boundary and may sit above it by that much.
+        let slack = out.replay.as_ref().map_or(0.0, |report| report.boundary_value_slack);
+        let published = out.published_objective.expect("replayed objective") - slack;
+        if let Some(problem) = exceeds_bound(published, bound) {
+            out.stop(ScipTermination::ValidationFailure, problem);
             return out;
         }
     }
-    out.termination = classify_status(report.status, true);
+    let termination = classify_status(report.status, true);
+    if let Some(found) = seed {
+        let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
+        if !improved && termination != ScipTermination::Optimal {
+            let bound = out.primary_bound;
+            adopt_seed(&mut out, found, bound);
+            return out;
+        }
+        out.day_by_day = Some(found.summary);
+    }
+    out.termination = termination;
     if matches!(out.termination, ScipTermination::Optimal | ScipTermination::FeasibleLimit) {
         out.solution = Some(Arc::new(solution));
     }
     activity.set(6);
+    log_outcome(&out);
     out
+}
+
+/// Share of the solve budget the day-by-day windows may take between them.
+/// The rest is the whole-horizon solve's, which is the only one that can
+/// bound the result.
+const DAY_BY_DAY_SHARE: f64 = 0.5;
+
+/// Most of what is left after the windows that completing the seed may use.
+/// Completion is propagation over fixed movements and normally takes
+/// seconds; the cap only stops a pathological case eating the solve.
+const SEED_COMPLETION_SHARE: f64 = 0.25;
+
+/// Below this, a whole-horizon solve cannot build and presolve its model,
+/// let alone improve on the seed, so the day-by-day schedule is kept as is.
+const WHOLE_HORIZON_MINIMUM: Duration = Duration::from_secs(2);
+
+/// The stitched day-by-day schedule, replayed against the whole horizon.
+struct Seed {
+    solution: BlendSolution,
+    replay: ReplayReport,
+    summary: DayByDaySummary,
+}
+
+enum DayByDay {
+    Seed(Box<Seed>),
+    /// No usable start; the whole-horizon solve runs unseeded.
+    Failed(String),
+    /// Cancelled, or a backend failure the whole run cannot continue past.
+    Stop(ScipTermination, String),
+}
+
+/// Solve the horizon a day at a time (see [`rolling`]) and stitch the kept
+/// days into one schedule for the whole horizon.
+fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> DayByDay {
+    let started = Instant::now();
+    let full = Arc::clone(&out.input);
+    let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
+    let mut carry = Carry::opening(&full);
+    let mut stitched = Stitched::new();
+    for (position, &window) in windows.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into());
+        }
+        let label = format!("window {}/{}", position + 1, windows.len());
+        let limit = budget.map(|budget| budget.saturating_sub(started.elapsed()) / (windows.len() - position) as u32);
+        if limit.is_some_and(|limit| limit.is_zero()) {
+            return DayByDay::Failed(format!("{label}: no time left"));
+        }
+        let input = carry.window_input(&full, window);
+
+        activity.set(2);
+        let phase = Instant::now();
+        let built = formulate_scip_with_cancel(&input, Some(&cancel.signal()), Some(&activity.formulation_checks));
+        out.timings.formulation += phase.elapsed();
+        let Ok(built) = built else {
+            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during formulation".into());
+        };
+        if built.sizes.variables > out.sizes.variables {
+            out.sizes = built.sizes;
+        }
+        let model = if options.diagnostic_logging {
+            built.model.show_output()
+        } else {
+            built.model.hide_output()
+        };
+        let mut model = match configure(model, limit, options.relative_gap) {
+            Ok(model) => model,
+            Err(problem) => return DayByDay::Stop(ScipTermination::BackendFailure, problem),
+        };
+        // The window's own progress record: the published diagnostics
+        // describe the whole-horizon solve alone.
+        let audit = Arc::new(adapter::InterruptAudit::default());
+        adapter::install_cancellation(&mut model, cancel.signal(), Arc::clone(&audit));
+
+        activity.set(3);
+        let phase = Instant::now();
+        let solved = model.solve();
+        let solve_time = phase.elapsed();
+        out.timings.solver += solve_time;
+        if audit.failed.load(Ordering::Acquire) {
+            return DayByDay::Stop(ScipTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback".into());
+        }
+        if cancel.is_cancelled() {
+            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into());
+        }
+        let status = solved.status();
+        let gap = adapter::gap(&solved);
+
+        activity.set(4);
+        let phase = Instant::now();
+        let extracted = extract_solution(&solved, &built.columns, || cancel.is_cancelled());
+        let paid = solved.best_sol().map_or(0.0, |best| {
+            built
+                .columns
+                .paid
+                .iter()
+                .filter(|&(&(_, interval, _), _)| interval < window.committed)
+                .map(|(&(conditional, _, _), column)| best.val(column) * input.conditional_values[conditional].value_per_tonne)
+                .sum()
+        });
+        out.timings.extraction += phase.elapsed();
+        drop(solved);
+        let solution = match extracted {
+            Err(()) => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during extraction".into()),
+            Ok(None) => return DayByDay::Failed(format!("{label}: no schedule within {limit:?} ({status:?})")),
+            Ok(Some(solution)) => solution,
+        };
+
+        activity.set(5);
+        let phase = Instant::now();
+        let checked = replay_cancellable(&input, &solution, &cancel.signal());
+        out.timings.replay += phase.elapsed();
+        let Some(checked) = checked else {
+            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
+        };
+        if !checked.is_valid() {
+            let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
+            return DayByDay::Failed(format!("{label}: replay rejected the window: {issue}"));
+        }
+        log::info!(
+            "schedule run {}: day-by-day {label}, intervals {}..{} keeping {}: {} variables, {:?} objective {:.2} gap {:?} in {:.2?}",
+            out.identity.run_id,
+            window.first,
+            window.end,
+            window.committed,
+            built.sizes.variables,
+            status,
+            solution.reported_objective,
+            gap,
+            solve_time
+        );
+        carry.advance(&full, window, &solution, &checked);
+        stitched.keep(&full, window, &solution, paid);
+    }
+
+    let solution = stitched.finish();
+    let phase = Instant::now();
+    let checked = replay_cancellable(&full, &solution, &cancel.signal());
+    out.timings.replay += phase.elapsed();
+    let Some(checked) = checked else {
+        return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
+    };
+    if !checked.is_valid() {
+        for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
+            log::warn!("schedule run {}: stitched day-by-day schedule: {issue}", out.identity.run_id);
+        }
+        let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
+        return DayByDay::Failed(format!("the stitched schedule failed the whole-horizon replay: {issue}"));
+    }
+    let summary = DayByDaySummary {
+        windows: windows.len(),
+        seconds: started.elapsed().as_secs_f64(),
+        value: Some(checked.replayed_objective),
+        kept: false,
+        failure: None,
+    };
+    log::info!(
+        "schedule run {}: day-by-day schedule of {} windows worth {:.2} in {:.2}s",
+        out.identity.run_id,
+        summary.windows,
+        checked.replayed_objective,
+        summary.seconds
+    );
+    DayByDay::Seed(Box::new(Seed {
+        solution,
+        replay: checked,
+        summary,
+    }))
+}
+
+/// Publish the day-by-day schedule. `bound` is a whole-horizon dual bound
+/// that still stands, if there is one.
+fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>) {
+    let published = found.replay.replayed_objective;
+    let raw = found.solution.reported_objective;
+    if let Some(bound) = bound
+        && let Some(problem) = exceeds_bound(published - found.replay.boundary_value_slack, bound)
+    {
+        out.stop(ScipTermination::ValidationFailure, problem);
+        return;
+    }
+    out.raw_objective = Some(raw);
+    out.primary_bound = bound;
+    // SCIP's own definition, so the figure reads the same as a solver gap.
+    out.primary_gap = bound.and_then(|bound| {
+        let smaller = raw.abs().min(bound.abs());
+        (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
+    });
+    out.published_objective = Some(published);
+    out.adjustments = Some(found.solution.adjustments);
+    out.replay = Some(Arc::new(found.replay));
+    out.solution = Some(Arc::new(found.solution));
+    out.day_by_day = Some(DayByDaySummary { kept: true, ..found.summary });
+    out.termination = ScipTermination::FeasibleLimit;
+    log_outcome(out);
+}
+
+fn exceeds_bound(published: f64, bound: f64) -> Option<String> {
+    let tolerance = 1e-4_f64.max(bound.abs() * 1e-8);
+    (published > bound + tolerance).then(|| format!("published objective {published} exceeds SCIP bound {bound} beyond {tolerance}"))
+}
+
+/// The run's limits and LP settings; everything else is SCIP's default.
+///
+/// # Primal simplex with devex pricing
+///
+/// SCIP starts the root LP with dual simplex and steepest-edge pricing. On
+/// the blended model primal simplex with devex pricing is faster wherever it
+/// was measured, and it is what lets a week's root LP finish inside a run:
+///
+/// | model | default | primal + devex |
+/// |---|---|---|
+/// | real project, week, first LP alone | 226.5 s | 103.0 s |
+/// | real project, week, seeded run | root LP unfinished in 208 s | root LP at 112 s, 0.11 % gap |
+/// | real project, one day | 0.45 s, optimal | 0.48 s, optimal |
+/// | known-answer fixture, 24 h / 72 h | 0.35 s / 2.04 s | 0.05 s / 0.19 s |
+/// | competition fixture, 24 / 48 / 72 h, 60 s | same bounds | same bounds, one better incumbent |
+///
+/// Only the LP algorithm changes, so the model and its optimum do not.
+fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relative_gap: Option<f64>) -> Result<Model<ProblemCreated>, String> {
+    let mut model = model;
+    for (name, value) in [(c"lp/initalgorithm", b'p'), (c"lp/pricing", b'd')] {
+        // SAFETY: a problem-stage parameter write on the thread that owns
+        // the model. russcip 0.10 has no char-parameter setter.
+        let code = unsafe { ffi::SCIPsetCharParam(model.scip_ptr(), name.as_ptr(), value as std::ffi::c_char) };
+        if code != ffi::SCIP_Retcode_SCIP_OKAY {
+            return Err(format!("setting SCIP {name:?}: retcode {code}"));
+        }
+    }
+    if let Some(limit) = time_limit {
+        model = model
+            .set_real_param("limits/time", limit.as_secs_f64())
+            .map_err(|error| format!("setting SCIP time limit: {error:?}"))?;
+    }
+    if let Some(gap) = relative_gap {
+        model = model.set_real_param("limits/gap", gap).map_err(|error| format!("setting SCIP gap: {error:?}"))?;
+    }
+    Ok(model)
+}
+
+/// Complete the stitched schedule into a full solution of the whole-horizon
+/// model, as values by variable name.
+///
+/// A second copy of the model is built with every movement and segment
+/// duration fixed at the seed's value, so what is left for SCIP is to fill in
+/// the state and indicator columns those imply. SCIP's own completion
+/// heuristic was tried first and is not used: given the same values as a
+/// partial solution it searched a neighbourhood of them instead, and on a
+/// real week it spent the whole budget returning a schedule worth a
+/// seventieth of the seed.
+fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duration>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None).map_err(|_| "cancelled".to_owned())?;
+    let tonnes: BTreeMap<(usize, usize, usize), f64> = seed.movements.iter().map(|row| ((row.candidate, row.interval, row.segment), row.tonnes_t)).collect();
+    let missing = tonnes.keys().filter(|key| !built.columns.movement.contains_key(key)).count();
+    if missing > 0 {
+        return Err(format!("the seed names {missing} movement cells the whole-horizon model does not have"));
+    }
+    let scip = built.model.scip_ptr();
+    let fix = |column: &Variable, value: f64| {
+        let value = value.clamp(column.lb(), column.ub());
+        // SAFETY: problem-stage bound changes on this model's own original
+        // variables, on the thread that owns the model.
+        unsafe {
+            ffi::SCIPchgVarLb(scip, column.inner(), value);
+            ffi::SCIPchgVarUb(scip, column.inner(), value);
+        }
+    };
+    for (key, column) in &built.columns.movement {
+        fix(column, tonnes.get(key).copied().unwrap_or(0.0));
+    }
+    for (key, column) in &built.columns.duration {
+        if let Some(duration) = seed.durations.get(key) {
+            fix(column, *duration);
+        }
+    }
+    let mut model = configure(built.model.hide_output(), limit, None)?;
+    adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
+    let solved = model.solve();
+    if cancel.is_cancelled() {
+        return Err("cancelled".into());
+    }
+    let Some(best) = solved.best_sol() else {
+        return Err(format!("SCIP found no completion ({:?})", solved.status()));
+    };
+    Ok(solved.orig_vars().iter().map(|variable| (variable.name(), best.val(variable))).collect())
+}
+
+/// Hand SCIP the completed seed. SCIP checks it against the original model
+/// before storing it, so a seed it would not accept is reported rather than
+/// half-used.
+///
+/// A seed makes weak dual reductions unsafe on this nonlinear model; see
+/// [`adapter::SolveTuning::apply`] for the reproducer.
+fn offer_seed(model: Model<ProblemCreated>, values: &HashMap<String, f64>) -> Result<(Model<ProblemCreated>, bool), String> {
+    let solution = model.create_orig_sol();
+    for variable in model.orig_vars() {
+        if let Some(value) = values.get(&variable.name()) {
+            solution.set_val(&variable, *value);
+        }
+    }
+    let stored = model.add_sol(solution).is_ok();
+    let model = model
+        .set_bool_param("misc/allowweakdualreds", false)
+        .map_err(|error| format!("configuring the seeded solve: {error:?}"))?;
+    Ok((model, stored))
+}
+
+/// One line per finished solve, whatever became of it.
+/// Diagnostic-only: what the captured project looks like and which
+/// formulation families dominate the model. Built by a counting pass, so it
+/// costs a second formulation walk but no solver memory.
+fn log_model_structure(run_id: u64, input: &BlendInput) {
+    let mut tonnes: Vec<f64> = input.ground.iter().map(|source| source.tonnes_t).collect();
+    tonnes.sort_by(f64::total_cmp);
+    let quantile = |q: f64| tonnes.get(((tonnes.len().saturating_sub(1)) as f64 * q).round() as usize).copied().unwrap_or(0.0);
+    log::info!(
+        "schedule run {run_id}: {} ground sources (tonnes min {:.0} / median {:.0} / p90 {:.0} / max {:.0}), {} multi-material, {} piles, {} loaders, {} tasks, {} movement candidates",
+        input.ground.len(),
+        quantile(0.0),
+        quantile(0.5),
+        quantile(0.9),
+        quantile(1.0),
+        input.ground.iter().filter(|source| source.material.len() > 1).count(),
+        input.piles.len(),
+        input.loaders.len(),
+        input.tasks.len(),
+        input.movements.len()
+    );
+    for task in &input.tasks {
+        let rate = input
+            .loaders
+            .iter()
+            .find(|loader| loader.id == task.loader)
+            .map(|loader| loader.rates.iter().map(|rate| rate.dig_tph.max(rate.reclaim_tph)).fold(0.0_f64, f64::max))
+            .unwrap_or(0.0);
+        match &task.kind {
+            TaskKind::Dig { sequence } => {
+                let total: f64 = sequence
+                    .iter()
+                    .filter_map(|id| input.ground.iter().find(|source| source.id == *id))
+                    .map(|source| source.tonnes_t)
+                    .sum();
+                log::info!(
+                    "schedule run {run_id}: task {:?} loader {:?} priority {} window {:.1}-{:.1} h, dig sequence of {} blocks, {:.0} t, peak rate {:.0} t/h",
+                    task.id,
+                    task.loader,
+                    task.priority,
+                    task.window_start_h,
+                    task.window_end_h,
+                    sequence.len(),
+                    total,
+                    rate
+                );
+            }
+            TaskKind::Reclaim { approved_sources, maximum_t } => log::info!(
+                "schedule run {run_id}: task {:?} loader {:?} priority {} window {:.1}-{:.1} h, reclaim from {} piles, cap {:?}, peak rate {:.0} t/h",
+                task.id,
+                task.loader,
+                task.priority,
+                task.window_start_h,
+                task.window_end_h,
+                approved_sources.len(),
+                maximum_t,
+                rate
+            ),
+        }
+    }
+    for (family, size) in crate::model::schedule::optimisation::blended::formulation::family_sizes(input) {
+        log::info!(
+            "schedule run {run_id}: family {family:<12} {:>9} columns ({:>8} binary) {:>9} rows {:>10} entries",
+            size.columns,
+            size.binaries,
+            size.rows,
+            size.entries
+        );
+    }
+}
+
+fn log_outcome(out: &ScipCompletion) {
+    log::info!(
+        "schedule run {} diagnostics: {:?}; posted linear coefficient entries {}; objective {:?}, bound {:?}, gap {:?}",
+        out.identity.run_id,
+        out.diagnostics,
+        out.sizes.linear_coefficient_entries,
+        out.raw_objective,
+        out.primary_bound,
+        out.primary_gap
+    );
+    log::info!(
+        "schedule run {}: {:?} (backend {:?}) under a {:?} limit and {:?} gap target; solve {:?}, replay {:?}; reason {:?}",
+        out.identity.run_id,
+        out.termination,
+        out.backend_status,
+        out.options.time_limit,
+        out.options.relative_gap,
+        out.timings.solver,
+        out.timings.replay,
+        out.diagnostic
+    );
 }
 
 fn classify_status(status: Status, usable: bool) -> ScipTermination {
@@ -386,6 +857,7 @@ fn classify_status(status: Status, usable: bool) -> ScipTermination {
 /// model encoded must still hash the same. A rename changes none of them,
 /// which is the point - and an edit to a chunk capacity, a truck roster or a
 /// cashflow coefficient changes the last one, which is also the point.
+#[cfg(all(test, feature = "blend-experiment"))]
 fn request_current(pending: Option<ScipRunIdentity>, completed: ScipRunIdentity, current_inputs: Option<ScheduleRunInputs>, current_plan: u64, current_semantic: u64) -> bool {
     pending == Some(completed) && current_inputs == Some(completed.inputs) && current_plan == completed.plan_revision && current_semantic == completed.semantic
 }
@@ -603,345 +1075,7 @@ fn validate_input(input: &BlendInput, options: ScipSolveOptions, cancel: &Cancel
     Ok(())
 }
 
-impl App<'_> {
-    /// Developer entry: submit an already captured synthetic blended input.
-    ///
-    /// Superseded for real work by [`Self::start_experimental_project_blend`],
-    /// and kept because it is the one path that can submit a *fixture* - a
-    /// scenario built by hand rather than resolved from a project - through
-    /// the same job, cancellation and currentness machinery.
-    #[allow(dead_code, reason = "the fixture submission path; the project path is what the UI action calls")]
-    pub(crate) fn start_experimental_scip_blend(&mut self, input: BlendInput, inputs: ScheduleRunInputs, plan_revision: u64, options: ScipSolveOptions) -> Result<u64, String> {
-        let Some(project) = self.workspace.active_project() else {
-            return Err("no active project".into());
-        };
-        let document_revision = project.project.document.revision();
-        if project.runtime_id != inputs.runtime || self.schedule_run_inputs().ok() != Some(inputs) || self.schedule_plan_revision() != plan_revision {
-            return Err("captured schedule inputs are stale".into());
-        }
-        self.cancel_experimental_scip_blend();
-        self.experimental_scip_serial += 1;
-        let identity = ScipRunIdentity {
-            run_id: self.experimental_scip_serial,
-            inputs,
-            plan_revision,
-            document_revision,
-            semantic: self.experimental_blend_key(options),
-        };
-        self.pending_experimental_scip = Some(identity);
-        let input = Arc::new(input);
-        let worker_input = Arc::clone(&input);
-        let activity = Arc::new(ScipActivity::default());
-        self.spawn_job_quietly(
-            "Experimental SCIP blended schedule",
-            vec![
-                JobKey::ExperimentalScip {
-                    runtime: inputs.runtime,
-                    serial: identity.run_id,
-                },
-                JobKey::Project {
-                    runtime_id: inputs.runtime,
-                    document_revision,
-                },
-            ],
-            move |cancel| Ok(execute_scip_blend(worker_input, identity, options, cancel, &activity)),
-            move |app, result| {
-                if app.pending_experimental_scip != Some(identity) {
-                    return;
-                }
-                let current = request_current(
-                    app.pending_experimental_scip,
-                    identity,
-                    app.schedule_run_inputs().ok(),
-                    app.schedule_plan_revision(),
-                    app.experimental_blend_key(options),
-                );
-                app.pending_experimental_scip = None;
-                if !current {
-                    return;
-                }
-                let completion = match result {
-                    Ok(result) => result,
-                    Err(error) => {
-                        let mut failed = ScipCompletion::new(identity, options, input);
-                        failed.stop(ScipTermination::BackendFailure, format!("worker failed: {error:#}"));
-                        failed
-                    }
-                };
-                log::info!(
-                    "experimental SCIP run {}: {:?}, backend {:?}, {:?}",
-                    identity.run_id,
-                    completion.termination,
-                    completion.backend_status,
-                    completion.diagnostic
-                );
-                let completion = Arc::new(completion);
-                if completion.usable() {
-                    app.experimental_scip_result = Some(Arc::clone(&completion));
-                }
-                app.experimental_scip_diagnostics = Some(completion);
-            },
-        );
-        Ok(identity.run_id)
-    }
-
-    /// Run the experimental optimiser on the project as it stands.
-    ///
-    /// The whole Stage 5B path in one action: capture the owned configuration
-    /// here, resolve it into a model and solve it on a worker, replay the
-    /// answer independently, and retain it only if it is still current.
-    ///
-    /// Deliberately separate from `Run Schedule`: the ordinary dispatcher,
-    /// its Gantt, its calendar rows and its animation are untouched by this,
-    /// and nothing here publishes into them.
-    pub(crate) fn start_experimental_project_blend(&mut self) -> Result<u64, Vec<String>> {
-        let Some(project) = self.workspace.active_project() else {
-            return Err(vec![crate::i18n::tr!("planning-snapshot-no-project")]);
-        };
-        let runtime = project.runtime_id;
-        let document_revision = project.project.document.revision();
-        let options = {
-            let experiment = project.project.document.schedule().experiment();
-            ScipSolveOptions {
-                time_limit: Some(Duration::from_secs_f64(experiment.solve_seconds)),
-                relative_gap: Some(experiment.relative_gap),
-                diagnostic_logging: false,
-            }
-        };
-        // Bounded: a plan clone, a field list and two `Arc`s. Candidate
-        // expansion is the worker's job.
-        let captured = self.capture_experimental_snapshot();
-        let snapshot = match captured {
-            Ok(snapshot) => snapshot,
-            Err(problems) => {
-                let messages: Vec<String> = problems.iter().map(super::commands::schedule_capture::CaptureDiagnostic::describe).collect();
-                return Err(messages);
-            }
-        };
-        let inputs = snapshot.inputs();
-        let plan_revision = snapshot.plan_revision;
-        self.cancel_experimental_scip_blend();
-        self.experimental_scip_serial += 1;
-        let identity = ScipRunIdentity {
-            run_id: self.experimental_scip_serial,
-            inputs,
-            plan_revision,
-            document_revision,
-            semantic: self.experimental_blend_key(options),
-        };
-        self.pending_experimental_scip = Some(identity);
-        let activity = Arc::new(ScipActivity::default());
-        self.spawn_job_quietly(
-            "Experimental blended optimisation",
-            vec![
-                JobKey::ExperimentalScip { runtime, serial: identity.run_id },
-                JobKey::Project {
-                    runtime_id: runtime,
-                    document_revision,
-                },
-            ],
-            move |cancel| {
-                let built = super::commands::schedule_capture::build(&snapshot, cancel);
-                match built {
-                    Ok(capture) => {
-                        let input = Arc::new(capture.input);
-                        let mut completion = execute_scip_blend(Arc::clone(&input), identity, options, cancel, &activity);
-                        completion.capture = Some(CaptureSummary {
-                            duration: capture.stats.duration,
-                            fingerprint: capture.fingerprint,
-                            candidates: capture.stats.candidates,
-                            ground_sources: capture.stats.ground_sources,
-                            mixed_blocks: capture.stats.mixed_blocks,
-                            event_budget_restricted: capture.stats.event_budget_restricted,
-                            estimated_columns: capture.stats.estimated_columns,
-                            notes: capture.notes,
-                            pile_names: capture.identities.piles.iter().map(|(id, _, name)| (id.0, name.clone())).collect(),
-                        });
-                        Ok(completion)
-                    }
-                    Err(problems) => {
-                        let mut refused = ScipCompletion::new(identity, options, Arc::new(empty_input()));
-                        if cancel.is_cancelled() {
-                            refused.stop(ScipTermination::Cancelled, "cancelled during project capture");
-                        } else {
-                            refused.stop(ScipTermination::CaptureFailure, "the project could not be resolved into a blended model");
-                            refused.capture_diagnostics = problems.iter().map(super::commands::schedule_capture::CaptureDiagnostic::describe).collect();
-                        }
-                        Ok(refused)
-                    }
-                }
-            },
-            move |app, result| {
-                if app.pending_experimental_scip != Some(identity) {
-                    return;
-                }
-                let current = request_current(
-                    app.pending_experimental_scip,
-                    identity,
-                    app.schedule_run_inputs().ok(),
-                    app.schedule_plan_revision(),
-                    app.experimental_blend_key(options),
-                );
-                app.pending_experimental_scip = None;
-                if !current {
-                    // An edit landed while this was solving. The previous
-                    // result stays exactly as it was, and this one is not
-                    // published under it.
-                    crate::userspace_warn!("{}", tr_experimental_superseded());
-                    app.redraw_requested = true;
-                    return;
-                }
-                let completion = match result {
-                    Ok(completion) => completion,
-                    Err(error) => {
-                        let mut failed = ScipCompletion::new(identity, options, Arc::new(empty_input()));
-                        failed.stop(ScipTermination::BackendFailure, format!("worker failed: {error:#}"));
-                        failed
-                    }
-                };
-                for diagnostic in &completion.capture_diagnostics {
-                    crate::userspace_warn!("{diagnostic}");
-                }
-                let completion = Arc::new(completion);
-                if completion.usable() {
-                    app.experimental_scip_result = Some(Arc::clone(&completion));
-                }
-                app.experimental_scip_diagnostics = Some(completion);
-                app.redraw_requested = true;
-            },
-        );
-        self.redraw_requested = true;
-        Ok(identity.run_id)
-    }
-
-    /// Cancellation is idempotent. The previous usable result stays held.
-    pub(crate) fn cancel_experimental_scip_blend(&mut self) {
-        if let Some(pending) = self.pending_experimental_scip.take() {
-            self.cancel_jobs(|key| matches!(key, JobKey::ExperimentalScip { runtime, serial } if *runtime == pending.inputs.runtime && *serial == pending.run_id));
-        }
-    }
-
-    pub(crate) fn advance_experimental_scip_blend(&mut self) {
-        let Some(pending) = self.pending_experimental_scip else { return };
-        if self.schedule_run_inputs().ok() != Some(pending.inputs) || self.schedule_plan_revision() != pending.plan_revision {
-            self.cancel_experimental_scip_blend();
-        }
-    }
-
-    /// Whether the retained experimental result still describes the project.
-    ///
-    /// `None` when nothing is retained. Presentation-only edits - a renamed
-    /// stockpile, rule or machine, or a changed currency label - leave this
-    /// `true`, because none of them changes a number the model encoded.
-    pub(crate) fn experimental_scip_is_current(&self) -> bool {
-        let Some(result) = self.experimental_scip_result.as_ref() else {
-            return false;
-        };
-        let identity = result.identity;
-        self.schedule_run_inputs().ok() == Some(identity.inputs)
-            && self.schedule_plan_revision() == identity.plan_revision
-            && self.experimental_blend_key(result.options) == identity.semantic
-    }
-
-    /// The complete experimental-run identity, cheaply.
-    ///
-    /// Every authored input the blended model encodes, hashed by stable id in
-    /// a fixed order, plus the run options - and no presentation name, so a
-    /// rename does not retire a result. This is deliberately built from the
-    /// *project*, not by re-running capture: capture expands candidates, and
-    /// a currentness check has to be affordable.
-    ///
-    /// It does not reuse the Setup pipeline's dig-only chain wholesale,
-    /// because that chain is explicitly *not* complete for an optimised run:
-    /// reclaim rates, opening stock, truck calendars and cashflow
-    /// coefficients all ride separate chains there, on purpose.
-    pub(crate) fn experimental_blend_key(&self, options: ScipSolveOptions) -> u64 {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        // The run options: a result found under a 10-second limit is not the
-        // same answer as one found under 600.
-        options.time_limit.map(|limit| limit.as_nanos()).hash(&mut hasher);
-        options.relative_gap.map(f64::to_bits).hash(&mut hasher);
-        // The Setup gate and the authored bars, which between them cover the
-        // project, the Solids run, the tonnage field, the fleet and every
-        // bar's window, priority, ground and reclaim cap.
-        match self.schedule_run_inputs() {
-            Ok(inputs) => (0u8, inputs.runtime, inputs.generation, inputs.fleet_revision, inputs.tonnage_field.0).hash(&mut hasher),
-            Err(_) => 1u8.hash(&mut hasher),
-        }
-        self.schedule_plan_revision().hash(&mut hasher);
-        let Some(document) = self.workspace.active_document() else {
-            return hasher.finish();
-        };
-        let plan = document.schedule();
-        // Reserve field *definitions*: a condition or a grade reads a field
-        // through one, so re-aggregating or deleting one is an input change.
-        // Names are excluded.
-        for field in document.reserve_fields() {
-            field.id.0.hash(&mut hasher);
-            format!("{:?}", field.aggregation).hash(&mut hasher);
-        }
-        // The reclaim half of the fleet, which the dig-only chain omits.
-        for class in plan.classes() {
-            (class.id.0, class.default_dig_rate_tph.to_bits(), class.default_reclaim_rate_tph.to_bits()).hash(&mut hasher);
-        }
-        for agent in plan.agents() {
-            (agent.id.0, agent.class_id.0).hash(&mut hasher);
-            agent.calendar.default_availability.to_bits().hash(&mut hasher);
-            agent.calendar.default_utilisation.to_bits().hash(&mut hasher);
-            for (period, value) in &agent.calendar.periods {
-                period.0.hash(&mut hasher);
-                value.availability.map(f64::to_bits).hash(&mut hasher);
-                value.utilisation.map(f64::to_bits).hash(&mut hasher);
-                value.rate_tph.map(f64::to_bits).hash(&mut hasher);
-                value.reclaim_rate_tph.map(f64::to_bits).hash(&mut hasher);
-            }
-        }
-        // Destinations: identity, kind, capacity, haul distance, crusher
-        // budget and opening inventory - by id, never by name. The solids'
-        // own kinds are read because that is what makes a solid a stockpile.
-        let routing = plan.routing();
-        routing.enabled.hash(&mut hasher);
-        for solid in document.solids() {
-            if let Some(kind) = crate::model::schedule::DestinationKind::of_solid(solid.kind) {
-                let id = crate::model::schedule::DestinationId::Solid(solid.id);
-                id.hash(&mut hasher);
-                kind.hash(&mut hasher);
-                routing.capacity_t(id).map(f64::to_bits).hash(&mut hasher);
-                routing.distance_km(id).to_bits().hash(&mut hasher);
-                if let Some(inventory) = routing.inventory(id) {
-                    inventory.hash_content(&mut hasher);
-                }
-            }
-        }
-        for entry in &routing.standalone {
-            entry.id.hash(&mut hasher);
-            entry.kind.hash(&mut hasher);
-            entry.capacity_t.map(f64::to_bits).hash(&mut hasher);
-            entry.distance_km.to_bits().hash(&mut hasher);
-            entry.inventory.hash_content(&mut hasher);
-            entry.crusher.default_tpd.map(f64::to_bits).hash(&mut hasher);
-            for (period, value) in &entry.crusher.periods {
-                period.0.hash(&mut hasher);
-                value.tonnes().map(f64::to_bits).hash(&mut hasher);
-            }
-        }
-        // Rules and coefficients. Each of these hashes its own content and
-        // deliberately leaves its name out.
-        for rule in &routing.rules {
-            rule.hash_content_public(&mut hasher);
-        }
-        plan.trucks().hash_content(&mut hasher);
-        plan.cashflow().hash_content(&mut hasher);
-        // Horizon, interval resolution, grade units and stockpile
-        // representation - everything the experiment itself is told.
-        plan.experiment().hash_content(&mut hasher);
-        hasher.finish()
-    }
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "blend-experiment"))]
 mod developer_checks {
     use std::{sync::mpsc, time::Duration};
 
@@ -1144,40 +1278,16 @@ mod developer_checks {
     }
 }
 
-/// A placeholder model for a run that never built one. Never solved: every
-/// path that installs it has already stopped the completion with a reason.
-fn empty_input() -> BlendInput {
-    use crate::model::schedule::optimisation::blended::grade::GradeTable;
-
-    BlendInput {
-        intervals: Vec::new(),
-        segments_per_interval: 0,
-        grades: GradeTable::build(Vec::new(), &std::collections::BTreeMap::new()).expect("an empty grade table is always buildable"),
-        piles: Vec::new(),
-        loaders: Vec::new(),
-        tasks: Vec::new(),
-        ground: Vec::new(),
-        destinations: Vec::new(),
-        trucks: Vec::new(),
-        movements: Vec::new(),
-        qualifications: Vec::new(),
-        conditional_values: Vec::new(),
-        grade_limits: Vec::new(),
-    }
-}
-
-fn tr_experimental_superseded() -> String {
-    crate::i18n::tr!("experiment-run-superseded")
-}
-
 /// Totals a reader asks for first, recomputed from the *replayed* rows rather
 /// than from the solver's own report.
+#[cfg(test)]
 pub(crate) struct BlendTotals {
     pub(crate) mined_t: f64,
     pub(crate) reclaimed_t: f64,
     pub(crate) processed_t: f64,
 }
 
+#[cfg(test)]
 pub(crate) fn totals(input: &BlendInput, solution: &BlendSolution) -> BlendTotals {
     let mut out = BlendTotals {
         mined_t: 0.0,
@@ -1199,189 +1309,4 @@ pub(crate) fn totals(input: &BlendInput, solution: &BlendSolution) -> BlendTotal
         }
     }
     out
-}
-
-impl App<'_> {
-    /// Mirror the retained experimental answer into the editor state the
-    /// Optimisation section reads.
-    ///
-    /// Formatting happens here, once, and only while that section is on
-    /// screen: the UI draws rows and never computes a total, and a frame that
-    /// is not showing the section costs nothing.
-    pub(crate) fn mirror_experimental_blend(&mut self, showing: bool) {
-        if !showing {
-            if self.editor.experimental_blend.have_result || self.editor.experimental_blend.running {
-                self.editor.experimental_blend = crate::ui::state::ExperimentalBlendView::default();
-            }
-            return;
-        }
-        let running = self.pending_experimental_scip.is_some();
-        let current = self.experimental_scip_is_current();
-        let mut view = crate::ui::state::ExperimentalBlendView {
-            running,
-            current,
-            ..Default::default()
-        };
-        // The last attempt's diagnostics, whether or not it produced a result:
-        // a failed or refused run must say why without disturbing what is
-        // held.
-        if let Some(latest) = self.experimental_scip_diagnostics.as_ref() {
-            view.diagnostics.extend(latest.capture_diagnostics.iter().cloned());
-            if !latest.usable()
-                && let Some(reason) = latest.diagnostic.as_ref()
-            {
-                view.diagnostics.push(reason.clone());
-            }
-            if let Some(replay) = latest.replay.as_ref().filter(|_| !latest.usable()) {
-                view.diagnostics.extend(replay.issues.iter().cloned());
-                view.diagnostics.extend(replay.grade_issues.iter().cloned());
-            }
-        }
-        if let Some(result) = self.experimental_scip_result.as_ref() {
-            view.have_result = true;
-            let input = &result.input;
-            let horizon = input.intervals.last().map(|interval| interval.end_h).unwrap_or(0.0);
-            let row = |label: &str, value: String| (label.to_owned(), value);
-            view.rows.push(row("Horizon", format!("{horizon:.2} h over {} intervals", input.intervals.len())));
-            view.rows.push(row("Termination", format!("{:?}", result.termination)));
-            view.rows.push(row(
-                "Validated objective",
-                result.published_objective.map_or_else(|| "—".to_owned(), |value| format!("{value:.2}")),
-            ));
-            // The bound and gap are the backend's, about the model it solved,
-            // and are reported as such. A valid incumbent is not optimality.
-            view.rows
-                .push(row("Bound", result.primary_bound.map_or_else(|| "—".to_owned(), |value| format!("{value:.2}"))));
-            view.rows.push(row(
-                "Relative gap",
-                result.primary_gap.map_or_else(|| "not reported".to_owned(), |value| format!("{value:.4}")),
-            ));
-            if let Some(solution) = result.solution.as_ref() {
-                let totals = totals(input, solution);
-                view.rows.push(row("Mined", format!("{:.1} t", totals.mined_t)));
-                view.rows.push(row("Reclaimed", format!("{:.1} t", totals.reclaimed_t)));
-                view.rows.push(row("Processed", format!("{:.1} t", totals.processed_t)));
-                let names = result.capture.as_ref().map(|capture| capture.pile_names.clone()).unwrap_or_default();
-                for pile in &input.piles {
-                    let supplied: f64 = solution
-                        .movements
-                        .iter()
-                        .filter_map(|movement| {
-                            input
-                                .movements
-                                .get(movement.candidate)
-                                .filter(|candidate| candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id))
-                                .map(|_| movement.tonnes_t)
-                        })
-                        .sum();
-                    let name = names
-                        .iter()
-                        .find(|(id, _)| *id == pile.id.0)
-                        .map(|(_, name)| name.clone())
-                        .unwrap_or_else(|| format!("stockpile {}", pile.id.0));
-                    view.rows.push(row(&format!("Supplied · {name}"), format!("{supplied:.1} t")));
-                }
-            }
-            if let Some(replay) = result.replay.as_ref() {
-                let names = result.capture.as_ref().map(|capture| capture.pile_names.clone()).unwrap_or_default();
-                for closing in &replay.closing {
-                    let name = names
-                        .iter()
-                        .find(|(id, _)| *id == closing.pile.0)
-                        .map(|(_, name)| name.clone())
-                        .unwrap_or_else(|| format!("stockpile {}", closing.pile.0));
-                    // Grades, not contained quantities: an empty pile has no
-                    // grade at all, and a dash says so rather than zero.
-                    let grades: Vec<String> = closing
-                        .contained
-                        .iter()
-                        .map(|contained| {
-                            if closing.tonnes_t > 1e-6 {
-                                format!("{:.4}", contained / closing.tonnes_t)
-                            } else {
-                                "—".to_owned()
-                            }
-                        })
-                        .collect();
-                    view.rows
-                        .push(row(&format!("Closing · {name}"), format!("{:.1} t · {}", closing.tonnes_t, grades.join(" / "))));
-                }
-            }
-            view.rows.push(row(
-                "Solve",
-                format!(
-                    "{:.2} s (formulate {:.2} s, replay {:.2} s)",
-                    result.timings.solver.as_secs_f64(),
-                    result.timings.formulation.as_secs_f64(),
-                    result.timings.replay.as_secs_f64()
-                ),
-            ));
-            view.rows.push(row("Backend", format!("{} · {}", result.backend_version, result.wrapper_version)));
-            if let Some(capture) = result.capture.as_ref() {
-                view.rows.push(row(
-                    "Capture",
-                    format!(
-                        "{:.2} s · {} candidates · {} ground sources",
-                        capture.duration.as_secs_f64(),
-                        capture.candidates,
-                        capture.ground_sources
-                    ),
-                ));
-                view.rows.push(row("Model identity", format!("{:016x}", capture.fingerprint)));
-                view.rows.push(row(
-                    "Model size",
-                    format!(
-                        "about {} movement columns over {} intervals x {} event positions",
-                        capture.estimated_columns, result.settings.intervals, result.settings.segments_per_interval
-                    ),
-                ));
-                if capture.mixed_blocks > 0 {
-                    view.notes.push(format!(
-                        "{} dig block(s) held more than one captured material; each was modelled as one block dug in its measured proportions",
-                        capture.mixed_blocks
-                    ));
-                }
-                view.notes.extend(capture.notes.iter().cloned());
-                if capture.event_budget_restricted {
-                    view.notes.push(format!(
-                        "the derived execution-event budget was capped at {} positions per interval, so some source transitions may be unavailable",
-                        result.settings.segments_per_interval
-                    ));
-                }
-            }
-            // Product approximations, stated every time: these are modelling
-            // decisions, not solver limitations.
-            if result.settings.receipt_release_at_boundary {
-                view.notes
-                    .push("receipts occupy pile capacity on arrival and join the reclaimable blend at the next interval boundary".to_owned());
-            }
-            if !result.settings.chunk_slot_reuse && result.settings.chunk_slots > 0 {
-                view.notes.push("an emptied chunk slot is not reused within this horizon".to_owned());
-            }
-            if result.settings.chunk_slots > 0 {
-                view.notes.push(format!(
-                    "{} chunk slot(s) across all piles, which can limit total horizon receipts",
-                    result.settings.chunk_slots
-                ));
-            }
-            if let Some(replay) = result.replay.as_ref()
-                && replay.chunk_dust_events > 0
-            {
-                view.notes.push(format!(
-                    "{} chunk-lifecycle events totalling {:.6} t were below the {:.6} t indicator-tolerance threshold and were counted rather than discarded",
-                    replay.chunk_dust_events, replay.chunk_dust_tonnes_t, replay.chunk_dust_threshold_t
-                ));
-            }
-        }
-        if self.editor.experimental_blend.rows != view.rows
-            || self.editor.experimental_blend.notes != view.notes
-            || self.editor.experimental_blend.diagnostics != view.diagnostics
-            || self.editor.experimental_blend.running != view.running
-            || self.editor.experimental_blend.current != view.current
-            || self.editor.experimental_blend.have_result != view.have_result
-        {
-            self.editor.experimental_blend = view;
-            self.redraw_requested = true;
-        }
-    }
 }

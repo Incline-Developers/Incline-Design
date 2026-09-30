@@ -212,23 +212,16 @@ pub(crate) fn draw_destination_properties(
     // opens holding. The opening total is calculated from the lots beside it and
     // is never typed here - one figure, one place it comes from.
     let stockpile = entry.kind == DestinationKind::Stockpile;
-    // Two extra experimental rows on a stockpile when the experiment is
-    // compiled in: the representation, and the chunk capacities it needs.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-    let experimental_rows = if stockpile {
+    // Optimisation rows on a stockpile: the representation, and the chunk
+    // capacities it needs.
+    let optimisation_rows = if stockpile {
         1 + usize::from(plan.experiment().representation(entry.id) == crate::model::schedule::experiment::StockpileRepresentation::Chunks)
     } else {
         0
     };
-    #[cfg(not(all(not(target_arch = "wasm32"), feature = "scip-code")))]
-    let experimental_rows = 0;
-    let rows_used = 5 + usize::from(linked) + 2 * usize::from(stockpile) + experimental_rows;
+    let rows_used = 5 + usize::from(linked) + 2 * usize::from(stockpile) + optimisation_rows;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
-    #[cfg_attr(
-        not(all(not(target_arch = "wasm32"), feature = "scip-code")),
-        allow(unused_mut, reason = "mutated only by the feature-gated experimental rows")
-    )]
     let mut chunk_draft = editor.schedule_chunk_draft.take();
     PropertyTable::new("schedule_destination_properties", table_rect, &entry.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -307,12 +300,10 @@ pub(crate) fn draw_destination_properties(
                 .is_some_and(|capacity| entry.opening_t > capacity)
                 .then(|| crate::model::schedule::ScheduleError::OpeningOverCapacity.message());
             rows.readonly(&tr!("inventory-opening-tonnes"), &tonnes(entry.opening_t), None, over.as_deref());
-            // The experimental representation, when this build has the
-            // experiment compiled in. The authored lots above are untouched
-            // by it: choosing one changes what the optimiser is told, not
-            // what the project holds.
-            #[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
-            super::schedule_experiment::stockpile_rows(rows, &mut chunk_draft, plan, entry.id, session, &mut edits);
+            // The representation. The authored lots above are untouched by
+            // it: choosing one changes what the optimiser is told, not what
+            // the project holds.
+            super::schedule_optimisation::stockpile_rows(rows, &mut chunk_draft, plan, entry.id, session, &mut edits);
         }
         // A haul distance, not a measurement: it is one number for every source
         // that delivers here, and nothing derives it from where the solid sits.

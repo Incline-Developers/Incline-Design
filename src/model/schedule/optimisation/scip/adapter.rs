@@ -9,13 +9,15 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use russcip::{Event, EventMask, Eventhdlr, Model, ProblemCreated, SCIPEventhdlr, Solved, Solving, ffi, prelude::*};
+
+use crate::model::schedule::result::SolveDiagnostics;
 
 /// SCIP build identification, recorded with every benchmark row.
 pub(crate) fn version() -> String {
@@ -34,6 +36,7 @@ pub(crate) struct InterruptAudit {
     pub(crate) callbacks: AtomicU64,
     pub(crate) calls: AtomicU64,
     pub(crate) failed: AtomicBool,
+    progress: Mutex<SolveDiagnostics>,
 }
 
 struct CancelOnEvent {
@@ -43,11 +46,12 @@ struct CancelOnEvent {
 
 impl Eventhdlr for CancelOnEvent {
     fn get_type(&self) -> EventMask {
-        EventMask::PRESOLVE_ROUND | EventMask::NODE_FOCUSED | EventMask::LP_SOLVED | EventMask::BEST_SOL_FOUND
+        EventMask::PRESOLVE_ROUND | EventMask::NODE_FOCUSED | EventMask::NODE_SOLVED | EventMask::FIRST_LP_SOLVED | EventMask::LP_SOLVED | EventMask::SOL_FOUND
     }
 
-    fn execute(&mut self, model: Model<Solving>, _handler: SCIPEventhdlr, _event: Event) {
+    fn execute(&mut self, model: Model<Solving>, _handler: SCIPEventhdlr, event: Event) {
         self.audit.callbacks.fetch_add(1, Ordering::Relaxed);
+        record_progress(&model, event.event_type(), &self.audit);
         if !self.signal.load(Ordering::Acquire) {
             return;
         }
@@ -65,6 +69,100 @@ impl Eventhdlr for CancelOnEvent {
     }
 }
 
+/// Reads SCIP only on its solving thread, never from the UI. Observation must
+/// not construct an LP, change parameters, or otherwise alter the solve.
+fn record_progress(model: &Model<Solving>, event: EventMask, audit: &InterruptAudit) {
+    let mut progress = audit.progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scip = model.scip_ptr();
+    // SAFETY: synchronous solver callback. Timing is valid during presolve
+    // and solve; depth and LP access are restricted to solving-stage events.
+    unsafe {
+        let elapsed = ffi::SCIPgetSolvingTime(scip);
+        if event.matches(EventMask::SOL_FOUND) {
+            progress.first_incumbent_s.get_or_insert(elapsed);
+            if event.matches(EventMask::BEST_SOL_FOUND) {
+                progress.incumbent_improvements += 1;
+            }
+        }
+        if event.matches(EventMask::PRESOLVE_ROUND) {
+            progress.presolve_rounds += 1;
+        }
+        if event.matches(EventMask::NODE_FOCUSED) {
+            if ffi::SCIPgetDepth(scip) == 0 && progress.presolved_variables.is_none() {
+                progress.presolved_variables = Some(ffi::SCIPgetNVars(scip).max(0) as usize);
+                progress.presolved_constraints = Some(ffi::SCIPgetNConss(scip).max(0) as usize);
+            } else if ffi::SCIPgetDepth(scip) > 0 {
+                progress.root_node_finished = true;
+            }
+        }
+        if event.matches(EventMask::NODE_SOLVED) && ffi::SCIPgetDepth(scip) == 0 {
+            progress.root_node_finished = true;
+        }
+        if event.matches(EventMask::LP_EVENT) && ffi::SCIPgetDepth(scip) == 0 {
+            let status = ffi::SCIPgetLPSolstat(scip);
+            let completed = matches!(
+                status,
+                ffi::SCIP_LPSolStat_SCIP_LPSOLSTAT_OPTIMAL
+                    | ffi::SCIP_LPSolStat_SCIP_LPSOLSTAT_INFEASIBLE
+                    | ffi::SCIP_LPSolStat_SCIP_LPSOLSTAT_UNBOUNDEDRAY
+                    | ffi::SCIP_LPSolStat_SCIP_LPSOLSTAT_OBJLIMIT
+            );
+            if completed {
+                if event.matches(EventMask::FIRST_LP_SOLVED) {
+                    progress.root_initial_lp_s.get_or_insert(elapsed);
+                }
+                if event.matches(EventMask::LP_SOLVED) {
+                    progress.root_cut_price_s.get_or_insert(elapsed);
+                }
+                if progress.root_lp_rows.is_none() {
+                    let count = ffi::SCIPgetNLPRows(scip).max(0) as usize;
+                    progress.root_lp_rows = Some(count);
+                    progress.root_lp_columns = Some(ffi::SCIPgetNLPCols(scip).max(0) as usize);
+                    let rows = ffi::SCIPgetLPRows(scip);
+                    // Count once, O(rows), without reading every coefficient.
+                    // A zero-row LP may expose a null pointer; never slice it.
+                    let mut nonzeros = 0;
+                    for index in 0..count {
+                        nonzeros += ffi::SCIProwGetNNonz(*rows.add(index)).max(0) as usize;
+                    }
+                    progress.root_lp_nonzeros = Some(nonzeros);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn diagnostics(solved: &Model<Solved>, audit: &InterruptAudit) -> SolveDiagnostics {
+    let mut progress = audit.progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    // SAFETY: a limit can return Model<Solved> while SCIP is still in presolve.
+    // Guard stage-restricted statistics accordingly. LP matrix getters are
+    // solving-only, so their snapshots are captured in the callback above.
+    unsafe {
+        let scip = solved.scip_ptr();
+        let stage = ffi::SCIPgetStage(scip);
+        if (ffi::SCIP_Stage_SCIP_STAGE_INITPRESOLVE..=ffi::SCIP_Stage_SCIP_STAGE_SOLVED).contains(&stage) {
+            progress.presolve_s = ffi::SCIPgetPresolvingTime(scip);
+        }
+        if matches!(
+            stage,
+            ffi::SCIP_Stage_SCIP_STAGE_PRESOLVING | ffi::SCIP_Stage_SCIP_STAGE_PRESOLVED | ffi::SCIP_Stage_SCIP_STAGE_SOLVING | ffi::SCIP_Stage_SCIP_STAGE_SOLVED
+        ) {
+            progress.lp_iterations = ffi::SCIPgetNLPIterations(scip).max(0) as u64;
+        }
+        if matches!(
+            stage,
+            ffi::SCIP_Stage_SCIP_STAGE_PRESOLVED | ffi::SCIP_Stage_SCIP_STAGE_SOLVING | ffi::SCIP_Stage_SCIP_STAGE_SOLVED
+        ) {
+            progress.root_lp_iterations = ffi::SCIPgetNRootLPIterations(scip).max(0) as u64;
+        }
+        progress.final_variables = ffi::SCIPgetNVars(scip).max(0) as usize;
+        progress.final_constraints = ffi::SCIPgetNConss(scip).max(0) as usize;
+        progress.final_nonzeros = ffi::SCIPgetNNZs(scip).max(0) as u64;
+    }
+    progress.nodes = solved.n_nodes();
+    progress
+}
+
 pub(crate) fn install_cancellation(model: &mut Model<ProblemCreated>, signal: Arc<AtomicBool>, audit: Arc<InterruptAudit>) {
     model.include_eventhdlr(
         "incline_cancel",
@@ -78,11 +176,24 @@ pub(crate) fn install_cancellation(model: &mut Model<ProblemCreated>, signal: Ar
 /// SCIP returns `+inf` when there is no incumbent; that is reported as
 /// `None` so "no incumbent" stays distinct from "gap zero".
 pub(crate) fn gap(solved: &Model<Solved>) -> Option<f64> {
-    if solved.n_sols() == 0 {
+    if solved.n_sols() == 0 || bound(solved).is_none() {
         return None;
     }
     let raw = unsafe { ffi::SCIPgetGap(solved.scip_ptr()) };
-    raw.is_finite().then_some(raw)
+    (raw.is_finite() && !is_infinity(solved, raw)).then_some(raw)
+}
+
+/// The dual bound, or `None` while SCIP has none. SCIP reports "no bound" as
+/// its own infinity (1e20 by default), which is a finite `f64` - so a solve
+/// stopped before its first root LP used to publish 1e20 as a bound.
+pub(crate) fn bound(solved: &Model<Solved>) -> Option<f64> {
+    let raw = solved.best_bound();
+    (raw.is_finite() && !is_infinity(solved, raw)).then_some(raw)
+}
+
+fn is_infinity(solved: &Model<Solved>, value: f64) -> bool {
+    // SAFETY: a read of the model's own numerics settings.
+    unsafe { ffi::SCIPisInfinity(solved.scip_ptr(), value.abs()) != 0 }
 }
 
 /// Solver settings this investigation established, rather than guessed.
@@ -158,6 +269,7 @@ impl SolveTuning {
 pub(crate) struct SolveReport {
     pub(crate) status: Status,
     pub(crate) objective: Option<f64>,
+    /// Infinite while SCIP has no dual bound.
     pub(crate) bound: f64,
     pub(crate) gap: Option<f64>,
     pub(crate) nodes: usize,
@@ -170,7 +282,7 @@ impl SolveReport {
         Self {
             status: solved.status(),
             objective: has_incumbent.then(|| solved.obj_val()),
-            bound: solved.best_bound(),
+            bound: bound(solved).unwrap_or(f64::INFINITY),
             gap: gap(solved),
             nodes: solved.n_nodes(),
             solve_time: solved.solving_time(),

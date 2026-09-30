@@ -9,6 +9,7 @@
 //! | [`input`] | the scenario contract and the stockpile semantics it encodes |
 //! | [`grade`] | which reserve fields may be used as a grade, and why most may not |
 //! | [`replay`] | an independent physical replay of a published schedule |
+//! | [`rolling`] | windows, carried state and stitching for day-by-day solving |
 //! | [`iterative`] | the iterative fixed-grade HiGHS method |
 //!
 //! The nonlinear SCIP formulation lives next door in
@@ -41,5 +42,7 @@
 pub(crate) mod formulation;
 pub(crate) mod grade;
 pub(crate) mod input;
+#[cfg(feature = "blend-experiment")]
 pub(crate) mod iterative;
 pub(crate) mod replay;
+pub(crate) mod rolling;

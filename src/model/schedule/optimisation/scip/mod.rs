@@ -1,11 +1,10 @@
-//! Experimental SCIP backend for *blended* stockpile formulations.
+//! The SCIP backend for the *blended* stockpile model: the schedule
+//! optimiser behind Run Period and Run All Periods on native builds.
 //!
-//! This module is an investigation, not a second production backend. The
-//! accepted scheduling engine remains [`super::highs`]; nothing here is
-//! reachable from `Run Schedule`, and the whole module is behind the
-//! `scip-experiment` (SCIP 10.0.2, bundled) or `scip-system` (whatever SCIP
-//! `$SCIPOPTDIR` points at) cargo feature and a `not(target_arch = "wasm32")`
-//! gate.
+//! Linked in every native build - the bundled SCIP 10.0.2 by default
+//! (`scip-bundled`), or whatever SCIP `$SCIPOPTDIR` points at (`scip-system`)
+//! - and never compiled for wasm. The parcel HiGHS model in [`super::highs`]
+//! remains an experimental baseline and is not reachable from a run.
 //!
 //! # Why a different solver at all
 //!
@@ -50,5 +49,5 @@ pub(crate) mod adapter;
 pub(crate) mod blend;
 pub(crate) mod experiments;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "blend-experiment"))]
 pub(crate) mod scenarios;

@@ -1,14 +1,17 @@
-//! Stateless sampling of a published dispatch schedule for the Animate view.
+//! Stateless sampling of a calculated schedule for the Animate view.
 //!
-//! The dispatch output has one segment per loader.  This index folds those
-//! contributions into one rate curve per physical dig block once, so moving
-//! the time cursor never scans every bar and never counts a shared rate twice.
+//! The result has one execution span per loader. This index folds the *dig*
+//! spans into one rate curve per physical dig block once, so moving the time
+//! cursor never scans every bar and never counts a shared rate twice. Reclaim
+//! spans take material out of a stockpile, not out of the pit, so they never
+//! enter a ground curve - the tonnes they move were already depleted from the
+//! ground when they were dug.
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::model::{
     DigBlockId,
-    schedule::{DispatchSchedule, dispatch::ExecutionSegment},
+    schedule::result::{CalculatedSchedule, Execution, WorkSource},
 };
 
 const TONNE_TOLERANCE: f64 = 1.0e-7;
@@ -67,18 +70,20 @@ pub(crate) struct AnimationIndex {
 }
 
 impl AnimationIndex {
-    pub(crate) fn build(schedule: &DispatchSchedule) -> Result<Self, AnimationError> {
+    pub(crate) fn build(schedule: &CalculatedSchedule) -> Result<Self, AnimationError> {
         // Grouped in one pass rather than filtered per balance: the execution
-        // log holds every loader's every interval, and walking all of it once
-        // for each block in it is the whole run squared.
-        let mut worked: HashMap<DigBlockId, Vec<&ExecutionSegment>> = HashMap::new();
-        for segment in &schedule.execution {
-            worked.entry(segment.resolved).or_default().push(segment);
+        // log holds every loader's every span, and walking all of it once for
+        // each block in it is the whole run squared.
+        let mut worked: HashMap<DigBlockId, Vec<&Execution>> = HashMap::new();
+        for execution in &schedule.executions {
+            if let WorkSource::Block(block) = execution.source {
+                worked.entry(block).or_default().push(execution);
+            }
         }
         let mut blocks = HashMap::new();
-        for balance in &schedule.balances {
+        for balance in &schedule.ground {
             if !balance.started_t.is_finite() || balance.started_t < 0.0 || !balance.remaining_t.is_finite() || balance.remaining_t < 0.0 {
-                return Err(AnimationError::InvalidBalance(balance.resolved));
+                return Err(AnimationError::InvalidBalance(balance.block));
             }
             // A zero-tonne block deliberately has no curve.  Its geometry is
             // retained because 0/0 has no useful visual interpretation.
@@ -90,10 +95,10 @@ impl AnimationIndex {
             // contributions on this shared block have one constant sum.
             let mut events: BTreeMap<u64, f64> = BTreeMap::new();
             let mut segment_total = 0.0;
-            for segment in worked.get(&balance.resolved).into_iter().flatten().copied() {
+            for segment in worked.get(&balance.block).into_iter().flatten().copied() {
                 let duration = segment.end_h - segment.start_h;
                 if !segment.start_h.is_finite() || !segment.end_h.is_finite() || !segment.tonnes.is_finite() || segment.tonnes < 0.0 || duration < 0.0 {
-                    return Err(AnimationError::InvalidSegment(balance.resolved));
+                    return Err(AnimationError::InvalidSegment(balance.block));
                 }
                 // A segment that occupies no time and moves nothing is an
                 // instant the dispatcher happened to record, not a defect:
@@ -101,7 +106,7 @@ impl AnimationIndex {
                 // exactly what it says. Tonnes over no time is the defect.
                 if duration == 0.0 {
                     if segment.tonnes > 0.0 {
-                        return Err(AnimationError::InvalidSegment(balance.resolved));
+                        return Err(AnimationError::InvalidSegment(balance.block));
                     }
                     continue;
                 }
@@ -115,7 +120,7 @@ impl AnimationIndex {
             let tolerance = TONNE_TOLERANCE * balance.started_t.max(1.0);
             if (segment_total - expected).abs() > tolerance {
                 return Err(AnimationError::Conservation {
-                    block: balance.resolved,
+                    block: balance.block,
                     expected_t: expected,
                     actual_t: segment_total,
                 });
@@ -140,7 +145,7 @@ impl AnimationIndex {
                 }
             }
             blocks.insert(
-                balance.resolved,
+                balance.block,
                 BlockCurve {
                     started_t: balance.started_t,
                     final_fraction: if balance.remaining_t <= 0.0 {

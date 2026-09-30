@@ -205,16 +205,6 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
     }
 
-    /// Whether the Schedule Setup page is showing the Configuration step,
-    /// which is the only page that draws the experimental result.
-    #[allow(dead_code, reason = "read by the feature-gated experimental result mirror")]
-    pub(crate) fn is_schedule_configuration(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Schedule
-            && self.schedule_subpage == PlanningSubpage::Setup
-            && self.schedule_setup_step == ScheduleStep::Configuration
-    }
-
     /// Whether the Schedule Setup page is showing the Destinations step, the
     /// one page whose choices are drawn from the Solids run's own bands.
     pub(crate) fn is_schedule_destinations(&self) -> bool {
@@ -2556,15 +2546,8 @@ pub(crate) struct EditorState {
     /// prerequisite, named. Inspection never consults it - only calculation is
     /// gated.
     pub(crate) schedule_calculation_status: String,
-    /// The experimental blended optimiser's last answer, mirrored from the
-    /// App while the Optimisation section is on screen. Held separately from
-    /// every dispatcher result: nothing here feeds the Gantt, the calendar
-    /// rows or the animation.
-    #[allow(dead_code, reason = "read by the feature-gated experimental Optimisation section")]
-    pub(crate) experimental_blend: ExperimentalBlendView,
-    /// Typed text for the experimental settings, so a partly typed number is
+    /// Typed text for the Optimisation settings, so a partly typed number is
     /// not committed and not lost.
-    #[allow(dead_code, reason = "held for the feature-gated experimental Optimisation section")]
     pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
     /// Typed chunk capacities for one stockpile, as `(destination, source, text)`.
     pub(crate) schedule_chunk_draft: Option<(crate::model::schedule::DestinationId, String, String)>,
@@ -2646,25 +2629,24 @@ pub(crate) struct EditorState {
     /// are drawn, so the Gantt never holds a report that outlived the run it
     /// was measured against.
     pub(crate) schedule_bar_reports: Vec<ScheduleBarView>,
-    /// What the last Run Schedule calculated, mirrored only while it is still
-    /// current. Authored bars remain separate and editable; an edit to any of
-    /// them takes this off the page until the schedule is run again, and the
-    /// held result itself is kept and labelled rather than destroyed.
-    pub(crate) schedule_dispatch: Option<std::sync::Arc<crate::model::schedule::DispatchSchedule>>,
-    /// Per-period tonnes for the mirrored result, present only while that
-    /// result is current. Derived display data, mirrored rather than authored.
-    pub(crate) schedule_production: Option<std::sync::Arc<crate::model::schedule::PeriodProduction>>,
-    /// What each destination received per period, off the same held result.
-    /// `None` when the run routed nothing, which is not the same as every
-    /// destination receiving zero.
-    pub(crate) schedule_received: Option<std::sync::Arc<crate::model::schedule::DestinationProduction>>,
-    /// What the Gantt's own run controls say: which run is on screen, that it
-    /// is out of date, or why one cannot be started.
+    /// What the last accepted run calculated, mirrored only while it is
+    /// still current. One shared, immutable result: the Gantt and the
+    /// Calendar read the same figures, and its per-period aggregates were
+    /// built once when it was published. Authored bars remain separate and
+    /// editable; an edit that changes what the run read takes this off the
+    /// pages until the schedule is run again, while the held result itself is
+    /// kept and labelled rather than destroyed.
+    pub(crate) schedule_result: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// What the run controls say: which run is on screen and how it was
+    /// solved, that it is out of date, or why one cannot be started.
     pub(crate) schedule_run_status: String,
+    /// The on-demand detail behind the status: value, bound and gap, timings,
+    /// and the approximations the result rests on.
+    pub(crate) schedule_run_details: Vec<String>,
     /// Whether a held result exists but no longer describes the project. The
     /// calculated bands are hidden while this is set.
     pub(crate) schedule_run_stale: bool,
-    /// Whether a Run Schedule is in flight, so the controls can offer Cancel.
+    /// Whether a schedule run is in flight, so the controls can offer Cancel.
     pub(crate) schedule_run_working: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
@@ -3144,10 +3126,9 @@ impl EditorState {
         self.bar_window_dialog = None;
         self.gantt_drag = None;
         self.schedule_bar_reports.clear();
-        self.schedule_dispatch = None;
-        self.schedule_production = None;
-        self.schedule_received = None;
+        self.schedule_result = None;
         self.schedule_run_status.clear();
+        self.schedule_run_details.clear();
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
         self.schedule_run_repair = None;
@@ -3734,7 +3715,6 @@ impl EditorState {
             schedule_stages: Default::default(),
             schedule_run_active: false,
             schedule_calculation_status: String::new(),
-            experimental_blend: ExperimentalBlendView::default(),
             schedule_experiment_draft: None,
             schedule_chunk_draft: None,
             schedule_selected_class: None,
@@ -3766,10 +3746,9 @@ impl EditorState {
             bar_window_dialog: None,
             gantt_drag: None,
             schedule_bar_reports: Vec::new(),
-            schedule_dispatch: None,
-            schedule_production: None,
-            schedule_received: None,
+            schedule_result: None,
             schedule_run_status: String::new(),
+            schedule_run_details: Vec::new(),
             schedule_run_stale: false,
             schedule_run_working: false,
             schedule_run_repair: None,
@@ -4338,26 +4317,18 @@ pub(crate) enum UiCommand {
     /// Reset the Schedule Setup pipeline and rerun from its first step through
     /// this one.
     RunScheduleStage(ScheduleStep),
-    /// Calculate one more period of the schedule, from the origin.
+    /// Solve from hour zero through one more day than the held current
+    /// result, or through day one when there is none.
     RunSchedulePeriod,
-    /// Calculate the whole schedule, to completion.
-    RunWholeSchedule,
-    /// Stop a Run Schedule in flight. The held result is untouched.
+    /// Solve from hour zero through the planning end day.
+    RunAllSchedulePeriods,
+    /// Stop a schedule run in flight. The held result is untouched.
     CancelScheduleCalculation,
     /// Reset the Schedule Setup pipeline and rerun every step.
     RunAllScheduleStages,
     /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
     /// whatever result the last completed run left stands untouched.
     CancelScheduleRun,
-    /// Capture the project, solve it with the experimental blended optimiser
-    /// and retain the replayed answer. Feature-gated and developer-only:
-    /// nothing it produces reaches the Gantt, the calendar or the animation.
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
-    RunExperimentalOptimisation,
-    /// Stop an experimental optimisation in flight. The previous answer is
-    /// kept exactly as it was and is not presented as current.
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
-    CancelExperimentalOptimisation,
     /// One edit to a project's loader fleet.
     ///
     /// Addressed rather than implicit: `project` is the runtime id of the
@@ -4858,9 +4829,7 @@ impl UiCommand {
             | Self::RunAllScheduleStages
             | Self::CancelScheduleRun
             | Self::RunSchedulePeriod
-            | Self::RunWholeSchedule
-            | Self::RunExperimentalOptimisation
-            | Self::CancelExperimentalOptimisation
+            | Self::RunAllSchedulePeriods
             | Self::CancelScheduleCalculation => None,
 
             #[cfg(target_arch = "wasm32")]
@@ -5040,6 +5009,7 @@ impl UiCommand {
                 // and the stockpile's own page show the result where it was
                 // typed.
                 | ScheduleEdit::SetExperimentHorizon { .. }
+                | ScheduleEdit::SetExperimentEventCapacity { .. }
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
@@ -5860,33 +5830,14 @@ pub(crate) struct ScheduleAgentDraft {
     pub(crate) name: String,
 }
 
-/// What the experimental optimiser's last run says, in already-formatted
-/// rows. The UI never computes any of this; it only draws it.
-#[derive(Clone, Debug, Default)]
-#[allow(dead_code, reason = "drawn by the feature-gated experimental Optimisation section")]
-pub(crate) struct ExperimentalBlendView {
-    /// A run is in flight, so Run is unavailable and Cancel is not.
-    pub(crate) running: bool,
-    /// Whether a retained answer still describes the project. A stale answer
-    /// is labelled, never deleted and never presented as current.
-    pub(crate) current: bool,
-    pub(crate) have_result: bool,
-    /// Property/value rows for the summary table.
-    pub(crate) rows: Vec<(String, String)>,
-    /// Stated approximations and limitations, verbatim.
-    pub(crate) notes: Vec<String>,
-    /// Why the last attempt produced nothing, when it produced nothing.
-    pub(crate) diagnostics: Vec<String>,
-}
-
-/// Typed experimental settings, held against the values they were read from
+/// Typed Optimisation settings, held against the values they were read from
 /// so an edit elsewhere refreshes the fields.
 #[derive(Clone, Debug)]
-#[allow(dead_code, reason = "held for the feature-gated experimental Optimisation section")]
 pub(crate) struct ScheduleExperimentDraft {
-    pub(crate) source: (u32, u64, u64, u64),
+    pub(crate) source: (u32, u64, u64, u64, Option<usize>),
     pub(crate) end_day: String,
     pub(crate) interval_h: String,
+    pub(crate) event_capacity: String,
     pub(crate) solve_seconds: String,
     pub(crate) relative_gap: String,
 }
@@ -6294,31 +6245,27 @@ pub(crate) enum ScheduleEdit {
         bar: crate::model::schedule::BarId,
         maximum_t: Option<f64>,
     },
-    /// Experimental blended-optimiser settings. Persisted and undoable like
-    /// every other plan setting; only the section that edits them is behind
-    /// the feature gate, because a project written by a build with the
-    /// experiment on must round-trip through one with it off.
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    /// Optimisation settings. Persisted and undoable like every other plan
+    /// setting, and edited in every build.
     SetExperimentHorizon {
         end_day: u32,
         interval_h: f64,
     },
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
     SetExperimentSolveLimits {
         seconds: f64,
         relative_gap: f64,
     },
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
     SetExperimentGradeUnit {
         field: crate::model::ReserveFieldId,
         unit: Option<crate::model::schedule::experiment::GradeUnit>,
     },
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
+    SetExperimentEventCapacity {
+        capacity: Option<usize>,
+    },
     SetStockpileRepresentation {
         destination: crate::model::schedule::DestinationId,
         representation: crate::model::schedule::experiment::StockpileRepresentation,
     },
-    #[allow(dead_code, reason = "emitted by the feature-gated experimental Optimisation section")]
     SetStockpileChunks {
         destination: crate::model::schedule::DestinationId,
         capacities: Vec<f64>,
@@ -6703,7 +6650,11 @@ pub(crate) struct ScheduleBarHeightDraft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CalendarRow {
     Input(crate::model::schedule::CalendarField),
-    Tonnes,
+    /// Tonnes a loader dug out of the ground in the period.
+    DigTonnes,
+    /// Tonnes a loader reclaimed from stockpiles in the period. Kept apart
+    /// from [`Self::DigTonnes`]: the two are not one "mined" figure.
+    ReclaimTonnes,
     /// A crusher's maximum tonnes for the period, the one destination input the
     /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
     /// figure for the whole calculation, not for a day of it.
@@ -6712,19 +6663,25 @@ pub(crate) enum CalendarRow {
     /// here rather than in Setup because a fleet changes day to day, unlike the
     /// truck itself.
     Truck(crate::model::schedule::TruckField),
-    /// What a destination received in the period. For a crusher this is also
-    /// what it processed, because nothing is buffered in this increment.
+    /// Truck-hours one class spent hauling in the period.
+    TruckHours,
+    /// What a destination received in the period. For a crusher this is what
+    /// it processed, direct mining and reclaim together.
     Received,
-    /// What a destination holds at the end of the period: a stockpile's
-    /// scheduled inventory, a dump's cumulative deposit.
+    /// What was reclaimed out of a stockpile in the period.
+    Reclaimed,
+    /// A balance at the end of the period: a stockpile's closing inventory,
+    /// opening stock included, or a dump's cumulative deposit.
     Cumulative,
+    /// The schedule's movement value for the period, in the plan's currency.
+    Value,
 }
 
 impl CalendarRow {
     pub(crate) fn field(self) -> Option<crate::model::schedule::CalendarField> {
         match self {
             Self::Input(field) => Some(field),
-            Self::Truck(_) | Self::Tonnes | Self::CrusherLimit | Self::Received | Self::Cumulative => None,
+            _ => None,
         }
     }
 
@@ -6732,7 +6689,10 @@ impl CalendarRow {
     /// authored. A calculated row is selectable, so it can be copied, and
     /// nothing more.
     pub(crate) fn is_calculated(self) -> bool {
-        matches!(self, Self::Tonnes | Self::Received | Self::Cumulative)
+        matches!(
+            self,
+            Self::DigTonnes | Self::ReclaimTonnes | Self::TruckHours | Self::Received | Self::Reclaimed | Self::Cumulative | Self::Value
+        )
     }
 
     /// The truck-calendar field this row edits, when it is one.
@@ -6751,6 +6711,8 @@ impl CalendarRow {
 /// loader's settings or a destination's receipts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CalendarOwner {
+    /// The schedule as a whole, which owns only calculated rows.
+    Schedule,
     Loader(crate::model::schedule::LoaderAgentId),
     Truck(crate::model::schedule::TruckClassId),
     Destination(crate::model::schedule::DestinationId),
@@ -6767,21 +6729,21 @@ impl CalendarCellAddress {
     pub(crate) fn agent(self) -> Option<crate::model::schedule::LoaderAgentId> {
         match self.owner {
             CalendarOwner::Loader(agent) => Some(agent),
-            CalendarOwner::Truck(_) | CalendarOwner::Destination(_) => None,
+            CalendarOwner::Schedule | CalendarOwner::Truck(_) | CalendarOwner::Destination(_) => None,
         }
     }
 
     pub(crate) fn truck(self) -> Option<crate::model::schedule::TruckClassId> {
         match self.owner {
             CalendarOwner::Truck(class) => Some(class),
-            CalendarOwner::Loader(_) | CalendarOwner::Destination(_) => None,
+            CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Destination(_) => None,
         }
     }
 
     pub(crate) fn destination(self) -> Option<crate::model::schedule::DestinationId> {
         match self.owner {
             CalendarOwner::Destination(destination) => Some(destination),
-            CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
+            CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
         }
     }
 }

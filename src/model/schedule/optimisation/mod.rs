@@ -30,16 +30,17 @@ use std::{
 #[cfg(not(target_arch = "wasm32"))]
 mod highs;
 
-/// The experimental blended-stockpile model: scenario contract, independent
-/// replay, and the iterative fixed-grade HiGHS solver for it. Off by default
-/// and never reachable from Run Schedule; see the module docs for what it
-/// does and does not claim.
-#[cfg(all(not(target_arch = "wasm32"), feature = "blend-experiment"))]
+/// The blended-stockpile model the schedule optimiser solves: scenario
+/// contract, the model written once, and the independent replay every
+/// published schedule passes. The iterative fixed-grade HiGHS method for it
+/// is a developer comparison behind the `blend-experiment` feature. Native
+/// only.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod blended;
 
-/// The nonlinear SCIP solver for that same blended model. Off by default, and
-/// separate from [`blended`] because it is the only part that needs SCIP.
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip-code"))]
+/// The nonlinear SCIP solver for that same blended model, separate from
+/// [`blended`] because it is the only part that needs SCIP.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod scip;
 
 macro_rules! id_type {
@@ -743,8 +744,6 @@ pub(crate) fn solve(input: &OptimisationInput, limits: SolveLimits, cancellation
     highs::solve(input, limits, cancellation)
 }
 
-/// Growth factor applied to the event-segment budget on each retry.
-#[cfg(not(target_arch = "wasm32"))]
 /// Ceiling applied to the *derived* per-interval segment budget. The
 /// derivation governs normally; this only stops pathological inputs (for
 /// example a fleet of tiny opening lots) from allocating thousands of event

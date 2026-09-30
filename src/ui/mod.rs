@@ -698,7 +698,7 @@ fn draw_ui(
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let animation_timeline_rect = if editor.is_schedule_animation() {
-        elements::schedule_animation::draw_timeline(root_ui, editor)
+        elements::schedule_animation::draw_timeline(root_ui, editor, document)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber
