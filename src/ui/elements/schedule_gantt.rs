@@ -6,20 +6,23 @@
 //!
 //! An authored bar is a **work window**: the period its loader is allowed to
 //! work that dig sequence or reclaim. What is actually worked in that period
-//! is the optimiser's answer, drawn as a thin band along the top of the bar,
-//! and it appears only after an explicit run - never inferred from the bar
+//! is the optimiser's answer, drawn inside the bar's lower half, and it
+//! appears only from a calculated schedule - never inferred from the bar
 //! itself.
 //!
 //! Three marks carry the calculated answer, and all three vanish the moment
 //! anything they were calculated from is edited:
 //!
-//! - a **working band** above the bar for each solved execution span: the
-//!   physical dig block a dig bar was on, or the stockpile a reclaim bar
-//!   actually drew from, at the times the model solved;
+//! - a **work segment** in the bar's lower half for each solved execution
+//!   span: the physical dig block a dig bar was on, or the stockpile a
+//!   reclaim bar actually drew from, at the times the model solved. Each
+//!   change of block alternates the shade and, where it fits, the block is
+//!   named; hovering the lane lists everything worked at that instant;
 //! - **grey** over the rest of a dig bar whose ground ran out before its
 //!   window closed, which reads as finished early;
 //! - an **idle strip** along the foot of a loader's row, where it executed
-//!   nothing inside the calculated horizon. It states the fact, not a reason.
+//!   nothing inside the calculated horizon, coloured by the reason the
+//!   result found for it and explained on hover.
 //!
 //! Dragging the middle of a bar moves its whole window; dragging either edge
 //! resizes it, and the same window can be typed in exactly. The drag previews
@@ -41,10 +44,11 @@ use crate::{
         DestinationId, LoaderAgentId, ScheduleBar, SchedulePlan, WorkWindow,
         cashflow::Activity,
         destinations::DestinationView,
-        result::{CalculatedSchedule, Execution, WorkSource},
+        result::{CalculatedSchedule, Execution, IdleReason, WorkSource},
     },
     ui::{
         EditorState, UiProjectView, chrome,
+        elements::schedule_calendar::format_tonnes,
         fonts::bold,
         state::{
             BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
@@ -74,7 +78,7 @@ const LANE_INSERT_ZONE: f32 = 9.0;
 /// Least width a bar is drawn at, whatever its window is worth on screen.
 /// A window of minutes at a month's zoom is still something to grab.
 const MIN_BAR_WIDTH: f32 = 18.0;
-/// Height of the working band above a bar.
+/// Space kept above each bar, between it and the lane above.
 const WORK_STRIP: f32 = 5.0;
 /// Height of the idle strip along the foot of a loader's row.
 const IDLE_STRIP: f32 = 4.0;
@@ -444,7 +448,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 ///
 /// The browser build shows them disabled with the reason, and refuses the
 /// commands as well: calculation needs the native solver.
-pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
     use crate::ui::{
         elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
         widgets::toolbar::ToolbarButton,
@@ -504,6 +508,30 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &EditorState,
         commands.push(UiCommand::CancelScheduleCalculation);
     }
     ui.spacing_mut().item_spacing.x = spacing;
+    ui.add_space(6.0);
+    // The hourly schedule is what every other control produces; this is the
+    // one that spends the solve time looking past it.
+    let improve = egui::Button::new(if editor.schedule_run_improve {
+        tr!("schedule-improving")
+    } else {
+        tr!("schedule-improve")
+    })
+    .corner_radius(GROUP_CORNER_RADIUS)
+    .selected(editor.schedule_run_improve);
+    if ui
+        .add_enabled(startable, improve)
+        .on_hover_text(hint(tr!("schedule-improve-note")))
+        .on_disabled_hover_text(hint(if editor.schedule_run_improve {
+            tr!("schedule-improving-note")
+        } else {
+            tr!("schedule-improve-note")
+        }))
+        .clicked()
+    {
+        commands.push(UiCommand::ImproveSchedule);
+    }
+    ui.add_enabled(available, egui::Checkbox::new(&mut editor.schedule_auto_recalculate, tr!("schedule-auto")))
+        .on_hover_text(hint(tr!("schedule-auto-note")));
 }
 
 /// The one status line the run controls carry, with the detail behind it on
@@ -527,9 +555,9 @@ pub(crate) fn draw_run_status(ui: &mut egui::Ui, editor: &EditorState) {
             let remaining: f64 = schedule.ground.iter().map(|balance| balance.remaining_t).sum();
             ui.label(tr!(
                 "schedule-result-summary",
-                started = format!("{started:.1}"),
-                extracted = format!("{:.1}", started - remaining),
-                remaining = format!("{remaining:.1}")
+                started = format_tonnes(started),
+                extracted = format_tonnes(started - remaining),
+                remaining = format_tonnes(remaining)
             ));
         }
         for line in &editor.schedule_run_details {
@@ -695,7 +723,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // Idle is a row-level indicator and must remain visible even beneath an
     // authored bar that has no executable material, so paint it over the bar
     // foot rather than letting the bar cover most of a four-pixel strip.
-    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows);
+    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
     // Over everything, because it marks an instant across all of it, and last
     // so its handle takes the pointer from the bars it crosses.
     let horizon_h = schedule.as_deref().map_or(0.0, |schedule| schedule.requested_end_h);
@@ -970,17 +998,17 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         if bar.reclaim().is_some() {
             let (drawn, cap) = schedule.reclaim_progress(bar.id, schedule.requested_end_h);
             lines.push(match cap {
-                Some(cap) => tr!("schedule-bar-reclaimed-of", tonnes = format!("{drawn:.1}"), cap = format!("{cap:.1}")),
-                None => tr!("schedule-bar-reclaimed", tonnes = format!("{drawn:.1}")),
+                Some(cap) => tr!("schedule-bar-reclaimed-of", tonnes = format_tonnes(drawn), cap = format_tonnes(cap)),
+                None => tr!("schedule-bar-reclaimed", tonnes = format_tonnes(drawn)),
             });
         } else {
-            lines.push(tr!("schedule-bar-worked", tonnes = format!("{worked:.1}")));
+            lines.push(tr!("schedule-bar-worked", tonnes = format_tonnes(worked)));
             // Material, not lost work: it stays in the block, and any later
             // bar referencing that ground - this machine's or another's - may
             // take it.
             let left_behind = schedule.bar_left_behind(bar.id);
             if left_behind > 0.0 {
-                lines.push(tr!("schedule-bar-left-behind", tonnes = format!("{left_behind:.1}")));
+                lines.push(tr!("schedule-bar-left-behind", tonnes = format_tonnes(left_behind)));
             } else if let Some(completed) = schedule.bar_completion_h(bar.id)
                 && window.end_h.is_some_and(|close| completed < close)
             {
@@ -1016,22 +1044,41 @@ const WORKING_COLOR: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0xD6);
 /// Reclaim: the same band in a second hue, so drawing a pile down never reads
 /// as digging ground.
 const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB5, 0x8A);
-/// Idle: a muted amber along the foot of the row, distinct from the working
-/// band above it at a glance and at a small size.
+/// Idle because a limit held the machine back - no room, no trucks, no
+/// route: red, because it is lost production something else caused.
+const IDLE_BLOCKED_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x5A, 0x4E);
+/// Idle with nothing left to do, or nothing worth doing: amber, because more
+/// or different work would fill it.
 const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
+/// Idle as planned - no bar open, or no rate in the calendar: grey, because
+/// it is what was asked for.
+const IDLE_PLANNED_COLOR: egui::Color32 = egui::Color32::from_rgb(0x80, 0x86, 0x8E);
+
+/// The strip colour, the short name and the explanation of one idle reason.
+fn idle_reason_look(reason: Option<IdleReason>) -> (egui::Color32, String, String) {
+    match reason {
+        Some(IdleReason::Unavailable) => (IDLE_PLANNED_COLOR, tr!("idle-unavailable"), tr!("idle-unavailable-note")),
+        Some(IdleReason::NoWork) => (IDLE_PLANNED_COLOR, tr!("idle-no-work"), tr!("idle-no-work-note")),
+        Some(IdleReason::WorkFinished) => (IDLE_COLOR, tr!("idle-work-finished"), tr!("idle-work-finished-note")),
+        Some(IdleReason::NoRoute) => (IDLE_BLOCKED_COLOR, tr!("idle-no-route"), tr!("idle-no-route-note")),
+        Some(IdleReason::DestinationsFull) => (IDLE_BLOCKED_COLOR, tr!("idle-destinations-full"), tr!("idle-destinations-full-note")),
+        Some(IdleReason::NoTrucks) => (IDLE_BLOCKED_COLOR, tr!("idle-no-trucks"), tr!("idle-no-trucks-note")),
+        Some(IdleReason::NotWorthIt) => (IDLE_COLOR, tr!("idle-not-worth-it"), tr!("idle-not-worth-it-note")),
+        None => (IDLE_COLOR, tr!("schedule-dispatch-idle"), String::new()),
+    }
+}
 
 /// The idle strip along the foot of each loader's row: where that machine
-/// executed nothing inside the calculated horizon.
+/// executed nothing inside the calculated horizon, and why.
 ///
 /// Drawn from the result's explicit idle spans, never inferred from gaps
-/// between bars - a gap on screen can be a lane that packed elsewhere. No
-/// reason is attached: zero production is a fact, and why it happened is not
-/// something the result records.
-fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, schedule: Option<&CalculatedSchedule>, rows: &[Row]) {
+/// between bars - a gap on screen can be a lane that packed elsewhere.
+fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, schedule: Option<&CalculatedSchedule>, rows: &[Row], destinations: &[DestinationView]) {
     let Some(schedule) = schedule else {
         return;
     };
-    for &(agent, start_h, end_h) in &schedule.idle {
+    for span in &schedule.idle {
+        let (agent, start_h, end_h) = (span.agent, span.start_h, span.end_h);
         let Some(row) = rows.iter().find(|row| row.agent == Some(agent)) else {
             continue;
         };
@@ -1041,27 +1088,52 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
             continue;
         }
         let rect = rect.intersect(body);
-        ui.painter_at(body).rect_filled(rect, 1.0, IDLE_COLOR);
-        ui.interact(rect, ui.id().with(("gantt_idle", agent, start_h.to_bits())), egui::Sense::hover())
-            .on_hover_text(tr_format!(
-                literal = "%kind%\n%from% → %to%",
-                kind = tr!("schedule-dispatch-idle"),
-                from = instant_label(start_h * GanttView::HOUR),
-                to = instant_label(end_h * GanttView::HOUR)
-            ));
+        let (color, name, note) = idle_reason_look(span.reason);
+        ui.painter_at(body).rect_filled(rect, 1.0, color);
+        // The strip is thin; the hover target is not.
+        let target = rect.expand2(egui::vec2(0.0, 3.0));
+        ui.interact(target, ui.id().with(("gantt_idle", agent, start_h.to_bits())), egui::Sense::hover())
+            .on_hover_ui(|ui| {
+                ui.set_max_width(420.0);
+                ui.label(bold(&tr!("idle-title", reason = name)));
+                ui.label(tr_format!(
+                    literal = "%from% → %to% (%hours% h)",
+                    from = instant_label(start_h * GanttView::HOUR),
+                    to = instant_label(end_h * GanttView::HOUR),
+                    hours = format!("{:.1}", end_h - start_h)
+                ));
+                if !span.full.is_empty() {
+                    let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
+                    ui.label(tr!("idle-full-list", destinations = names.join(", ")));
+                }
+                if !note.is_empty() {
+                    ui.label(egui::RichText::new(note).weak());
+                }
+            });
     }
+}
+
+/// The bar member a solved block is, as the readiness report currently
+/// describes it.
+fn member_of<'a>(
+    schedule: &CalculatedSchedule,
+    bar: &ScheduleBar,
+    report: Option<&'a ScheduleBarView>,
+    block: crate::model::DigBlockId,
+) -> Option<&'a crate::ui::state::ScheduleMemberView> {
+    schedule
+        .bar_blocks
+        .iter()
+        .find(|(id, _)| *id == bar.id)
+        .and_then(|(_, blocks)| blocks.iter().position(|held| *held == block))
+        .and_then(|position| report.and_then(|report| report.members.get(position)))
 }
 
 /// What one solved source is called, resolved now rather than when the run
 /// was made.
 fn source_label(source: WorkSource, bar: &ScheduleBar, report: Option<&ScheduleBarView>, schedule: &CalculatedSchedule, destinations: &[DestinationView]) -> String {
     match source {
-        WorkSource::Block(block) => schedule
-            .bar_blocks
-            .iter()
-            .find(|(id, _)| *id == bar.id)
-            .and_then(|(_, blocks)| blocks.iter().position(|held| *held == block))
-            .and_then(|position| report.and_then(|report| report.members.get(position)))
+        WorkSource::Block(block) => member_of(schedule, bar, report, block)
             .and_then(|member| member.name.clone())
             .unwrap_or_else(|| tr!("schedule-dispatch-block", block = block.0.to_string())),
         WorkSource::Stockpile(pile) => destination_label(pile, destinations),
@@ -1094,12 +1166,16 @@ fn execution_tooltip(
         Activity::Dig => tr!("schedule-dispatch-execution"),
         Activity::Reclaim => tr!("schedule-dispatch-reclaim"),
     };
+    let source = source_label(execution.source, bar, report, schedule, destinations);
+    let source = match execution.source {
+        WorkSource::Block(block) => match member_of(schedule, bar, report, block).and_then(|member| member.area.clone()) {
+            Some(area) => format!("{area} · {source}"),
+            None => source,
+        },
+        WorkSource::Stockpile(_) => source,
+    };
     let mut lines = vec![
-        tr_format!(
-            literal = "%kind% — %source%",
-            kind = kind,
-            source = source_label(execution.source, bar, report, schedule, destinations)
-        ),
+        tr_format!(literal = "%kind% — %source%", kind = kind, source = source),
         tr_format!(
             literal = "%from% → %to%",
             from = instant_label(execution.start_h * GanttView::HOUR),
@@ -1107,8 +1183,8 @@ fn execution_tooltip(
         ),
         tr!(
             "schedule-dispatch-tonnes-rate",
-            tonnes = format!("{:.1}", execution.tonnes),
-            rate = format!("{:.0}", execution.rate_tph())
+            tonnes = format_tonnes(execution.tonnes),
+            rate = format_tonnes(execution.rate_tph().round())
         ),
     ];
     match execution.source {
@@ -1139,7 +1215,7 @@ fn execution_tooltip(
                     .sum();
                 let left = (balance.started_t - taken_by_then).max(0.0);
                 lines.push(if left > 1e-6 {
-                    tr!("schedule-dispatch-remaining", tonnes = format!("{left:.1}"))
+                    tr!("schedule-dispatch-remaining", tonnes = format_tonnes(left))
                 } else {
                     tr!("schedule-dispatch-emptied")
                 });
@@ -1148,8 +1224,8 @@ fn execution_tooltip(
         WorkSource::Stockpile(pile) => {
             let (drawn, cap) = schedule.reclaim_progress(execution.bar, execution.end_h);
             lines.push(match cap {
-                Some(cap) => tr!("schedule-bar-reclaimed-of", tonnes = format!("{drawn:.1}"), cap = format!("{cap:.1}")),
-                None => tr!("schedule-bar-reclaimed", tonnes = format!("{drawn:.1}")),
+                Some(cap) => tr!("schedule-bar-reclaimed-of", tonnes = format_tonnes(drawn), cap = format_tonnes(cap)),
+                None => tr!("schedule-bar-reclaimed", tonnes = format_tonnes(drawn)),
             });
             // Which chunks the pile gave up in these intervals, when it is an
             // ordered chunked pile: the actual source choice, not the permitted
@@ -1165,7 +1241,7 @@ fn execution_tooltip(
                 lines.push(tr!(
                     "schedule-dispatch-pile-holds",
                     stockpile = destination_label(pile, destinations),
-                    tonnes = format!("{held:.1}")
+                    tonnes = format_tonnes(held)
                 ));
             }
         }
@@ -1184,7 +1260,7 @@ fn execution_tooltip(
         lines.push(tr!(
             "schedule-dispatch-delivered",
             destination = destination_label(destination, destinations),
-            tonnes = format!("{tonnes:.1}")
+            tonnes = format_tonnes(tonnes)
         ));
     }
     lines.join("\n")
@@ -1547,44 +1623,91 @@ fn draw_bars(
                     if window.end_h.is_some() {
                         painter.line_segment([rect.right_top(), rect.right_bottom()], edge);
                     }
+                    // The calculated work, inside the bar's lower half: one
+                    // segment per span worked, consecutive blocks in
+                    // alternating shades so each change of block shows, and
+                    // each block named where its run is wide enough. Drawn
+                    // only from a current run: the moment anything it was
+                    // calculated from is edited, `schedule` is `None` here and
+                    // the work is simply not there.
+                    let work = schedule.filter(|schedule| schedule.bar_executions(bar.id).next().is_some());
+                    let label_y = if work.is_some() { rect.top() + rect.height() * 0.27 } else { rect.center().y };
                     // Clipped to the bar rather than allowed to overhang it:
                     // the bar is a period now, and a label spilling past its
                     // end would read as work that runs on past the window.
                     if rect.width() > 16.0 {
                         ui.painter_at(rect.intersect(body)).galley(
-                            egui::pos2(rect.left() + 6.0, rect.center().y - marker.galley.size().y * 0.5),
+                            egui::pos2(rect.left() + 6.0, label_y - marker.galley.size().y * 0.5),
                             marker.galley.clone(),
                             visuals.strong_text_color(),
                         );
                     }
-
-                    // The calculated work, in the strip above the bar. Drawn
-                    // only from a current run: the moment anything it was
-                    // calculated from is edited, `schedule` is `None` here and
-                    // the strip is simply not there.
-                    if let Some(schedule) = schedule {
-                        for execution in schedule.bar_executions(bar.id) {
-                            let band = span_rect(view, body, execution.start_h, execution.end_h, strip.top(), WORK_STRIP);
-                            if !band.intersects(body) {
-                                continue;
+                    // What the pointer is over in the work lane, if anything:
+                    // every span worked at that instant, which in an hour that
+                    // finished one block and started the next is two. Read off
+                    // the bar's own response, so hovering the work never takes
+                    // a press or a drag away from the bar.
+                    let mut hovered_work: Vec<&Execution> = Vec::new();
+                    if let Some(schedule) = work {
+                        let lane = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + rect.height() * 0.52), egui::pos2(rect.right(), rect.bottom() - 3.0));
+                        let clip = rect.intersect(body);
+                        let work_painter = ui.painter_at(clip);
+                        // Runs of one source: (source, first, last) execution
+                        // indices into this bar's spans, in time order.
+                        let spans: Vec<&Execution> = schedule.bar_executions(bar.id).collect();
+                        let mut runs: Vec<(WorkSource, usize, usize)> = Vec::new();
+                        for (index, execution) in spans.iter().enumerate() {
+                            match runs.last_mut() {
+                                Some((source, _, last)) if *source == execution.source && (spans[*last].end_h - execution.start_h).abs() < 1e-6 => *last = index,
+                                _ => runs.push((execution.source, index, index)),
                             }
-                            let band = band.intersect(body);
-                            let color = match execution.activity {
+                        }
+                        for (run, &(source, first, last)) in runs.iter().enumerate() {
+                            let base = match spans[first].activity {
                                 Activity::Dig => WORKING_COLOR,
                                 Activity::Reclaim => RECLAIM_COLOR,
                             };
-                            ui.painter_at(body).rect_filled(band, 1.0, color);
-                            ui.interact(
-                                band.expand2(egui::vec2(0.0, 2.0)).intersect(body),
-                                ui.id().with(("gantt_work", bar.id, execution.agent, execution.start_h.to_bits())),
-                                egui::Sense::hover(),
-                            )
-                            .on_hover_ui(|ui| {
-                                ui.label(execution_tooltip(execution, bar, report, schedule, plan, destinations));
-                            });
+                            let color = if run % 2 == 0 { base } else { base.gamma_multiply(0.72) };
+                            for execution in &spans[first..=last] {
+                                let band = span_rect(view, body, execution.start_h, execution.end_h, lane.top(), lane.height());
+                                if !band.intersects(clip) {
+                                    continue;
+                                }
+                                let band = band.intersect(clip);
+                                work_painter.rect_filled(band, 2.0, color);
+                            }
+                            let whole = span_rect(view, body, spans[first].start_h, spans[last].end_h, lane.top(), lane.height()).intersect(clip);
+                            // The block's own name is short and only unique in
+                            // its area, so the area leads it where it fits.
+                            if whole.width() > 14.0 {
+                                let name = source_label(source, bar, report, schedule, destinations);
+                                let area = match source {
+                                    WorkSource::Block(block) => member_of(schedule, bar, report, block).and_then(|member| member.area.clone()),
+                                    WorkSource::Stockpile(_) => None,
+                                };
+                                let ink = egui::Color32::from_rgb(0x0E, 0x1A, 0x24);
+                                let font = egui::FontId::proportional(11.0);
+                                let fitted = area
+                                    .map(|area| format!("{area} · {name}"))
+                                    .into_iter()
+                                    .chain(std::iter::once(name))
+                                    .map(|text| ui.painter().layout_no_wrap(text, font.clone(), ink))
+                                    .find(|galley| galley.size().x + 8.0 <= whole.width());
+                                if let Some(galley) = fitted {
+                                    ui.painter_at(whole)
+                                        .galley(egui::pos2(whole.left() + 4.0, whole.center().y - galley.size().y * 0.5), galley, ink);
+                                }
+                            }
                         }
                     }
 
+                    if let (Some(schedule), Some(pos)) = (work, response.hover_pos()) {
+                        let lane_top = rect.top() + rect.height() * 0.52;
+                        if pos.y >= lane_top {
+                            let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
+                            hovered_work.extend(schedule.bar_executions(bar.id).filter(|execution| execution.start_h <= at_h && at_h < execution.end_h));
+                        }
+                    }
                     if response.clicked() {
                         selected = Some(bar.id);
                     }
@@ -1716,8 +1839,22 @@ fn draw_bars(
                             }
                         }
                     });
-                    response.on_hover_ui(|ui| {
-                        ui.label(bar_tooltip(bar, report, window, schedule));
+                    // At the pointer: a bar can span the whole week, and its
+                    // left edge says nothing about the hour being asked about.
+                    response.on_hover_ui_at_pointer(|ui| match schedule.filter(|_| !hovered_work.is_empty()) {
+                        Some(schedule) => {
+                            ui.set_min_width(260.0);
+                            for (index, execution) in hovered_work.iter().enumerate() {
+                                if index > 0 {
+                                    ui.separator();
+                                }
+                                ui.label(execution_tooltip(execution, bar, report, schedule, plan, destinations));
+                            }
+                        }
+                        None => {
+                            ui.set_min_width(260.0);
+                            ui.label(bar_tooltip(bar, report, window, schedule));
+                        }
                     });
                 }
             }

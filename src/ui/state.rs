@@ -2651,6 +2651,11 @@ pub(crate) struct EditorState {
     /// Whether the run in flight is showing its day-by-day schedule while
     /// the whole-horizon solve looks for a better one, so Cancel keeps it.
     pub(crate) schedule_run_improving: bool,
+    /// Whether the run in flight is an Improve run, so its control shows it.
+    pub(crate) schedule_run_improve: bool,
+    /// Whether the schedule recalculates on its own once edits settle. On by
+    /// default: the first schedule takes a fraction of a second.
+    pub(crate) schedule_auto_recalculate: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
@@ -3135,6 +3140,7 @@ impl EditorState {
         self.schedule_run_stale = false;
         self.schedule_run_working = false;
         self.schedule_run_improving = false;
+        self.schedule_run_improve = false;
         self.schedule_run_repair = None;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
@@ -3756,6 +3762,8 @@ impl EditorState {
             schedule_run_stale: false,
             schedule_run_working: false,
             schedule_run_improving: false,
+            schedule_run_improve: false,
+            schedule_auto_recalculate: true,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden_solids: HashSet::new(),
@@ -4327,6 +4335,9 @@ pub(crate) enum UiCommand {
     RunSchedulePeriod,
     /// Solve from hour zero through the planning end day.
     RunAllSchedulePeriods,
+    /// Look for a better schedule than the hourly one over the held
+    /// result's horizon, with the whole-horizon optimiser.
+    ImproveSchedule,
     /// Stop a schedule run in flight. The held result is untouched.
     CancelScheduleCalculation,
     /// Reset the Schedule Setup pipeline and rerun every step.
@@ -4835,6 +4846,7 @@ impl UiCommand {
             | Self::CancelScheduleRun
             | Self::RunSchedulePeriod
             | Self::RunAllSchedulePeriods
+            | Self::ImproveSchedule
             | Self::CancelScheduleCalculation => None,
 
             #[cfg(target_arch = "wasm32")]
@@ -6432,6 +6444,8 @@ pub(crate) struct ScheduleMemberView {
     /// The block's name and solid in the Solids panels, when the reference
     /// resolved.
     pub(crate) name: Option<String>,
+    /// The dig area it belongs to, which is what a bar is named after.
+    pub(crate) area: Option<String>,
     pub(crate) solid_name: Option<String>,
     pub(crate) solid_type: Option<String>,
     pub(crate) bench: Option<String>,

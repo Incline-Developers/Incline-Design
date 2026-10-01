@@ -246,6 +246,7 @@ impl<'a> App<'a> {
                     // geometry sync would let one frame's work start against a
                     // demand that the same frame's edit had already retired.
                     self.sync_planning_pipeline();
+                    self.auto_recalculate_schedule();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
                     self.sync_reserve_setup_stats();

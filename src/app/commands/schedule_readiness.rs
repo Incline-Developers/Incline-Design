@@ -518,6 +518,7 @@ impl crate::app::App<'_> {
                         .map(|member| ScheduleMemberView {
                             position: member.position,
                             name: member.name.clone(),
+                            area: member.area_name.clone(),
                             solid_name: member.solid_name.clone(),
                             solid_type: member.solid_type.clone(),
                             bench: member.bench.clone(),

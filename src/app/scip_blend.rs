@@ -71,6 +71,12 @@ pub(crate) struct ScipSolveOptions {
     pub(crate) time_limit: Option<Duration>,
     pub(crate) relative_gap: Option<f64>,
     pub(crate) diagnostic_logging: bool,
+    /// Stop at the hourly dispatch schedule: no relaxation bound and no
+    /// whole-horizon solve. What a recalculation after an edit asks for; an
+    /// Improve run leaves it off. Only a dispatcher that fails falls through
+    /// to the solver path, since that is the only way to get a schedule.
+    #[serde(default)]
+    pub(crate) first_schedule_only: bool,
 }
 
 impl Default for ScipSolveOptions {
@@ -79,6 +85,7 @@ impl Default for ScipSolveOptions {
             time_limit: Some(Duration::from_secs(60)),
             relative_gap: Some(1e-4),
             diagnostic_logging: false,
+            first_schedule_only: false,
         }
     }
 }
@@ -404,6 +411,13 @@ pub(crate) fn execute_scip_blend(
     let mut windows = None;
     if let DayByDay::Failed(reason) = &attempt {
         log::info!("schedule run {}: no hourly dispatch schedule: {reason}", out.identity.run_id);
+        // A recalculation does not fall through to the solver: that takes
+        // up to the whole solve budget, which an edit should never cost.
+        if options.first_schedule_only {
+            let reason = crate::i18n::tr!("schedule-first-schedule-failed", reason = reason.clone());
+            out.stop(ScipTermination::BackendFailure, reason);
+            return out;
+        }
         if let Some(planned) = rolling::plan(&out.input, 0.0) {
             relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
             // Days alone first; with a look-ahead only when that fails (see
@@ -431,10 +445,14 @@ pub(crate) fn execute_scip_blend(
             }
             windows = Some(planned.len());
         }
-    } else {
+    } else if !options.first_schedule_only {
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
     }
     match attempt {
+        DayByDay::Seed(found) if options.first_schedule_only => {
+            adopt_seed(&mut out, *found, None, None, DayByDayRole::Only);
+            return out;
+        }
         DayByDay::Seed(found) => {
             let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
             let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));

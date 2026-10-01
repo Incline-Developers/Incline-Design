@@ -796,6 +796,69 @@ Through `execute_scip_blend`, 40 s:
 The two proof times on each row are from two runs; the gap between them is
 the relaxation solve racing SCIP.
 
+## Recalculation and Improve
+
+Every control except Improve now stops at the hourly dispatch schedule
+(`ScipSolveOptions::first_schedule_only`): no relaxation bound and no
+whole-horizon solve. Run Period and Run All Periods keep their horizons.
+Improve runs the full pipeline above over the held result's horizon, or the
+planning end when there is none.
+
+With Auto on, which is the default, the app recalculates on its own once
+the schedule's inputs have stayed unchanged for 350 ms
+(`ScheduleRunMode::Auto`):
+- It covers the horizon the held result covered, even a stale one, so a
+  schedule run to day 3 stays a schedule to day 3.
+- It is quiet: its start, finish and supersession go to the log, not the
+  console. The status reads "Updating the schedule…" instead of warning that
+  the last run is out of date.
+- It runs at most once for one set of inputs. A refusal, a failure or a run
+  the user stopped is not retried until something changes.
+- A first-schedule run whose dispatcher fails does not fall through to the
+  day-by-day SCIP windows, since that would cost an edit up to the whole
+  solve budget. It says so, and Improve still searches with the full
+  optimiser.
+
+DreamLand's week, measured in the app: the schedule is back 0.12 s after an
+edit settles (84 ms of it is the dispatcher), so about half a second from
+the end of a drag to a redrawn Gantt.
+
+A Setup step that has not been run, or has gone stale, no longer reads as
+"Cannot run": a run validates the Setup steps itself. A Setup step that
+failed is marked stale once its inputs change, rather than staying failed
+against inputs it never saw.
+
+## Idle reasons
+
+Publication now explains each idle span (`IdleReason`, `explain_idle` in
+`app/schedule_publish.rs`). It cuts each span at the calendar intervals and
+checks each piece in this order, using only the published schedule and the
+captured input, so a schedule from either optimiser is explained the same
+way:
+
+| reason | holds when |
+|---|---|
+| not available | the loader's dig and reclaim rates are both zero, or zero for every open bar's activity |
+| no work assigned | none of the loader's bars is open |
+| work finished | every open dig bar's sequence is dug and every open reclaim pile is empty |
+| no destination rule | no material of the next block (the first in sequence with ground left) is fully routed |
+| destinations full | some material of every next block has no destination with room; the tooltip names the full destinations |
+| no trucks | every truck class that can haul for a source with room is fully used in the interval |
+| not worth moving | none of the above |
+
+"Destinations full" checks each material separately because ground is dug
+whole, in proportion. On DreamLand's day 7, from 11:00, both loaders stop:
+the ore, 98 % of the next blocks, has no room, because ROM A and ROM B are
+full and CR1 has used its daily budget. Only the 2 % waste could go, to the
+unlimited dump.
+
+The Gantt colours the idle strip by reason:
+- grey for planned idle: not available, no work assigned;
+- amber where more or different work would fill it: work finished, not worth
+  moving;
+- red where a limit held the machine back: no destination rule, destinations
+  full, no trucks.
+
 ## Solver process
 
 SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,

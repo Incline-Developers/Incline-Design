@@ -432,7 +432,7 @@ pub(crate) fn publish(
         omitted_tonnes_t: omitted_tonnes_t + solution.adjustments.movement_total_t,
         notes: meta.notes,
     };
-    Ok(CalculatedSchedule::new(ScheduleParts {
+    let mut schedule = CalculatedSchedule::new(ScheduleParts {
         run: meta.run,
         semantic: meta.semantic,
         generation: meta.generation,
@@ -447,7 +447,214 @@ pub(crate) fn publish(
         reclaim_caps: identities.reclaim_caps.clone(),
         grades: identities.grades.iter().map(|(field, _, unit)| (*field, *unit)).collect(),
         report,
-    }))
+    });
+    explain_idle(&mut schedule, input, &lookup);
+    Ok(schedule)
+}
+
+/// Tonnes below which a block, a pile or the room left at a destination
+/// counts as none: the replay's own negligible scale.
+const IDLE_NEGLIGIBLE_T: f64 = 1e-3;
+
+/// The part of `[start_h, end_h)` that falls inside `[from_h, to_h)`, as a
+/// fraction of the former.
+fn share_within(start_h: f64, end_h: f64, from_h: f64, to_h: f64) -> f64 {
+    let duration = end_h - start_h;
+    if duration <= 0.0 {
+        return if start_h >= from_h && start_h < to_h { 1.0 } else { 0.0 };
+    }
+    ((end_h.min(to_h) - start_h.max(from_h)) / duration).clamp(0.0, 1.0)
+}
+
+/// Say why each idle span happened (see [`IdleReason`] for the order the
+/// reasons are checked in), from the published schedule and the captured
+/// input alone - so the same answer is given whichever optimiser made it.
+fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &Lookup<'_>) {
+    use crate::model::schedule::{
+        optimisation::{DestinationKind, TaskKind},
+        result::IdleReason,
+    };
+
+    if schedule.idle.is_empty() {
+        return;
+    }
+    let intervals: Vec<(f64, f64)> = input.intervals.iter().map(|interval| (interval.start_h, interval.end_h)).collect();
+    let loaders: BTreeMap<LoaderAgentId, LoaderId> = lookup.loaders.iter().map(|(id, agent)| (*agent, *id)).collect();
+    // What was taken out of each block, delivered to each destination and
+    // hauled by each truck class, as (start, end, quantity) spans.
+    let mut dug: BTreeMap<crate::model::DigBlockId, Vec<(f64, f64, f64)>> = BTreeMap::new();
+    for execution in &schedule.executions {
+        if let WorkSource::Block(block) = execution.source {
+            dug.entry(block).or_default().push((execution.start_h, execution.end_h, execution.tonnes));
+        }
+    }
+    let mut received: BTreeMap<ProjectDestinationId, Vec<(f64, f64, f64)>> = BTreeMap::new();
+    let mut hauled: BTreeMap<trucking::TruckClassId, Vec<(f64, f64, f64)>> = BTreeMap::new();
+    for delivery in &schedule.deliveries {
+        received.entry(delivery.destination).or_default().push((delivery.start_h, delivery.end_h, delivery.tonnes));
+        hauled.entry(delivery.truck).or_default().push((delivery.start_h, delivery.end_h, delivery.truck_hours));
+    }
+    let sum_within = |spans: Option<&Vec<(f64, f64, f64)>>, from_h: f64, to_h: f64| {
+        spans.map_or(0.0, |spans| {
+            spans.iter().map(|&(start, end, quantity)| quantity * share_within(start, end, from_h, to_h)).sum::<f64>()
+        })
+    };
+
+    schedule.classify_idle(&intervals, |schedule, agent, position| {
+        let Some(&loader) = loaders.get(&agent) else {
+            return (IdleReason::NoWork, Vec::new());
+        };
+        let interval = input.intervals[position];
+        let (start_h, end_h) = (interval.start_h, interval.end_h);
+        let (dig_tph, reclaim_tph) = input
+            .loaders
+            .iter()
+            .find(|candidate| candidate.id == loader)
+            .and_then(|found| found.rates.iter().find(|rate| rate.interval == interval.index))
+            .map_or((0.0, 0.0), |rate| (rate.dig_tph, rate.reclaim_tph));
+        if dig_tph <= 0.0 && reclaim_tph <= 0.0 {
+            return (IdleReason::Unavailable, Vec::new());
+        }
+        let open: Vec<_> = input
+            .tasks
+            .iter()
+            .filter(|task| task.loader == loader && task.window_start_h < end_h - 1e-9 && task.window_end_h > start_h + 1e-9)
+            .collect();
+        if open.is_empty() {
+            return (IdleReason::NoWork, Vec::new());
+        }
+        let rate_for = |kind: &TaskKind| match kind {
+            TaskKind::Dig { .. } => dig_tph,
+            TaskKind::Reclaim { .. } => reclaim_tph,
+        };
+        if open.iter().all(|task| rate_for(&task.kind) <= 0.0) {
+            return (IdleReason::Unavailable, Vec::new());
+        }
+        let mut sources = Vec::new();
+        for task in open.iter().filter(|task| rate_for(&task.kind) > 0.0) {
+            match &task.kind {
+                // Ground is dug in order: what the machine could be on is the
+                // first block of the sequence that still holds any.
+                TaskKind::Dig { sequence } => {
+                    let next = sequence.iter().find(|ground| {
+                        let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
+                        let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
+                        total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
+                    });
+                    sources.extend(next.map(|ground| SourceId::Ground(*ground)));
+                }
+                TaskKind::Reclaim { approved_sources, .. } => {
+                    for pile in approved_sources {
+                        let held = lookup
+                            .piles
+                            .get(pile)
+                            .and_then(|project| schedule.inventory_at(*project, start_h))
+                            .map_or(0.0, |(tonnes, _)| tonnes);
+                        if held > IDLE_NEGLIGIBLE_T {
+                            sources.push(SourceId::Stockpile(*pile));
+                        }
+                    }
+                }
+            }
+        }
+        if sources.is_empty() {
+            return (IdleReason::WorkFinished, Vec::new());
+        }
+        let candidates: Vec<_> = input
+            .movements
+            .iter()
+            .filter(|movement| movement.loader == loader && sources.contains(&movement.source))
+            .collect();
+        let routed = |source: SourceId| match source {
+            SourceId::Ground(ground) => input.ground.iter().find(|found| found.id == ground).is_some_and(|found| {
+                found
+                    .material
+                    .iter()
+                    .filter(|share| share.fraction > 0.0)
+                    .all(|share| candidates.iter().any(|movement| movement.source == source && movement.material == share.material))
+            }),
+            SourceId::Stockpile(_) => candidates.iter().any(|movement| movement.source == source),
+        };
+        if !sources.iter().any(|source| routed(*source)) {
+            return (IdleReason::NoRoute, Vec::new());
+        }
+        let has_room = |destination: DestinationId| {
+            let Some(found) = input.destinations.iter().find(|candidate| candidate.id == destination) else {
+                return false;
+            };
+            let project = lookup.destinations.get(&destination);
+            match found.kind {
+                DestinationKind::Crusher => {
+                    let day = interval.day();
+                    match found.crusher_daily_t.get(day as usize).copied().flatten() {
+                        None => true,
+                        Some(budget) => {
+                            let day_start = f64::from(day) * 24.0;
+                            budget - sum_within(project.and_then(|project| received.get(project)), day_start, day_start + 24.0) > IDLE_NEGLIGIBLE_T
+                        }
+                    }
+                }
+                DestinationKind::Dump => found
+                    .capacity_t
+                    .is_none_or(|capacity| capacity - sum_within(project.and_then(|project| received.get(project)), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T),
+                DestinationKind::Stockpile(pile) => found.capacity_t.is_none_or(|capacity| {
+                    let held = lookup
+                        .piles
+                        .get(&pile)
+                        .and_then(|project| schedule.inventory_at(*project, start_h))
+                        .map_or(0.0, |(tonnes, _)| tonnes);
+                    capacity - held > IDLE_NEGLIGIBLE_T
+                }),
+            }
+        };
+        // Ground is dug whole, its materials in proportion, so a block can be
+        // dug only while every material in it has somewhere to go - the
+        // waste having room does not let the ore out. A source is open when
+        // each of its materials has a candidate with room.
+        let roomy: Vec<_> = candidates.iter().copied().filter(|movement| has_room(movement.destination)).collect();
+        let open_source = |source: SourceId| {
+            let materials: Vec<_> = match source {
+                SourceId::Ground(ground) => input
+                    .ground
+                    .iter()
+                    .find(|found| found.id == ground)
+                    .map(|found| found.material.iter().filter(|share| share.fraction > 0.0).map(|share| share.material).collect())
+                    .unwrap_or_default(),
+                SourceId::Stockpile(_) => candidates.iter().filter(|movement| movement.source == source).map(|movement| movement.material).collect(),
+            };
+            !materials.is_empty()
+                && materials
+                    .iter()
+                    .all(|material| roomy.iter().any(|movement| movement.source == source && movement.material == *material))
+        };
+        let open_sources: Vec<_> = sources.iter().copied().filter(|source| open_source(*source)).collect();
+        if open_sources.is_empty() {
+            let mut full: Vec<_> = candidates
+                .iter()
+                .filter(|movement| !has_room(movement.destination))
+                .filter_map(|movement| lookup.destinations.get(&movement.destination).copied())
+                .collect();
+            full.sort_unstable();
+            full.dedup();
+            return (IdleReason::DestinationsFull, full);
+        }
+        let roomy: Vec<_> = roomy.into_iter().filter(|movement| open_sources.contains(&movement.source)).collect();
+        let trucks_spent = |truck: TruckClassId| {
+            let available = input
+                .trucks
+                .iter()
+                .find(|class| class.id == truck)
+                .and_then(|class| class.hours.get(position))
+                .copied()
+                .unwrap_or(0.0);
+            let used = sum_within(lookup.trucks.get(&truck).and_then(|project| hauled.get(project)), start_h, end_h);
+            available - used <= 1e-6 * available.max(1.0)
+        };
+        if roomy.iter().all(|movement| trucks_spent(movement.truck)) {
+            return (IdleReason::NoTrucks, Vec::new());
+        }
+        (IdleReason::NotWorthIt, Vec::new())
+    });
 }
 
 /// An orderable stand-in for [`WorkSource`], for grouping.

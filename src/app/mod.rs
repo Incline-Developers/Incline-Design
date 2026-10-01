@@ -455,6 +455,15 @@ pub(crate) struct App<'a> {
     /// Numbers the runs, so a result can be named rather than merely dated.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) schedule_run_serial: u64,
+    /// The inputs a recalculation was last started (or a run last failed or
+    /// was stopped) for, so one that cannot succeed is not retried until
+    /// something changes. See [`Self::auto_recalculate_schedule`].
+    pub(crate) schedule_auto_attempted: Option<u64>,
+    /// The inputs last seen while waiting for edits to settle, and since when.
+    pub(crate) schedule_auto_settle: Option<(u64, Instant)>,
+    /// When the settled inputs are due a recalculation, so the event loop
+    /// wakes for it with no further input.
+    pub(crate) schedule_auto_deadline: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -587,6 +596,9 @@ impl<'a> Default for App<'a> {
             schedule_semantic_cache: std::cell::Cell::new(None),
             schedule_report_key_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
+            schedule_auto_attempted: None,
+            schedule_auto_settle: None,
+            schedule_auto_deadline: None,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -2272,7 +2284,16 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
+        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.schedule_auto_deadline = None;
+            self.redraw_requested = true;
+        }
+        let wake_deadline = wake_deadline
+            .into_iter()
+            .chain(self.slice_surface_retry_deadline)
+            .chain(resize_settle_deadline)
+            .chain(self.schedule_auto_deadline)
+            .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {

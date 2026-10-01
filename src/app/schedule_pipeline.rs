@@ -312,7 +312,10 @@ impl SchedulePipeline {
         for later in ScheduleStep::ALL.into_iter().skip(step.index()) {
             let status = self.status_mut(later);
             match status.state {
-                StageState::Complete => status.state = StageState::Stale,
+                // A failure is a finding about inputs that have now changed:
+                // it may no longer hold, so it is out of date like a success
+                // would be, and the next run says whether it still does.
+                StageState::Complete | StageState::Failed | StageState::Blocked => status.state = StageState::Stale,
                 StageState::Running => status.state = StageState::Cancelled,
                 StageState::Queued if stopped => status.state = StageState::Cancelled,
                 _ => {}
@@ -700,7 +703,7 @@ impl crate::app::App<'_> {
     /// Gantt run. Scheduling Readiness delegates to Solids when that upstream
     /// pipeline is the actual blocker.
     pub(crate) fn schedule_repair_target(&self) -> Option<ScheduleRepairTarget> {
-        let reason = self.schedule_run_inputs().err()?;
+        let reason = self.schedule_run_blocker()?;
         let schedule_step = match reason {
             ScheduleNotReady::NoProject => return None,
             ScheduleNotReady::NotRun(step) | ScheduleNotReady::Stale(step) | ScheduleNotReady::Running(step) | ScheduleNotReady::Failed { step, .. } => step,
@@ -716,6 +719,28 @@ impl crate::app::App<'_> {
             return Some(ScheduleRepairTarget::Solids(step));
         }
         Some(ScheduleRepairTarget::Schedule(schedule_step))
+    }
+
+    /// What actually stops a schedule run starting now, if anything.
+    ///
+    /// A Setup step that has not been run, or has gone stale, is no blocker:
+    /// a run validates the Setup steps itself before it captures. What a run
+    /// cannot fix is a Setup step that fails, and a Solids run that is
+    /// missing - which Readiness reports as its own, so that is looked for
+    /// first and named as such.
+    pub(crate) fn schedule_run_blocker(&self) -> Option<ScheduleNotReady> {
+        let reason = self.schedule_run_inputs().err()?;
+        match reason {
+            ScheduleNotReady::NotRun(_) | ScheduleNotReady::Stale(_) => {
+                let project = self.workspace.active_project()?;
+                let solids = self.planning_pipeline.as_ref().filter(|pipeline| pipeline.runtime == project.runtime_id)?;
+                solids
+                    .readiness(&self.planning_fingerprints())
+                    .err()
+                    .map(|_| ScheduleNotReady::NotRun(ScheduleStep::Readiness))
+            }
+            reason => Some(reason),
+        }
     }
 
     /// Copy the pipeline's status into the editor state the panels read.

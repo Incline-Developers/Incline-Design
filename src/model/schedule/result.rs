@@ -70,6 +70,46 @@ impl Execution {
     }
 }
 
+/// Why a loader did nothing over one idle span.
+///
+/// Read off the published schedule and the captured input, not the solver:
+/// whichever optimiser produced the schedule, the first of these that holds
+/// is the reason given, checked in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum IdleReason {
+    /// The calendar gives the machine no rate: availability, utilisation or
+    /// the rate itself is zero.
+    Unavailable,
+    /// None of its bars' windows is open.
+    NoWork,
+    /// Its open bars' ground is all dug, or their stockpiles are empty.
+    WorkFinished,
+    /// Ground is left, but no routing rule sends its material anywhere this
+    /// machine can take it.
+    NoRoute,
+    /// Every destination its material may go to is full, or at its crusher
+    /// budget for the day.
+    DestinationsFull,
+    /// Every truck class that can haul for it is fully used.
+    NoTrucks,
+    /// Work, room and trucks were all there: moving the material was worth
+    /// less than leaving it.
+    NotWorthIt,
+}
+
+/// Loader time with no execution inside the requested horizon.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct IdleSpan {
+    pub(crate) agent: LoaderAgentId,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    /// `None` until [`CalculatedSchedule::classify_idle`] has explained it.
+    pub(crate) reason: Option<IdleReason>,
+    /// For [`IdleReason::DestinationsFull`], the destinations that had no
+    /// room, so the reason can name them. Empty otherwise.
+    pub(crate) full: Vec<DestinationId>,
+}
+
 /// One movement of material to one destination.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Delivery {
@@ -299,6 +339,9 @@ pub(crate) enum DayByDayRole {
     /// It is published as within the gap target: the relaxation bound proved
     /// it, so no whole-horizon solve ran.
     Proven,
+    /// It is published as asked for: the run was a recalculation that does
+    /// not look for a better schedule. Improve does.
+    Only,
 }
 
 /// Which solve proved a published bound.
@@ -536,9 +579,9 @@ pub(crate) struct CalculatedSchedule {
     pub(crate) ground: Vec<GroundBalance>,
     pub(crate) piles: Vec<PileTrack>,
     pub(crate) chunk_draws: Vec<ChunkDraw>,
-    /// Loader time inside the requested horizon with no execution, per agent.
-    /// A fact about the timeline and nothing more: no reason is attached.
-    pub(crate) idle: Vec<(LoaderAgentId, f64, f64)>,
+    /// Loader time inside the requested horizon with no execution, per agent,
+    /// each with the reason publication found for it.
+    pub(crate) idle: Vec<IdleSpan>,
     /// Each dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
     /// Each reclaim bar's cap, as captured.
@@ -578,12 +621,24 @@ impl CalculatedSchedule {
             let mut at = 0.0_f64;
             for execution in executions.iter().filter(|execution| execution.agent == *agent) {
                 if execution.start_h > at + 1e-6 {
-                    idle.push((*agent, at, execution.start_h));
+                    idle.push(IdleSpan {
+                        agent: *agent,
+                        start_h: at,
+                        end_h: execution.start_h,
+                        reason: None,
+                        full: Vec::new(),
+                    });
                 }
                 at = at.max(execution.end_h);
             }
             if parts.requested_end_h > at + 1e-6 {
-                idle.push((*agent, at, parts.requested_end_h));
+                idle.push(IdleSpan {
+                    agent: *agent,
+                    start_h: at,
+                    end_h: parts.requested_end_h,
+                    reason: None,
+                    full: Vec::new(),
+                });
             }
         }
         let mut by_bar: HashMap<BarId, Vec<usize>> = HashMap::new();
@@ -616,6 +671,37 @@ impl CalculatedSchedule {
     }
 
     /// The spans worked under one bar, in time order per loader.
+    /// Give every idle span a reason, interval by interval: each span is cut
+    /// at the calendar intervals (`(start_h, end_h)`, in order) it crosses,
+    /// `reason` is asked about each piece, and neighbouring pieces with the
+    /// same reason are joined again.
+    pub(crate) fn classify_idle(&mut self, intervals: &[(f64, f64)], reason: impl Fn(&Self, LoaderAgentId, usize) -> (IdleReason, Vec<DestinationId>)) {
+        let mut classified: Vec<IdleSpan> = Vec::with_capacity(self.idle.len());
+        for span in &self.idle {
+            let first = intervals.partition_point(|&(_, end_h)| end_h <= span.start_h + 1e-9);
+            for (position, &(start_h, end_h)) in intervals.iter().enumerate().skip(first) {
+                if start_h >= span.end_h - 1e-9 {
+                    break;
+                }
+                let (found, full) = reason(self, span.agent, position);
+                let piece = IdleSpan {
+                    agent: span.agent,
+                    start_h: start_h.max(span.start_h),
+                    end_h: end_h.min(span.end_h),
+                    reason: Some(found),
+                    full,
+                };
+                match classified.last_mut() {
+                    Some(last) if last.agent == piece.agent && last.reason == piece.reason && last.full == piece.full && (last.end_h - piece.start_h).abs() < 1e-9 => {
+                        last.end_h = piece.end_h;
+                    }
+                    _ => classified.push(piece),
+                }
+            }
+        }
+        self.idle = classified;
+    }
+
     pub(crate) fn bar_executions(&self, bar: BarId) -> impl Iterator<Item = &Execution> {
         self.by_bar.get(&bar).into_iter().flatten().map(|index| &self.executions[*index])
     }

@@ -1,11 +1,20 @@
-//! Run Period and Run All Periods: what a schedule run captures, what it
-//! publishes, and when what it published stops being true.
+//! Run Period, Run All Periods, Improve and the automatic recalculation:
+//! what a schedule run captures, what it publishes, and when what it
+//! published stops being true.
 //!
-//! Nothing here recalculates on its own. Dragging a bar, resizing a window,
-//! rerunning Solids or editing the fleet all *mark* the held result stale;
-//! only an explicit run produces a new one. That separation is the reason the
-//! pages can be trusted: a figure on screen either belongs to a run the user
-//! asked for, or is labelled as belonging to an earlier one.
+//! Dragging a bar, resizing a window, rerunning Solids or editing the fleet
+//! all *mark* the held result stale; a figure on screen either belongs to the
+//! inputs as they stand, or is labelled as belonging to an earlier run.
+//!
+//! # Recalculation
+//!
+//! The hourly schedule takes a fraction of a second, so with Auto on (the
+//! default) an edit is followed, once edits have settled for
+//! [`AUTO_SETTLE`], by a run of its own ([`ScheduleRunMode::Auto`]). It
+//! covers the horizon the held result did, says nothing in the console, and
+//! is tried once per set of inputs: one that is refused, fails or is stopped
+//! by the user is not retried until something changes. Improve - the
+//! whole-horizon optimiser - only ever runs when asked for.
 //!
 //! # One path
 //!
@@ -51,7 +60,7 @@ use std::{
 };
 
 use crate::{
-    app::schedule_pipeline::ScheduleRunInputs,
+    app::schedule_pipeline::{ScheduleNotReady, ScheduleRunInputs},
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
@@ -60,14 +69,30 @@ use crate::{
     ui::state::{ScheduleRepairTarget, ScheduleStep},
 };
 
-/// What a run was asked to cover.
+/// What a run was asked to cover, and how hard it looks.
+///
+/// Every mode but [`Self::Improve`] stops at the hourly dispatch schedule
+/// (see [`crate::model::schedule::optimisation::blended::greedy`]), which
+/// takes a fraction of a second. Improve starts from that schedule and spends
+/// the configured solve time looking for a better one over the whole horizon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScheduleRunMode {
     /// One day more than the held current result, from hour zero.
     Period,
     /// From hour zero to the planning end day.
     All,
+    /// The held result's horizon, or the planning end when there is none,
+    /// solved with the whole-horizon optimiser.
+    Improve,
+    /// A recalculation after an edit, nobody pressed anything: the horizon
+    /// the held result covered, even a stale one, so a schedule run to day 3
+    /// stays a schedule to day 3. Quiet in the console.
+    Auto,
 }
+
+/// How long the schedule has to stay unedited before it is recalculated on
+/// its own, so a burst of edits costs one run rather than one each.
+const AUTO_SETTLE: std::time::Duration = std::time::Duration::from_millis(350);
 
 /// A run in flight.
 #[derive(Debug)]
@@ -77,6 +102,10 @@ pub(crate) struct PendingScheduleRun {
     inputs: ScheduleRunInputs,
     semantic: u64,
     pub(crate) requested_end_h: f64,
+    /// Started by [`ScheduleRunMode::Auto`]: said in the log, not the console.
+    auto: bool,
+    /// Started by [`ScheduleRunMode::Improve`].
+    pub(crate) improve: bool,
     /// Where the worker leaves the day-by-day schedule for the UI thread.
     early: Arc<Mutex<Option<Arc<CalculatedSchedule>>>>,
     /// Whether the held result is this run's day-by-day schedule.
@@ -318,19 +347,29 @@ impl crate::app::App<'_> {
             solver_process,
         };
 
+        let auto = mode == ScheduleRunMode::Auto;
         // Validate the lightweight Schedule Setup stages as part of the run.
         // Solids remains an explicit prerequisite.
         self.run_all_schedule_steps();
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => {
-                crate::userspace_warn!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
+                // The status line already says why; a recalculation nobody
+                // asked for does not repeat it in the console.
+                if auto {
+                    log::info!("schedule recalculation blocked: {}", reason.describe());
+                } else {
+                    crate::userspace_warn!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
+                }
                 return;
             }
         };
         let end_h = self.planning_end_h();
+        let held_end_h = self.schedule_calculation.as_ref().map(|held| held.requested_end_h.min(end_h));
         let requested_end_h = match mode {
             ScheduleRunMode::All => end_h,
+            ScheduleRunMode::Auto => held_end_h.unwrap_or(end_h),
+            ScheduleRunMode::Improve => held_end_h.filter(|_| self.schedule_calculation_is_current()).unwrap_or(end_h),
             ScheduleRunMode::Period => match self.schedule_calculation.as_ref().filter(|_| self.schedule_calculation_is_current()) {
                 Some(held) if held.requested_end_h >= end_h - 1e-9 => {
                     crate::userspace_log!("{}", tr!("schedule-run-at-end", day = day_of(end_h).to_string()));
@@ -366,6 +405,7 @@ impl crate::app::App<'_> {
                 relative_gap: Some(settings.relative_gap),
                 // Developer aid: SCIP's own progress log on stdout.
                 diagnostic_logging: std::env::var_os("INCLINE_SCIP_LOG").is_some(),
+                first_schedule_only: mode != ScheduleRunMode::Improve,
             }
         };
         self.cancel_schedule_run_calculation_quietly();
@@ -383,6 +423,8 @@ impl crate::app::App<'_> {
             inputs,
             semantic,
             requested_end_h,
+            auto,
+            improve: mode == ScheduleRunMode::Improve,
             early: early_slot,
             showing_early: false,
         });
@@ -487,16 +529,20 @@ impl crate::app::App<'_> {
                 // that landed while it was solving retires it, and a late
                 // answer is never published under inputs it did not read.
                 if app.schedule_run_inputs().ok() != Some(inputs) || app.schedule_semantic_key() != semantic || app.planning_end_h() < requested_end_h - 1e-9 {
-                    crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+                    if !auto {
+                        crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+                    }
                     app.redraw_requested = true;
                     return;
                 }
                 match result {
                     Ok(RunOutcome::Published(schedule)) => {
-                        crate::userspace_log!(
-                            "{}",
-                            tr!("schedule-run-finished", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string())
-                        );
+                        let finished = tr!("schedule-run-finished", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string());
+                        if auto {
+                            log::info!("{finished}");
+                        } else {
+                            crate::userspace_log!("{finished}");
+                        }
                         app.schedule_run_diagnostics = None;
                         app.schedule_calculation = Some(schedule);
                     }
@@ -534,8 +580,79 @@ impl crate::app::App<'_> {
         self.redraw_requested = true;
     }
 
+    /// Recalculate the schedule on its own once its inputs have settled
+    /// after an edit: the first schedule only, over the horizon the held
+    /// result covered.
+    ///
+    /// Runs only while switched on, with no run in flight and no current
+    /// result, and at most once for one set of inputs - a recalculation
+    /// that cannot succeed, or a run the user stopped, is not retried until
+    /// something changes.
+    pub(crate) fn auto_recalculate_schedule(&mut self) {
+        self.schedule_auto_deadline = None;
+        if cfg!(target_arch = "wasm32")
+            || !self.editor.schedule_auto_recalculate
+            || self.workspace.active_project().is_none()
+            || self.pending_schedule_run.is_some()
+            || self.schedule_calculation_is_current()
+        {
+            self.schedule_auto_settle = None;
+            return;
+        }
+        let key = self.auto_key();
+        if self.schedule_auto_attempted == Some(key) {
+            return;
+        }
+        let now = web_time::Instant::now();
+        let since = match self.schedule_auto_settle {
+            Some((seen, since)) if seen == key => since,
+            _ => {
+                self.schedule_auto_settle = Some((key, now));
+                // The pages were mirrored before this frame knew a
+                // recalculation was coming; mirror them again now.
+                self.redraw_requested = true;
+                now
+            }
+        };
+        if now < since + AUTO_SETTLE {
+            self.schedule_auto_deadline = Some(since + AUTO_SETTLE);
+            return;
+        }
+        self.schedule_auto_settle = None;
+        self.start_schedule_run(ScheduleRunMode::Auto);
+        // Starting validates the Setup steps, which moves the key; what is
+        // remembered is what the run (or its refusal) was made against.
+        self.schedule_auto_attempted = Some(self.auto_key());
+    }
+
+    /// Whether the held result is out of date only until a recalculation
+    /// already under way, or about to start, replaces it.
+    fn schedule_recalculating(&self) -> bool {
+        if !self.editor.schedule_auto_recalculate || self.schedule_calculation_is_current() {
+            return false;
+        }
+        match self.pending_schedule_run.as_ref() {
+            Some(pending) => pending.auto,
+            None => self.schedule_auto_settle.is_some() && self.schedule_auto_attempted != Some(self.auto_key()),
+        }
+    }
+
+    /// What a recalculation depends on: the schedule's inputs and the
+    /// planning end its horizon is clipped to.
+    fn auto_key(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.schedule_semantic_key().hash(&mut hasher);
+        self.planning_end_h().to_bits().hash(&mut hasher);
+        // The semantic key holds the Setup gate only once it passes; these
+        // move with the Solids run and the Setup inputs while it does not,
+        // so a refused recalculation is tried again once they change.
+        self.schedule_fingerprints().hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Publish nothing, keep whatever was held, and say why.
     fn record_attempt(&mut self, attempt: ScheduleAttempt) {
+        self.schedule_auto_attempted = Some(self.auto_key());
         let headline = attempt_headline(&attempt);
         crate::userspace_warn!("{headline}");
         for message in &attempt.messages {
@@ -551,6 +668,8 @@ impl crate::app::App<'_> {
         if let Some(pending) = self.pending_schedule_run.as_ref() {
             let (serial, semantic, showing_early) = (pending.serial, pending.semantic, pending.showing_early);
             self.cancel_schedule_run_calculation_quietly();
+            // Stopped on purpose: not to be restarted behind the user's back.
+            self.schedule_auto_attempted = Some(self.auto_key());
             if showing_early {
                 crate::userspace_log!("{}", tr!("schedule-run-stopped-early", run = serial.to_string()));
                 return;
@@ -596,10 +715,14 @@ impl crate::app::App<'_> {
         let Some(pending) = self.pending_schedule_run.as_ref() else {
             return;
         };
-        let (inputs, semantic, requested_end_h) = (pending.inputs, pending.semantic, pending.requested_end_h);
+        let (inputs, semantic, requested_end_h, auto) = (pending.inputs, pending.semantic, pending.requested_end_h, pending.auto);
         if self.schedule_run_inputs().ok() != Some(inputs) || self.schedule_semantic_key() != semantic || self.planning_end_h() < requested_end_h - 1e-9 {
             self.cancel_schedule_run_calculation_quietly();
-            crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+            // A recalculation overtaken by an edit is simply started again
+            // once the edits settle; only a run someone asked for is reported.
+            if !auto {
+                crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+            }
             return;
         }
         let early = pending.early.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
@@ -628,17 +751,27 @@ impl crate::app::App<'_> {
         let current = self.schedule_calculation_is_current();
         let running = self.pending_schedule_run.as_ref().map(|pending| pending.requested_end_h);
         let improving = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.showing_early) && current;
+        let improve = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.improve);
         let result = self.schedule_calculation.clone().filter(|_| current);
         let semantic = self.schedule_semantic_key();
         let attempt = self.schedule_run_diagnostics.as_ref().filter(|attempt| attempt.semantic == semantic);
         let held_status = self.schedule_calculation.as_ref().map(|calculation| {
             if current {
-                result_status(calculation)
+                let currency = self
+                    .workspace
+                    .active_document()
+                    .map(|document| document.schedule().currency().to_owned())
+                    .unwrap_or_default();
+                result_status(calculation, &currency)
             } else {
                 tr!("schedule-run-stale", run = calculation.run.to_string())
             }
         });
+        // A recalculation in hand says so quietly rather than warning that
+        // the last result is out of date: it is about to be replaced.
+        let recalculating = self.schedule_recalculating();
         let status = match (running, attempt, held_status) {
+            _ if recalculating => tr!("schedule-run-updating"),
             (Some(end_h), _, _) if improving => tr!("schedule-run-improving", day = day_of(end_h).to_string()),
             (Some(end_h), _, _) => tr!("schedule-run-working", day = day_of(end_h).to_string()),
             // The newest attempt failed: say so first, then what is still
@@ -652,9 +785,10 @@ impl crate::app::App<'_> {
                 if cfg!(target_arch = "wasm32") {
                     tr!("schedule-run-desktop-only")
                 } else {
-                    match self.schedule_run_inputs() {
-                        Ok(_) => tr!("schedule-run-never"),
-                        Err(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
+                    match self.schedule_run_blocker() {
+                        None => tr!("schedule-run-never"),
+                        Some(ScheduleNotReady::NotRun(ScheduleStep::Readiness)) => tr!("schedule-run-needs-solids"),
+                        Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
                     }
                 }
             }
@@ -671,7 +805,7 @@ impl crate::app::App<'_> {
                 .unwrap_or_default();
             details.extend(result_details(calculation, &currency));
         }
-        let stale = !current && self.schedule_calculation.is_some();
+        let stale = !current && self.schedule_calculation.is_some() && !recalculating;
         let repair = if running.is_some() {
             None
         } else {
@@ -691,6 +825,7 @@ impl crate::app::App<'_> {
             || self.editor.schedule_run_stale != stale
             || self.editor.schedule_run_working != running.is_some()
             || self.editor.schedule_run_improving != improving
+            || self.editor.schedule_run_improve != improve
             || self.editor.schedule_run_repair != repair
         {
             self.editor.schedule_result = result;
@@ -699,6 +834,7 @@ impl crate::app::App<'_> {
             self.editor.schedule_run_stale = stale;
             self.editor.schedule_run_working = running.is_some();
             self.editor.schedule_run_improving = improving;
+            self.editor.schedule_run_improve = improve;
             self.editor.schedule_run_repair = repair;
             self.redraw_requested = true;
         }
@@ -754,15 +890,19 @@ fn attempt_headline(attempt: &ScheduleAttempt) -> String {
     }
 }
 
-/// The one line the run controls show for a held, current result.
-fn result_status(calculation: &CalculatedSchedule) -> String {
+/// The one line the run controls show for a held, current result: how far
+/// it reaches, what it is worth, and how hard it was looked for.
+fn result_status(calculation: &CalculatedSchedule, currency: &str) -> String {
     let run = calculation.run.to_string();
     let day = day_of(calculation.requested_end_h).to_string();
     let report = &calculation.report;
+    let value = format!("{} {currency}", crate::ui::elements::schedule_calendar::format_money(report.objective));
+    let first_only = report.day_by_day.as_ref().is_some_and(|start| start.role == DayByDayRole::Only);
     let mut status = match (report.quality, report.gap) {
-        (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", run = run, day = day),
-        (_, Some(gap)) => tr!("schedule-run-limited", run = run, day = day, gap = format!("{:.2}", gap * 100.0)),
-        (_, None) => tr!("schedule-run-limited-no-gap", run = run, day = day),
+        _ if first_only => tr!("schedule-run-first", run = run, day = day, value = value),
+        (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", run = run, day = day, value = value),
+        (_, Some(gap)) => tr!("schedule-run-limited", run = run, day = day, value = value, gap = format!("{:.2}", gap * 100.0)),
+        (_, None) => tr!("schedule-run-limited-no-gap", run = run, day = day, value = value),
     };
     // A restriction that can hold production back is said where the status
     // is read, not only in the details.
@@ -812,6 +952,7 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
                     DayByDayRole::Early => tr!("schedule-detail-start-early", start = method, seconds = seconds, value = value),
                     DayByDayRole::Stopped => tr!("schedule-detail-start-stopped", start = method, seconds = seconds, value = value),
                     DayByDayRole::Proven => tr!("schedule-detail-start-proven", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Only => tr!("schedule-detail-start-only", start = method, seconds = seconds, value = value),
                 }
             }
             (None, reason) => tr!("schedule-detail-day-by-day-failed", reason = reason.cloned().unwrap_or_default()),

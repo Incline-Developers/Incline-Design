@@ -146,6 +146,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllScheduleStages
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunAllSchedulePeriods
+                | UiCommand::ImproveSchedule
                 | UiCommand::FocusScheduleAnimationSolid(_)
                 | UiCommand::Schedule { .. }
         );
@@ -464,6 +465,10 @@ impl<'a> App<'a> {
             }
             UiCommand::RunAllSchedulePeriods => {
                 self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::All);
+                Ok(())
+            }
+            UiCommand::ImproveSchedule => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Improve);
                 Ok(())
             }
             UiCommand::CancelScheduleCalculation => {
