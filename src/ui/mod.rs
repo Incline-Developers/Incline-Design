@@ -713,7 +713,7 @@ fn draw_ui(
     // directly under it.
     let planning_island = if editor.is_planning_cut_step() {
         Some(if editor.is_dig_strips_step() {
-            elements::dig_strips::draw_panel(root_ui, editor, commands)
+            elements::dig_strips::draw_panel(root_ui, editor, document, commands)
         } else {
             elements::blasting::draw_panel(root_ui, editor, commands)
         })

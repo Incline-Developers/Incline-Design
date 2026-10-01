@@ -711,6 +711,10 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                         commands.push(UiCommand::BeginRenameItem(crate::ui::state::RenameTarget::Solid(solid.id)));
                         ui.close();
                     }
+                    if ContextMenuAction::new(tr!("planning-topography-update-action")).show(ui).clicked() {
+                        crate::ui::dialogs::solids::open_topography_update(editor, document.solids(), Some(solid.id));
+                        ui.close();
+                    }
                     if ContextMenuAction::new(tr!(literal = "Delete Solid")).show(ui).clicked() {
                         commands.push(UiCommand::DeleteSolid(solid.id));
                         ui.close();
@@ -723,6 +727,14 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                 context_menu_popup(&response, tr!("planning-solids"), |ui| {
                     if ContextMenuAction::new(tr!(literal = "New Solid")).show(ui).clicked() {
                         editor.new_solid_open = true;
+                        ui.close();
+                    }
+                    if ContextMenuAction::new(tr!("planning-topography-update-action"))
+                        .enabled(!document.solids().is_empty())
+                        .show(ui)
+                        .clicked()
+                    {
+                        crate::ui::dialogs::solids::open_topography_update(editor, document.solids(), None);
                         ui.close();
                     }
                 });
@@ -1195,6 +1207,7 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
     );
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
+    crate::ui::dialogs::solids::draw_topography_update_dialog(ui, editor, project, document.solids(), commands);
 }
 
 /// The Benching step's first column: the RL the solid is benched down from,

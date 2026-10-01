@@ -167,7 +167,7 @@ pub(crate) fn draw_sequence_editor(
                 let half = (body_height - ui.spacing().item_spacing.y) * 0.5;
                 ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
                     ui.label(egui::RichText::new(tr!(literal = "Solids Navigation")).strong());
-                    crate::ui::elements::solids_view::draw_tree(ui, editor, document);
+                    crate::ui::elements::solids_view::draw_tree(ui, editor, document, commands);
                 });
                 ui.separator();
                 ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {

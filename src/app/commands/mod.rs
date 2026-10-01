@@ -139,6 +139,7 @@ impl<'a> App<'a> {
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
                 | UiCommand::UpdateSolid { .. }
+                | UiCommand::SetSolidsTopography { .. }
                 | UiCommand::RecomputeReserveStats(_)
                 | UiCommand::RunPlanningStage(_)
                 | UiCommand::RunAllPlanningStages
@@ -481,6 +482,12 @@ impl<'a> App<'a> {
             }
             UiCommand::UpdateSolid { solid, edit } => {
                 self.update_solid(solid, edit);
+                Ok(())
+            }
+            UiCommand::SetSolidsTopography { solids, topography } => {
+                for solid in solids {
+                    self.update_solid(solid, crate::model::SolidEdit::Topography(topography));
+                }
                 Ok(())
             }
             UiCommand::SetInitiation { target, delay_ms } => {

@@ -226,6 +226,8 @@ pub(crate) struct CaptureSnapshot {
     destinations: Vec<DestinationView>,
     snapshot: Arc<PlanningSnapshot>,
     reports: Arc<Vec<BarReport>>,
+    /// Each solid's ground taken out of mining, read as the run started.
+    exclusions: Vec<(crate::model::SolidId, crate::model::MiningExclusions)>,
 }
 
 /// Cap on the estimated column count, so a horizon somebody typed three extra
@@ -327,8 +329,27 @@ impl crate::app::App<'_> {
             destinations,
             snapshot,
             reports,
+            exclusions: document
+                .solids()
+                .iter()
+                .filter(|solid| !solid.exclusions.is_empty())
+                .map(|solid| (solid.id, solid.exclusions.clone()))
+                .collect(),
         })
     }
+}
+
+/// Whether a dig block is ground the planner has taken out of mining.
+fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusions: &[(crate::model::SolidId, crate::model::MiningExclusions)]) -> bool {
+    exclusions.iter().any(|(solid, exclusions)| {
+        *solid == block.solid
+            && exclusions.excludes(
+                block.bench.base,
+                block.blast.map(|blast| (blast.bench_base(), blast.anchor())),
+                block.flitch.base,
+                &block.ground,
+            )
+    })
 }
 
 /// Resolve one owned snapshot into the experimental model, or every reason it
@@ -418,6 +439,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 continue;
             }
             let mut members = Vec::new();
+            let mut skipped = 0usize;
             for member in &report.members {
                 let (Some(resolved), Some(tonnes)) = (member.resolved, member.tonnes) else {
                     problems.push(CaptureDiagnostic::new(bar.name().to_owned(), "a dig block in this bar has no measured tonnage"));
@@ -430,7 +452,16 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     ));
                     continue;
                 };
+                // Excluded ground is never dug: it leaves the sequence, and
+                // the bar works on to the next block.
+                if excluded(&source.snapshot.blocks[position], &source.exclusions) {
+                    skipped += 1;
+                    continue;
+                }
                 members.push((position, tonnes));
+            }
+            if skipped > 0 {
+                notes.push(crate::i18n::tr!("schedule-capture-excluded", bar = bar.name().to_owned(), count = skipped.to_string()));
             }
             ScopedWork::Dig { members }
         };
@@ -1755,6 +1786,7 @@ impl CaptureSnapshot {
                 blocks,
             }),
             reports: Arc::new(reports),
+            exclusions: Vec::new(),
         }
     }
 }

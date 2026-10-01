@@ -2527,6 +2527,8 @@ pub(crate) struct EditorState {
     /// Whether the New Solid dialog (Solids Setup's Solids step) is open, and
     /// its draft contents.
     pub(crate) new_solid_open: bool,
+    /// The Update Topography dialog, while it is open.
+    pub(crate) topography_update: Option<TopographyUpdate>,
     pub(crate) new_solid_name: String,
     pub(crate) new_solid_kind: crate::model::SolidKind,
     pub(crate) new_solid_surface: Option<TriangulationId>,
@@ -3726,6 +3728,7 @@ impl EditorState {
             planning_solids_step: SolidsStep::FieldList,
             planning_selected_solid: None,
             new_solid_open: false,
+            topography_update: None,
             new_solid_name: String::new(),
             new_solid_kind: crate::model::SolidKind::Pit,
             new_solid_surface: None,
@@ -4375,6 +4378,12 @@ pub(crate) enum UiCommand {
         solid: crate::model::SolidId,
         edit: crate::model::SolidEdit,
     },
+    /// Measure several solids against one topography at once: a new survey
+    /// replacing the surface they were cut from.
+    SetSolidsTopography {
+        solids: Vec<crate::model::SolidId>,
+        topography: Option<crate::model::triangulation::TriangulationId>,
+    },
     /// Apply or remove one collar's initiation delay after its dialog closes.
     SetInitiation {
         target: DrillHoleRef,
@@ -4849,6 +4858,7 @@ impl UiCommand {
             | Self::RequestDeleteItem(_)
             | Self::SetReserveMapping { .. }
             | Self::SetReserveModelIncluded { .. }
+            | Self::SetSolidsTopography { .. }
             | Self::UpdateSolid { .. }
             | Self::ResetSolidPreviewView
             | Self::RecomputeReserveStats(_)
@@ -5659,6 +5669,13 @@ pub(crate) struct DelayDraft {
     pub(crate) type_names: Vec<String>,
     /// The paste box, while it is open.
     pub(crate) paste: Option<String>,
+}
+
+/// The Update Topography dialog: which surface, and which solids take it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TopographyUpdate {
+    pub(crate) topography: Option<crate::model::triangulation::TriangulationId>,
+    pub(crate) solids: Vec<crate::model::SolidId>,
 }
 
 /// What a chip in the Gantt's palette makes when it is dropped on a row.

@@ -922,6 +922,44 @@ only on the next input event. The event loop requested its frame after it
 had already decided whether to redraw. It now asks before that decision,
 so a run starts with the pointer still.
 
+## Starting from as-mined
+
+A week's re-plan starts from the pit as surveyed. Two things support it.
+
+**Update Topography** is in a solid's menu and the Solids list's menu on
+Solids Setup. It points several solids at one topography in one step:
+- The solids measured against the same surface as the one right-clicked
+  start ticked.
+- Every solid it changes rebuilds from its new topography through the
+  normal Solids pipeline.
+
+**Exclude from Mining** is on bench and blast rows in the Solids View tree,
+and on dig blocks in the Dig Strips list. The exclusions are held on the
+solid (`MiningExclusions` in `model/mod.rs`) against data that survives a
+rerun:
+- a bench by its base RL;
+- a blast by its bench and the anchor its name is matched on;
+- a dig block by its flitch and a point inside it.
+
+Excluded rows read "· excluded".
+
+Capture applies the exclusions, not the planning snapshot, so excluding
+ground rebuilds no geometry and starts no Solids work:
+- An excluded block leaves its bar's dig order, and the bar works on to the
+  next block.
+- The run states how many blocks each bar skipped.
+- The schedule's semantic key hashes the exclusions, so Auto recalculates.
+
+On DreamLand, excluding the benches with base RL 348 and 336 takes 34 of
+EX7001's 54 blocks out, and the machine runs out of work on day 6.
+
+Limitations:
+- The 3D views do not yet grey out excluded ground.
+- The sequence editor still lets an excluded block be picked; capture skips
+  it.
+- Excluded ground is meant to be undrillable as well, but the drill and
+  blast tools do not yet read the exclusions.
+
 ## Solver process
 
 SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,

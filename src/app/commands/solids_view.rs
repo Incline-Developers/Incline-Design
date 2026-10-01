@@ -472,6 +472,7 @@ impl ViewSolid {
                 color: [0.0; 4],
                 benching: Default::default(),
                 blasting: Default::default(),
+                exclusions: Default::default(),
             },
             sources: [None, None],
             envelope: Stage::default(),

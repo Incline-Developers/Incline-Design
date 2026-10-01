@@ -279,6 +279,133 @@ pub(crate) struct Solid {
     /// How each bench is divided into blasts; see [`BlastingPlan`].
     #[serde(default)]
     pub(crate) blasting: BlastingPlan,
+    /// Ground the planner has taken out of mining; see [`MiningExclusions`].
+    #[serde(default, skip_serializing_if = "MiningExclusions::is_empty")]
+    pub(crate) exclusions: MiningExclusions,
+}
+
+/// Ground a planner has forced out of mining: already mined, sterilised,
+/// under a haul road. A schedule never digs it.
+///
+/// Held the way blast names are, against what survives a rerun: a bench by
+/// its base RL, a blast by its bench and the point its name is matched on,
+/// and a dig block by its flitch and a point inside it - the block is
+/// excluded while it holds that point, however the strips around it are
+/// redrawn.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct MiningExclusions {
+    /// Base RLs of whole benches.
+    pub(crate) benches: Vec<f64>,
+    pub(crate) blasts: Vec<ExcludedGround>,
+    pub(crate) blocks: Vec<ExcludedGround>,
+}
+
+/// One excluded blast or dig block: the base RL of its bench (a blast) or
+/// flitch (a dig block), and a point inside it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExcludedGround {
+    pub(crate) base: f64,
+    pub(crate) anchor: [f64; 2],
+}
+
+/// What a planner can exclude from mining.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ExclusionTarget {
+    Bench(f64),
+    /// A blast: its bench's base RL and its stored anchor.
+    Blast {
+        bench: f64,
+        anchor: [f64; 2],
+    },
+    /// A dig block: its flitch's base RL and a point inside it.
+    Block {
+        flitch: f64,
+        anchor: [f64; 2],
+    },
+}
+
+impl MiningExclusions {
+    /// Same tolerance a stored bench is matched to a generated one with.
+    const RL_EPSILON: f64 = 1e-6;
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.benches.is_empty() && self.blasts.is_empty() && self.blocks.is_empty()
+    }
+
+    fn same_rl(left: f64, right: f64) -> bool {
+        (left - right).abs() <= Self::RL_EPSILON
+    }
+
+    pub(crate) fn bench_excluded(&self, base: f64) -> bool {
+        self.benches.iter().any(|bench| Self::same_rl(*bench, base))
+    }
+
+    /// Exactly the anchor the blast's name is held against, as the tree and
+    /// the planning snapshot both carry it.
+    pub(crate) fn blast_excluded(&self, bench: f64, anchor: [f64; 2]) -> bool {
+        self.blasts.iter().any(|entry| Self::same_rl(entry.base, bench) && entry.anchor == anchor)
+    }
+
+    /// Whether a dig block of this flitch with this footprint was picked out.
+    pub(crate) fn block_excluded(&self, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
+        self.blocks
+            .iter()
+            .any(|entry| Self::same_rl(entry.base, flitch) && arrangement::point_in_face(face, glam::DVec2::from_array(entry.anchor)))
+    }
+
+    /// Whether a dig block is out of mining for any reason.
+    pub(crate) fn excludes(&self, bench: f64, blast: Option<(f64, [f64; 2])>, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
+        self.bench_excluded(bench) || blast.is_some_and(|(base, anchor)| self.blast_excluded(base, anchor)) || self.block_excluded(flitch, face)
+    }
+
+    pub(crate) fn is_target_excluded(&self, target: ExclusionTarget) -> bool {
+        match target {
+            ExclusionTarget::Bench(base) => self.bench_excluded(base),
+            ExclusionTarget::Blast { bench, anchor } => self.blast_excluded(bench, anchor),
+            ExclusionTarget::Block { flitch, anchor } => self.blocks.iter().any(|entry| Self::same_rl(entry.base, flitch) && entry.anchor == anchor),
+        }
+    }
+
+    /// These exclusions with `target` in or out.
+    pub(crate) fn with(&self, target: ExclusionTarget, excluded: bool) -> Self {
+        let mut next = self.clone();
+        match target {
+            ExclusionTarget::Bench(base) => {
+                next.benches.retain(|bench| !Self::same_rl(*bench, base));
+                if excluded {
+                    next.benches.push(base);
+                }
+            }
+            ExclusionTarget::Blast { bench, anchor } => {
+                next.blasts.retain(|entry| !(Self::same_rl(entry.base, bench) && entry.anchor == anchor));
+                if excluded {
+                    next.blasts.push(ExcludedGround { base: bench, anchor });
+                }
+            }
+            ExclusionTarget::Block { flitch, anchor } => {
+                next.blocks.retain(|entry| !(Self::same_rl(entry.base, flitch) && entry.anchor == anchor));
+                if excluded {
+                    next.blocks.push(ExcludedGround { base: flitch, anchor });
+                }
+            }
+        }
+        next
+    }
+
+    pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        use std::hash::Hash;
+        for bench in &self.benches {
+            bench.to_bits().hash(hasher);
+        }
+        for entry in self.blasts.iter().chain(&self.blocks) {
+            entry.base.to_bits().hash(hasher);
+            entry.anchor[0].to_bits().hash(hasher);
+            entry.anchor[1].to_bits().hash(hasher);
+        }
+        (self.benches.len(), self.blasts.len(), self.blocks.len()).hash(hasher);
+    }
 }
 
 /// The blast shapes each bench of a solid is divided into.
@@ -667,6 +794,8 @@ pub(crate) enum SolidEdit {
     /// The whole blasting plan at once, for the same reason as
     /// [`SolidEdit::Benching`].
     Blasting(BlastingPlan),
+    /// Every exclusion at once, for the same reason.
+    Exclusions(MiningExclusions),
 }
 
 /// Fill style for closed polylines.
@@ -1782,6 +1911,7 @@ impl Document {
             color: default_solid_color(),
             benching: BenchingPlan::default(),
             blasting: BlastingPlan::default(),
+            exclusions: MiningExclusions::default(),
         });
         self.touch();
         id
@@ -1819,6 +1949,7 @@ impl Document {
             SolidEdit::Topography(topography) => std::mem::replace(&mut solid.topography, topography) != topography,
             SolidEdit::BlockModel(block_model) => std::mem::replace(&mut solid.block_model, block_model) != block_model,
             SolidEdit::Blasting(blasting) => std::mem::replace(&mut solid.blasting, blasting.clone()) != blasting,
+            SolidEdit::Exclusions(exclusions) => std::mem::replace(&mut solid.exclusions, exclusions.clone()) != exclusions,
         };
         if changed {
             self.touch();

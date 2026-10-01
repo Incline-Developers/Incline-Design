@@ -452,7 +452,7 @@ pub(crate) fn draw_explorer(
                     // other full-window planning page lists its own steps.
                     if editor.is_solids_view() {
                         super::solids_view::tree_heading(ui);
-                        super::solids_view::draw_tree(ui, editor, document);
+                        super::solids_view::draw_tree(ui, editor, document, commands);
                         return;
                     }
                     // The Gantt is not a setup step, so the column stays the
@@ -467,7 +467,7 @@ pub(crate) fn draw_explorer(
                         if editor.is_dig_strips_step() {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
                         } else {
-                            super::solids_view::draw_bench_tree(ui, editor, document);
+                            super::solids_view::draw_bench_tree(ui, editor, document, commands);
                         }
                         return;
                     }

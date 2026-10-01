@@ -303,6 +303,11 @@ impl crate::app::App<'_> {
         }
         plan.trucks().hash_content(&mut hasher);
         plan.cashflow().hash_content(&mut hasher);
+        // Ground taken out of mining.
+        for solid in document.solids() {
+            solid.id.hash(&mut hasher);
+            solid.exclusions.hash_content(&mut hasher);
+        }
         // The hours delay lists and rosters take each machine out.
         plan.delays().hash_calendar(&plan.agent_ids(), self.planning_end_h(), &mut hasher);
         // Resolution, grade units and stockpile representation.

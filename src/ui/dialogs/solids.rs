@@ -146,3 +146,77 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
         editor.new_solid_block_model = None;
     }
 }
+
+/// Open the Update Topography dialog from a solid's menu: the solids measured
+/// against the same topography as `from` are ticked, since a new survey
+/// usually replaces the surface all of them were cut from.
+pub(crate) fn open_topography_update(editor: &mut EditorState, solids: &[crate::model::Solid], from: Option<crate::model::SolidId>) {
+    let shared = from.and_then(|id| solids.iter().find(|solid| solid.id == id)).map(|solid| solid.topography);
+    let ticked = solids
+        .iter()
+        .filter(|solid| match shared {
+            Some(topography) => solid.topography == topography,
+            None => true,
+        })
+        .map(|solid| solid.id)
+        .collect();
+    editor.topography_update = Some(crate::ui::state::TopographyUpdate {
+        topography: shared.flatten(),
+        solids: ticked,
+    });
+}
+
+/// Point several solids at one topography in a single step.
+pub(crate) fn draw_topography_update_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, solids: &[crate::model::Solid], commands: &mut Vec<UiCommand>) {
+    let Some(update) = editor.topography_update.as_mut() else {
+        return;
+    };
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("topography_update_dialog", tr!("planning-topography-update"))
+        .open(&mut open)
+        .min_width(340.0)
+        .show(ui.ctx(), |ui| {
+            menu::menu_note(ui, tr!("planning-topography-update-note"));
+            let topography_text = triangulation_label(project, update.topography);
+            MenuFieldCombo::new(
+                "topography_update_surface",
+                tr!(literal = "Topography"),
+                &mut update.topography,
+                topography_text,
+                triangulation_options(project).into_iter().map(|(id, name)| (id, name.into())),
+            )
+            .show(ui);
+            menu::menu_section(ui, tr!("planning-topography-update-solids"));
+            for solid in solids {
+                let mut on = update.solids.contains(&solid.id);
+                let current = triangulation_label(project, solid.topography);
+                if ui
+                    .checkbox(&mut on, tr!("planning-topography-update-row", name = solid.name.clone(), current = current))
+                    .changed()
+                {
+                    if on {
+                        update.solids.push(solid.id);
+                    } else {
+                        update.solids.retain(|id| *id != solid.id);
+                    }
+                }
+            }
+            menu::menu_actions(ui, |ui| {
+                let can_apply = !update.solids.is_empty();
+                if ui.add(MenuButton::new(tr!("planning-topography-update-apply")).primary().enabled(can_apply)).clicked() && can_apply {
+                    commands.push(UiCommand::SetSolidsTopography {
+                        solids: update.solids.clone(),
+                        topography: update.topography,
+                    });
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.topography_update = None;
+    }
+}

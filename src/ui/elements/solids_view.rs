@@ -15,6 +15,7 @@ use crate::{
         state::{BenchSelection, BlastShapeRef, SolidsViewRow, UiCommand},
         unthemed_icon,
         widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::PropertyTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
         },
@@ -29,8 +30,8 @@ use crate::{
 /// everything under it, so the arrows are what collapse a row rather than its
 /// label; flitches start collapsed, since a pit has tens of them and the
 /// benches are what the tree is read for.
-pub(crate) fn draw_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document) {
-    draw_tree_to_depth(ui, editor, document, true);
+pub(crate) fn draw_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    draw_tree_to_depth(ui, editor, document, true, commands);
 }
 
 /// Animate's independent hierarchy. Every row has the same eye affordance as
@@ -213,8 +214,8 @@ fn set_animation_blast_visible(editor: &mut EditorState, blast: BlastShapeRef, b
 
 /// The same tree stopping at benches, for the Blasting step: a blast divides
 /// a bench, and flitches have nothing to say about it.
-pub(crate) fn draw_bench_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document) {
-    draw_tree_to_depth(ui, editor, document, false);
+pub(crate) fn draw_bench_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    draw_tree_to_depth(ui, editor, document, false, commands);
 }
 
 /// Dig Strips chooses a whole flitch, independently of blast partitions.
@@ -281,7 +282,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
     });
 }
 
-fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, show_flitches: bool) {
+fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, show_flitches: bool, commands: &mut Vec<UiCommand>) {
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -344,17 +345,20 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                         })
                                         .collect();
                                     let bench_id = egui::Id::new(("solids_view_bench", solid.id.0, bench.base.to_bits()));
-                                    let bench_label = format_rl(bench.base);
+                                    let bench_target = crate::model::ExclusionTarget::Bench(bench.base);
+                                    let bench_label = exclusion_label(&format_rl(bench.base), solid.exclusions.is_target_excluded(bench_target));
                                     let bench_selected = group_selected(selection, &bench_rows);
                                     if !show_flitches {
-                                        if leaf_row(ui, bench_id, &bench_label, bench_selected) {
+                                        let response = leaf_row_response(ui, bench_id, &bench_label, bench_selected);
+                                        exclusion_menu(&response, &bench_label, solid, bench_target, commands);
+                                        if response.clicked() {
                                             clicked = Some(bench_rows);
                                         }
                                         continue;
                                     }
                                     // Flitches start closed: a pit carries tens of them,
                                     // and the benches are what the tree is scanned for.
-                                    let bench_clicked = collapsible_row(ui, bench_id, &bench_label, bench_selected, |ui| {
+                                    let bench_response = collapsible_row(ui, bench_id, &bench_label, bench_selected, |ui| {
                                         let blasts = solid.blasting.bench(bench.base).map(|entry| entry.blasts.as_slice()).unwrap_or_default();
                                         if blasts.is_empty() {
                                             explorer_note(ui, tr!("planning-solid-geometry-pending"));
@@ -363,7 +367,12 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                         for (blast_index, blast) in blasts.iter().enumerate() {
                                             let blast_ref = Some(crate::ui::state::BlastShapeRef::new(solid.id, bench.base, blast.anchor));
                                             let blast_selected = editor.selected_blast == blast_ref || (editor.selected_blast.is_none() && bench_selected);
-                                            let blast_clicked = collapsible_row(ui, bench_id.with(("blast", blast_index)), &blast.name, blast_selected, |ui| {
+                                            let blast_target = crate::model::ExclusionTarget::Blast {
+                                                bench: bench.base,
+                                                anchor: blast.anchor,
+                                            };
+                                            let blast_label = exclusion_label(&blast.name, solid.exclusions.is_target_excluded(blast_target));
+                                            let blast_response = collapsible_row(ui, bench_id.with(("blast", blast_index)), &blast_label, blast_selected, |ui| {
                                                 for flitch in &flitches {
                                                     let flitch_row = SolidsViewRow {
                                                         solid: solid.id,
@@ -385,13 +394,15 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                                     }
                                                 }
                                             });
-                                            if blast_clicked {
+                                            exclusion_menu(&blast_response, &blast_label, solid, blast_target, commands);
+                                            if blast_response.clicked() {
                                                 clicked = Some(bench_rows.clone());
                                                 clicked_blast = blast_ref;
                                             }
                                         }
                                     });
-                                    if bench_clicked {
+                                    exclusion_menu(&bench_response, &bench_label, solid, bench_target, commands);
+                                    if bench_response.clicked() {
                                         clicked = Some(bench_rows);
                                     }
                                 }
@@ -473,7 +484,7 @@ pub(crate) fn format_rl(value: f64) -> String {
 /// The arrow is the only thing that collapses it: clicking the row itself
 /// selects it *and* its children, because the figures beside the tree are
 /// read across whatever is picked.
-fn collapsible_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, body: impl FnOnce(&mut egui::Ui)) -> bool {
+fn collapsible_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, body: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let header = ui
         .horizontal(|ui| {
@@ -483,22 +494,44 @@ fn collapsible_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool,
         })
         .inner;
     state.show_body_indented(&header, ui, body);
-    header.clicked()
+    header
 }
 
 /// A tree row with nothing under it, gutter-aligned with the rows that have
 /// an arrow so the column of labels stays straight.
 fn leaf_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool) -> bool {
+    leaf_row_response(ui, id, label, selected).clicked()
+}
+
+fn leaf_row_response(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool) -> egui::Response {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ExplorerEntry::new(id, label.to_owned())
-            .reserve_toggle_gutter(true)
-            .selected(selected)
-            .show(ui)
-            .response
-            .clicked()
+        ExplorerEntry::new(id, label.to_owned()).reserve_toggle_gutter(true).selected(selected).show(ui).response
     })
     .inner
+}
+
+/// A bench or blast row's label, saying so when it is out of mining.
+fn exclusion_label(label: &str, excluded: bool) -> String {
+    if excluded {
+        tr!("planning-excluded-label", name = label.to_owned())
+    } else {
+        label.to_owned()
+    }
+}
+
+/// The row's menu: take this ground out of mining, or put it back.
+fn exclusion_menu(response: &egui::Response, title: &str, solid: &crate::model::Solid, target: crate::model::ExclusionTarget, commands: &mut Vec<UiCommand>) {
+    let excluded = solid.exclusions.is_target_excluded(target);
+    context_menu_popup(response, title, |ui| {
+        if ContextMenuAction::new(tr!("planning-exclude-from-mining")).checked(excluded).show(ui).clicked() {
+            commands.push(UiCommand::UpdateSolid {
+                solid: solid.id,
+                edit: crate::model::SolidEdit::Exclusions(solid.exclusions.with(target, !excluded)),
+            });
+            ui.close();
+        }
+    });
 }
 
 /// Click replaces the selection with `rows`; ctrl- or shift-click toggles the
