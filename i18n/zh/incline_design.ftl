@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = 设置剖面网格 = { $enabled }
 cmd-split-created-2-open-polylines = 已创建 2 条开放折线
 cmd-split-line = 拆分线
 cmd-split-points-needs-interior-vertex = 按点拆分：请选择开放线的内部顶点
-cmd-split-points-needs-non-adjacent-vertices = 按点拆分：请选择两个不相邻的多段线顶点
 cmd-split-polyline-into-two = 已将源折线拆分为两条开放折线
 cmd-text-edit-finished = 已完成对象 { $object_id } 的文本编辑
 cmd-text-updated = 已更新对象 { $object_id } 上的文本

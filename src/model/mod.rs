@@ -7,6 +7,7 @@ pub(crate) mod layer_residency;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
+pub(crate) mod blast;
 pub(crate) mod block_model;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
@@ -1915,13 +1916,13 @@ impl EditTarget<'_> {
 
     /// Clear every hole pair named by either side of a tie-in edit, then lay
     /// `insert` across them. One connector to a pair, so a pair is cleared
-    /// before it is written whichever direction the old one ran in.
+    /// before it is written, whichever order the old one named its holes in.
     fn write_tie_ins(&mut self, dataset: drill_hole::DrillHoleId, remove: &[drill_hole::TieIn], insert: &[drill_hole::TieIn]) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
             return;
         };
         let data = std::sync::Arc::make_mut(&mut entry.dataset);
-        data.ties.retain(|tie| !remove.iter().chain(insert).any(|touched| tie.joins(touched.from, touched.to)));
+        data.ties.retain(|tie| !remove.iter().chain(insert).any(|touched| tie.joins(touched.a, touched.b)));
         data.ties.extend(insert.iter().cloned());
         self.touch_item(ItemRef::DrillHole(dataset));
     }
@@ -1953,6 +1954,25 @@ impl EditTarget<'_> {
             data.apply_corrections(targets, records);
         } else {
             data.withdraw_corrections(targets, records);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    /// Write each named hole's charge, emptying those given `None`.
+    fn write_charges(&mut self, dataset: drill_hole::DrillHoleId, charges: &[(usize, Option<blast::HoleCharge>)]) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        for (hole, charge) in charges {
+            match charge {
+                Some(charge) => {
+                    data.charges.insert(*hole, charge.clone());
+                }
+                None => {
+                    data.charges.remove(hole);
+                }
+            }
         }
         self.touch_item(ItemRef::DrillHole(dataset));
     }
@@ -2153,6 +2173,13 @@ pub(crate) enum Command {
         targets: Vec<(usize, usize)>,
         records: Vec<drill_hole::Correction>,
     },
+    /// Load, reload or unload holes. Each side names the same holes: `before`
+    /// is what they held (`None` for empty), `after` what they hold now.
+    SetCharges {
+        dataset: drill_hole::DrillHoleId,
+        before: Vec<(usize, Option<blast::HoleCharge>)>,
+        after: Vec<(usize, Option<blast::HoleCharge>)>,
+    },
     /// Add a complete project item. While the item is present, `added` is
     /// `None`; undo lifts it back into the command so redo can restore the
     /// exact same data and explorer position without cloning it.
@@ -2249,6 +2276,11 @@ impl Command {
                             })
                             .fold(0usize, usize::saturating_add)
                 }
+                Command::SetCharges { before, after, .. } => before
+                    .iter()
+                    .chain(after)
+                    .map(|(_, charge)| size_of::<usize>() + charge.as_ref().map_or(0, blast::HoleCharge::estimated_bytes))
+                    .fold(0usize, usize::saturating_add),
                 Command::MoveCollars { originals, .. } | Command::RotateCollars { originals, .. } => originals
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
@@ -2350,7 +2382,8 @@ impl Command {
             | Self::RotateCollars { dataset, .. }
             | Self::SetTieIns { dataset, .. }
             | Self::SetInitiation { dataset, .. }
-            | Self::CorrectIntervals { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
+            | Self::CorrectIntervals { dataset, .. }
+            | Self::SetCharges { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
             Self::Batch(commands) => {
@@ -2392,7 +2425,8 @@ impl Command {
             | Command::RotateCollars { dataset, .. }
             | Command::SetTieIns { dataset, .. }
             | Command::SetInitiation { dataset, .. }
-            | Command::CorrectIntervals { dataset, .. } => {
+            | Command::CorrectIntervals { dataset, .. }
+            | Command::SetCharges { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
                     into.push(item);
@@ -2546,6 +2580,7 @@ impl Command {
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
             Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, true),
+            Command::SetCharges { dataset, after, .. } => target.write_charges(*dataset, after),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
                     debug_assert_eq!(added_item.item_ref(), *item);
@@ -2695,6 +2730,7 @@ impl Command {
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
             Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, false),
+            Command::SetCharges { dataset, before, .. } => target.write_charges(*dataset, before),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
                     *index = taken_index;

@@ -615,7 +615,6 @@ cmd-slice-set-section-grid-enabled = Schnittraster aktiviert = { $enabled }
 cmd-split-created-2-open-polylines = 2 offene Polylinien erstellt
 cmd-split-line = Linie teilen
 cmd-split-points-needs-interior-vertex = An Punkten teilen: Wählen Sie einen inneren Eckpunkt der offenen Linie
-cmd-split-points-needs-non-adjacent-vertices = An Punkten teilen: Wählen Sie zwei nicht benachbarte Polylinien-Eckpunkte
 cmd-split-polyline-into-two = Quellpolylinie in zwei offene Polylinien geteilt
 cmd-text-edit-finished = Textbearbeitung für Objekt { $object_id } abgeschlossen
 cmd-text-updated = Text auf Objekt { $object_id } aktualisiert

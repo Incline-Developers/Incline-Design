@@ -69,6 +69,7 @@ impl App<'_> {
             &preferences,
             self.editor.workspace_order,
             products,
+            self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
         )) {

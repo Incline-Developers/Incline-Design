@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = Grid penampang aktif = { $enabled }
 cmd-split-created-2-open-polylines = 2 poligaris terbuka dibuat
 cmd-split-line = Pisahkan garis
 cmd-split-points-needs-interior-vertex = Pisahkan pada Titik: pilih verteks bagian dalam dari garis terbuka
-cmd-split-points-needs-non-adjacent-vertices = Pisahkan pada Titik: pilih dua verteks poligaris yang tidak bersebelahan
 cmd-split-polyline-into-two = Poligaris sumber dibagi menjadi dua poligaris terbuka
 cmd-text-edit-finished = Pengeditan teks untuk objek { $object_id } selesai
 cmd-text-updated = Teks pada objek { $object_id } diperbarui

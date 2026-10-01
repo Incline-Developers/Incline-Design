@@ -156,9 +156,14 @@ impl<'a> App<'a> {
 
         // Taken here, before the renderer sees it, or one notch would both walk the section and zoom it.
         let slice_walked = !gui_consumed && self.slice_walk_scroll(&event);
+        // The welcome splash's backdrop takes every click, but a middle press
+        // normally gets past egui to the camera. Hold presses back while the
+        // splash is up so it cannot be panned behind; releases still pass, so
+        // a drag begun before it opened cannot stick.
+        let splash_blocks_press = !self.startup_dialog_dismissed && matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, .. });
         let graphics_consumed = !slice_walked
             && self.graphics.as_mut().is_some_and(|graphics| {
-                if gui_consumed && !graphics.should_receive_event_when_gui_consumed(&event) {
+                if gui_consumed && (splash_blocks_press || !graphics.should_receive_event_when_gui_consumed(&event)) {
                     return false;
                 }
 
@@ -215,6 +220,7 @@ impl<'a> App<'a> {
                     self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
+                    self.refresh_blast_hover();
                     self.refresh_object_edit_dialog();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
@@ -945,6 +951,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
+                ActiveTool::ChargeHoles => self.charge_holes_press(),
                 ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
@@ -1561,7 +1568,7 @@ impl<'a> App<'a> {
         }
         if tool != self.editor.active_tool
             && ((tool.requires_active_layer() && self.active_layer().is_none())
-                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint)
+                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles)
                     && !self
                         .editor
                         .active_drill_hole

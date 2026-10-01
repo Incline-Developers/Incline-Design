@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = Grille de coupe activée = { $enabled }
 cmd-split-created-2-open-polylines = 2 polylignes ouvertes créées
 cmd-split-line = Scinder la ligne
 cmd-split-points-needs-interior-vertex = Diviser aux points : choisissez un sommet intérieur de la ligne ouverte
-cmd-split-points-needs-non-adjacent-vertices = Diviser aux points : choisissez deux sommets non adjacents de la polyligne
 cmd-split-polyline-into-two = Polyligne source scindée en deux polylignes ouvertes
 cmd-text-edit-finished = Modification du texte terminée pour l’objet { $object_id }
 cmd-text-updated = Texte mis à jour sur l’objet { $object_id }

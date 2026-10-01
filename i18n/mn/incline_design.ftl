@@ -625,7 +625,6 @@ cmd-slice-set-section-grid-enabled = Огтлолын торыг тохируу�
 cmd-split-created-2-open-polylines = 2 задгай полилиниа үүсгэлээ
 cmd-split-line = Шугамыг хуваах
 cmd-split-points-needs-interior-vertex = Цэгээр хуваах: задгай шугамын дотоод орой цэгийг сонгоно уу
-cmd-split-points-needs-non-adjacent-vertices = Цэгээр хуваах: зэргэлдээ бус хоёр полилиниагийн орой цэгийг сонгоно уу
 cmd-split-polyline-into-two = Эх полилиниаг хоёр задгай полилиниа болгож хуваав
 cmd-text-edit-finished = { $object_id } объектын текст засварыг дуусгалаа
 cmd-text-updated = { $object_id } объект дээрх текстийг шинэчиллээ

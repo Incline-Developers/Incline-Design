@@ -20,6 +20,7 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
 | Ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); see its README; check with `cargo check -p mineflow` |
 | Reusable UI widgets | `ui/widgets/` (`menu.rs` buttons and fields, `collapsible_section.rs`, `data_table.rs`, `toolbar.rs`) |
+| Drill & Blast | `model/drill_hole.rs` (patterns, ties, firing times), `model/blast.rs` (charge library, `charge_hole`, `BlastAnalysis`), `app/tie_in.rs`, `app/blast.rs`, `ui/elements/products.rs` (palette, rules, shot summary), `ui/elements/blast.rs` (contours, relief legend, hole card, timeline) |
 | Translations | `src/i18n.rs` (`tr!` macro, loader), `i18n/en/incline_design.ftl` |
 | Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 
@@ -101,4 +102,5 @@ wasm is `panic = "abort"` (the job queue's panic recovery does *not* apply), nee
 
 ## Git
 
+- **Never open a PR against `main`.** A push to `main` triggers `.github/workflows/release.yml`, so a merge there can cut a release. PRs go to `staging` or to the integration branch the current line of work uses.
 - Short, action-oriented commit subjects; no mandatory prefix scheme. Keep PRs focused: problem, resulting behaviour, validation, platform limitations. Link relevant issues and include screenshots for visual changes.
