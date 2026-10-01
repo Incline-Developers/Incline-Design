@@ -392,9 +392,10 @@ pub(crate) fn execute_scip_blend(
 
     // The whole run shares one solve budget. The hourly dispatch schedule
     // comes first (see `greedy`): it takes milliseconds, is shown at once and
-    // seeds the whole-horizon solve. Only an input it cannot schedule - a
-    // chunked pile - is solved day by day instead, when the horizon is long
-    // enough to need it. The whole horizon then gets whatever is left.
+    // seeds the whole-horizon solve. Only when it fails - HiGHS failing on an
+    // interval, or the replay refusing its schedule - is the horizon solved
+    // day by day instead, when it is long enough to need it. The whole
+    // horizon then gets whatever is left.
     let budget_started = Instant::now();
     let mut seed = None;
     let mut relaxation = None;

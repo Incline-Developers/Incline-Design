@@ -10,7 +10,7 @@
 //! | [`grade`] | which reserve fields may be used as a grade, and why most may not |
 //! | [`replay`] | an independent physical replay of a published schedule |
 //! | [`greedy`] | the hourly dispatch schedule, one LP per interval: a run's first schedule and SCIP's start |
-//! | [`rolling`] | windows, carried state and stitching for day-by-day solving, used when the dispatcher cannot schedule an input |
+//! | [`rolling`] | windows, carried state and stitching for day-by-day solving, the fallback when the dispatcher fails |
 //! | [`iterative`] | the iterative fixed-grade HiGHS method |
 //! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
 //!

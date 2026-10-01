@@ -321,8 +321,8 @@ week (7 days x 1 h, both ROM piles blended) the first root LP alone took
 
 A horizon that needs more than one window is now solved in three steps,
 inside the run's one time limit. Since "Hourly dispatch first" below, this
-path runs only for an input the dispatcher cannot schedule, which today means
-one with a chunked pile:
+path runs only when the dispatcher fails (see "Chunked piles in the
+dispatcher"):
 
 1. **Windows.** Each window is one kept day, solved alone; only if that
    fails is the run solved again with two days of look-ahead per window (see
@@ -689,8 +689,8 @@ captured requests, and the fixtures:
 | graded 168 h | 24,000 | 24,000, optimal |
 
 So a run's first schedule is now the dispatch schedule, for every horizon
-that the dispatcher can schedule, and SCIP's day-by-day windows are kept
-only for chunked piles.
+that the dispatcher can schedule, and SCIP's day-by-day windows were kept
+for chunked piles, which the dispatcher then refused.
 
 The dispatcher also became a linear program per interval
 (`blended/greedy.rs`). Before, loaders took shared crusher, pile and truck
@@ -749,6 +749,52 @@ The fixtures give the same values as the old dispatcher (competition 96 and
 168 h, graded 24 and 168 h), each in under 25 ms. The chunked LIFO fixture
 still reaches 9,600 in 38 s through the day-by-day windows and their
 look-ahead fallback.
+
+## Chunked piles in the dispatcher
+
+The dispatcher now schedules chunked piles too, so every input gets the
+hourly dispatch schedule first. SCIP's day-by-day windows only run when the
+dispatcher fails: HiGHS failing on an interval, or the replay refusing its
+schedule.
+
+The chunk rules are the formulation's, with one rule of the dispatcher's own:
+- **Closing:** a chunk closes when it is full, and only then. The formulation
+  may close a partly filled chunk; the dispatcher never does. Closing early
+  is what led the days-alone LIFO run into its dead end, where every chunk
+  was closed and the diggers had nowhere to deliver.
+- **Filling:** receipts go to the first chunk still open, up to its room and
+  the pile's. A chunk is open or closed for a whole interval, so a chunk that
+  fills during an interval closes at the start of the next, and the next
+  chunk starts receiving then.
+- **Reclaiming:** reclaim draws only the chunk the authored order releases,
+  at that chunk's own blend. Under FIFO that is the oldest chunk holding
+  material, if it is closed; under LIFO, the newest closed chunk holding
+  material. A draw within 1e-6 t of emptying the chunk empties it, so the
+  order rules see it as empty.
+- **Admission:** reclaim admission by grade is judged on that chunk's blend,
+  with the formulation's margin.
+
+The dispatcher publishes a chunk row for every chunk and interval, and the
+replay checks these rows against its own chunk walk. SCIP completes the
+schedule into a seed as for an unchunked pile.
+
+Dispatch alone, against SCIP's proven optimum:
+
+| fixture | dispatch | SCIP |
+|---|---|---|
+| dynamic chunks FIFO / LIFO, 8, 12, 24 h | 5,600, in 1-3 ms | 5,600, optimal |
+| dynamic chunks FIFO / LIFO, 96 h | 9,600, in 12 ms | 9,600 |
+| alternating chunks FIFO / LIFO, 2 and 4 chunks | 400, in under 1 ms | 400 |
+
+Through `execute_scip_blend`, 40 s:
+
+| fixture | days alone first | hourly dispatch first |
+|---|---|---|
+| dynamic chunks FIFO 96 h | 9,600 in 24 s | shown at 0.015 s; proven at 0.3-1.5 s |
+| dynamic chunks LIFO 96 h | 9,600 in 38 s, after the fallback | shown at 0.013 s; proven at 1.3-1.4 s |
+
+The two proof times on each row are from two runs; the gap between them is
+the relaxation solve racing SCIP.
 
 ## Solver process
 

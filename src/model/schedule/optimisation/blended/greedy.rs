@@ -43,18 +43,30 @@
 //! interval. A reclaim goes where a grade decides admission - a route
 //! qualification or a minimum grade - only when the pile's released blend
 //! clears the boundary by the formulation's own margin, and never where a
-//! grade-conditional value applies, which is the model's to price. Chunked
-//! piles are not dispatched: the input is refused rather than half-handled.
+//! grade-conditional value applies, which is the model's to price.
+//!
+//! A chunked pile follows the formulation's chunk lifecycle with one rule of
+//! its own: a chunk closes when it is full, and only then. Receipts go to the
+//! first chunk still open, up to its room. A chunk is open or closed for a
+//! whole interval, so one that fills during an interval closes at the start of
+//! the next, and the next chunk starts receiving then. Reclaim draws one
+//! chunk, the one the authored order releases - FIFO the oldest holding
+//! material, if it is closed; LIFO the newest closed one holding material -
+//! at that chunk's own blend. The formulation may also close a partly filled
+//! chunk; the dispatcher never does, which is what kept it out of the dead end
+//! where every chunk closed early and the diggers had nowhere to deliver.
 
 use std::collections::BTreeMap;
 
 use highs::{Col, HighsModelStatus, RowProblem, Sense};
 
 use super::{
-    input::{BlendInput, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, authored_tasks, interval_rate, task_active, task_authorises},
-    replay::{BlendSolution, ExtractionAdjustments, MovementRow},
+    input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, authored_tasks, interval_rate, task_active, task_authorises},
+    replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MovementCandidate, SourceId, StockpileId, TaskKind, TruckClassId};
+use crate::model::schedule::optimisation::{
+    Activity, DestinationId, DestinationKind, GroundId, Interval, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId,
+};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
@@ -72,9 +84,6 @@ const TIE_WEIGHT: f64 = 1e-7;
 
 /// A dispatch schedule for `input`, or why there is none.
 pub(crate) fn dispatch(input: &BlendInput) -> Result<BlendSolution, String> {
-    if input.piles.iter().any(|pile| !pile.chunks.is_empty()) {
-        return Err("the dispatcher does not handle chunked piles".into());
-    }
     let mut state = State::new(input);
     for interval in &input.intervals {
         state.work(*interval)?;
@@ -86,8 +95,12 @@ pub(crate) fn dispatch(input: &BlendInput) -> Result<BlendSolution, String> {
 struct State<'a> {
     input: &'a BlendInput,
     ground: BTreeMap<GroundId, f64>,
-    /// Released opening tonnes and contained quantity per grade.
+    /// Released opening tonnes and contained quantity per grade; a chunked
+    /// pile's is the sum of its chunks.
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
+    /// Chunked piles only.
+    chunks: BTreeMap<StockpileId, Vec<Chunk>>,
+    chunk_rows: Vec<ChunkRow>,
     /// What each dump has taken, and each crusher day.
     dumped: BTreeMap<DestinationId, f64>,
     crushed: BTreeMap<(DestinationId, u32), f64>,
@@ -104,6 +117,22 @@ struct State<'a> {
     weight: Vec<f64>,
     rows: BTreeMap<(usize, usize), f64>,
     durations: BTreeMap<(usize, usize), f64>,
+}
+
+/// One chunk of a chunked pile, as it opens an interval.
+struct Chunk {
+    capacity_t: f64,
+    held_t: f64,
+    held_q: Vec<f64>,
+    closed: bool,
+}
+
+/// What a pile releases to reclaim in an interval.
+struct Released {
+    /// The chunk drawn, for a chunked pile.
+    chunk: Option<usize>,
+    tonnes: f64,
+    blend: Vec<f64>,
 }
 
 /// One loader's work in an interval.
@@ -160,6 +189,13 @@ impl<'a> State<'a> {
             input,
             ground: input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect(),
             piles: input.piles.iter().map(|pile| (pile.id, pile.total_opening(input.grades.count()))).collect(),
+            chunks: input
+                .piles
+                .iter()
+                .filter(|pile| !pile.chunks.is_empty())
+                .map(|pile| (pile.id, opening_chunks(pile, input.grades.count())))
+                .collect(),
+            chunk_rows: Vec::new(),
             dumped: BTreeMap::new(),
             crushed: BTreeMap::new(),
             reclaimed: BTreeMap::new(),
@@ -308,7 +344,7 @@ impl<'a> State<'a> {
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
-                        if self.piles.get(pile).is_none_or(|(open_t, _)| *open_t <= NEGLIGIBLE_T) {
+                        if self.released(*pile).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
                             continue;
                         }
                         for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
@@ -326,7 +362,7 @@ impl<'a> State<'a> {
             problem.add_row(..=self.ground.get(&block).copied().unwrap_or(0.0), terms);
         }
         for (pile, terms) in pile_draw {
-            problem.add_row(..=self.piles.get(&pile).map_or(0.0, |(open_t, _)| *open_t), terms);
+            problem.add_row(..=self.released(pile).map_or(0.0, |released| released.tonnes), terms);
         }
 
         // Shared room: truck hours per class, and each destination's.
@@ -423,19 +459,48 @@ impl<'a> State<'a> {
             }
         }
 
+        // A draw within [`SNAP_T`] of emptying what its pile released
+        // empties it, so a drained chunk reads as empty to the order rules.
+        let mut released: BTreeMap<StockpileId, Released> = BTreeMap::new();
+        for pile in &input.piles {
+            if let Some(found) = self.released(pile.id) {
+                released.insert(pile.id, found);
+            }
+        }
+        for (pile, found) in &released {
+            let drawn: f64 = rows
+                .iter()
+                .filter(|(index, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
+                .map(|(_, tonnes)| tonnes)
+                .sum();
+            if drawn > 0.0 && drawn >= found.tonnes - SNAP_T && drawn != found.tonnes {
+                let scale = found.tonnes / drawn;
+                for (index, tonnes) in &mut rows {
+                    if input.movements[*index].source == SourceId::Stockpile(*pile) {
+                        *tonnes *= scale;
+                    }
+                }
+            }
+        }
+
         // Rows, allowances and pile balances.
         let grades = input.grades.count();
         let mut drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
         let mut received: BTreeMap<StockpileId, (f64, Vec<f64>)> = BTreeMap::new();
+        let mut receipts: BTreeMap<StockpileId, Vec<(usize, f64)>> = BTreeMap::new();
         for (index, tonnes) in rows {
             let candidate = &input.movements[index];
             *self.rows.entry((index, k)).or_default() += tonnes;
-            if let SourceId::Stockpile(pile) = candidate.source {
-                *drawn.entry(pile).or_default() += tonnes;
-                if let Some(task) = self.reclaim_task(candidate, interval) {
-                    *self.reclaimed.entry(task).or_default() += tonnes;
+            let blend = match candidate.source {
+                SourceId::Stockpile(pile) => {
+                    *drawn.entry(pile).or_default() += tonnes;
+                    if let Some(task) = self.reclaim_task(candidate, interval) {
+                        *self.reclaimed.entry(task).or_default() += tonnes;
+                    }
+                    released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| vec![0.0; grades])
                 }
-            }
+                _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
+            };
             let Some(destination) = input.destinations.iter().find(|entry| entry.id == candidate.destination) else {
                 continue;
             };
@@ -443,7 +508,7 @@ impl<'a> State<'a> {
                 DestinationKind::Dump => *self.dumped.entry(destination.id).or_default() += tonnes,
                 DestinationKind::Crusher => *self.crushed.entry((destination.id, interval.day())).or_default() += tonnes,
                 DestinationKind::Stockpile(pile) => {
-                    let blend = self.delivered_blend(candidate);
+                    receipts.entry(pile).or_default().push((index, tonnes));
                     let entry = received.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades]));
                     entry.0 += tonnes;
                     for (contained, grade) in entry.1.iter_mut().zip(blend) {
@@ -453,6 +518,52 @@ impl<'a> State<'a> {
             }
         }
         for (pile, (open_t, open_q)) in &mut self.piles {
+            if let Some(chunks) = self.chunks.get_mut(pile) {
+                let reclaimed = drawn.get(pile).copied().unwrap_or(0.0);
+                let drawn_chunk = released.get(pile).and_then(|found| found.chunk);
+                let receiving = chunks.iter().position(|chunk| !chunk.closed);
+                let pile_receipts = receipts.remove(pile).unwrap_or_default();
+                for (index, chunk) in chunks.iter_mut().enumerate() {
+                    let draw = if Some(index) == drawn_chunk { reclaimed.min(chunk.held_t) } else { 0.0 };
+                    let (taken_t, taken_q) = if Some(index) == receiving {
+                        received.get(pile).cloned().unwrap_or((0.0, vec![0.0; grades]))
+                    } else {
+                        (0.0, vec![0.0; grades])
+                    };
+                    self.chunk_rows.push(ChunkRow {
+                        pile: *pile,
+                        chunk: index,
+                        interval: k,
+                        open_t: chunk.held_t,
+                        reclaimed_t: draw,
+                        closed: chunk.closed,
+                        received_t: taken_t,
+                        receipts: if Some(index) == receiving { pile_receipts.clone() } else { Vec::new() },
+                    });
+                    if draw > 0.0 && chunk.held_t > 0.0 {
+                        let share = draw / chunk.held_t;
+                        for contained in &mut chunk.held_q {
+                            *contained -= *contained * share;
+                        }
+                    }
+                    chunk.held_t -= draw;
+                    if draw > 0.0 && chunk.held_t <= FINISHED_T {
+                        chunk.held_t = 0.0;
+                        chunk.held_q.iter_mut().for_each(|contained| *contained = 0.0);
+                    }
+                    chunk.held_t += taken_t;
+                    for (contained, taken) in chunk.held_q.iter_mut().zip(&taken_q) {
+                        *contained += taken;
+                    }
+                    // Full, it closes for the next interval.
+                    if !chunk.closed && chunk.capacity_t - chunk.held_t <= SNAP_T {
+                        chunk.closed = true;
+                    }
+                }
+                *open_t = chunks.iter().map(|chunk| chunk.held_t).sum();
+                *open_q = (0..grades).map(|grade| chunks.iter().map(|chunk| chunk.held_q[grade]).sum()).collect();
+                continue;
+            }
             let reclaimed = drawn.get(pile).copied().unwrap_or(0.0).min(*open_t);
             if reclaimed > 0.0 && *open_t > 0.0 {
                 let share = reclaimed / *open_t;
@@ -470,19 +581,30 @@ impl<'a> State<'a> {
         }
     }
 
-    /// The grade per tonne a movement delivers: its material's for a dig,
-    /// the pile's released blend for a reclaim.
-    fn delivered_blend(&self, candidate: &MovementCandidate) -> Vec<f64> {
-        let input = self.input;
-        let grades = input.grades.count();
-        match candidate.source {
-            SourceId::Stockpile(pile) => self
-                .piles
-                .get(&pile)
-                .map(|(open_t, open_q)| open_q.iter().map(|contained| if *open_t > 0.0 { contained / open_t } else { 0.0 }).collect())
-                .unwrap_or_else(|| vec![0.0; grades]),
-            _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
-        }
+    /// What `pile` releases to reclaim this interval: an unchunked pile its
+    /// whole opening blend, a chunked one the chunk its order releases, if
+    /// any.
+    fn released(&self, pile: StockpileId) -> Option<Released> {
+        let blend = |tonnes: f64, contained: &[f64]| contained.iter().map(|value| if tonnes > 0.0 { value / tonnes } else { 0.0 }).collect();
+        let Some(chunks) = self.chunks.get(&pile) else {
+            let (open_t, open_q) = self.piles.get(&pile)?;
+            return Some(Released {
+                chunk: None,
+                tonnes: *open_t,
+                blend: blend(*open_t, open_q),
+            });
+        };
+        let order = self.input.piles.iter().find(|entry| entry.id == pile)?.order;
+        let index = match order {
+            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| chunks[index].closed)?,
+            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| chunk.closed && chunk.held_t > FINISHED_T)?,
+        };
+        let chunk = &chunks[index];
+        Some(Released {
+            chunk: Some(index),
+            tonnes: chunk.held_t,
+            blend: blend(chunk.held_t, &chunk.held_q),
+        })
     }
 
     /// The reclaim bar a reclaim row was worked under: its loader's first
@@ -511,12 +633,11 @@ impl<'a> State<'a> {
     }
 
     /// Reclaim candidates for one loader and pile under `bar`, admitted on
-    /// the pile's released blend with the formulation's margin to spare.
+    /// the blend the pile releases with the formulation's margin to spare.
     fn reclaim_candidates(&self, loader: usize, pile: StockpileId, bar: usize, interval: Interval) -> Vec<usize> {
         let input = self.input;
-        let Some((open_t, open_q)) = self.piles.get(&pile) else { return Vec::new() };
-        let blend: Vec<f64> = open_q.iter().map(|contained| contained / open_t).collect();
-        let band = GRADE_MARGIN + GRADE_CUSHION_T / open_t.max(GRADE_CUSHION_T) + 1e-9;
+        let Some(Released { tonnes, blend, .. }) = self.released(pile) else { return Vec::new() };
+        let band = GRADE_MARGIN + GRADE_CUSHION_T / tonnes.max(GRADE_CUSHION_T) + 1e-9;
         self.reclaims
             .get(&(loader, pile))
             .map(|list| {
@@ -571,9 +692,14 @@ impl<'a> State<'a> {
             // Receipts must fit on top of the opening stock, with no credit
             // for what the interval reclaims: the replay's stricter check
             // when a delivering loader works blocks back to back.
+            // A chunked pile also takes no more than its receiving chunk's room.
             DestinationKind::Stockpile(pile) => {
                 let Some(target) = input.piles.iter().find(|entry| entry.id == pile) else { return 0.0 };
-                target.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes)
+                let room = target.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
+                match self.chunks.get(&pile) {
+                    Some(chunks) => chunks.iter().find(|chunk| !chunk.closed).map_or(0.0, |chunk| room.min(chunk.capacity_t - chunk.held_t)),
+                    None => room,
+                }
             }
         }
         .max(0.0)
@@ -598,11 +724,34 @@ impl<'a> State<'a> {
         BlendSolution {
             movements,
             durations: self.durations,
-            chunks: Vec::new(),
+            chunks: self.chunk_rows,
             reported_objective,
             adjustments: ExtractionAdjustments::default(),
         }
     }
+}
+
+/// A chunked pile's chunks as the horizon opens. Without authored per-chunk
+/// opening the pile's opening goes into chunk 0, as the formulation puts it.
+fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
+    pile.chunks
+        .iter()
+        .enumerate()
+        .map(|(index, capacity_t)| {
+            let (held_t, mut held_q) = match pile.chunk_opening.get(index) {
+                Some((tonnes, contained)) => (*tonnes, contained.clone()),
+                None if pile.chunk_opening.is_empty() && index == 0 => (pile.opening_t, pile.opening_q.clone()),
+                None => (0.0, Vec::new()),
+            };
+            held_q.resize(grades, 0.0);
+            Chunk {
+                capacity_t: *capacity_t,
+                held_t,
+                held_q,
+                closed: pile.chunk_starts_closed(index),
+            }
+        })
+        .collect()
 }
 
 /// Whether some alternative of `qualification` holds on `blend` with `band`

@@ -255,7 +255,7 @@ pub(crate) struct SolveDiagnostics {
 
 /// The first schedule of a run, replayed against the whole horizon, shown
 /// at once and used to seed the whole-horizon solve: the hourly dispatch
-/// schedule, or for an input it cannot schedule, days solved one at a time
+/// schedule, or when that fails, days solved one at a time
 /// and stitched.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DayByDaySummary {
