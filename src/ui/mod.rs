@@ -420,6 +420,12 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
         ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
+        ActiveTool::ChargeHoles => match editor.active_rule() {
+            Some(rule) => {
+                ViewportMessage::text(tr_format!(literal = "Click or drag over holes to load them with %rule%", rule = &rule.name)).minor(tr!(literal = "hold Shift to unload"))
+            }
+            None => ViewportMessage::text(tr!(literal = "No charge rule to load with")).minor(tr!(literal = "right-click the Charge Rules heading to add one")),
+        },
         ActiveTool::PickRotationCentre => ViewportMessage::text(tr!(literal = "Click a point to fix the centre of rotation")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
@@ -655,6 +661,7 @@ fn draw_ui(
     widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
     draw_initiation_cards(root_ui, editor, canvas_rect);
+    elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -1219,6 +1226,9 @@ fn draw_global_dialogs(
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
+    dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
+    dialogs::charging::draw_charge_rule_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::charging::draw_delete_blast_item_dialog(root_ui, editor, commands);
 
     // Exit confirmation
     if editor.exit_confirm_open {

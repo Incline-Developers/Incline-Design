@@ -1837,6 +1837,25 @@ pub(crate) struct EditorState {
     pub(crate) initiation_cards: Vec<InitiationCard>,
     /// Product awaiting destructive deletion confirmation: (id, row label).
     pub(crate) pending_delete_delay_product: Option<(DelayProductId, String)>,
+    /// The charge products and loading rules. Configuration rather than
+    /// project data, like the delay palette.
+    pub(crate) blast_library: crate::model::blast::BlastLibrary,
+    /// Name of the rule the Charge Holes tool loads with. Falls back to the
+    /// first rule whenever it names none.
+    pub(crate) active_charge_rule: Option<String>,
+    pub(crate) charge_product_dialog: Option<ChargeProductDialog>,
+    pub(crate) charge_rule_dialog: Option<ChargeRuleDialog>,
+    /// Library entry awaiting deletion confirmation.
+    pub(crate) pending_delete_blast_item: Option<BlastLibraryItem>,
+    /// Which reviews of the fired pattern are showing, and the timeline's playhead.
+    pub(crate) blast_review: BlastReview,
+    /// The active dataset read back - see `App::refresh_blast_round`.
+    pub(crate) blast_analysis: Option<std::sync::Arc<crate::model::blast::BlastAnalysis>>,
+    /// Contours of equal time projected to the window, refreshed each frame
+    /// while they are showing.
+    pub(crate) blast_contours_px: Vec<ProjectedContour>,
+    /// The hole under the pointer, for the hole card.
+    pub(crate) blast_hover: Option<BlastHover>,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -2710,6 +2729,15 @@ impl EditorState {
             initiation_dialog: None,
             initiation_cards: Vec::new(),
             pending_delete_delay_product: None,
+            blast_library: crate::model::blast::BlastLibrary::default(),
+            active_charge_rule: None,
+            charge_product_dialog: None,
+            charge_rule_dialog: None,
+            pending_delete_blast_item: None,
+            blast_review: BlastReview::default(),
+            blast_analysis: None,
+            blast_contours_px: Vec::new(),
+            blast_hover: None,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2789,6 +2817,38 @@ impl EditorState {
     pub(crate) fn active_product(&self) -> Option<&DelayProduct> {
         let id = self.active_delay_product?;
         self.delay_products.iter().find(|product| product.id == id)
+    }
+
+    /// The rule the Charge Holes tool loads with.
+    pub(crate) fn active_rule(&self) -> Option<&crate::model::blast::ChargeRule> {
+        let rules = &self.blast_library.rules;
+        self.active_charge_rule
+            .as_ref()
+            .and_then(|name| rules.iter().find(|rule| &rule.name == name))
+            .or_else(|| rules.first())
+    }
+
+    /// How the collars of `dataset` are painted by an open review, if one is:
+    /// the timeline wins over the relief heatmap while it is open, since it
+    /// is the one being watched.
+    pub(crate) fn blast_collar_paint(&self, dataset: DrillHoleId) -> Option<(&crate::model::blast::BlastAnalysis, CollarPaint)> {
+        if self.active_workspace != Workspace::DrillAndBlast || self.active_drill_hole != Some(dataset) {
+            return None;
+        }
+        let analysis = self.blast_analysis.as_deref()?;
+        if self.blast_review.timeline {
+            Some((analysis, CollarPaint::Timeline(self.blast_review.playhead_ms)))
+        } else if self.blast_review.relief {
+            Some((analysis, CollarPaint::Relief(self.blast_review.limits)))
+        } else {
+            None
+        }
+    }
+
+    /// Whether loaded decks are drawn down the holes: charging is blasting
+    /// content, shown where it is worked on, as tie-ins are.
+    pub(crate) fn shows_charges(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast
     }
 
     /// Whether the Drill & Blast Tie Holes tool owns canvas clicks.
@@ -2907,6 +2967,9 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's initiation tool: a click puts the point a round starts
     /// at on the hole under the cursor, at the delay the products panel holds.
     SetInitiationPoint,
+    /// Load holes with the active charge rule: click one, or drag a box over
+    /// several. Shift unloads instead.
+    ChargeHoles,
     /// One click fixes the centre both views orbit about.
     PickRotationCentre,
     Chamfer,
@@ -3186,6 +3249,24 @@ pub(crate) enum UiCommand {
     SetInitiation {
         target: DrillHoleRef,
         delay_ms: Option<u32>,
+    },
+    /// Add a charge product, or replace the one named `original`.
+    SaveChargeProduct {
+        original: Option<String>,
+        product: crate::model::blast::ChargeProduct,
+    },
+    /// Add a loading rule, or replace the one named `original`.
+    SaveChargeRule {
+        original: Option<String>,
+        rule: crate::model::blast::ChargeRule,
+        /// Also reload the active pattern's holes that were loaded with it.
+        reload: bool,
+    },
+    DeleteBlastLibraryItem(BlastLibraryItem),
+    /// Load the selected holes of the active dataset with the named rule, or
+    /// unload them with `None`.
+    ChargeSelectedHoles {
+        rule: Option<String>,
     },
     FinishPolyClose,
     CommitStrokeOpen,
@@ -3594,6 +3675,7 @@ impl UiCommand {
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SetInitiation { .. }
+            | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::PreviewCollarRotation(_)
@@ -3717,6 +3799,9 @@ impl UiCommand {
             ),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
             Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
+            Self::SaveChargeProduct { product, .. } => report(tr!(literal = "Save Charge Product"), product.name.clone()),
+            Self::SaveChargeRule { rule, .. } => report(tr!(literal = "Save Charge Rule"), rule.name.clone()),
+            Self::DeleteBlastLibraryItem(item) => report(tr!(literal = "Delete Charge Library Entry"), item.name().to_owned()),
             Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
             Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
@@ -4242,9 +4327,8 @@ pub(crate) struct BlastRoundSummary {
     pub(crate) unreached: usize,
 }
 
-/// One tie-in connector as selection state addresses it. Hole order is
-/// canonical here because selection is about the physical connector, while
-/// [`crate::model::drill_hole::TieIn`] retains direction for firing order.
+/// One tie-in connector as selection state addresses it, with its holes in
+/// canonical order so the same connector is always the same ref.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TieInRef {
     pub(crate) dataset: DrillHoleId,
@@ -4278,6 +4362,89 @@ pub(crate) struct InitiationCard {
     /// can be drawn at a world size instead of a fixed screen size. Measured
     /// per card because under perspective the scale falls off with depth.
     pub(crate) px_per_world: f32,
+}
+
+/// Draft held while a charge product is added or edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChargeProductDialog {
+    /// The product being edited, by its name before the edit; `None` adds one.
+    pub(crate) original: Option<String>,
+    pub(crate) product: crate::model::blast::ChargeProduct,
+}
+
+/// Draft held while a loading rule is added or edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChargeRuleDialog {
+    pub(crate) original: Option<String>,
+    pub(crate) rule: crate::model::blast::ChargeRule,
+}
+
+/// One entry of the charge library, by name.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BlastLibraryItem {
+    Product(String),
+    Rule(String),
+}
+
+impl BlastLibraryItem {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Product(name) | Self::Rule(name) => name,
+        }
+    }
+}
+
+/// Drill & Blast's reviews of the fired pattern: the three view toggles the
+/// viewport bar carries, and the timeline's transport.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastReview {
+    pub(crate) relief: bool,
+    pub(crate) contours: bool,
+    pub(crate) timeline: bool,
+    pub(crate) limits: crate::model::blast::ReliefLimits,
+    /// Where the timeline stands, in milliseconds from the shot.
+    pub(crate) playhead_ms: f64,
+    pub(crate) playing: bool,
+    /// Firing milliseconds played per real millisecond. A round is over in
+    /// a second or two, so playback starts well below real time.
+    pub(crate) speed: f64,
+}
+
+impl Default for BlastReview {
+    fn default() -> Self {
+        Self {
+            relief: false,
+            contours: false,
+            timeline: false,
+            limits: Default::default(),
+            playhead_ms: 0.0,
+            playing: false,
+            speed: 0.1,
+        }
+    }
+}
+
+/// How an open review paints the active dataset's collars.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CollarPaint {
+    Relief(crate::model::blast::ReliefLimits),
+    /// Fired, firing and waiting, at this playhead.
+    Timeline(f64),
+}
+
+/// One line of equal time in window pixels; `None` marks a clipped point.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ProjectedContour {
+    pub(crate) time_ms: f64,
+    pub(crate) points: Vec<Option<(f32, f32)>>,
+    pub(crate) closed: bool,
+}
+
+/// The hole under the pointer and where its collar stands on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlastHover {
+    pub(crate) hole: DrillHoleRef,
+    pub(crate) screen_px: (f32, f32),
 }
 
 /// One leg of the tie-in a click would confirm: the two holes it joins, where

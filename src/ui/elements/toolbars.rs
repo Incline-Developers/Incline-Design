@@ -106,7 +106,8 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
-/// nudge its holes, re-aim them, tie them together, then say where it starts.
+/// nudge its holes, re-aim them, tie them together, say where it starts,
+/// then load it.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -154,6 +155,14 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
             tooltip: tr!(literal = "Set Initiation Point"),
             action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
+            enabled: editing_enabled && has_active_dataset,
+            hint: None,
+        },
+        LeftTool {
+            // Loading follows tying: the round is laid out, timed, then filled.
+            icon: egui::Image::new(unthemed_icon!("charge_holes.svg")),
+            tooltip: tr!(literal = "Charge Holes"),
+            action: LeftToolAction::Tool(ActiveTool::ChargeHoles),
             enabled: editing_enabled && has_active_dataset,
             hint: None,
         },

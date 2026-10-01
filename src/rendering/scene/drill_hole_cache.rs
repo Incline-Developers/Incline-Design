@@ -6,10 +6,24 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
-    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE,
+use crate::{
+    model::{
+        blast::{BlastAnalysis, RELIEF_UNFIRED_COLOR, VIBRATION_WINDOW_MS},
+        drill_hole::{
+            COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
+            DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow,
+        },
+    },
+    ui::state::CollarPaint,
 };
+
+/// Dashes a redundant tie is broken into.
+const TIE_DASHES: usize = 5;
+/// Chevron size as a multiple of the collar marker's radius.
+const TIE_CHEVRON_MARKER_SCALE: f64 = 1.4;
+
+/// The part of a loaded hole no deck reaches - subdrill left open, say.
+const UNLOADED_TRACE_COLOR: [f32; 3] = [0.55, 0.55, 0.58];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -76,11 +90,12 @@ impl DrillHoleGpuCache {
                 continue;
             }
             let selection = HoleSelection::of(dataset, editor);
-            let key = dataset_key(dataset, scene_origin, &selection);
+            let blast = BlastPaint::of(dataset, editor);
+            let key = dataset_key(dataset, scene_origin, &selection, &blast);
             if self.entries.get(&dataset.id).is_some_and(|cached| cached.key == key) {
                 continue;
             }
-            let instances = build_instances(dataset, scene_origin, &selection);
+            let instances = build_instances(dataset, scene_origin, &selection, &blast);
             let buffer = (!instances.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Segment Instances"),
@@ -96,7 +111,7 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
-            let collars = build_collar_instances(dataset, scene_origin, &selection);
+            let collars = build_collar_instances(dataset, scene_origin, &selection, &blast);
             let collar_buffer = (!collars.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Collar Instances"),
@@ -257,8 +272,70 @@ impl HoleSelection {
     }
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
+/// What Drill & Blast adds to how a dataset is drawn: loaded decks down the
+/// holes, and collars painted by an open review.
+struct BlastPaint<'a> {
+    charges: bool,
+    collars: Option<(&'a BlastAnalysis, CollarPaint)>,
+}
+
+/// Timeline collar fills: a hole whose detonation is in the trailing 8 ms
+/// window is going off, one before it has gone, one after it is waiting.
+const TIMELINE_FIRING_COLOR: [f32; 3] = [1.0, 0.80, 0.18];
+const TIMELINE_FIRED_COLOR: [f32; 3] = [0.62, 0.16, 0.10];
+
+impl<'a> BlastPaint<'a> {
+    fn of(dataset: &OpenDrillHoleDataset, editor: &'a crate::ui::state::EditorState) -> Self {
+        Self {
+            charges: editor.shows_charges() && !dataset.dataset.charges.is_empty(),
+            collars: editor.blast_collar_paint(dataset.id),
+        }
+    }
+
+    fn hash(&self, hash: &mut DefaultHasher) {
+        self.charges.hash(hash);
+        match self.collars {
+            None => 0u8.hash(hash),
+            Some((analysis, CollarPaint::Relief(limits))) => {
+                1u8.hash(hash);
+                std::ptr::from_ref(analysis).hash(hash);
+                limits.low.to_bits().hash(hash);
+                limits.high.to_bits().hash(hash);
+            }
+            Some((analysis, CollarPaint::Timeline(playhead))) => {
+                2u8.hash(hash);
+                std::ptr::from_ref(analysis).hash(hash);
+                // Only the holes whose state the playhead changes matter, so
+                // the key is the count of detonations it has passed and the
+                // count still inside the firing window - a playhead moving
+                // between detonations rebuilds nothing.
+                let passed = analysis.firing_order.partition_point(|hole| analysis.times[*hole].unwrap_or(0.0) <= playhead);
+                let settled = analysis
+                    .firing_order
+                    .partition_point(|hole| analysis.times[*hole].unwrap_or(0.0) <= playhead - VIBRATION_WINDOW_MS);
+                passed.hash(hash);
+                settled.hash(hash);
+            }
+        }
+    }
+
+    fn collar_fill(&self, hole: usize) -> Option<[f32; 3]> {
+        let (analysis, paint) = self.collars?;
+        Some(match paint {
+            CollarPaint::Relief(limits) => analysis.band(hole, limits).color(),
+            CollarPaint::Timeline(playhead) => match analysis.times.get(hole).copied().flatten() {
+                None => RELIEF_UNFIRED_COLOR,
+                Some(time) if time > playhead => COLLAR_MARKER_FILL_COLOR,
+                Some(time) if time > playhead - VIBRATION_WINDOW_MS => TIMELINE_FIRING_COLOR,
+                Some(_) => TIMELINE_FIRED_COLOR,
+            },
+        })
+    }
+}
+
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection, blast: &BlastPaint) -> u64 {
     let mut hash = DefaultHasher::new();
+    blast.hash(&mut hash);
     dataset.id.hash(&mut hash);
     dataset.state.loaded.hash(&mut hash);
     // Hole positions are not hashed one by one: an edit to the geometry - the
@@ -289,7 +366,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
     hash.finish()
 }
 
-fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection, blast: &BlastPaint) -> Vec<DrillSegmentInstance> {
     if !dataset.state.loaded {
         return Vec::new();
     }
@@ -303,7 +380,15 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
         let min_depth = hole.trace.first().unwrap().depth;
         let max_depth = hole.trace.last().unwrap().depth;
         let mut boundaries = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
-        if let Some(field) = field {
+        // A loaded hole is drawn as its column: each deck in its product's
+        // colour, in place of any interval colouring.
+        let charge = blast.charges.then(|| dataset.dataset.charges.get(&index)).flatten();
+        if let Some(charge) = charge {
+            for deck in &charge.decks {
+                boundaries.push(deck.from.clamp(min_depth, max_depth));
+                boundaries.push(deck.to.clamp(min_depth, max_depth));
+            }
+        } else if let Some(field) = field {
             for interval in &hole.intervals {
                 if interval.values.contains_key(&field.key) {
                     boundaries.push(interval.from.clamp(min_depth, max_depth));
@@ -336,6 +421,12 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
             let color = if selected {
                 let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
                 [red, green, blue]
+            } else if let Some(charge) = charge {
+                charge
+                    .decks
+                    .iter()
+                    .find(|deck| deck.from <= midpoint && midpoint < deck.to)
+                    .map_or(UNLOADED_TRACE_COLOR, |deck| deck.color)
             } else {
                 field
                     .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
@@ -358,37 +449,78 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
 /// cylinder the traces use. A tie has no thickness of its own, so it takes a
 /// world radius from the holes it joins and scales with them until reaching
 /// the shared two-pixel screen floor.
+///
+/// Ties are undirected, so the round decides which way each was crossed: a
+/// chevron at its middle points the way the signal went, and one no first
+/// signal came over - a loop, a backup, two fronts meeting - is drawn broken.
 fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
     let holes = &dataset.dataset.holes;
-    dataset
-        .dataset
-        .ties
-        .iter()
-        .filter_map(|tie| {
-            let from = holes.get(tie.from)?;
-            let to = holes.get(tie.to)?;
-            let start = from.collar_position();
-            let end = to.collar_position();
-            (start.distance_squared(end) > 1.0e-18).then_some(DrillSegmentInstance {
-                start: (start - scene_origin).as_vec3().to_array(),
-                // A run between holes of unequal diameter takes their mean, so
-                // it reads the same whichever end it was tied from.
-                radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
-                end: (end - scene_origin).as_vec3().to_array(),
+    let flows = dataset.dataset.tie_flows(&dataset.dataset.firing_times());
+    let mut instances = Vec::with_capacity(dataset.dataset.ties.len() * 3);
+    for (tie, flow) in dataset.dataset.ties.iter().zip(flows) {
+        let (Some(a), Some(b)) = (holes.get(tie.a), holes.get(tie.b)) else {
+            continue;
+        };
+        let (start, end) = (a.collar_position(), b.collar_position());
+        let length = start.distance(end);
+        if length <= 1.0e-9 {
+            continue;
+        }
+        // A run between holes of unequal diameter takes their mean, so it
+        // reads the same from either end.
+        let hole_radius = (a.render_radius() + b.render_radius()) * 0.5;
+        let radius = (hole_radius * TIE_RADIUS_SCALE) as f32;
+        let color = if selection.contains_tie(tie.a, tie.b) {
+            let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+            [red, green, blue]
+        } else {
+            tie.color
+        };
+        let mut push = |from: DVec3, to: DVec3| {
+            instances.push(DrillSegmentInstance {
+                start: (from - scene_origin).as_vec3().to_array(),
+                radius,
+                end: (to - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
-                color: if selection.contains_tie(tie.from, tie.to) {
-                    let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
-                    [red, green, blue]
-                } else {
-                    tie.color
-                },
+                color,
                 _pad1: 0.0,
-            })
-        })
-        .collect()
+            });
+        };
+        let along = (end - start) / length;
+        match flow {
+            TieFlow::Redundant => {
+                for dash in 0..TIE_DASHES {
+                    let from = start.lerp(end, (2 * dash) as f64 / (2 * TIE_DASHES - 1) as f64);
+                    let to = start.lerp(end, (2 * dash + 1) as f64 / (2 * TIE_DASHES - 1) as f64);
+                    push(from, to);
+                }
+            }
+            TieFlow::AToB | TieFlow::BToA | TieFlow::Unreached => {
+                push(start, end);
+                let direction = match flow {
+                    TieFlow::AToB => along,
+                    TieFlow::BToA => -along,
+                    _ => continue,
+                };
+                // Sized off the collar marker so it reads beside the holes,
+                // but never more than a fifth of a short tie.
+                let size = (hole_radius * COLLAR_MARKER_RADIUS_SCALE * TIE_CHEVRON_MARKER_SCALE).min(length * 0.2);
+                let side = direction.cross(DVec3::Z).normalize_or_zero();
+                if side == DVec3::ZERO {
+                    continue;
+                }
+                let middle = start.lerp(end, 0.5);
+                let tip = middle + direction * size * 0.5;
+                let back = middle - direction * size * 0.5;
+                push(back + side * size * 0.6, tip);
+                push(back - side * size * 0.6, tip);
+            }
+        }
+    }
+    instances
 }
 
-fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
+fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection, blast: &BlastPaint) -> Vec<DrillCollarInstance> {
     if !dataset.state.loaded {
         return Vec::new();
     }
@@ -404,7 +536,7 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
         .map(|(index, hole)| {
             let (outline, fill) = match selected_colors {
                 Some(colors) if selection.contains(index) => colors,
-                _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
+                _ => (COLLAR_MARKER_OUTLINE_COLOR, blast.collar_fill(index).unwrap_or(COLLAR_MARKER_FILL_COLOR)),
             };
             let center = hole.collar_position();
             let hole_radius = hole.render_radius();

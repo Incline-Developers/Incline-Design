@@ -514,8 +514,37 @@ impl<'a> Graphics<'a> {
                     })
                 })
                 .collect();
+            // Lines of equal time across the active pattern, while that review is on.
+            let contours_visible = editor.blast_review.contours
+                && editor.active_drill_hole.is_some_and(|id| {
+                    drill_holes
+                        .iter()
+                        .any(|dataset| dataset.id == id && dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
+                });
+            editor.blast_contours_px = match editor.blast_analysis.as_deref().filter(|_| contours_visible) {
+                Some(analysis) => analysis
+                    .contours
+                    .iter()
+                    .map(|contour| crate::ui::state::ProjectedContour {
+                        time_ms: contour.time_ms,
+                        points: contour
+                            .points
+                            .iter()
+                            .map(|point| {
+                                if slab.is_some_and(|slab| !slab.contains(*point)) {
+                                    return None;
+                                }
+                                self.world_to_window_px(&view_proj, *point)
+                            })
+                            .collect(),
+                        closed: contour.closed,
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
         } else {
             editor.initiation_cards.clear();
+            editor.blast_contours_px.clear();
         }
 
         if let Some(failure) = &editor.tri_create_failure {
