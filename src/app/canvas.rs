@@ -100,7 +100,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -115,7 +115,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {

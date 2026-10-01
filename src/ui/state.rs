@@ -3007,6 +3007,14 @@ impl ActiveTool {
         matches!(self, Self::RotateCollar)
     }
 
+    /// Whether a press over open ground starts a box rather than reaching the
+    /// tool as a click: with no tool armed, under the transform tools, whose
+    /// targets are picked by box, and under Charge Holes, which loads every
+    /// hole a box takes.
+    pub(crate) fn box_selects_from_open_ground(self) -> bool {
+        self == Self::None || self == Self::ChargeHoles || self.translates() || self.rotates()
+    }
+
     /// Either collar gesture. Both work on individually picked holes rather
     /// than on whole datasets, and so want the same selection, the same picks
     /// and the same session capture.
