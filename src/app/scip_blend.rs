@@ -46,7 +46,7 @@ use crate::model::schedule::{
             experiments::extract_solution,
         },
     },
-    result::{BoundSource, DayByDayRole, DayByDaySummary},
+    result::{BoundSource, DayByDayRole, DayByDaySummary, StartMethod},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -390,77 +390,88 @@ pub(crate) fn execute_scip_blend(
         return out;
     }
 
-    // The whole run shares one solve budget: day-by-day windows first, when
-    // the horizon is long enough to need them, then the whole horizon with
-    // whatever is left.
+    // The whole run shares one solve budget. The hourly dispatch schedule
+    // comes first (see `greedy`): it takes milliseconds, is shown at once and
+    // seeds the whole-horizon solve. Only an input it cannot schedule - a
+    // chunked pile - is solved day by day instead, when the horizon is long
+    // enough to need it. The whole horizon then gets whatever is left.
     let budget_started = Instant::now();
     let mut seed = None;
     let mut relaxation = None;
-    if let Some(windows) = rolling::plan(&out.input, 0.0) {
-        relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
-        // Days alone first; with a look-ahead only when that fails (see
-        // `rolling`), from the start and within the same share of the budget.
-        let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
-        let mut windows = windows;
-        let mut attempt = solve_day_by_day(&mut out, &windows, budget, options, cancel, activity);
-        if let DayByDay::Failed(reason) = &attempt
-            && let Some(ahead) = rolling::plan(&out.input, rolling::LOOKAHEAD_H)
-        {
-            log::warn!(
-                "schedule run {}: days solved alone failed ({reason}); solving them again with a {} h look-ahead",
-                out.identity.run_id,
-                rolling::LOOKAHEAD_H
-            );
-            windows = ahead;
-            attempt = solve_day_by_day(
-                &mut out,
-                &windows,
-                budget.map(|budget| budget.saturating_sub(budget_started.elapsed())),
-                options,
-                cancel,
-                activity,
-            );
-        }
-        match attempt {
-            DayByDay::Seed(found) => {
-                let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
-                let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
-                shown.sizes = out.sizes;
-                shown.timings = out.timings;
-                adopt_seed(&mut shown, (*found).clone(), None, proved, DayByDayRole::Early);
-                if shown.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
-                    log::info!(
-                        "schedule run {}: the day-by-day schedule is within the gap target of the relaxation bound; no whole-horizon solve",
-                        out.identity.run_id
-                    );
-                    adopt_seed(&mut out, *found, None, proved, DayByDayRole::Proven);
-                    return out;
-                }
-                early(&shown);
-                seed = Some(*found);
+    activity.set(3);
+    let mut attempt = hourly_dispatch(&mut out, cancel);
+    let mut windows = None;
+    if let DayByDay::Failed(reason) = &attempt {
+        log::info!("schedule run {}: no hourly dispatch schedule: {reason}", out.identity.run_id);
+        if let Some(planned) = rolling::plan(&out.input, 0.0) {
+            relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
+            // Days alone first; with a look-ahead only when that fails (see
+            // `rolling`), from the start and within the same share of the budget.
+            let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
+            let mut planned = planned;
+            attempt = solve_day_by_day(&mut out, &planned, budget, options, cancel, activity);
+            if let DayByDay::Failed(reason) = &attempt
+                && let Some(ahead) = rolling::plan(&out.input, rolling::LOOKAHEAD_H)
+            {
+                log::warn!(
+                    "schedule run {}: days solved alone failed ({reason}); solving them again with a {} h look-ahead",
+                    out.identity.run_id,
+                    rolling::LOOKAHEAD_H
+                );
+                planned = ahead;
+                attempt = solve_day_by_day(
+                    &mut out,
+                    &planned,
+                    budget.map(|budget| budget.saturating_sub(budget_started.elapsed())),
+                    options,
+                    cancel,
+                    activity,
+                );
             }
-            DayByDay::Failed(reason) => {
+            windows = Some(planned.len());
+        }
+    } else {
+        relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
+    }
+    match attempt {
+        DayByDay::Seed(found) => {
+            let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+            let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
+            shown.sizes = out.sizes;
+            shown.timings = out.timings;
+            adopt_seed(&mut shown, (*found).clone(), None, proved, DayByDayRole::Early);
+            if shown.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+                log::info!(
+                    "schedule run {}: the first schedule is within the gap target of the relaxation bound; no whole-horizon solve",
+                    out.identity.run_id
+                );
+                adopt_seed(&mut out, *found, None, proved, DayByDayRole::Proven);
+                return out;
+            }
+            early(&shown);
+            seed = Some(*found);
+        }
+        DayByDay::Failed(reason) => {
+            if let Some(windows) = windows {
                 log::warn!("schedule run {}: day-by-day start abandoned: {reason}", out.identity.run_id);
                 out.day_by_day = Some(DayByDaySummary {
-                    windows: windows.len(),
+                    method: StartMethod::DayByDay,
+                    windows,
                     seconds: budget_started.elapsed().as_secs_f64(),
                     value: None,
                     role: DayByDayRole::Improved,
                     failure: Some(reason),
                 });
             }
-            DayByDay::Stop(reason, diagnostic) => {
-                out.stop(reason, diagnostic);
-                return out;
-            }
+        }
+        DayByDay::Stop(reason, diagnostic) => {
+            out.stop(reason, diagnostic);
+            return out;
         }
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
-        log::info!(
-            "schedule run {}: no time left for a whole-horizon solve; keeping the day-by-day schedule",
-            out.identity.run_id
-        );
+        log::info!("schedule run {}: no time left for a whole-horizon solve; keeping the first schedule", out.identity.run_id);
         let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
@@ -473,34 +484,14 @@ pub(crate) fn execute_scip_blend(
         let limit = remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE));
         match complete_seed(&out.input, &found.solution, limit, cancel) {
             Ok(values) => {
-                log::info!("schedule run {}: day-by-day seed completed in {:.2?}", out.identity.run_id, started.elapsed());
+                log::info!("schedule run {}: first schedule completed into a seed in {:.2?}", out.identity.run_id, started.elapsed());
                 completed = Some(values);
             }
             Err(_) if cancel.is_cancelled() => {
-                out.stop(ScipTermination::Cancelled, "cancelled while completing the day-by-day seed");
+                out.stop(ScipTermination::Cancelled, "cancelled while completing the first schedule into a seed");
                 return out;
             }
-            Err(problem) => log::warn!("schedule run {}: day-by-day seed not offered to SCIP: {problem}", out.identity.run_id),
-        }
-        out.timings.solver += started.elapsed();
-    } else {
-        // No day-by-day schedule: start from a dispatch schedule instead.
-        activity.set(3);
-        let started = Instant::now();
-        match dispatch_start(&out.input, remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE)), cancel) {
-            Ok((values, value)) => {
-                log::info!(
-                    "schedule run {}: starting from a dispatch schedule worth {value:.2}, completed in {:.2?}",
-                    out.identity.run_id,
-                    started.elapsed()
-                );
-                completed = Some(values);
-            }
-            Err(_) if cancel.is_cancelled() => {
-                out.stop(ScipTermination::Cancelled, "cancelled while completing the dispatch schedule");
-                return out;
-            }
-            Err(problem) => log::warn!("schedule run {}: no dispatch start: {problem}", out.identity.run_id),
+            Err(problem) => log::warn!("schedule run {}: first schedule not offered to SCIP: {problem}", out.identity.run_id),
         }
         out.timings.solver += started.elapsed();
     }
@@ -590,7 +581,7 @@ pub(crate) fn execute_scip_blend(
         && let Some(found) = seed.take()
     {
         log::info!(
-            "schedule run {}: the relaxation bound proves the day-by-day schedule within the gap target; whole-horizon solve stopped after {solve_time:.2?}",
+            "schedule run {}: the relaxation bound proves the first schedule within the gap target; whole-horizon solve stopped after {solve_time:.2?}",
             out.identity.run_id
         );
         let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
@@ -841,6 +832,50 @@ enum DayByDay {
     Stop(ScipTermination, String),
 }
 
+/// The hourly dispatch schedule (see [`greedy`]), replayed against the
+/// whole horizon.
+fn hourly_dispatch(out: &mut ScipCompletion, cancel: &CancelFlag) -> DayByDay {
+    let started = Instant::now();
+    let solution = match greedy::dispatch(&out.input) {
+        Ok(solution) => solution,
+        Err(reason) => return DayByDay::Failed(reason),
+    };
+    out.timings.solver += started.elapsed();
+    let phase = Instant::now();
+    let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
+    out.timings.replay += phase.elapsed();
+    let Some(checked) = checked else {
+        return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
+    };
+    if !checked.is_valid() {
+        for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
+            log::warn!("schedule run {}: hourly dispatch schedule: {issue}", out.identity.run_id);
+        }
+        let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
+        return DayByDay::Failed(format!("the replay rejected it: {issue}"));
+    }
+    let summary = DayByDaySummary {
+        method: StartMethod::Hourly,
+        windows: out.input.intervals.len(),
+        seconds: started.elapsed().as_secs_f64(),
+        value: Some(checked.replayed_objective),
+        role: DayByDayRole::Improved,
+        failure: None,
+    };
+    log::info!(
+        "schedule run {}: hourly dispatch schedule of {} intervals worth {:.2} in {:.2?}",
+        out.identity.run_id,
+        summary.windows,
+        checked.replayed_objective,
+        started.elapsed()
+    );
+    DayByDay::Seed(Box::new(Seed {
+        solution,
+        replay: checked,
+        summary,
+    }))
+}
+
 /// Solve the horizon a day at a time (see [`rolling`]) and stitch the kept
 /// days into one schedule for the whole horizon, all within `budget`.
 fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option<Duration>, options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> DayByDay {
@@ -1000,6 +1035,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         return DayByDay::Failed(format!("the stitched schedule failed the whole-horizon replay: {issue}"));
     }
     let summary = DayByDaySummary {
+        method: StartMethod::DayByDay,
         windows: windows.len(),
         seconds: started.elapsed().as_secs_f64(),
         value: Some(checked.replayed_objective),
@@ -1192,7 +1228,7 @@ const SEED_BAND_RELATIVE: f64 = 1e-3;
 /// It is only ever a start: SCIP checks it against the model before storing
 /// it, and whatever SCIP returns is replayed again on its own.
 fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
-    let mut solution = greedy::dispatch(input).ok_or("the dispatcher does not handle chunked piles")?;
+    let mut solution = greedy::dispatch(input)?;
     // The rows are the dispatcher's own, so the objective they report is
     // what the replay values them at.
     solution.reported_objective = replay_cancellable(input, &solution, &cancel.signal()).ok_or("cancelled")?.replayed_objective;
@@ -1684,13 +1720,20 @@ mod developer_checks {
         let input = Arc::new(graded_blend_world(3));
         let result = execute_scip_blend(input, identity(1), ScipSolveOptions::default(), &CancelFlag::default(), &ScipActivity::default(), &|_| {});
         assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
-        // Started from an optimal dispatch schedule, SCIP may stop at the gap
-        // target rather than close the gap exactly.
+        // The hourly dispatch schedule is optimal here, so either SCIP stops
+        // at the gap target or the relaxation proves the schedule first.
         assert_eq!(result.termination, ScipTermination::Optimal);
-        assert!(matches!(result.backend_status, Some(Status::Optimal | Status::GapLimit)), "{:?}", result.backend_status);
+        let proven = result
+            .day_by_day
+            .as_ref()
+            .is_some_and(|start| start.method == StartMethod::Hourly && start.role == DayByDayRole::Proven);
+        assert!(
+            proven || matches!(result.backend_status, Some(Status::Optimal | Status::GapLimit)),
+            "{:?}",
+            result.backend_status
+        );
         assert!(result.replay.as_ref().is_some_and(|report| report.is_valid()));
         assert!(result.timings.solver > Duration::ZERO);
-        assert!(result.timings.formulation > Duration::ZERO);
 
         let mut invalid = graded_blend_world(3);
         invalid.segments_per_interval = 0;
@@ -1751,14 +1794,14 @@ mod developer_checks {
                 result.timings.solver,
                 result.solver_limit_overshoot
             );
-            assert_eq!(result.backend_status, Some(Status::TimeLimit));
-            assert_eq!(
-                result.termination,
-                if result.usable() {
-                    ScipTermination::FeasibleLimit
-                } else {
-                    ScipTermination::LimitNoIncumbent
-                }
+            // The hourly dispatch schedule is there before SCIP starts, so a
+            // limit too short for SCIP keeps it rather than ending empty.
+            assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
+            assert!(matches!(result.backend_status, None | Some(Status::TimeLimit)), "{:?}", result.backend_status);
+            assert!(
+                matches!(result.termination, ScipTermination::FeasibleLimit | ScipTermination::Optimal),
+                "{:?}",
+                result.termination
             );
         }
     }
@@ -1863,7 +1906,7 @@ mod developer_checks {
         cancel.cancel();
         let result = rx.recv_timeout(Duration::from_secs(5)).expect("formulation ignored cancellation");
         assert_eq!(result.termination, ScipTermination::Cancelled);
-        assert_eq!(result.timings.solver, Duration::ZERO);
+        assert_eq!(result.backend_status, None);
         println!(
             "SCIP formulation cancellation latency={:?} after {} checkpoints",
             requested.elapsed(),

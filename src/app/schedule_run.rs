@@ -55,7 +55,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
-        result::{BoundSource, CalculatedSchedule, DayByDayRole, SolveQuality},
+        result::{BoundSource, CalculatedSchedule, DayByDayRole, SolveQuality, StartMethod},
     },
     ui::state::{ScheduleRepairTarget, ScheduleStep},
 };
@@ -798,17 +798,20 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
         _ => tr!("schedule-detail-no-bound"),
     });
     if let Some(start) = report.day_by_day.as_ref() {
-        let windows = start.windows.to_string();
-        let seconds = format!("{:.1}", start.seconds);
+        let seconds = format!("{:.2}", start.seconds);
+        let method = match start.method {
+            StartMethod::DayByDay => tr!("schedule-detail-start-day-by-day", windows = start.windows.to_string()),
+            StartMethod::Hourly => tr!("schedule-detail-start-hourly", intervals = start.windows.to_string()),
+        };
         lines.push(match (start.value, start.failure.as_ref()) {
             (Some(value), _) => {
                 let value = crate::ui::elements::schedule_calendar::format_money(value);
                 match start.role {
-                    DayByDayRole::Improved => tr!("schedule-detail-day-by-day-improved", windows = windows, seconds = seconds, value = value),
-                    DayByDayRole::Kept => tr!("schedule-detail-day-by-day-kept", windows = windows, seconds = seconds, value = value),
-                    DayByDayRole::Early => tr!("schedule-detail-day-by-day-early", windows = windows, seconds = seconds, value = value),
-                    DayByDayRole::Stopped => tr!("schedule-detail-day-by-day-stopped", windows = windows, seconds = seconds, value = value),
-                    DayByDayRole::Proven => tr!("schedule-detail-day-by-day-proven", windows = windows, seconds = seconds, value = value),
+                    DayByDayRole::Improved => tr!("schedule-detail-start-improved", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Kept => tr!("schedule-detail-start-kept", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Early => tr!("schedule-detail-start-early", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Stopped => tr!("schedule-detail-start-stopped", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Proven => tr!("schedule-detail-start-proven", start = method, seconds = seconds, value = value),
                 }
             }
             (None, reason) => tr!("schedule-detail-day-by-day-failed", reason = reason.cloned().unwrap_or_default()),

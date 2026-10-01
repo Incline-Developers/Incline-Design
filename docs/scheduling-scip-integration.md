@@ -320,7 +320,9 @@ week (7 days x 1 h, both ROM piles blended) the first root LP alone took
 226.5 s, and a 300 s run published 1.09M against a 74.7M bound.
 
 A horizon that needs more than one window is now solved in three steps,
-inside the run's one time limit:
+inside the run's one time limit. Since "Hourly dispatch first" below, this
+path runs only for an input the dispatcher cannot schedule, which today means
+one with a chunked pile:
 
 1. **Windows.** Each window is one kept day, solved alone; only if that
    fails is the run solved again with two days of look-ahead per window (see
@@ -672,6 +674,81 @@ Fixtures through `execute_scip_blend`, 40 s:
 | graded 168 h | optimal in 0.3 s | optimal in 0.1 s |
 | dynamic chunks FIFO 96 h | 9,600 in 29 s | 9,600 in 24 s |
 | dynamic chunks LIFO 96 h | 9,600 in 38 s | 9,600 in 38 s, after the fallback |
+
+## Hourly dispatch first
+
+Measured against what the whole-horizon solve had proved, the dispatch
+schedule alone was already as good, in milliseconds. DreamLand from the app's
+captured requests, and the fixtures:
+
+| horizon | dispatch alone | best whole-horizon result |
+|---|---|---|
+| DreamLand 1 / 3 / 4 days | 11.2M / 33.6M / 44.8M in 15-30 ms | the same, proven optimal |
+| DreamLand 7 days | 74.50M in 31 ms | 74.58M after 60 s; bound 74.71M |
+| competition 96 / 168 h | 20,400 / 33,900 | 20,400 / 33,900 |
+| graded 168 h | 24,000 | 24,000, optimal |
+
+So a run's first schedule is now the dispatch schedule, for every horizon
+that the dispatcher can schedule, and SCIP's day-by-day windows are kept
+only for chunked piles.
+
+The dispatcher also became a linear program per interval
+(`blended/greedy.rs`). Before, loaders took shared crusher, pile and truck
+room one at a time, best-paying bar first, and the first could use room the
+second would have used better. Now each interval is one HiGHS LP over every
+working loader:
+- block extraction up to the loader's rate, materials in proportion;
+- reclaim from the pile's released opening blend;
+- truck hours, crusher day, dump and pile room shared between loaders, which
+  the LP divides. Trucks are not allotted to loaders beforehand.
+
+Readiness, bar priority, authored block order and reclaim admission are as
+before. A loader that finishes its block with rate to spare opens the next
+block and the interval is solved again, with the finished block held
+finished.
+
+The objective is the interval's value plus a production credit per tonne
+moved, as large as the most negative movement value plus a tie-break of 1e-7
+of the largest value per tonne. An interval sees nothing after itself, so
+without the credit waste worth nothing until it is moved would never be dug.
+When every movement pays, the credit is only the tie-break, so the
+destination choice is purely by value. HiGHS runs single-threaded, so the
+same input always gives the same schedule.
+
+What a run does now:
+1. The hourly dispatch schedule is built and replayed against the whole
+   horizon, then shown at once.
+2. The HiGHS relaxation bound starts beside it.
+3. The dispatch schedule is completed into a seed and the whole-horizon SCIP
+   solve starts from it.
+4. The watcher stops SCIP once the relaxation bound proves the schedule.
+
+The run summary names the first schedule's method ("Hourly dispatch schedule
+(N intervals)" or "Day-by-day schedule (N windows)"); `DayByDaySummary`
+carries it as `method`, which defaults to day-by-day for results saved
+before it.
+
+DreamLand, from the app's captured requests, 60 s limit:
+
+| horizon | days alone first | hourly dispatch first |
+|---|---|---|
+| 1 day | 11.2M optimal, 0.5 s | shown at 0.03 s; proven at 0.38 s |
+| 3 days | early at about 1 s; proven at 2.9 s | shown at 0.05 s; proven at 6.4 s |
+| 4 days | early at about 2 s; proven at 16 s | shown at 0.06 s; proven at 16.8 s |
+| 7 days | early at 3 s; 74.58M at 60 s | shown at 0.08 s; 74.50M at 60 s, 0.29 % below the bound |
+
+Every horizon now has a schedule on screen in under a tenth of a second. The
+proofs on 3 and 4 days still wait for the relaxation bound (2.7 s and 6.1 s)
+and then for SCIP to notice the interrupt, which lags by 3-10 s during its
+root LP. On the week the whole-horizon solve did not improve on the dispatch
+schedule in 60 s. The day-by-day windows had found 0.11 % more, because each
+day's SCIP solve could look across the day where the dispatcher looks across
+one hour. That is the cost of the faster, repeatable first schedule.
+
+The fixtures give the same values as the old dispatcher (competition 96 and
+168 h, graded 24 and 168 h), each in under 25 ms. The chunked LIFO fixture
+still reaches 9,600 in 38 s through the day-by-day windows and their
+look-ahead fallback.
 
 ## Solver process
 

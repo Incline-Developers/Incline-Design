@@ -253,11 +253,15 @@ pub(crate) struct SolveDiagnostics {
     pub(crate) final_nonzeros: u64,
 }
 
-/// The day-by-day start of a long horizon: each day solved with a look-ahead,
-/// the kept days stitched and replayed against the whole horizon, then used
-/// to seed the whole-horizon solve.
+/// The first schedule of a run, replayed against the whole horizon, shown
+/// at once and used to seed the whole-horizon solve: the hourly dispatch
+/// schedule, or for an input it cannot schedule, days solved one at a time
+/// and stitched.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DayByDaySummary {
+    #[serde(default)]
+    pub(crate) method: StartMethod,
+    /// Day-by-day windows, or the dispatch schedule's intervals.
     pub(crate) windows: usize,
     pub(crate) seconds: f64,
     /// Replayed value of the stitched schedule; `None` when no window
@@ -267,7 +271,17 @@ pub(crate) struct DayByDaySummary {
     pub(crate) failure: Option<String>,
 }
 
-/// What became of the stitched day-by-day schedule.
+/// How a run's first schedule was made.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum StartMethod {
+    /// Days solved one at a time by SCIP and stitched.
+    #[default]
+    DayByDay,
+    /// Interval by interval, one linear program each.
+    Hourly,
+}
+
+/// What became of the first schedule.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DayByDayRole {
     /// It seeded the whole-horizon solve, whose schedule is the one
