@@ -6,23 +6,20 @@
 //!
 //! An authored bar is a **work window**: the period its loader is allowed to
 //! work that dig sequence or reclaim. What is actually worked in that period
-//! is the optimiser's answer, drawn inside the bar's lower half, and it
-//! appears only from a calculated schedule - never inferred from the bar
-//! itself.
+//! is the optimiser's answer, and it appears only from a calculated schedule -
+//! never inferred from the bar itself. The bar stays a plain named window; the
+//! answer is drawn beside it, and its detail is left to the hover.
 //!
-//! Three marks carry the calculated answer, and all three vanish the moment
-//! anything they were calculated from is edited:
+//! Two marks carry the calculated answer, and both vanish the moment anything
+//! they were calculated from is edited:
 //!
-//! - a **work segment** in the bar's lower half for each solved execution
-//!   span: the physical dig block a dig bar was on, or the stockpile a
-//!   reclaim bar actually drew from, at the times the model solved. Each
-//!   change of block alternates the shade and, where it fits, the block is
-//!   named; hovering the lane lists everything worked at that instant;
+//! - an **activity track** along the foot of each loader's row, one line per
+//!   machine across the calculated horizon: blue where it dug, green where it
+//!   reclaimed, and idle coloured by the reason the result found for it.
+//!   Hovering it says what was worked at that instant - block, tonnes,
+//!   destinations - or why the machine stood;
 //! - **grey** over the rest of a dig bar whose ground ran out before its
-//!   window closed, which reads as finished early;
-//! - an **idle strip** along the foot of a loader's row, where it executed
-//!   nothing inside the calculated horizon, coloured by the reason the
-//!   result found for it and explained on hover.
+//!   window closed, which reads as finished early.
 //!
 //! Dragging the middle of a bar moves its whole window; dragging either edge
 //! resizes it, and the same window can be typed in exactly. The drag previews
@@ -44,7 +41,7 @@ use crate::{
         DestinationId, LoaderAgentId, ScheduleBar, SchedulePlan, WorkWindow,
         cashflow::Activity,
         destinations::DestinationView,
-        result::{CalculatedSchedule, Execution, IdleReason, WorkSource},
+        result::{CalculatedSchedule, Execution, IdleReason, IdleSpan, WorkSource},
     },
     ui::{
         EditorState, UiProjectView, chrome,
@@ -78,10 +75,12 @@ const LANE_INSERT_ZONE: f32 = 9.0;
 /// Least width a bar is drawn at, whatever its window is worth on screen.
 /// A window of minutes at a month's zoom is still something to grab.
 const MIN_BAR_WIDTH: f32 = 18.0;
-/// Space kept above each bar, between it and the lane above.
-const WORK_STRIP: f32 = 5.0;
-/// Height of the idle strip along the foot of a loader's row.
-const IDLE_STRIP: f32 = 4.0;
+/// Space kept above and below each bar, between it and its neighbours.
+const BAR_GAP_Y: f32 = 4.0;
+/// Height of the activity track along the foot of a loader's row.
+const TRACK_HEIGHT: f32 = 5.0;
+/// Room a row keeps under its lanes for the activity track.
+const TRACK_SPACE: f32 = TRACK_HEIGHT + 5.0;
 /// How wide the grab zone on each edge of a bar is.
 const RESIZE_GRIP: f32 = 5.0;
 /// Shortest window a drag may leave behind. Typing a shorter one is still
@@ -417,20 +416,26 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
             if lane.stacks.is_empty() {
                 lane.stacks.push(Vec::new());
             }
-            lane.height = (plan.bar_height() + WORK_STRIP + 6.0) * lane.stacks.len() as f32;
+            lane.height = (plan.bar_height() + 2.0 * BAR_GAP_Y) * lane.stacks.len() as f32;
             lanes_height += lane.height;
         }
         // A row is never shorter than a machine's name and its class need.
         // Where the lanes alone do not fill that, they share the rest out
         // between them rather than leaving a dead strip under the last one.
-        let scale = if lanes_height > 0.0 { (ROW_HEIGHT / lanes_height).max(1.0) } else { 1.0 };
+        let scale = if lanes_height > 0.0 {
+            ((ROW_HEIGHT - TRACK_SPACE) / lanes_height).max(1.0)
+        } else {
+            1.0
+        };
         let mut offset = 0.0;
         for lane in &mut row.lanes {
             lane.height *= scale;
             lane.offset = offset;
             offset += lane.height;
         }
-        row.height = offset.max(ROW_HEIGHT);
+        // The activity track has the foot of the row to itself, under every
+        // lane, so no bar ever covers it.
+        row.height = (offset + TRACK_SPACE).max(ROW_HEIGHT);
         row.top = top;
         top += row.height + LOADER_GAP;
     }
@@ -719,11 +724,19 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // on a bar is a click on the bar rather than a pan of the timeline, and a
     // right-click on empty lane space is that lane's own menu.
     draw_row_menus(ui, body, editor, &layout.rows, session, commands);
-    draw_bars(ui, body, editor, plan, destinations, &layout, session, commands, schedule.as_deref());
-    // Idle is a row-level indicator and must remain visible even beneath an
-    // authored bar that has no executable material, so paint it over the bar
-    // foot rather than letting the bar cover most of a four-pixel strip.
-    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
+    draw_bars(ui, body, editor, plan, &layout, session, commands, schedule.as_deref());
+    // What each machine actually did, under its bars.
+    draw_activity(
+        ui,
+        body,
+        editor.gantt,
+        editor.gantt.row_scroll,
+        schedule.as_deref(),
+        &layout.rows,
+        plan,
+        &editor.schedule_bar_reports,
+        destinations,
+    );
     // Over everything, because it marks an instant across all of it, and last
     // so its handle takes the pointer from the bars it crosses.
     let horizon_h = schedule.as_deref().map_or(0.0, |schedule| schedule.requested_end_h);
@@ -1037,11 +1050,10 @@ fn span_rect(view: GanttView, body: egui::Rect, start_h: f64, end_h: f64, top: f
 
 /// The one colour a loader working a sequence is drawn in.
 ///
-/// One colour, not a palette keyed by bar: the band already sits on the bar it
-/// belongs to, so a second identity for it would only compete with the lane
-/// and selection colours around it.
+/// One colour, not a palette keyed by bar or block: the track says whether the
+/// machine was working, and which block it was on is the hover's to say.
 const WORKING_COLOR: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0xD6);
-/// Reclaim: the same band in a second hue, so drawing a pile down never reads
+/// Reclaim: the same track in a second hue, so drawing a pile down never reads
 /// as digging ground.
 const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB5, 0x8A);
 /// Idle because a limit held the machine back - no room, no trucks, no
@@ -1068,39 +1080,119 @@ fn idle_reason_look(reason: Option<IdleReason>) -> (egui::Color32, String, Strin
     }
 }
 
-/// The idle strip along the foot of each loader's row: where that machine
-/// executed nothing inside the calculated horizon, and why.
+/// The activity track along the foot of each loader's row: one line per
+/// machine saying what it was doing at every instant of the calculated
+/// horizon - working, reclaiming, or idle coloured by why.
 ///
-/// Drawn from the result's explicit idle spans, never inferred from gaps
-/// between bars - a gap on screen can be a lane that packed elsewhere.
-fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, schedule: Option<&CalculatedSchedule>, rows: &[Row], destinations: &[DestinationView]) {
+/// The bars above say what the machine was allowed to do; this says what it
+/// did, so it is drawn once per machine rather than once per bar, and the
+/// detail - which block, how many tonnes, why idle - is left to the hover.
+/// Idle is drawn from the result's explicit idle spans, never inferred from
+/// gaps between bars: a gap on screen can be a lane that packed elsewhere.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the hover names blocks and destinations, which needs the plan, the reports and the destinations alongside the run"
+)]
+fn draw_activity(
+    ui: &mut egui::Ui,
+    body: egui::Rect,
+    view: GanttView,
+    scroll: f32,
+    schedule: Option<&CalculatedSchedule>,
+    rows: &[Row],
+    plan: &SchedulePlan,
+    reports: &[ScheduleBarView],
+    destinations: &[DestinationView],
+) {
     let Some(schedule) = schedule else {
         return;
     };
-    for span in &schedule.idle {
-        let (agent, start_h, end_h) = (span.agent, span.start_h, span.end_h);
-        let Some(row) = rows.iter().find(|row| row.agent == Some(agent)) else {
+    let painter = ui.painter_at(body);
+    for row in rows {
+        let Some(agent) = row.agent else {
             continue;
         };
-        let top = body.top() + row.top - scroll + row.height - IDLE_STRIP - 1.0;
-        let rect = span_rect(view, body, start_h, end_h, top, IDLE_STRIP);
-        if !rect.intersects(body) {
+        let top = body.top() + row.top - scroll + row.height - TRACK_SPACE + (TRACK_SPACE - TRACK_HEIGHT) * 0.5;
+        if top > body.bottom() || top + TRACK_HEIGHT < body.top() {
             continue;
         }
-        let rect = rect.intersect(body);
-        let (color, name, note) = idle_reason_look(span.reason);
-        ui.painter_at(body).rect_filled(rect, 1.0, color);
-        // The strip is thin; the hover target is not.
-        let target = rect.expand2(egui::vec2(0.0, 3.0));
-        ui.interact(target, ui.id().with(("gantt_idle", agent, start_h.to_bits())), egui::Sense::hover())
-            .on_hover_ui(|ui| {
-                ui.set_max_width(420.0);
+        // Work first, then idle: the two never overlap in a published result,
+        // and painting square-ended spans side by side keeps a run of hours
+        // reading as one unbroken line.
+        for execution in schedule.executions.iter().filter(|execution| execution.agent == agent) {
+            let rect = span_rect(view, body, execution.start_h, execution.end_h, top, TRACK_HEIGHT);
+            if rect.intersects(body) {
+                let color = match execution.activity {
+                    Activity::Dig => WORKING_COLOR,
+                    Activity::Reclaim => RECLAIM_COLOR,
+                };
+                painter.rect_filled(rect.intersect(body), 0.0, color);
+            }
+        }
+        // A machine with no bars at all never reached the solve, so the
+        // result holds nothing for it; over the whole horizon it had no work.
+        let unassigned = [IdleSpan {
+            agent,
+            start_h: 0.0,
+            end_h: schedule.requested_end_h,
+            reason: Some(IdleReason::NoWork),
+            full: Vec::new(),
+        }];
+        let idle: &[IdleSpan] = if schedule.executions.iter().any(|execution| execution.agent == agent) || schedule.idle.iter().any(|span| span.agent == agent) {
+            &schedule.idle
+        } else {
+            &unassigned
+        };
+        for span in idle.iter().filter(|span| span.agent == agent) {
+            let rect = span_rect(view, body, span.start_h, span.end_h, top, TRACK_HEIGHT);
+            if rect.intersects(body) {
+                painter.rect_filled(rect.intersect(body), 0.0, idle_reason_look(span.reason).0);
+            }
+        }
+
+        // One hover target for the whole track, taller than the line itself,
+        // answering for the instant under the pointer.
+        let target = egui::Rect::from_min_max(egui::pos2(body.left(), top - 3.0), egui::pos2(body.right(), top + TRACK_HEIGHT + 3.0)).intersect(body);
+        if !target.is_positive() {
+            continue;
+        }
+        let response = ui.interact(target, ui.id().with(("gantt_activity", agent)), egui::Sense::hover());
+        let Some(pos) = response.hover_pos() else {
+            continue;
+        };
+        let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
+        let working: Vec<&Execution> = schedule
+            .executions
+            .iter()
+            .filter(|execution| execution.agent == agent && execution.start_h <= at_h && at_h < execution.end_h)
+            .collect();
+        let idle = idle.iter().find(|span| span.agent == agent && span.start_h <= at_h && at_h < span.end_h);
+        if working.is_empty() && idle.is_none() {
+            continue;
+        }
+        response.on_hover_ui_at_pointer(|ui| {
+            ui.set_min_width(260.0);
+            ui.set_max_width(420.0);
+            // Every span worked at that instant, which in an hour that
+            // finished one block and started the next is two.
+            for (index, execution) in working.iter().enumerate() {
+                if index > 0 {
+                    ui.separator();
+                }
+                let Some(bar) = plan.bar(execution.bar) else {
+                    continue;
+                };
+                let report = reports.iter().find(|report| report.bar == bar.id);
+                ui.label(execution_tooltip(execution, bar, report, schedule, plan, destinations));
+            }
+            if let Some(span) = idle {
+                let (_, name, note) = idle_reason_look(span.reason);
                 ui.label(bold(&tr!("idle-title", reason = name)));
                 ui.label(tr_format!(
                     literal = "%from% → %to% (%hours% h)",
-                    from = instant_label(start_h * GanttView::HOUR),
-                    to = instant_label(end_h * GanttView::HOUR),
-                    hours = format!("{:.1}", end_h - start_h)
+                    from = instant_label(span.start_h * GanttView::HOUR),
+                    to = instant_label(span.end_h * GanttView::HOUR),
+                    hours = format!("{:.1}", span.end_h - span.start_h)
                 ));
                 if !span.full.is_empty() {
                     let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
@@ -1109,7 +1201,8 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
                 if !note.is_empty() {
                     ui.label(egui::RichText::new(note).weak());
                 }
-            });
+            }
+        });
     }
 }
 
@@ -1434,8 +1527,8 @@ fn placement_top(placement: Placement, body: egui::Rect, scroll: f32, rows: &[Ro
     }
 }
 
-/// The bars themselves: drawn with their calculated work, hit-tested, dragged,
-/// resized and right-clicked.
+/// The bars themselves: drawn with where their work finished, hit-tested,
+/// dragged, resized and right-clicked.
 #[allow(
     clippy::too_many_arguments,
     reason = "one pass over the bars needs the frame's layout, the project it was read from, the run being drawn and somewhere to put the edits; splitting it would only move the list"
@@ -1445,7 +1538,6 @@ fn draw_bars(
     body: egui::Rect,
     editor: &mut EditorState,
     plan: &SchedulePlan,
-    destinations: &[DestinationView],
     layout: &Layout,
     session: u32,
     commands: &mut Vec<UiCommand>,
@@ -1538,7 +1630,7 @@ fn draw_bars(
         let slot = if active.preview_insert {
             egui::Rect::from_min_size(egui::pos2(body.left(), top - 1.5), egui::vec2(body.width(), 3.0))
         } else {
-            egui::Rect::from_min_size(egui::pos2(body.left(), top), egui::vec2(body.width(), plan.bar_height() + WORK_STRIP + 6.0))
+            egui::Rect::from_min_size(egui::pos2(body.left(), top), egui::vec2(body.width(), plan.bar_height() + 2.0 * BAR_GAP_Y))
         };
         let fill = if active.preview_insert {
             visuals.selection.stroke.color
@@ -1583,8 +1675,7 @@ fn draw_bars(
                         }
                         _ => top + lane.offset + stack_height * stack as f32,
                     };
-                    let strip = egui::Rect::from_min_max(egui::pos2(left, slot_top + 1.0), egui::pos2(right, slot_top + 1.0 + WORK_STRIP));
-                    let rect = egui::Rect::from_min_size(egui::pos2(left, strip.bottom() + 1.0), egui::vec2(right - left, plan.bar_height()));
+                    let rect = egui::Rect::from_min_size(egui::pos2(left, slot_top + BAR_GAP_Y), egui::vec2(right - left, plan.bar_height()));
 
                     let response = ui.interact(rect.intersect(body), ui.id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
                     let is_selected = selected == Some(bar.id);
@@ -1623,90 +1714,15 @@ fn draw_bars(
                     if window.end_h.is_some() {
                         painter.line_segment([rect.right_top(), rect.right_bottom()], edge);
                     }
-                    // The calculated work, inside the bar's lower half: one
-                    // segment per span worked, consecutive blocks in
-                    // alternating shades so each change of block shows, and
-                    // each block named where its run is wide enough. Drawn
-                    // only from a current run: the moment anything it was
-                    // calculated from is edited, `schedule` is `None` here and
-                    // the work is simply not there.
-                    let work = schedule.filter(|schedule| schedule.bar_executions(bar.id).next().is_some());
-                    let label_y = if work.is_some() { rect.top() + rect.height() * 0.27 } else { rect.center().y };
                     // Clipped to the bar rather than allowed to overhang it:
                     // the bar is a period now, and a label spilling past its
                     // end would read as work that runs on past the window.
                     if rect.width() > 16.0 {
                         ui.painter_at(rect.intersect(body)).galley(
-                            egui::pos2(rect.left() + 6.0, label_y - marker.galley.size().y * 0.5),
+                            egui::pos2(rect.left() + 6.0, rect.center().y - marker.galley.size().y * 0.5),
                             marker.galley.clone(),
                             visuals.strong_text_color(),
                         );
-                    }
-                    // What the pointer is over in the work lane, if anything:
-                    // every span worked at that instant, which in an hour that
-                    // finished one block and started the next is two. Read off
-                    // the bar's own response, so hovering the work never takes
-                    // a press or a drag away from the bar.
-                    let mut hovered_work: Vec<&Execution> = Vec::new();
-                    if let Some(schedule) = work {
-                        let lane = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + rect.height() * 0.52), egui::pos2(rect.right(), rect.bottom() - 3.0));
-                        let clip = rect.intersect(body);
-                        let work_painter = ui.painter_at(clip);
-                        // Runs of one source: (source, first, last) execution
-                        // indices into this bar's spans, in time order.
-                        let spans: Vec<&Execution> = schedule.bar_executions(bar.id).collect();
-                        let mut runs: Vec<(WorkSource, usize, usize)> = Vec::new();
-                        for (index, execution) in spans.iter().enumerate() {
-                            match runs.last_mut() {
-                                Some((source, _, last)) if *source == execution.source && (spans[*last].end_h - execution.start_h).abs() < 1e-6 => *last = index,
-                                _ => runs.push((execution.source, index, index)),
-                            }
-                        }
-                        for (run, &(source, first, last)) in runs.iter().enumerate() {
-                            let base = match spans[first].activity {
-                                Activity::Dig => WORKING_COLOR,
-                                Activity::Reclaim => RECLAIM_COLOR,
-                            };
-                            let color = if run % 2 == 0 { base } else { base.gamma_multiply(0.72) };
-                            for execution in &spans[first..=last] {
-                                let band = span_rect(view, body, execution.start_h, execution.end_h, lane.top(), lane.height());
-                                if !band.intersects(clip) {
-                                    continue;
-                                }
-                                let band = band.intersect(clip);
-                                work_painter.rect_filled(band, 2.0, color);
-                            }
-                            let whole = span_rect(view, body, spans[first].start_h, spans[last].end_h, lane.top(), lane.height()).intersect(clip);
-                            // The block's own name is short and only unique in
-                            // its area, so the area leads it where it fits.
-                            if whole.width() > 14.0 {
-                                let name = source_label(source, bar, report, schedule, destinations);
-                                let area = match source {
-                                    WorkSource::Block(block) => member_of(schedule, bar, report, block).and_then(|member| member.area.clone()),
-                                    WorkSource::Stockpile(_) => None,
-                                };
-                                let ink = egui::Color32::from_rgb(0x0E, 0x1A, 0x24);
-                                let font = egui::FontId::proportional(11.0);
-                                let fitted = area
-                                    .map(|area| format!("{area} · {name}"))
-                                    .into_iter()
-                                    .chain(std::iter::once(name))
-                                    .map(|text| ui.painter().layout_no_wrap(text, font.clone(), ink))
-                                    .find(|galley| galley.size().x + 8.0 <= whole.width());
-                                if let Some(galley) = fitted {
-                                    ui.painter_at(whole)
-                                        .galley(egui::pos2(whole.left() + 4.0, whole.center().y - galley.size().y * 0.5), galley, ink);
-                                }
-                            }
-                        }
-                    }
-
-                    if let (Some(schedule), Some(pos)) = (work, response.hover_pos()) {
-                        let lane_top = rect.top() + rect.height() * 0.52;
-                        if pos.y >= lane_top {
-                            let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
-                            hovered_work.extend(schedule.bar_executions(bar.id).filter(|execution| execution.start_h <= at_h && at_h < execution.end_h));
-                        }
                     }
                     if response.clicked() {
                         selected = Some(bar.id);
@@ -1841,20 +1857,9 @@ fn draw_bars(
                     });
                     // At the pointer: a bar can span the whole week, and its
                     // left edge says nothing about the hour being asked about.
-                    response.on_hover_ui_at_pointer(|ui| match schedule.filter(|_| !hovered_work.is_empty()) {
-                        Some(schedule) => {
-                            ui.set_min_width(260.0);
-                            for (index, execution) in hovered_work.iter().enumerate() {
-                                if index > 0 {
-                                    ui.separator();
-                                }
-                                ui.label(execution_tooltip(execution, bar, report, schedule, plan, destinations));
-                            }
-                        }
-                        None => {
-                            ui.set_min_width(260.0);
-                            ui.label(bar_tooltip(bar, report, window, schedule));
-                        }
+                    response.on_hover_ui_at_pointer(|ui| {
+                        ui.set_min_width(260.0);
+                        ui.label(bar_tooltip(bar, report, window, schedule));
                     });
                 }
             }

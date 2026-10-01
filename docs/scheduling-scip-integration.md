@@ -852,12 +852,23 @@ the ore, 98 % of the next blocks, has no room, because ROM A and ROM B are
 full and CR1 has used its daily budget. Only the 2 % waste could go, to the
 unlimited dump.
 
-The Gantt colours the idle strip by reason:
+The Gantt draws one activity track under each machine's row: what the
+machine did at every instant of the horizon. The bars above it stay plain,
+named windows; which block was dug, the tonnes and the reason for idle are on
+the track's hover. Working is blue (reclaim green), and idle is coloured by
+reason:
 - grey for planned idle: not available, no work assigned;
 - amber where more or different work would fill it: work finished, not worth
   moving;
 - red where a limit held the machine back: no destination rule, destinations
   full, no trucks.
+
+A machine with no bars never reaches the solve, so the result holds nothing
+for it; its track is grey, no work assigned, across the whole horizon.
+
+The status line says only how far the schedule reaches and, after Improve,
+how close it is to the best possible. The value, run number and solver
+working are in its hover.
 
 ## Solver process
 

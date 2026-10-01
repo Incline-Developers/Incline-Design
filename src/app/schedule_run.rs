@@ -757,12 +757,7 @@ impl crate::app::App<'_> {
         let attempt = self.schedule_run_diagnostics.as_ref().filter(|attempt| attempt.semantic == semantic);
         let held_status = self.schedule_calculation.as_ref().map(|calculation| {
             if current {
-                let currency = self
-                    .workspace
-                    .active_document()
-                    .map(|document| document.schedule().currency().to_owned())
-                    .unwrap_or_default();
-                result_status(calculation, &currency)
+                result_status(calculation)
             } else {
                 tr!("schedule-run-stale", run = calculation.run.to_string())
             }
@@ -892,17 +887,18 @@ fn attempt_headline(attempt: &ScheduleAttempt) -> String {
 
 /// The one line the run controls show for a held, current result: how far
 /// it reaches, what it is worth, and how hard it was looked for.
-fn result_status(calculation: &CalculatedSchedule, currency: &str) -> String {
-    let run = calculation.run.to_string();
+fn result_status(calculation: &CalculatedSchedule) -> String {
+    // Only what a planner acts on: how far the schedule reaches and whether
+    // it can still be improved. The value, the run number and the solver's
+    // working are in the details on hover.
     let day = day_of(calculation.requested_end_h).to_string();
     let report = &calculation.report;
-    let value = format!("{} {currency}", crate::ui::elements::schedule_calendar::format_money(report.objective));
     let first_only = report.day_by_day.as_ref().is_some_and(|start| start.role == DayByDayRole::Only);
     let mut status = match (report.quality, report.gap) {
-        _ if first_only => tr!("schedule-run-first", run = run, day = day, value = value),
-        (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", run = run, day = day, value = value),
-        (_, Some(gap)) => tr!("schedule-run-limited", run = run, day = day, value = value, gap = format!("{:.2}", gap * 100.0)),
-        (_, None) => tr!("schedule-run-limited-no-gap", run = run, day = day, value = value),
+        _ if first_only => tr!("schedule-run-first", day = day),
+        (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", day = day),
+        (_, Some(gap)) => tr!("schedule-run-limited", day = day, gap = format!("{:.2}", gap * 100.0)),
+        (_, None) => tr!("schedule-run-limited-no-gap", day = day),
     };
     // A restriction that can hold production back is said where the status
     // is read, not only in the details.
