@@ -25,17 +25,26 @@ use crate::{
 /// direction the round runs in reads off the colours alone.
 /// Opacity of the heatmap's colour field over the scene.
 const RELIEF_SURFACE_ALPHA: u8 = 150;
-const LEGEND_WIDTH: f32 = 240.0;
+const LEGEND_WIDTH: f32 = 260.0;
+/// Width of each limit's field under the legend bar.
+const LEGEND_FIELD_WIDTH: f32 = 74.0;
 /// Gap between a floating tile and the canvas edge, and between tiles.
 const TILE_MARGIN: f32 = 12.0;
 /// Playback rates offered by the timeline, as firing ms per real ms.
 const TIMELINE_SPEEDS: [f64; 5] = [0.02, 0.05, 0.1, 0.25, 1.0];
-const TIMELINE_STRIP_HEIGHT: f32 = 54.0;
+const TIMELINE_STRIP_HEIGHT: f32 = 44.0;
+/// The surface signal's lane above the detonations, and the gap between.
+const TIMELINE_LANE_HEIGHT: f32 = 9.0;
+const TIMELINE_LANE_GAP: f32 = 3.0;
+/// Room under the strip for its time axis.
+const TIMELINE_AXIS_HEIGHT: f32 = 15.0;
 const TIMELINE_MAX_WIDTH: f32 = 760.0;
 /// The colour a detonation is drawn in on the timeline: the firing-collar
 /// yellow the renderer uses, so strip and scene read as one.
 const TIMELINE_BAR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xCC, 0x2E);
 const TIMELINE_PEAK: egui::Color32 = egui::Color32::from_rgb(0xDE, 0x33, 0x38);
+/// A peak held under the site's limit.
+const TIMELINE_WITHIN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xBB, 0x6A);
 /// The surface signal: a lit fuse running along each connector, burnt once
 /// it has passed.
 const FUSE_LIT: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xC2, 0x4A);
@@ -336,10 +345,10 @@ fn draw_timeline_scene(ui: &egui::Ui, editor: &EditorState, analysis: &BlastAnal
     }
 }
 
-/// The key to the relief heatmap: the colour ramp as a bar with the two
-/// limits marked on it and editable beneath, and how many holes fall in each
-/// band. The limits are a judgement about this rock, and the field recolours
-/// as they are dragged.
+/// The key to the relief heatmap: the colour ramp as a bar with its scale
+/// at the ends, each limit's value set directly under its mark, and how many
+/// holes fall in each band as chips in the band's colour. The limits are a
+/// judgement about this rock, and the field recolours as they are dragged.
 fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalysis, canvas_rect: egui::Rect) {
     let limits = &mut editor.blast_review.limits;
     let [tight, good, slack] = analysis.band_counts(*limits);
@@ -351,12 +360,20 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
         .show(ui.ctx(), |ui| {
             tile_frame(ui.visuals()).show(ui, |ui| {
                 ui.set_width(LEGEND_WIDTH);
+                let weak = ui.visuals().weak_text_color();
                 ui.label(egui::RichText::new(tr!(literal = "Burden relief")).strong());
-                ui.label(egui::RichText::new(tr!(literal = "ms per metre to the last neighbour to fire")).small().weak());
-                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tr!(literal = "ms per metre to the last neighbour to fire")).small().color(weak));
+                ui.add_space(4.0);
 
                 let ramp = crate::model::blast::relief_ramp(*limits);
                 let top = ramp[ramp.len() - 1].0.max(1.0e-6);
+                let scale_font = egui::FontId::proportional(10.0);
+                // The scale's ends over the bar.
+                let (ends, _) = ui.allocate_exact_size(egui::vec2(LEGEND_WIDTH, 12.0), egui::Sense::hover());
+                ui.painter().text(ends.left_bottom(), egui::Align2::LEFT_BOTTOM, "0", scale_font.clone(), weak);
+                ui.painter().text(ends.right_bottom(), egui::Align2::RIGHT_BOTTOM, format!("{top:.0}+"), scale_font, weak);
+                ui.add_space(2.0);
+
                 let (bar, _) = ui.allocate_exact_size(egui::vec2(LEGEND_WIDTH, 12.0), egui::Sense::hover());
                 let x = |value: f64| bar.left() + (value / top).clamp(0.0, 1.0) as f32 * bar.width();
                 let mut mesh = egui::Mesh::default();
@@ -374,32 +391,46 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
                 let tick = egui::Stroke::new(1.5, ui.visuals().strong_text_color());
                 for value in [limits.low, limits.high] {
                     ui.painter()
-                        .line_segment([egui::pos2(x(value), bar.top() - 3.0), egui::pos2(x(value), bar.bottom() + 3.0)], tick);
+                        .line_segment([egui::pos2(x(value), bar.top() - 2.0), egui::pos2(x(value), bar.bottom() + 4.0)], tick);
                 }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.label(egui::RichText::new(tr!(literal = "Tight below")).small());
-                    let high = limits.high;
-                    ui.add(egui::DragValue::new(&mut limits.low).range(0.1..=high).speed(0.1).max_decimals(1));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let low = limits.low;
-                        ui.add(egui::DragValue::new(&mut limits.high).range(low..=1_000.0).speed(0.1).max_decimals(1));
-                        ui.label(egui::RichText::new(tr!(literal = "slack above")).small());
-                    });
+
+                // Each limit's field centred under its mark, kept inside the
+                // bar and clear of the other.
+                let (row, _) = ui.allocate_exact_size(egui::vec2(LEGEND_WIDTH, 22.0), egui::Sense::hover());
+                let field = egui::vec2(LEGEND_FIELD_WIDTH, 20.0);
+                let low_left = (x(limits.low) - field.x * 0.5).clamp(bar.left(), bar.right() - 2.0 * field.x - 4.0);
+                let high_left = (x(limits.high) - field.x * 0.5).clamp(low_left + field.x + 4.0, bar.right() - field.x);
+                let low_rect = egui::Rect::from_min_size(egui::pos2(low_left, row.top() + 2.0), field);
+                let high_rect = egui::Rect::from_min_size(egui::pos2(high_left, row.top() + 2.0), field);
+                let high = limits.high;
+                ui.put(low_rect, egui::DragValue::new(&mut limits.low).range(0.1..=high).speed(0.1).max_decimals(1).suffix(" ms/m"))
+                    .on_hover_text(tr!(literal = "Below this a hole fires before the rock in front of it has moved: tight."));
+                let low = limits.low;
+                ui.put(
+                    high_rect,
+                    egui::DragValue::new(&mut limits.high).range(low..=1_000.0).speed(0.1).max_decimals(1).suffix(" ms/m"),
+                )
+                .on_hover_text(tr!(literal = "Above this the rock in front has long gone: slack, with cut-off and flyrock risk."));
+                ui.add_space(6.0);
+
+                // Counts as chips in each band's colour.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let chip = |ui: &mut egui::Ui, color: egui::Color32, count: usize, label: String| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let (dot, _) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 4.5, color);
+                            ui.label(egui::RichText::new(count.to_string()).strong());
+                            ui.label(egui::RichText::new(label).small().color(weak));
+                        });
+                    };
+                    let band_color = |value: f64| color32(crate::model::blast::relief_color(value, *limits));
+                    chip(ui, band_color(limits.low * 0.5), tight, tr!(literal = "tight"));
+                    chip(ui, band_color((limits.low + limits.high) * 0.5), good, tr!(literal = "good"));
+                    chip(ui, band_color(limits.high * 1.4), slack, tr!(literal = "slack"));
+                    chip(ui, egui::Color32::WHITE, free, tr!(literal = "free face"));
                 });
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(tr_format!(
-                        literal = "%tight% tight · %good% good · %slack% slack · %free% free face",
-                        tight = tight,
-                        good = good,
-                        slack = slack,
-                        free = free
-                    ))
-                    .small()
-                    .weak(),
-                );
             });
         });
 }
@@ -606,8 +637,9 @@ fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: String) -> egui
     response.on_hover_text(tooltip)
 }
 
-/// The blast played through: transport, a strip of detonations over time
-/// that scrubs the playhead, and what is going off in the 8 ms behind it.
+/// The blast played through: transport and the site's charge limit, a strip
+/// of the surface signal over the detonations it sets off that scrubs the
+/// playhead, and what is going off in the 8 ms at it against the busiest.
 fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalysis, canvas_rect: egui::Rect) {
     let Some(end) = analysis.timeline_end_ms() else {
         egui::Area::new(egui::Id::new("blast_timeline"))
@@ -636,6 +668,7 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
         ui.ctx().request_repaint();
     }
     let width = (canvas_rect.width() - 2.0 * TILE_MARGIN).clamp(260.0, TIMELINE_MAX_WIDTH);
+    let loaded = analysis.charged_holes > 0;
 
     egui::Area::new(egui::Id::new("blast_timeline"))
         .order(egui::Order::Foreground)
@@ -658,7 +691,7 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                     if transport_button(ui, Transport::Rewind, tr!(literal = "Back to the start")).clicked() {
                         review.playhead_ms = 0.0;
                     }
-                    ui.label(egui::RichText::new(format!("{:.0} ms", review.playhead_ms.min(duration))).strong().monospace());
+                    ui.label(egui::RichText::new(format!("{:.0} ms", review.playhead_ms.min(duration))).strong());
                     ui.label(egui::RichText::new(tr_format!(literal = "of %duration% ms", duration = format!("{duration:.0}"))).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let speed_label = |speed: f64| {
@@ -676,15 +709,27 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                                     ui.selectable_value(&mut review.speed, speed, speed_label(speed));
                                 }
                             });
+                        if loaded {
+                            ui.add_space(12.0);
+                            // The site's charge-per-delay limit, held to only
+                            // while it is ticked.
+                            let mut limit = review.mic_limit_kg.unwrap_or(analysis.peak_mass.value.max(1.0).round());
+                            let mut on = review.mic_limit_kg.is_some();
+                            ui.add_enabled(on, egui::DragValue::new(&mut limit).range(1.0..=1_000_000.0).speed(5.0).max_decimals(0).suffix(" kg"));
+                            ui.checkbox(&mut on, tr!(literal = "MIC limit")).on_hover_text(tr!(
+                                literal = "The most explosive allowed to detonate in any 8 ms at this site. Windows over it are flagged."
+                            ));
+                            review.mic_limit_kg = on.then_some(limit);
+                        }
                     });
                 });
-                ui.add_space(4.0);
-                if let Some(playhead) = timeline_strip(ui, analysis, review.playhead_ms, end) {
+                ui.add_space(6.0);
+                if let Some(playhead) = timeline_strip(ui, analysis, review.playhead_ms, end, review.mic_limit_kg) {
                     review.playhead_ms = playhead;
                     review.playing = false;
                 }
-                ui.add_space(4.0);
-                if analysis.charged_holes == 0 {
+                ui.add_space(2.0);
+                if !loaded {
                     ui.label(
                         egui::RichText::new(tr!(
                             literal = "No holes are loaded: the surface signal plays, but nothing detonates. Load holes with the Charge Holes tool."
@@ -695,80 +740,156 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                 }
                 let (holes, mass) = analysis.window_at(review.playhead_ms - VIBRATION_WINDOW_MS + 1.0e-9);
                 ui.horizontal(|ui| {
-                    let mut now = tr_format!(literal = "Last 8 ms: %holes% hole(s)", holes = holes);
+                    let mut now = tr_format!(literal = "Now: %holes% hole(s)", holes = holes);
                     if analysis.total_mass_kg > 0.0 {
                         now.push_str(&format!(" · {mass:.0} kg"));
                     }
+                    now.push_str(&tr!(literal = " in 8 ms"));
                     ui.label(now);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let mut peak = tr_format!(
-                            literal = "Peak: %holes% hole(s) at %time% ms",
-                            holes = analysis.peak_holes.value,
-                            time = format!("{:.0}", analysis.peak_holes.start_ms)
-                        );
-                        if analysis.total_mass_kg > 0.0 {
-                            peak.push_str(&tr_format!(
-                                literal = " · MIC %mass% kg at %time% ms",
-                                mass = format!("{:.0}", analysis.peak_mass.value),
-                                time = format!("{:.0}", analysis.peak_mass.start_ms)
-                            ));
-                        }
-                        ui.label(egui::RichText::new(peak).color(TIMELINE_PEAK));
+                        let has_mass = analysis.total_mass_kg > 0.0;
+                        let peak = if has_mass { analysis.peak_mass } else { analysis.peak_holes };
+                        let mut text = if has_mass {
+                            tr_format!(
+                                literal = "Peak %mass% kg at %time% ms",
+                                mass = format!("{:.0}", peak.value),
+                                time = format!("{:.0}", peak.start_ms)
+                            )
+                        } else {
+                            tr_format!(literal = "Peak %holes% hole(s) at %time% ms", holes = peak.value, time = format!("{:.0}", peak.start_ms))
+                        };
+                        // Red only for a broken limit: a peak is not a fault.
+                        let color = match review.mic_limit_kg.filter(|_| has_mass) {
+                            Some(limit) if peak.value > limit => {
+                                text.push_str(&tr_format!(literal = ", %over% kg over", over = format!("{:.0}", peak.value - limit)));
+                                TIMELINE_PEAK
+                            }
+                            Some(_) => {
+                                text.push_str(&tr!(literal = ", within limit"));
+                                TIMELINE_WITHIN
+                            }
+                            None => ui.visuals().text_color(),
+                        };
+                        ui.label(egui::RichText::new(text).color(color));
                     });
                 });
             });
         });
 }
 
-/// The strip itself. Returns the playhead the user scrubbed to, if they did.
-fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, end: f64) -> Option<f64> {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), TIMELINE_STRIP_HEIGHT), egui::Sense::click_and_drag());
+/// The strip itself: the surface signal as a thin lane over the detonations,
+/// the time across beneath. Windows over the charge limit are shaded red.
+/// Returns the playhead the user scrubbed to, if they did.
+fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, end: f64, limit: Option<f64>) -> Option<f64> {
+    let height = TIMELINE_LANE_HEIGHT + TIMELINE_LANE_GAP + TIMELINE_STRIP_HEIGHT;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height + TIMELINE_AXIS_HEIGHT), egui::Sense::click_and_drag());
+    let strip = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), height));
+    let lane = egui::Rect::from_min_size(strip.min, egui::vec2(strip.width(), TIMELINE_LANE_HEIGHT));
+    let bars = egui::Rect::from_min_max(egui::pos2(strip.left(), lane.bottom() + TIMELINE_LANE_GAP), strip.max);
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
-    painter.rect_filled(rect, GROUP_CORNER_RADIUS, visuals.extreme_bg_color);
-    let x = |time: f64| rect.left() + (time / end).clamp(0.0, 1.0) as f32 * rect.width();
+    let weak = visuals.weak_text_color();
+    painter.rect_filled(lane, GROUP_CORNER_RADIUS, visuals.extreme_bg_color);
+    painter.rect_filled(bars, GROUP_CORNER_RADIUS, visuals.extreme_bg_color);
+    let x = |time: f64| strip.left() + (time / end).clamp(0.0, 1.0) as f32 * strip.width();
 
-    // Detonations binned to roughly three pixels, so a dense round reads as
-    // a histogram rather than a comb.
-    let bins = ((rect.width() / 3.0) as usize).max(1);
+    // Binned to roughly three pixels, so a dense round reads as a histogram
+    // rather than a comb.
+    let bins = ((strip.width() / 3.0) as usize).max(1);
+    let bin_of = |time: f64| ((time / end) * bins as f64).floor().clamp(0.0, (bins - 1) as f64) as usize;
+    let bin_width = strip.width() / bins as f32;
+    let bin_passed = |bin: usize| (bin as f64 + 0.5) / bins as f64 * end <= playhead;
+
+    // The surface signal: how many downlines it lights in each bin.
+    let mut lit = vec![0usize; bins];
+    for time in analysis.surface_times.iter().flatten() {
+        lit[bin_of(*time)] += 1;
+    }
+    let busiest = lit.iter().copied().max().unwrap_or(1).max(1) as f32;
+    for (bin, count) in lit.iter().enumerate().filter(|(_, count)| **count > 0) {
+        let left = strip.left() + bin as f32 * bin_width;
+        let alpha = 0.35 + 0.65 * (*count as f32 / busiest);
+        let color = if bin_passed(bin) { FUSE_LIT } else { FUSE_LIT.gamma_multiply(0.3) };
+        painter.rect_filled(
+            egui::Rect::from_x_y_ranges(left..=left + bin_width.max(1.5) - 0.5, lane.shrink(1.0).y_range()),
+            0.0,
+            color.gamma_multiply(alpha),
+        );
+    }
+
+    // Windows over the limit, shaded behind the bars they hold.
+    if let Some(limit) = limit {
+        for (index, hole) in analysis.firing_order.iter().enumerate() {
+            if analysis.window_mass.get(index).is_some_and(|mass| *mass > limit) {
+                let start = analysis.times[*hole].unwrap_or(0.0);
+                let band = egui::Rect::from_x_y_ranges(x(start)..=x(start + VIBRATION_WINDOW_MS).max(x(start) + 1.0), bars.y_range());
+                painter.rect_filled(band, 0.0, TIMELINE_PEAK.gamma_multiply(0.22));
+            }
+        }
+    }
+
+    // Detonations - of loaded holes only, as in the scene - and whether any
+    // of a bin's opens a window over the limit.
     let mut counts = vec![0usize; bins];
-    // Detonations are of loaded holes only, as in the scene.
-    for hole in analysis.firing_order.iter().filter(|hole| analysis.is_loaded(**hole)) {
-        let time = analysis.times[*hole].unwrap_or(0.0);
-        let bin = ((time / end) * bins as f64).floor().clamp(0.0, (bins - 1) as f64) as usize;
+    let mut over = vec![false; bins];
+    for (index, hole) in analysis.firing_order.iter().enumerate() {
+        if !analysis.is_loaded(*hole) {
+            continue;
+        }
+        let bin = bin_of(analysis.times[*hole].unwrap_or(0.0));
         counts[bin] += 1;
+        over[bin] |= limit.is_some_and(|limit| analysis.window_mass.get(index).is_some_and(|mass| *mass > limit));
     }
     let tallest = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
-    let bin_width = rect.width() / bins as f32;
     for (bin, count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
-        let height = (*count as f32 / tallest) * (rect.height() - 10.0);
-        let left = rect.left() + bin as f32 * bin_width;
-        let bar = egui::Rect::from_min_max(egui::pos2(left, rect.bottom() - height), egui::pos2(left + bin_width.max(1.5) - 0.5, rect.bottom()));
-        let fired = analysis.times.is_empty() || (bin as f64 + 0.5) / bins as f64 * end <= playhead;
-        painter.rect_filled(bar, 0.0, if fired { TIMELINE_BAR } else { TIMELINE_BAR.gamma_multiply(0.35) });
+        let height = (*count as f32 / tallest) * (bars.height() - 6.0);
+        let left = strip.left() + bin as f32 * bin_width;
+        let bar = egui::Rect::from_min_max(egui::pos2(left, bars.bottom() - height), egui::pos2(left + bin_width.max(1.5) - 0.5, bars.bottom()));
+        let base = if over[bin] { TIMELINE_PEAK } else { TIMELINE_BAR };
+        painter.rect_filled(bar, 0.0, if bin_passed(bin) { base } else { base.gamma_multiply(0.35) });
     }
 
-    // The busiest window by mass - or by holes, where diameters are unknown.
-    let peak = if analysis.total_mass_kg > 0.0 { analysis.peak_mass } else { analysis.peak_holes };
-    let peak_rect = egui::Rect::from_x_y_ranges(x(peak.start_ms)..=x(peak.start_ms + VIBRATION_WINDOW_MS).max(x(peak.start_ms) + 2.0), rect.y_range());
+    // The busiest window, outlined - in red only when it breaks the limit.
     if analysis.charged_holes > 0 {
-        painter.rect_stroke(peak_rect, 0.0, egui::Stroke::new(1.0, TIMELINE_PEAK), egui::StrokeKind::Inside);
+        let has_mass = analysis.total_mass_kg > 0.0;
+        let peak = if has_mass { analysis.peak_mass } else { analysis.peak_holes };
+        let broken = has_mass && limit.is_some_and(|limit| peak.value > limit);
+        let outline = egui::Rect::from_x_y_ranges(x(peak.start_ms)..=x(peak.start_ms + VIBRATION_WINDOW_MS).max(x(peak.start_ms) + 2.0), bars.y_range());
+        painter.rect_stroke(outline, 0.0, egui::Stroke::new(1.0, if broken { TIMELINE_PEAK } else { weak }), egui::StrokeKind::Inside);
     }
 
-    // The playhead, with the 8 ms behind it shaded.
-    let window = egui::Rect::from_x_y_ranges(x(playhead - VIBRATION_WINDOW_MS)..=x(playhead), rect.y_range());
+    // The playhead across both lanes, with the 8 ms behind it shaded.
+    let window = egui::Rect::from_x_y_ranges(x(playhead - VIBRATION_WINDOW_MS)..=x(playhead), bars.y_range());
     painter.rect_filled(window, 0.0, visuals.selection.bg_fill.gamma_multiply(0.35));
     painter.line_segment(
-        [egui::pos2(x(playhead), rect.top()), egui::pos2(x(playhead), rect.bottom())],
+        [egui::pos2(x(playhead), strip.top()), egui::pos2(x(playhead), strip.bottom())],
         egui::Stroke::new(2.0, visuals.strong_text_color()),
     );
-    painter.rect_stroke(rect, GROUP_CORNER_RADIUS, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+    painter.rect_stroke(lane, GROUP_CORNER_RADIUS, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+    painter.rect_stroke(bars, GROUP_CORNER_RADIUS, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
-    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    // Time beneath, every round step.
+    let step = crate::model::blast::nice_step(end / 6.0);
+    let font = egui::FontId::proportional(10.0);
+    let mut tick = 0.0;
+    while tick <= end + 1.0e-6 {
+        let tick_x = x(tick);
+        painter.line_segment([egui::pos2(tick_x, strip.bottom()), egui::pos2(tick_x, strip.bottom() + 3.0)], egui::Stroke::new(1.0, weak));
+        let align = if tick == 0.0 { egui::Align2::LEFT_TOP } else { egui::Align2::CENTER_TOP };
+        let label = if tick == 0.0 { "0 ms".to_owned() } else { format!("{tick:.0}") };
+        if tick_x < strip.right() - 14.0 || tick == 0.0 {
+            painter.text(egui::pos2(tick_x, strip.bottom() + 3.0), align, label, font.clone(), weak);
+        }
+        tick += step;
+    }
+
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal).on_hover_text(tr!(
+        literal = "Top: the surface signal lighting each downline. Below: detonations. Click or drag to move the playhead."
+    ));
     if (response.dragged() || response.clicked())
         && let Some(pointer) = response.interact_pointer_pos()
     {
-        return Some((((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64) * end);
+        return Some((((pointer.x - strip.left()) / strip.width()).clamp(0.0, 1.0) as f64) * end);
     }
     None
 }

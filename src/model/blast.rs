@@ -496,6 +496,9 @@ pub(crate) struct BlastAnalysis {
     pub(crate) total_mass_kg: f64,
     pub(crate) peak_holes: WindowPeak,
     pub(crate) peak_mass: WindowPeak,
+    /// Kilograms going off in the 8 ms each detonation opens, in the order of
+    /// [`Self::firing_order`]: what a site's charge-per-delay limit is held to.
+    pub(crate) window_mass: Vec<f64>,
 }
 
 impl BlastAnalysis {
@@ -591,7 +594,7 @@ impl BlastAnalysis {
         firing_order.sort_by(|a, b| times[*a].unwrap_or(0.0).total_cmp(&times[*b].unwrap_or(0.0)).then(a.cmp(b)));
         let duration_ms = firing_order.last().and_then(|last| times[*last]);
 
-        let (peak_holes, peak_mass) = window_peaks(&firing_order, &times, &mass_kg);
+        let (peak_holes, peak_mass, window_mass) = window_peaks(&firing_order, &times, &mass_kg);
         // Minor lines about twenty to the round; every second or fifth one
         // major, so the majors land on round numbers - 100 over 50s, 100
         // over 20s, 50 over 10s.
@@ -633,6 +636,7 @@ impl BlastAnalysis {
             duration_ms,
             peak_holes,
             peak_mass,
+            window_mass,
         }
     }
 
@@ -701,7 +705,8 @@ impl BlastAnalysis {
 /// The busiest `VIBRATION_WINDOW_MS` by hole count and by mass, found with a
 /// sliding window over the holes in firing order. Every window that matters
 /// starts on a detonation, so only those starts are tried.
-fn window_peaks(order: &[usize], times: &[Option<f64>], mass: &[f64]) -> (WindowPeak, WindowPeak) {
+fn window_peaks(order: &[usize], times: &[Option<f64>], mass: &[f64]) -> (WindowPeak, WindowPeak, Vec<f64>) {
+    let mut window_mass = Vec::with_capacity(order.len());
     let mut peak_holes = WindowPeak::default();
     let mut peak_mass = WindowPeak::default();
     let mut end = 0;
@@ -719,9 +724,10 @@ fn window_peaks(order: &[usize], times: &[Option<f64>], mass: &[f64]) -> (Window
         if running > peak_mass.value {
             peak_mass = WindowPeak { start_ms: opens, value: running };
         }
+        window_mass.push(running);
         running -= mass[order[start]];
     }
-    (peak_holes, peak_mass)
+    (peak_holes, peak_mass, window_mass)
 }
 
 /// A round 1-2-5 step near `raw`.

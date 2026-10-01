@@ -4430,6 +4430,9 @@ pub(crate) struct BlastReview {
     /// Firing milliseconds played per real millisecond. A round is over in
     /// a second or two, so playback starts well below real time.
     pub(crate) speed: f64,
+    /// The site's maximum instantaneous charge, kilograms per 8 ms, when one
+    /// is being held to: windows over it are flagged on the timeline.
+    pub(crate) mic_limit_kg: Option<f64>,
 }
 
 impl Default for BlastReview {
@@ -4442,6 +4445,7 @@ impl Default for BlastReview {
             playhead_ms: 0.0,
             playing: false,
             speed: 0.1,
+            mic_limit_kg: None,
         }
     }
 }
