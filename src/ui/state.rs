@@ -1856,6 +1856,12 @@ pub(crate) struct EditorState {
     pub(crate) blast_contours_px: Vec<ProjectedContour>,
     /// The hole under the pointer, for the hole card.
     pub(crate) blast_hover: Option<BlastHover>,
+    /// Every collar of the active dataset in window pixels, refreshed each
+    /// frame while the timeline is open; `None` for one off screen.
+    pub(crate) blast_collars_px: Vec<Option<(f32, f32)>>,
+    /// Window pixels one world unit spans at the pattern, for sizing the
+    /// timeline's marks against the collars they sit on.
+    pub(crate) blast_px_per_world: f32,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -2738,6 +2744,8 @@ impl EditorState {
             blast_analysis: None,
             blast_contours_px: Vec::new(),
             blast_hover: None,
+            blast_collars_px: Vec::new(),
+            blast_px_per_world: 0.0,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2828,21 +2836,26 @@ impl EditorState {
             .or_else(|| rules.first())
     }
 
-    /// How the collars of `dataset` are painted by an open review, if one is:
-    /// the timeline wins over the relief heatmap while it is open, since it
-    /// is the one being watched.
-    pub(crate) fn blast_collar_paint(&self, dataset: DrillHoleId) -> Option<(&crate::model::blast::BlastAnalysis, CollarPaint)> {
-        if self.active_workspace != Workspace::DrillAndBlast || self.active_drill_hole != Some(dataset) {
+    /// The relief heatmap's reading of `dataset`'s collars, while it is the
+    /// review on show. The timeline takes over the pattern while it is open -
+    /// it draws its own layer, see [`Self::timeline_playing_over`] - so the
+    /// heatmap stands down for it.
+    pub(crate) fn relief_collar_paint(&self, dataset: DrillHoleId) -> Option<(&crate::model::blast::BlastAnalysis, crate::model::blast::ReliefLimits)> {
+        if self.timeline_playing_over(dataset) || !self.blast_review.relief {
             return None;
         }
-        let analysis = self.blast_analysis.as_deref()?;
-        if self.blast_review.timeline {
-            Some((analysis, CollarPaint::Timeline(self.blast_review.playhead_ms)))
-        } else if self.blast_review.relief {
-            Some((analysis, CollarPaint::Relief(self.blast_review.limits)))
-        } else {
-            None
-        }
+        self.reviewing(dataset).then_some(())?;
+        Some((self.blast_analysis.as_deref()?, self.blast_review.limits))
+    }
+
+    /// Whether the blast timeline is open over `dataset`: its ties are muted
+    /// so the signal and the detonations the timeline draws stand out.
+    pub(crate) fn timeline_playing_over(&self, dataset: DrillHoleId) -> bool {
+        self.blast_review.timeline && self.reviewing(dataset) && self.blast_analysis.is_some()
+    }
+
+    fn reviewing(&self, dataset: DrillHoleId) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast && self.active_drill_hole == Some(dataset)
     }
 
     /// Whether loaded decks are drawn down the holes: charging is blasting
@@ -4422,14 +4435,6 @@ impl Default for BlastReview {
             speed: 0.1,
         }
     }
-}
-
-/// How an open review paints the active dataset's collars.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum CollarPaint {
-    Relief(crate::model::blast::ReliefLimits),
-    /// Fired, firing and waiting, at this playhead.
-    Timeline(f64),
 }
 
 /// One line of equal time in window pixels; `None` marks a clipped point.

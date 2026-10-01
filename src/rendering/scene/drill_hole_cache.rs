@@ -6,15 +6,12 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::{
-    model::{
-        blast::{BlastAnalysis, RELIEF_UNFIRED_COLOR, VIBRATION_WINDOW_MS},
-        drill_hole::{
-            COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
-            DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow,
-        },
+use crate::model::{
+    blast::{BlastAnalysis, ReliefLimits},
+    drill_hole::{
+        COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
+        DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow,
     },
-    ui::state::CollarPaint,
 };
 
 /// Dashes a redundant tie is broken into.
@@ -103,7 +100,7 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
-            let ties = build_tie_instances(dataset, scene_origin, &selection);
+            let ties = build_tie_instances(dataset, scene_origin, &selection, &blast);
             let tie_buffer = (!ties.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Tie-In Instances"),
@@ -273,63 +270,40 @@ impl HoleSelection {
 }
 
 /// What Drill & Blast adds to how a dataset is drawn: loaded decks down the
-/// holes, and collars painted by an open review.
+/// holes, collars painted by the relief heatmap, and ties muted under the
+/// timeline. The timeline's own marks are egui geometry over the scene, so a
+/// moving playhead never rebuilds anything here.
 struct BlastPaint<'a> {
     charges: bool,
-    collars: Option<(&'a BlastAnalysis, CollarPaint)>,
+    relief: Option<(&'a BlastAnalysis, ReliefLimits)>,
+    mute_ties: bool,
 }
 
-/// Timeline collar fills: a hole whose detonation is in the trailing 8 ms
-/// window is going off, one before it has gone, one after it is waiting.
-const TIMELINE_FIRING_COLOR: [f32; 3] = [1.0, 0.80, 0.18];
-const TIMELINE_FIRED_COLOR: [f32; 3] = [0.62, 0.16, 0.10];
+/// Ties under the timeline: grey, so the burning fuse drawn over them reads.
+const MUTED_TIE_COLOR: [f32; 3] = [0.42, 0.42, 0.45];
 
 impl<'a> BlastPaint<'a> {
     fn of(dataset: &OpenDrillHoleDataset, editor: &'a crate::ui::state::EditorState) -> Self {
         Self {
             charges: editor.shows_charges() && !dataset.dataset.charges.is_empty(),
-            collars: editor.blast_collar_paint(dataset.id),
+            relief: editor.relief_collar_paint(dataset.id),
+            mute_ties: editor.timeline_playing_over(dataset.id),
         }
     }
 
     fn hash(&self, hash: &mut DefaultHasher) {
         self.charges.hash(hash);
-        match self.collars {
-            None => 0u8.hash(hash),
-            Some((analysis, CollarPaint::Relief(limits))) => {
-                1u8.hash(hash);
-                std::ptr::from_ref(analysis).hash(hash);
-                limits.low.to_bits().hash(hash);
-                limits.high.to_bits().hash(hash);
-            }
-            Some((analysis, CollarPaint::Timeline(playhead))) => {
-                2u8.hash(hash);
-                std::ptr::from_ref(analysis).hash(hash);
-                // Only the holes whose state the playhead changes matter, so
-                // the key is the count of detonations it has passed and the
-                // count still inside the firing window - a playhead moving
-                // between detonations rebuilds nothing.
-                let passed = analysis.firing_order.partition_point(|hole| analysis.times[*hole].unwrap_or(0.0) <= playhead);
-                let settled = analysis
-                    .firing_order
-                    .partition_point(|hole| analysis.times[*hole].unwrap_or(0.0) <= playhead - VIBRATION_WINDOW_MS);
-                passed.hash(hash);
-                settled.hash(hash);
-            }
+        self.mute_ties.hash(hash);
+        if let Some((analysis, limits)) = self.relief {
+            std::ptr::from_ref(analysis).hash(hash);
+            limits.low.to_bits().hash(hash);
+            limits.high.to_bits().hash(hash);
         }
     }
 
     fn collar_fill(&self, hole: usize) -> Option<[f32; 3]> {
-        let (analysis, paint) = self.collars?;
-        Some(match paint {
-            CollarPaint::Relief(limits) => analysis.band(hole, limits).color(),
-            CollarPaint::Timeline(playhead) => match analysis.times.get(hole).copied().flatten() {
-                None => RELIEF_UNFIRED_COLOR,
-                Some(time) if time > playhead => COLLAR_MARKER_FILL_COLOR,
-                Some(time) if time > playhead - VIBRATION_WINDOW_MS => TIMELINE_FIRING_COLOR,
-                Some(_) => TIMELINE_FIRED_COLOR,
-            },
-        })
+        let (analysis, limits) = self.relief?;
+        Some(analysis.band(hole, limits).color())
     }
 }
 
@@ -453,7 +427,7 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
 /// Ties are undirected, so the round decides which way each was crossed: a
 /// chevron at its middle points the way the signal went, and one no first
 /// signal came over - a loop, a backup, two fronts meeting - is drawn broken.
-fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection, blast: &BlastPaint) -> Vec<DrillSegmentInstance> {
     let holes = &dataset.dataset.holes;
     let flows = dataset.dataset.tie_flows(&dataset.dataset.firing_times());
     let mut instances = Vec::with_capacity(dataset.dataset.ties.len() * 3);
@@ -473,6 +447,8 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
         let color = if selection.contains_tie(tie.a, tie.b) {
             let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
             [red, green, blue]
+        } else if blast.mute_ties {
+            MUTED_TIE_COLOR
         } else {
             tie.color
         };

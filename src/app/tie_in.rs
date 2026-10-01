@@ -146,8 +146,8 @@ impl App<'_> {
         // The fuller reading - detonation times, relief, contours - goes
         // with it, on the same key.
         self.editor.blast_analysis = dataset.map(|dataset| std::sync::Arc::new(crate::model::blast::BlastAnalysis::compute(&dataset.dataset)));
-        let duration = self.editor.blast_analysis.as_ref().and_then(|analysis| analysis.duration_ms).unwrap_or(0.0);
-        self.editor.blast_review.playhead_ms = self.editor.blast_review.playhead_ms.min(duration + crate::model::blast::VIBRATION_WINDOW_MS);
+        let end = self.editor.blast_analysis.as_ref().and_then(|analysis| analysis.timeline_end_ms()).unwrap_or(0.0);
+        self.editor.blast_review.playhead_ms = self.editor.blast_review.playhead_ms.min(end);
         self.editor.blast_round_key = key;
         self.editor.blast_round = summary;
     }

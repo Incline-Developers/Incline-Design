@@ -420,6 +420,16 @@ pub(crate) struct TimeContour {
     pub(crate) closed: bool,
 }
 
+/// The surface signal crossing one tie: it leaves `from` when that hole's
+/// surface signal arrives, and reaches `to` the tie's delay later.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SignalPath {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) leaves_ms: f64,
+    pub(crate) arrives_ms: f64,
+}
+
 /// The busiest 8 ms of the round by one measure.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct WindowPeak {
@@ -431,7 +441,18 @@ pub(crate) struct WindowPeak {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BlastAnalysis {
     /// When each hole detonates: surface arrival plus its downhole delay.
+    /// `None` for a hole no signal reaches, and for an empty hole in a
+    /// pattern that is being loaded - see [`Self::is_empty_hole`].
     pub(crate) times: Vec<Option<f64>>,
+    /// Holes left unloaded in a pattern that has some loaded: they pass the
+    /// signal on but never detonate.
+    pub(crate) empty: Vec<bool>,
+    /// Holes with a charge in them: the only ones the timeline shows going off.
+    pub(crate) loaded: Vec<bool>,
+    /// When the last connector finishes carrying the surface signal.
+    pub(crate) signal_end_ms: Option<f64>,
+    /// When the surface signal reaches each hole and lights its downline.
+    pub(crate) surface_times: Vec<Option<f64>>,
     /// Milliseconds per metre to the most recent neighbour that fired at or
     /// before the hole. `None` for an unfired hole or one that fires first.
     pub(crate) relief: Vec<Option<f64>>,
@@ -443,6 +464,8 @@ pub(crate) struct BlastAnalysis {
     pub(crate) volume: Vec<f64>,
     /// Reached holes in detonation order.
     pub(crate) firing_order: Vec<usize>,
+    /// Every tie that carried a first signal, in the direction it carried it.
+    pub(crate) signal_paths: Vec<SignalPath>,
     pub(crate) contours: Vec<TimeContour>,
     pub(crate) duration_ms: Option<f64>,
     pub(crate) charged_holes: usize,
@@ -456,13 +479,48 @@ impl BlastAnalysis {
     pub(crate) fn compute(dataset: &DrillHoleDataset) -> Self {
         let count = dataset.holes.len();
         let surface = dataset.firing_times();
+        // Until anything is loaded every reached hole is read as firing, so a
+        // round can be timed before it is charged. Once loading starts only
+        // loaded holes detonate: an empty hole passes the surface signal on
+        // and does nothing else - no burst, no relief, no share of the 8 ms.
+        let detonates = |index: usize| dataset.charges.is_empty() || dataset.charges.contains_key(&index);
         let times: Vec<Option<f64>> = (0..count)
             .map(|index| {
+                if !detonates(index) {
+                    return None;
+                }
                 let surface = surface.get(index).copied().flatten()?;
                 let downhole = dataset.charges.get(&index).map_or(0, HoleCharge::downhole_delay_ms);
                 Some(f64::from(surface) + f64::from(downhole))
             })
             .collect();
+        let signal_paths = dataset
+            .ties
+            .iter()
+            .zip(dataset.tie_flows(&surface))
+            .filter_map(|(tie, flow)| {
+                let (from, to) = match flow {
+                    crate::model::drill_hole::TieFlow::AToB => (tie.a, tie.b),
+                    crate::model::drill_hole::TieFlow::BToA => (tie.b, tie.a),
+                    _ => return None,
+                };
+                let leaves_ms = f64::from(surface[from]?);
+                Some(SignalPath {
+                    from,
+                    to,
+                    leaves_ms,
+                    arrives_ms: leaves_ms + f64::from(tie.delay_ms),
+                })
+            })
+            .collect();
+        let signal_paths: Vec<SignalPath> = signal_paths;
+        let signal_end_ms = signal_paths
+            .iter()
+            .map(|path| path.arrives_ms)
+            .chain(surface.iter().flatten().map(|time| f64::from(*time)))
+            .reduce(f64::max);
+        let empty = (0..count).map(|index| !detonates(index)).collect();
+        let loaded = (0..count).map(|index| dataset.charges.contains_key(&index)).collect();
         let collars: Vec<DVec3> = dataset.holes.iter().map(DrillHole::collar_position).collect();
         let mesh = CollarMesh::build(&collars);
 
@@ -522,12 +580,17 @@ impl BlastAnalysis {
             charged_holes: dataset.charges.len(),
             total_mass_kg: mass_kg.iter().sum(),
             total_volume: (0..count).filter(|index| dataset.charges.contains_key(index)).map(|index| volume[index]).sum(),
+            surface_times: surface.iter().map(|time| time.map(f64::from)).collect(),
+            empty,
+            loaded,
+            signal_end_ms,
             times,
             relief,
             relieved_by,
             mass_kg,
             volume,
             firing_order,
+            signal_paths,
             contours,
             duration_ms,
             peak_holes,
@@ -544,6 +607,26 @@ impl BlastAnalysis {
         let volume = *self.volume.get(hole)?;
         let mass = *self.mass_kg.get(hole)?;
         (volume > 1.0e-9 && mass > 0.0).then(|| mass / volume)
+    }
+
+    /// Whether `hole` is left unloaded in a pattern being loaded.
+    pub(crate) fn is_empty_hole(&self, hole: usize) -> bool {
+        self.empty.get(hole).copied().unwrap_or(false)
+    }
+
+    /// Whether `hole` holds a charge.
+    pub(crate) fn is_loaded(&self, hole: usize) -> bool {
+        self.loaded.get(hole).copied().unwrap_or(false)
+    }
+
+    /// How far the timeline runs: to the last detonation's 8 ms window, or to
+    /// the end of the surface signal if that runs on past it.
+    pub(crate) fn timeline_end_ms(&self) -> Option<f64> {
+        let detonations = self.duration_ms.map(|duration| duration + VIBRATION_WINDOW_MS);
+        match (detonations, self.signal_end_ms) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     pub(crate) fn band(&self, hole: usize, limits: ReliefLimits) -> ReliefBand {

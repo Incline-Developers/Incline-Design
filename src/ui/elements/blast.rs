@@ -38,6 +38,25 @@ const TIMELINE_MAX_WIDTH: f32 = 760.0;
 /// yellow the renderer uses, so strip and scene read as one.
 const TIMELINE_BAR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xCC, 0x2E);
 const TIMELINE_PEAK: egui::Color32 = egui::Color32::from_rgb(0xDE, 0x33, 0x38);
+/// The surface signal: a lit fuse running along each connector, burnt once
+/// it has passed.
+const FUSE_LIT: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xC2, 0x4A);
+const FUSE_SPARK: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xF6, 0xD8);
+const FUSE_BURNT: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x9C, 0x4A, 0x16, 0xB0);
+/// A hole whose downline is lit and is waiting out its downhole delay.
+const HOLE_LIT: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xA8, 0x3A);
+/// A detonation: a white-hot core in an expanding ring, then an ember.
+const BURST_CORE: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xF4, 0xB8);
+const BURST_RING: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x7A, 0x1A);
+const EMBER_FILL: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x1A, 0x10);
+const EMBER_EDGE: egui::Color32 = egui::Color32::from_rgb(0xC2, 0x40, 0x1F);
+/// How long a burst stays bright, in real milliseconds whatever the playback
+/// speed, so a detonation reads the same at every rate.
+const BURST_REAL_MS: f64 = 350.0;
+/// Smallest and largest collar mark the timeline draws, in points: a pattern
+/// seen whole still shows every hole going off.
+const MARK_MIN_POINTS: f32 = 3.5;
+const MARK_MAX_POINTS: f32 = 14.0;
 
 fn color32(color: [f32; 3]) -> egui::Color32 {
     egui::Color32::from_rgb((color[0] * 255.0) as u8, (color[1] * 255.0) as u8, (color[2] * 255.0) as u8)
@@ -63,6 +82,9 @@ pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, d
         .is_some_and(|id| drill_holes.iter().any(|dataset| dataset.id == id && dataset.state.loaded));
     if let Some(analysis) = analysis.as_deref().filter(|_| active_visible) {
         if editor.blast_review.timeline {
+            if let Some(dataset) = drill_holes.iter().find(|dataset| Some(dataset.id) == editor.active_drill_hole) {
+                draw_timeline_scene(ui, editor, analysis, dataset, canvas_rect);
+            }
             draw_timeline(ui, editor, analysis, canvas_rect);
         } else if editor.blast_review.relief {
             draw_relief_legend(ui, editor, analysis, canvas_rect);
@@ -135,6 +157,79 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
         painter.rect_filled(rect, GROUP_CORNER_RADIUS, halo);
         painter.galley(rect.center() - galley.size() * 0.5, galley, color);
         labels.push(rect);
+    }
+}
+
+/// The round drawn over the pattern at the playhead: the surface signal
+/// burning along each connector, holes whose downline it has lit, and each
+/// detonation as a burst that cools to an ember.
+///
+/// Drawn in window space at a floor size rather than left to the collars'
+/// fills, which shrink to a few pixels with the pattern in view - exactly
+/// when the round is most worth watching.
+fn draw_timeline_scene(ui: &egui::Ui, editor: &EditorState, analysis: &BlastAnalysis, dataset: &OpenDrillHoleDataset, canvas_rect: egui::Rect) {
+    let collars = &editor.blast_collars_px;
+    if collars.len() != analysis.times.len() {
+        return;
+    }
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let at = |hole: usize| collars[hole].map(|point| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point));
+    let playhead = editor.blast_review.playhead_ms;
+    let marker_world = dataset
+        .dataset
+        .holes
+        .first()
+        .map_or(0.0, |hole| hole.render_radius() * crate::model::drill_hole::COLLAR_MARKER_RADIUS_SCALE) as f32;
+    let radius = (marker_world * editor.blast_px_per_world / pixels_per_point).clamp(MARK_MIN_POINTS, MARK_MAX_POINTS);
+    let fuse_width = (radius * 0.45).clamp(1.5, 4.0);
+
+    for path in &analysis.signal_paths {
+        if playhead <= path.leaves_ms {
+            continue;
+        }
+        let (Some(from), Some(to)) = (at(path.from), at(path.to)) else {
+            continue;
+        };
+        let span = (path.arrives_ms - path.leaves_ms).max(1.0e-6);
+        let progress = ((playhead - path.leaves_ms) / span).min(1.0) as f32;
+        if progress >= 1.0 {
+            painter.line_segment([from, to], egui::Stroke::new(fuse_width * 0.7, FUSE_BURNT));
+        } else {
+            let tip = from.lerp(to, progress);
+            painter.line_segment([from, tip], egui::Stroke::new(fuse_width, FUSE_LIT));
+            painter.circle_filled(tip, fuse_width * 1.2, FUSE_SPARK);
+        }
+    }
+
+    let burst_ms = (BURST_REAL_MS * editor.blast_review.speed).max(VIBRATION_WINDOW_MS);
+    for hole in 0..collars.len() {
+        let Some(centre) = at(hole) else {
+            continue;
+        };
+        // Only a charge goes off. An empty hole has no downline to light and
+        // nothing to detonate - even in a pattern not yet loaded, where the
+        // other reviews read every hole as firing - so the fuse runs past it.
+        if !analysis.is_loaded(hole) {
+            continue;
+        }
+        let lit = analysis.surface_times[hole].is_some_and(|time| time <= playhead);
+        match analysis.times[hole] {
+            Some(time) if time <= playhead => {
+                let age = ((playhead - time) / burst_ms) as f32;
+                if age < 1.0 {
+                    let ring = BURST_RING.gamma_multiply(1.0 - age);
+                    painter.circle_stroke(centre, radius * (1.4 + 2.6 * age), egui::Stroke::new(2.0, ring));
+                    painter.circle_filled(centre, radius * (1.5 - 0.5 * age), BURST_CORE.lerp_to_gamma(BURST_RING, age));
+                } else {
+                    painter.circle(centre, radius, EMBER_FILL, egui::Stroke::new(1.0, EMBER_EDGE));
+                }
+            }
+            _ if lit => {
+                painter.circle_stroke(centre, radius * 1.15, egui::Stroke::new(1.5, HOLE_LIT));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -253,6 +348,7 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
                         let index = hover.hole.hole;
                         match analysis.times[index] {
                             Some(time) => row(tr!(literal = "Fires at"), format!("{time:.0} ms"), None),
+                            None if analysis.is_empty_hole(index) => row(tr!(literal = "Fires at"), tr!(literal = "empty, won't detonate"), None),
                             None => row(tr!(literal = "Fires at"), tr!(literal = "not reached"), Some(warn)),
                         }
                         let band = analysis.band(index, editor.blast_review.limits);
@@ -392,7 +488,7 @@ fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: String) -> egui
 /// The blast played through: transport, a strip of detonations over time
 /// that scrubs the playhead, and what is going off in the 8 ms behind it.
 fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalysis, canvas_rect: egui::Rect) {
-    let Some(duration) = analysis.duration_ms else {
+    let Some(end) = analysis.timeline_end_ms() else {
         egui::Area::new(egui::Id::new("blast_timeline"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::CENTER_BOTTOM)
@@ -405,7 +501,9 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
         editor.blast_review.playing = false;
         return;
     };
-    let end = duration + VIBRATION_WINDOW_MS;
+    // What the readout counts to: the last detonation, or - in a pattern
+    // being loaded with nothing reached loaded yet - the signal's end.
+    let duration = analysis.duration_ms.unwrap_or(end);
     let review = &mut editor.blast_review;
     if review.playing {
         let dt = f64::from(ui.ctx().input(|input| input.stable_dt).min(0.1));
@@ -465,6 +563,15 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                     review.playing = false;
                 }
                 ui.add_space(4.0);
+                if analysis.charged_holes == 0 {
+                    ui.label(
+                        egui::RichText::new(tr!(
+                            literal = "No holes are loaded: the surface signal plays, but nothing detonates. Load holes with the Charge Holes tool."
+                        ))
+                        .weak(),
+                    );
+                    return;
+                }
                 let (holes, mass) = analysis.window_at(review.playhead_ms - VIBRATION_WINDOW_MS + 1.0e-9);
                 ui.horizontal(|ui| {
                     let mut now = tr_format!(literal = "Last 8 ms: %holes% hole(s)", holes = holes);
@@ -504,7 +611,8 @@ fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, en
     // a histogram rather than a comb.
     let bins = ((rect.width() / 3.0) as usize).max(1);
     let mut counts = vec![0usize; bins];
-    for hole in &analysis.firing_order {
+    // Detonations are of loaded holes only, as in the scene.
+    for hole in analysis.firing_order.iter().filter(|hole| analysis.is_loaded(**hole)) {
         let time = analysis.times[*hole].unwrap_or(0.0);
         let bin = ((time / end) * bins as f64).floor().clamp(0.0, (bins - 1) as f64) as usize;
         counts[bin] += 1;
@@ -519,10 +627,12 @@ fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, en
         painter.rect_filled(bar, 0.0, if fired { TIMELINE_BAR } else { TIMELINE_BAR.gamma_multiply(0.35) });
     }
 
-    // The busiest window by mass - or by holes, for an unloaded pattern.
+    // The busiest window by mass - or by holes, where diameters are unknown.
     let peak = if analysis.total_mass_kg > 0.0 { analysis.peak_mass } else { analysis.peak_holes };
     let peak_rect = egui::Rect::from_x_y_ranges(x(peak.start_ms)..=x(peak.start_ms + VIBRATION_WINDOW_MS).max(x(peak.start_ms) + 2.0), rect.y_range());
-    painter.rect_stroke(peak_rect, 0.0, egui::Stroke::new(1.0, TIMELINE_PEAK), egui::StrokeKind::Inside);
+    if analysis.charged_holes > 0 {
+        painter.rect_stroke(peak_rect, 0.0, egui::Stroke::new(1.0, TIMELINE_PEAK), egui::StrokeKind::Inside);
+    }
 
     // The playhead, with the 8 ms behind it shaded.
     let window = egui::Rect::from_x_y_ranges(x(playhead - VIBRATION_WINDOW_MS)..=x(playhead), rect.y_range());
