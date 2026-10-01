@@ -228,6 +228,7 @@ impl<'a> App<'a> {
                     self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
+                    self.refresh_blast_hover();
                     self.refresh_object_edit_dialog();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
@@ -957,6 +958,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
+                ActiveTool::ChargeHoles => self.charge_holes_press(),
                 ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
@@ -1564,7 +1566,7 @@ impl<'a> App<'a> {
         }
         if tool != self.editor.active_tool
             && ((tool.requires_active_layer() && self.active_layer().is_none())
-                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint)
+                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles)
                     && !self
                         .editor
                         .active_drill_hole

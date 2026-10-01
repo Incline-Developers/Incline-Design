@@ -6,6 +6,7 @@
 use crate::model::{Axis, ObjectId};
 
 pub(crate) mod about;
+pub(crate) mod charging;
 pub(crate) mod confirmations;
 pub(crate) mod drill_hole;
 pub(crate) mod drill_pattern;

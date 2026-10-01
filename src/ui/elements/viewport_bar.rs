@@ -669,46 +669,53 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
 /// The blast reviews, the one run a single workspace adds to the view controls:
 /// Drill & Blast's own, left of the divider.
 ///
-/// Each of these reads the fired pattern back - how much burden each hole is
-/// left to move, when the ground around it lifts, the shot played through -
+/// Each of these reads the fired pattern back - how much relief each hole
+/// has, where the lines of equal firing time run, the shot played through -
 /// so all three act on the dataset the centre run names, and none of them has
 /// anything to work on until one is picked there.
-///
-/// Placeholders: the buttons, their icons and their enablement are here, but
-/// nothing is wired behind them yet.
-fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, side: f32) {
+fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, side: f32) {
     // The centre run shows "None" for a dataset that is no longer loaded, and
     // these follow it: a stale id is not something to review.
     let has_active_dataset = editor
         .active_drill_hole
         .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+    let review = &mut editor.blast_review;
 
     // A right-to-left layout adds each button to the left of the last, so the
     // run is added in reverse to read left to right on screen.
-    ui.add_enabled(
+    let timeline = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!(literal = "Blast Timeline [PLACEHOLDER]"))
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!(literal = "Blast Timeline"))
             .id_salt("blast_timeline")
-            .button_side(side),
+            .button_side(side)
+            .selected(review.timeline && has_active_dataset),
     );
+    // Independent of each other: they layer - the heatmap's field, the
+    // contour lines over it, the timeline's signal and detonations on top.
+    if timeline.clicked() {
+        review.timeline = !review.timeline;
+        review.playing = false;
+    }
 
-    ui.add_enabled(
+    let contours = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")),
-            tr!(literal = "Contours of Equal Time [PLACEHOLDER]"),
-        )
-        .id_salt("contours_of_equal_time")
-        .button_side(side),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), tr!(literal = "Contours of Equal Time"))
+            .id_salt("contours_of_equal_time")
+            .button_side(side)
+            .selected(review.contours && has_active_dataset),
     );
+    if contours.clicked() {
+        review.contours = !review.contours;
+    }
 
-    ui.add_enabled(
+    let relief = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")),
-            tr!(literal = "Burden Relief Heatmap [PLACEHOLDER]"),
-        )
-        .id_salt("burden_relief_heatmap")
-        .button_side(side),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), tr!(literal = "Burden Relief Heatmap"))
+            .id_salt("burden_relief_heatmap")
+            .button_side(side)
+            .selected(review.relief && has_active_dataset),
     );
+    if relief.clicked() {
+        review.relief = !review.relief;
+    }
 }
