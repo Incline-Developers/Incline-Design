@@ -274,7 +274,11 @@ pub(crate) fn charge_hole(rule: &ChargeRule, products: &[ChargeProduct], hole: &
     let (Some(first), Some(last)) = (hole.trace.first(), hole.trace.last()) else {
         return Err(ChargeFailure::NoDepth);
     };
-    let (top, bottom) = (first.depth, last.depth);
+    lay_rule(rule, products, first.depth, last.depth)
+}
+
+/// Lay `rule` down a column running from measured depth `top` to `bottom`.
+pub(crate) fn lay_rule(rule: &ChargeRule, products: &[ChargeProduct], top: f64, bottom: f64) -> Result<HoleCharge, ChargeFailure> {
     if bottom <= top + 1.0e-6 {
         return Err(ChargeFailure::NoDepth);
     }
@@ -477,6 +481,9 @@ pub(crate) struct BlastAnalysis {
     pub(crate) mass_kg: Vec<f64>,
     /// Rock each hole is responsible for, cubic metres.
     pub(crate) volume: Vec<f64>,
+    /// The pattern's median hole depth, which a rule is pictured on in the
+    /// products panel.
+    pub(crate) median_depth: Option<f64>,
     /// Reached holes in detonation order.
     pub(crate) firing_order: Vec<usize>,
     /// Every tie that carried a first signal, in the direction it carried it.
@@ -487,7 +494,6 @@ pub(crate) struct BlastAnalysis {
     pub(crate) duration_ms: Option<f64>,
     pub(crate) charged_holes: usize,
     pub(crate) total_mass_kg: f64,
-    pub(crate) total_volume: f64,
     pub(crate) peak_holes: WindowPeak,
     pub(crate) peak_mass: WindowPeak,
 }
@@ -598,10 +604,19 @@ impl BlastAnalysis {
             Vec::new()
         };
 
+        let mut depths: Vec<f64> = dataset
+            .holes
+            .iter()
+            .filter_map(|hole| Some(hole.trace.last()?.depth - hole.trace.first()?.depth))
+            .filter(|depth| *depth > 0.0)
+            .collect();
+        depths.sort_by(f64::total_cmp);
+        let median_depth = depths.get(depths.len() / 2).copied();
+
         Self {
+            median_depth,
             charged_holes: dataset.charges.len(),
             total_mass_kg: mass_kg.iter().sum(),
-            total_volume: (0..count).filter(|index| dataset.charges.contains_key(index)).map(|index| volume[index]).sum(),
             surface_times: surface.iter().map(|time| time.map(f64::from)).collect(),
             empty,
             loaded,
@@ -619,11 +634,6 @@ impl BlastAnalysis {
             peak_holes,
             peak_mass,
         }
-    }
-
-    /// Kilograms of explosive per cubic metre of the charged holes' rock.
-    pub(crate) fn powder_factor(&self) -> Option<f64> {
-        (self.total_volume > 1.0e-9 && self.total_mass_kg > 0.0).then(|| self.total_mass_kg / self.total_volume)
     }
 
     pub(crate) fn hole_powder_factor(&self, hole: usize) -> Option<f64> {

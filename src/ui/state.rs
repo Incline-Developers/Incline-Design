@@ -4381,6 +4381,16 @@ pub(crate) struct ChargeProductDialog {
 pub(crate) struct ChargeRuleDialog {
     pub(crate) original: Option<String>,
     pub(crate) rule: crate::model::blast::ChargeRule,
+    /// The hole the rule is previewed on, depth and diameter in metres.
+    /// Taken from the active pattern when the dialog first draws, then the
+    /// user's to change.
+    pub(crate) preview: Option<(f64, f64)>,
+}
+
+impl ChargeRuleDialog {
+    pub(crate) fn new(original: Option<String>, rule: crate::model::blast::ChargeRule) -> Self {
+        Self { original, rule, preview: None }
+    }
 }
 
 /// One entry of the charge library, by name.

@@ -4,13 +4,13 @@
 use crate::{
     i18n::{tr, tr_format},
     model::{
-        blast::{ChargeProduct, ChargeRule, DeckKind, DeckLength, RuleDeck, charge_hole},
-        drill_hole::{DrillHole, OpenDrillHoleDataset, TraceStation},
+        blast::{ChargeProduct, ChargeRule, DeckKind, DeckLength, RuleDeck, lay_rule},
+        drill_hole::OpenDrillHoleDataset,
     },
     ui::{
         EditorState,
         state::{BlastLibraryItem, UiCommand},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText},
     },
 };
 
@@ -19,8 +19,14 @@ const MAX_DOWNHOLE_DELAY_MS: u32 = 10_000;
 /// The hole a rule is previewed on when no pattern is active to take one from.
 const PREVIEW_FALLBACK_DEPTH: f64 = 12.0;
 const PREVIEW_FALLBACK_DIAMETER: f64 = 0.165;
-const DECK_LENGTH_WIDTH: f32 = 64.0;
-const DECK_BUTTON_WIDTH: f32 = 24.0;
+const RULE_DIALOG_WIDTH: f32 = 500.0;
+/// Deck table columns.
+const DECK_PRODUCT_WIDTH: f32 = 200.0;
+const DECK_LENGTH_WIDTH: f32 = 112.0;
+const DECK_ACTION_SIZE: f32 = 20.0;
+const PREVIEW_BAR_HEIGHT: f32 = 28.0;
+/// Least room between two depth labels under the preview bar.
+const PREVIEW_TICK_SPACING: f32 = 34.0;
 
 /// Add or edit one charge product.
 pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
@@ -85,52 +91,37 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     }
 }
 
-/// A hole to preview a rule on: the median-depth hole of the active pattern,
-/// so the preview is of the holes it will actually load.
-fn preview_hole(editor: &EditorState, drill_holes: &[OpenDrillHoleDataset]) -> (DrillHole, bool) {
-    let from_pattern = editor
-        .active_drill_hole
-        .and_then(|id| drill_holes.iter().find(|dataset| dataset.id == id && dataset.state.loaded))
-        .and_then(|dataset| {
-            let mut holes: Vec<&DrillHole> = dataset.dataset.holes.iter().filter(|hole| hole.trace.len() >= 2).collect();
-            holes.sort_by(|a, b| {
-                let depth = |hole: &DrillHole| hole.trace.last().map_or(0.0, |station| station.depth);
-                depth(a).total_cmp(&depth(b))
-            });
-            holes.get(holes.len() / 2).map(|hole| (*hole).clone())
-        });
-    match from_pattern {
-        Some(hole) => (hole, true),
-        None => {
-            let collar = glam::DVec3::ZERO;
-            (
-                DrillHole {
-                    dhid: String::new(),
-                    collar,
-                    diameter: Some(PREVIEW_FALLBACK_DIAMETER),
-                    trace: vec![
-                        TraceStation { depth: 0.0, position: collar },
-                        TraceStation {
-                            depth: PREVIEW_FALLBACK_DEPTH,
-                            position: collar - glam::DVec3::Z * PREVIEW_FALLBACK_DEPTH,
-                        },
-                    ],
-                    render_ranges: Vec::new(),
-                    intervals: Vec::new(),
-                },
-                false,
-            )
-        }
-    }
+/// The hole a rule is first previewed on: the median-depth hole of the
+/// active pattern, so the preview is of the holes the rule will load.
+fn pattern_preview(editor: &EditorState, drill_holes: &[OpenDrillHoleDataset]) -> Option<(f64, f64)> {
+    let id = editor.active_drill_hole?;
+    let dataset = drill_holes.iter().find(|dataset| dataset.id == id && dataset.state.loaded)?;
+    let mut holes: Vec<(f64, Option<f64>)> = dataset
+        .dataset
+        .holes
+        .iter()
+        .filter_map(|hole| Some((hole.trace.last()?.depth - hole.trace.first()?.depth, hole.diameter)))
+        .filter(|(depth, _)| *depth > 0.0)
+        .collect();
+    holes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (depth, diameter) = *holes.get(holes.len() / 2)?;
+    Some((depth, diameter.unwrap_or(PREVIEW_FALLBACK_DIAMETER)))
 }
 
-/// Add or edit one loading rule, with the column it makes previewed live on
-/// a hole from the active pattern.
+fn product_color(products: &[ChargeProduct], name: &str) -> egui::Color32 {
+    products
+        .iter()
+        .find(|product| product.name == name)
+        .map_or(egui::Color32::GRAY, |product| egui::Color32::from_rgb(product.color[0], product.color[1], product.color[2]))
+}
+
+/// Add or edit one loading rule: the decks as a table, the priming on one
+/// line, and the column it makes drawn to scale on an editable hole.
 pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     if editor.charge_rule_dialog.is_none() {
         return;
     }
-    let (sample, from_pattern) = preview_hole(editor, drill_holes);
+    let from_pattern = pattern_preview(editor, drill_holes);
     // How many holes of the active pattern were loaded by the rule being
     // edited, for the offer to reload them with the edit.
     let loaded_with_original = editor
@@ -148,6 +139,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     let Some(dialog) = editor.charge_rule_dialog.as_mut() else {
         return;
     };
+    let (depth, diameter) = *dialog.preview.get_or_insert(from_pattern.unwrap_or((PREVIEW_FALLBACK_DEPTH, PREVIEW_FALLBACK_DIAMETER)));
     let mut open = true;
     let mut close = false;
     let title = if dialog.original.is_some() {
@@ -157,71 +149,83 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     };
     DragableMenu::new("charge_rule_dialog", title)
         .open(&mut open)
-        .min_width(460.0)
-        .max_width(520.0)
-        .inner_margin(egui::Margin::symmetric(10, 8))
+        .min_width(RULE_DIALOG_WIDTH)
+        .max_width(RULE_DIALOG_WIDTH)
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui.ctx(), |ui| {
             let rule = &mut dialog.rule;
             MenuFieldText::new(tr!(literal = "Name"), &mut rule.name).hint_text(tr!(literal = "Required")).show(ui);
 
             menu::menu_section(ui, tr!(literal = "Decks, collar to toe"));
-            draw_deck_rows(ui, rule, &products);
+            // Laid on the preview hole, for the length a fill deck comes to.
+            let laid = lay_rule(rule, &products, 0.0, depth).ok();
+            draw_deck_table(ui, rule, &products, laid.as_ref());
 
             menu::menu_section(ui, tr!(literal = "Priming"));
-            MenuFieldU32::new(tr!(literal = "Downhole delay"), &mut rule.downhole_delay_ms, 0..=MAX_DOWNHOLE_DELAY_MS)
-                .suffix(" ms")
-                .help_text(tr!(literal = "The in-hole detonator. A hole fires this long after its surface signal arrives."))
-                .show(ui);
-            MenuFieldF64::new(tr!(literal = "Primer height"), &mut rule.primer_offset, 0.0..=100.0)
-                .help_text(tr!(literal = "How far above the base of each explosive deck its primer sits."))
-                .speed(0.05)
-                .suffix(" m")
-                .show(ui);
-            MenuFieldF64::new(tr!(literal = "Booster"), &mut rule.booster_kg, 0.0..=50.0)
-                .help_text(tr!(literal = "Cast booster mass in each primer."))
-                .speed(0.05)
-                .suffix(" kg")
-                .show(ui);
+            draw_priming(ui, rule);
 
             menu::menu_section(ui, tr!(literal = "Preview"));
+            let preview = dialog.preview.as_mut().expect("set above");
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(tr!(literal = "On a"));
+                ui.add(egui::DragValue::new(&mut preview.0).range(0.5..=200.0).speed(0.1).max_decimals(1).suffix(" m"));
+                ui.label(tr!(literal = "hole of"));
+                let mut millimetres = preview.1 * 1_000.0;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut millimetres)
+                            .range(20.0..=1_000.0)
+                            .speed(1.0)
+                            .max_decimals(0)
+                            .prefix("Ø ")
+                            .suffix(" mm"),
+                    )
+                    .changed()
+                {
+                    preview.1 = millimetres / 1_000.0;
+                }
+                if let Some(pattern) = from_pattern
+                    && (pattern.0 - preview.0).abs() + (pattern.1 - preview.1).abs() > 1.0e-9
+                    && ui
+                        .link(tr!(literal = "use the pattern's"))
+                        .on_hover_text(tr!(literal = "Preview on the active pattern's median hole"))
+                        .clicked()
+                {
+                    *preview = pattern;
+                }
+            });
+            ui.add_space(6.0);
             let problem = rule.problem(&products);
-            let name = rule.name.trim().to_owned();
-            let clash = rules.iter().any(|other| other.name == name && dialog.original.as_deref() != Some(name.as_str()));
-            let depth = sample.trace.last().map_or(0.0, |station| station.depth);
-            let hole_text = match sample.diameter {
-                Some(diameter) => tr_format!(
-                    literal = "%depth% m hole, Ø %diameter% mm",
-                    depth = format!("{depth:.1}"),
-                    diameter = format!("{:.0}", diameter * 1_000.0)
-                ),
-                None => tr_format!(literal = "%depth% m hole", depth = format!("{depth:.1}")),
-            };
-            let source = if from_pattern {
-                tr_format!(literal = "On the pattern's median hole: %hole%", hole = hole_text)
-            } else {
-                tr_format!(literal = "On a typical %hole%", hole = hole_text)
-            };
-            ui.label(egui::RichText::new(source).weak());
-            match (&problem, charge_hole(rule, &products, &sample)) {
+            match (&problem, &laid) {
                 (Some(problem), _) => {
                     ui.colored_label(ui.visuals().error_fg_color, problem);
                 }
-                (None, Err(_)) => {
-                    ui.colored_label(ui.visuals().warn_fg_color, tr!(literal = "The fixed decks do not fit this hole"));
+                (None, None) => {
+                    ui.colored_label(ui.visuals().warn_fg_color, tr!(literal = "The fixed decks are longer than this hole"));
                 }
-                (None, Ok(charge)) => {
-                    let top = sample.trace.first().map_or(0.0, |station| station.depth);
-                    crate::ui::elements::blast::draw_column_with_legend(ui, &charge.decks, &charge.primers, top, depth, 110.0);
-                    let mass = charge.mass_kg(sample.diameter);
-                    if mass > 0.0 {
-                        ui.label(tr_format!(literal = "%mass% kg of explosive", mass = format!("{mass:.1}")));
+                (None, Some(charge)) => {
+                    draw_preview_bar(ui, charge, depth);
+                    ui.add_space(4.0);
+                    let explosive: f64 = charge.decks.iter().filter(|deck| deck.kind == DeckKind::Explosive).map(|deck| deck.length()).sum();
+                    let mass = charge.mass_kg(Some(diameter));
+                    let mut stats = vec![tr_format!(literal = "%mass% kg explosive", mass = format!("{mass:.1}"))];
+                    if explosive > 0.0 {
+                        stats.push(tr_format!(
+                            literal = "%rate% kg/m",
+                            rate = format!("{:.1}", (mass - charge.primers.iter().map(|primer| primer.booster_kg).sum::<f64>()) / explosive)
+                        ));
                     }
+                    stats.push(tr_format!(literal = "%count% primer(s)", count = charge.primers.len()));
+                    ui.label(egui::RichText::new(stats.join("  ·  ")).weak());
                 }
             }
+
+            let name = rule.name.trim().to_owned();
+            let clash = rules.iter().any(|other| other.name == name && dialog.original.as_deref() != Some(name.as_str()));
             if clash {
                 ui.colored_label(ui.visuals().error_fg_color, tr!(literal = "Another rule already has this name"));
             }
-
             let can_save = problem.is_none() && !clash;
             menu::menu_actions(ui, |ui| {
                 let mut save = |reload: bool| {
@@ -257,81 +261,107 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
 }
 
-/// One row per deck: product, fixed length or fill, and reorder and remove
-/// buttons; then a button to add one.
-fn draw_deck_rows(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeProduct]) {
+/// A small frameless button for a table row's actions.
+fn row_action(ui: &mut egui::Ui, glyph: &str, enabled: bool, tooltip: String) -> bool {
+    ui.add_enabled(enabled, egui::Button::new(glyph).frame(false).min_size(egui::vec2(DECK_ACTION_SIZE, DECK_ACTION_SIZE)))
+        .on_hover_text(tooltip)
+        .clicked()
+}
+
+/// The decks as a table: product with its colour, length - or what the fill
+/// deck comes to - and a Fill toggle that moves the fill to its row, then
+/// reorder and remove.
+fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeProduct], laid: Option<&crate::model::blast::HoleCharge>) {
     let mut swap = None;
     let mut remove = None;
+    let mut make_fill = None;
+    let mut make_fixed = None;
     let count = rule.decks.len();
-    let has_fill = rule.decks.iter().any(|deck| deck.length == DeckLength::Fill);
-    for (index, deck) in rule.decks.iter_mut().enumerate() {
-        MenuField::new(tr_format!(literal = "Deck %number%", number = index + 1)).show(ui, |ui, row_height, column_width| {
-            ui.allocate_ui_with_layout(egui::vec2(column_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let buttons = 3.0 * (DECK_BUTTON_WIDTH + 4.0);
-                let combo_width = (column_width - DECK_LENGTH_WIDTH * 2.0 - buttons - 12.0).max(90.0);
+    let weak = ui.visuals().weak_text_color();
+    egui::Grid::new("rule_deck_table").num_columns(5).spacing([8.0, 4.0]).show(ui, |ui| {
+        for heading in [String::new(), tr!(literal = "Product"), tr!(literal = "Length"), String::new(), String::new()] {
+            ui.label(egui::RichText::new(heading).small().color(weak));
+        }
+        ui.end_row();
+        for (index, deck) in rule.decks.iter_mut().enumerate() {
+            ui.label(egui::RichText::new((index + 1).to_string()).color(weak));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(swatch, 2.0, product_color(products, &deck.product));
                 egui::ComboBox::from_id_salt(("rule_deck_product", index))
                     .selected_text(&deck.product)
-                    .width(combo_width)
+                    .width(DECK_PRODUCT_WIDTH - 16.0)
                     .truncate()
                     .show_ui(ui, |ui| {
                         for product in products {
                             ui.selectable_value(&mut deck.product, product.name.clone(), &product.name);
                         }
                     });
-                let mut fill = deck.length == DeckLength::Fill;
-                let fill_label = if fill { tr!(literal = "Fill") } else { tr!(literal = "Fixed") };
-                ui.add_enabled_ui(fill || !has_fill, |ui| {
-                    egui::ComboBox::from_id_salt(("rule_deck_mode", index))
-                        .selected_text(fill_label)
-                        .width(DECK_LENGTH_WIDTH)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut fill, false, tr!(literal = "Fixed"));
-                            ui.selectable_value(&mut fill, true, tr!(literal = "Fill"));
-                        })
-                        .response
-                        .on_hover_text(tr!(literal = "A fill deck takes whatever length the fixed decks leave. One per rule."));
-                });
-                match (fill, deck.length) {
-                    (true, DeckLength::Fixed(_)) => deck.length = DeckLength::Fill,
-                    (false, DeckLength::Fill) => deck.length = DeckLength::Fixed(1.0),
-                    _ => {}
-                }
-                match &mut deck.length {
+            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(DECK_LENGTH_WIDTH, DECK_ACTION_SIZE),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| match &mut deck.length {
                     DeckLength::Fixed(length) => {
                         ui.add_sized(
-                            [DECK_LENGTH_WIDTH, row_height],
+                            [DECK_LENGTH_WIDTH, DECK_ACTION_SIZE],
                             egui::DragValue::new(length).range(0.05..=1_000.0).speed(0.05).max_decimals(2).suffix(" m"),
                         );
                     }
                     DeckLength::Fill => {
-                        ui.add_sized([DECK_LENGTH_WIDTH, row_height], egui::Label::new(egui::RichText::new(tr!(literal = "rest")).weak()));
+                        let rest = laid.and_then(|charge| charge.decks.get(index)).map(|deck| deck.length());
+                        let text = match rest {
+                            Some(rest) => tr_format!(literal = "rest · %length% m", length = format!("{rest:.2}")),
+                            None => tr!(literal = "rest"),
+                        };
+                        ui.label(egui::RichText::new(text).italics().color(weak));
                     }
+                },
+            );
+            let fill = deck.length == DeckLength::Fill;
+            if ui
+                .selectable_label(fill, tr!(literal = "Fill"))
+                .on_hover_text(tr!(literal = "This deck takes whatever length the fixed decks leave. One deck per rule fills."))
+                .clicked()
+            {
+                if fill {
+                    make_fixed = Some(index);
+                } else {
+                    make_fill = Some(index);
                 }
-                if ui
-                    .add_enabled(index > 0, egui::Button::new("↑").min_size(egui::vec2(DECK_BUTTON_WIDTH, 0.0)))
-                    .on_hover_text(tr!(literal = "Move up"))
-                    .clicked()
-                {
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                if row_action(ui, "↑", index > 0, tr!(literal = "Move up")) {
                     swap = Some((index - 1, index));
                 }
-                if ui
-                    .add_enabled(index + 1 < count, egui::Button::new("↓").min_size(egui::vec2(DECK_BUTTON_WIDTH, 0.0)))
-                    .on_hover_text(tr!(literal = "Move down"))
-                    .clicked()
-                {
+                if row_action(ui, "↓", index + 1 < count, tr!(literal = "Move down")) {
                     swap = Some((index, index + 1));
                 }
-                if ui
-                    .add(egui::Button::new("×").min_size(egui::vec2(DECK_BUTTON_WIDTH, 0.0)))
-                    .on_hover_text(tr!(literal = "Remove deck"))
-                    .clicked()
-                {
+                if row_action(ui, "×", true, tr!(literal = "Remove deck")) {
                     remove = Some(index);
                 }
-            })
-            .response
-        });
+            });
+            ui.end_row();
+        }
+    });
+    // A deck leaving the fill keeps the length it was filling, so moving the
+    // fill to another row does not throw away the shape of the column.
+    let laid_length = |index: usize| {
+        laid.and_then(|charge| charge.decks.get(index))
+            .map_or(1.0, |deck| (deck.length() * 10.0).round().max(1.0) / 10.0)
+    };
+    if let Some(index) = make_fill {
+        for (other, deck) in rule.decks.iter_mut().enumerate() {
+            if deck.length == DeckLength::Fill {
+                deck.length = DeckLength::Fixed(laid_length(other));
+            }
+        }
+        rule.decks[index].length = DeckLength::Fill;
+    }
+    if let Some(index) = make_fixed {
+        rule.decks[index].length = DeckLength::Fixed(laid_length(index));
     }
     if let Some((a, b)) = swap {
         rule.decks.swap(a, b);
@@ -339,13 +369,119 @@ fn draw_deck_rows(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargePr
     if let Some(index) = remove {
         rule.decks.remove(index);
     }
-    ui.add_space(2.0);
+    ui.add_space(4.0);
     if ui.add(MenuButton::new(tr!(literal = "Add Deck"))).clicked() {
         let product = products.iter().find(|product| product.kind == DeckKind::Stemming).or(products.first());
         rule.decks.push(RuleDeck {
             product: product.map_or_else(String::new, |product| product.name.clone()),
             length: DeckLength::Fixed(1.0),
         });
+    }
+}
+
+/// The three priming settings side by side, each named above its value.
+fn draw_priming(ui: &mut egui::Ui, rule: &mut ChargeRule) {
+    let weak = ui.visuals().weak_text_color();
+    egui::Grid::new("rule_priming").num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
+        let heading = |ui: &mut egui::Ui, text: String, help: String| {
+            ui.label(egui::RichText::new(text).small().color(weak)).on_hover_text(help);
+        };
+        heading(
+            ui,
+            tr!(literal = "Downhole delay"),
+            tr!(literal = "The in-hole detonator. A hole fires this long after its surface signal arrives."),
+        );
+        heading(
+            ui,
+            tr!(literal = "Primer height"),
+            tr!(literal = "How far above the base of each explosive deck its primer sits."),
+        );
+        heading(ui, tr!(literal = "Booster"), tr!(literal = "Cast booster mass in each primer."));
+        ui.end_row();
+        let width = (RULE_DIALOG_WIDTH - 32.0) / 3.0;
+        ui.add_sized(
+            [width, DECK_ACTION_SIZE],
+            egui::DragValue::new(&mut rule.downhole_delay_ms).range(0..=MAX_DOWNHOLE_DELAY_MS).suffix(" ms"),
+        );
+        ui.add_sized(
+            [width, DECK_ACTION_SIZE],
+            egui::DragValue::new(&mut rule.primer_offset).range(0.0..=100.0).speed(0.05).max_decimals(2).suffix(" m"),
+        );
+        ui.add_sized(
+            [width, DECK_ACTION_SIZE],
+            egui::DragValue::new(&mut rule.booster_kg).range(0.0..=50.0).speed(0.05).max_decimals(2).suffix(" kg"),
+        );
+        ui.end_row();
+    });
+}
+
+/// The loaded column on its side across the dialog, collar at the left: each
+/// deck as a band to scale with its product named inside where it fits,
+/// primers marked where they sit, and the depth of every boundary beneath.
+fn draw_preview_bar(ui: &mut egui::Ui, charge: &crate::model::blast::HoleCharge, depth: f64) {
+    let weak = ui.visuals().weak_text_color();
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, PREVIEW_BAR_HEIGHT + 16.0), egui::Sense::hover());
+    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(width, PREVIEW_BAR_HEIGHT));
+    let painter = ui.painter();
+    let x = |at: f64| bar.left() + (at / depth).clamp(0.0, 1.0) as f32 * bar.width();
+    painter.rect_filled(bar, 3.0, ui.visuals().extreme_bg_color);
+    let font = egui::FontId::proportional(11.0);
+    for deck in &charge.decks {
+        let band = egui::Rect::from_x_y_ranges(x(deck.from)..=x(deck.to), bar.y_range());
+        let [red, green, blue] = deck.color.map(|channel| (channel * 255.0) as u8);
+        let fill = egui::Color32::from_rgb(red, green, blue);
+        painter.rect_filled(band, 0.0, fill);
+        // Dark text on a light band, light on a dark one.
+        let luminance = 0.299 * f32::from(red) + 0.587 * f32::from(green) + 0.114 * f32::from(blue);
+        let ink = if luminance > 140.0 {
+            egui::Color32::from_black_alpha(220)
+        } else {
+            egui::Color32::WHITE
+        };
+        let galley = painter.layout_no_wrap(deck.product.clone(), font.clone(), ink);
+        if galley.size().x + 8.0 <= band.width() {
+            painter.galley(band.center() - galley.size() * 0.5, galley, ink);
+        }
+    }
+    for primer in &charge.primers {
+        let centre = egui::pos2(x(primer.depth), bar.center().y);
+        let size = 5.0;
+        let diamond = vec![
+            centre + egui::vec2(0.0, -size),
+            centre + egui::vec2(size, 0.0),
+            centre + egui::vec2(0.0, size),
+            centre + egui::vec2(-size, 0.0),
+        ];
+        painter.add(egui::Shape::convex_polygon(
+            diamond,
+            egui::Color32::from_rgb(0xFF, 0xD2, 0x3D),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(0x6A, 0x46, 0x00)),
+        ));
+    }
+    painter.rect_stroke(bar, 3.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+
+    // Depths under every boundary, collar to toe, skipping any that would
+    // crowd the one before.
+    let mut boundaries: Vec<f64> = std::iter::once(0.0).chain(charge.decks.iter().map(|deck| deck.to)).collect();
+    boundaries.dedup_by(|a, b| (*a - *b).abs() < 1.0e-6);
+    let mut last_label: Option<f32> = None;
+    for (index, at) in boundaries.iter().enumerate() {
+        let tick_x = x(*at);
+        painter.line_segment([egui::pos2(tick_x, bar.bottom()), egui::pos2(tick_x, bar.bottom() + 3.0)], egui::Stroke::new(1.0, weak));
+        let is_last = index + 1 == boundaries.len();
+        if last_label.is_some_and(|previous| tick_x - previous < PREVIEW_TICK_SPACING) && !is_last {
+            continue;
+        }
+        let align = if index == 0 {
+            egui::Align2::LEFT_TOP
+        } else if is_last {
+            egui::Align2::RIGHT_TOP
+        } else {
+            egui::Align2::CENTER_TOP
+        };
+        painter.text(egui::pos2(tick_x, bar.bottom() + 3.0), align, format!("{at:.1}"), egui::FontId::proportional(10.0), weak);
+        last_label = Some(tick_x);
     }
 }
 

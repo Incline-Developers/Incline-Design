@@ -660,8 +660,10 @@ fn draw_ui(
     // Draw first so later overlays paint above it.
     widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
-    draw_initiation_cards(root_ui, editor, canvas_rect);
+    // The reviews' fields and lines first, so the initiation cards - the
+    // points the whole round is read from - stay on top of them.
     elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
+    draw_initiation_cards(root_ui, editor, canvas_rect);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select

@@ -15,8 +15,7 @@
 //!
 //! The charge library sits below the delays in the same form: loading rules,
 //! one of which the Charge Holes tool stands on the way the Tie Holes tool
-//! stands on a delay, and the products those rules stack into a column. The
-//! shot summary at the foot reads the active pattern back.
+//! stands on a delay, and the products those rules stack into a column.
 
 use crate::{
     i18n::{tr, tr_format},
@@ -46,9 +45,13 @@ const HEADER_DELAY_PALETTE: egui::Color32 = egui::Color32::from_rgb(0xE2, 0x3B, 
 /// Heading tint for the charge sections: the explosive pink of their icon.
 const HEADER_CHARGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x4F, 0x8C);
 
-/// How far the shot summary's figures sit in from the panel edge: level with
-/// the row labels above them.
-const SUMMARY_INDENT: f32 = 12.0;
+/// The column bar at the right of a rule's row.
+const RULE_BAR_WIDTH: f32 = 58.0;
+const RULE_BAR_HEIGHT: f32 = 8.0;
+/// Clear space between the bar and the panel's right edge.
+const RULE_BAR_INSET: f32 = 10.0;
+/// The hole a rule is pictured on when no pattern is active.
+const RULE_BAR_FALLBACK_DEPTH: f64 = 12.0;
 
 /// Space between a product's delay and the name after it.
 const LABEL_GAP: f32 = 6.0;
@@ -108,15 +111,13 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                         .show(ui, |ui| draw_charge_rules(ui, editor, commands));
                     context_menu_popup(&toggle.union(header.inner), tr!(literal = "Charge Rules"), |ui| {
                         if ContextMenuAction::new(tr!(literal = "New Rule")).show(ui).clicked() {
-                            editor.charge_rule_dialog = Some(ChargeRuleDialog {
-                                original: None,
-                                rule: new_rule(&editor.blast_library),
-                            });
+                            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, new_rule(&editor.blast_library)));
                             ui.close();
                         }
                     });
 
                     let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_products_collapse"), tr!(literal = "Charge Products"))
+                        .icon(unthemed_icon!("charge_products.svg"))
                         .color(HEADER_CHARGE)
                         .default_open(false)
                         .show(ui, |ui| draw_charge_products(ui, editor));
@@ -135,9 +136,6 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                         }
                     });
 
-                    ExplorerHeader::new(egui::Id::new("shot_summary_collapse"), tr!(literal = "Shot"))
-                        .color(HEADER_DELAY_PALETTE)
-                        .show(ui, |ui| draw_shot_summary(ui, editor));
                     paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                 });
         })
@@ -276,19 +274,30 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     let selected_holes = editor
         .active_drill_hole
         .map_or(0, |id| editor.selected_drill_holes.iter().filter(|hole| hole.dataset == id).count());
+    // Rules are pictured on a hole of the active pattern's median depth, so
+    // the bar shows the proportions the rule will actually load.
+    let depth = editor
+        .blast_analysis
+        .as_deref()
+        .and_then(|analysis| analysis.median_depth)
+        .unwrap_or(RULE_BAR_FALLBACK_DEPTH);
     let mut choose = None;
     for rule in &editor.blast_library.rules {
         let chosen = active.as_deref() == Some(rule.name.as_str());
         let problem = rule.problem(&editor.blast_library.products);
-        let mut entry = ExplorerEntry::new(
-            egui::Id::new(("charge_rule", rule.name.as_str())),
-            rule_label(ui, rule, &editor.blast_library, problem.is_some()),
-        )
-        .selected(chosen);
+        let mut entry = ExplorerEntry::new(egui::Id::new(("charge_rule", rule.name.as_str())), rule_label(ui, rule, problem.is_some()))
+            .selected(chosen)
+            .trailing(RULE_BAR_WIDTH + RULE_BAR_INSET);
         if chosen {
             entry = entry.leading_icon(unthemed_icon!("product_active.svg"), HEADER_CHARGE);
         }
-        let mut response = entry.show(ui).response;
+        let shown = entry.show(ui);
+        if let Some(slot) = shown.trailing
+            && problem.is_none()
+        {
+            paint_rule_bar(ui, slot, rule, &editor.blast_library, depth);
+        }
+        let mut response = shown.response;
         if let Some(problem) = &problem {
             response = response.on_hover_text(problem);
         } else {
@@ -298,10 +307,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
             choose = Some(rule.name.clone());
         }
         if response.double_clicked() {
-            editor.charge_rule_dialog = Some(ChargeRuleDialog {
-                original: Some(rule.name.clone()),
-                rule: rule.clone(),
-            });
+            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(Some(rule.name.clone()), rule.clone()));
         }
         context_menu_popup(&response, rule.name.clone(), |ui| {
             let can_load = selected_holes > 0 && problem.is_none();
@@ -322,16 +328,13 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 ui.close();
             }
             if ContextMenuAction::new(tr!(literal = "Edit Rule")).show(ui).clicked() {
-                editor.charge_rule_dialog = Some(ChargeRuleDialog {
-                    original: Some(rule.name.clone()),
-                    rule: rule.clone(),
-                });
+                editor.charge_rule_dialog = Some(ChargeRuleDialog::new(Some(rule.name.clone()), rule.clone()));
                 ui.close();
             }
             if ContextMenuAction::new(tr!(literal = "Duplicate Rule")).show(ui).clicked() {
                 let mut copy = rule.clone();
                 copy.name = tr_format!(literal = "%name% copy", name = &rule.name);
-                editor.charge_rule_dialog = Some(ChargeRuleDialog { original: None, rule: copy });
+                editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, copy));
                 ui.close();
             }
             if ContextMenuAction::new(tr!(literal = "Delete Rule")).show(ui).clicked() {
@@ -345,52 +348,41 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
-/// A rule as a row: its name, then the column it makes in the panel's
-/// secondary weight - a band of each deck's colour, so rules read apart at a
-/// glance - or a warning when it cannot load anything.
-fn rule_label(ui: &egui::Ui, rule: &ChargeRule, library: &BlastLibrary, broken: bool) -> egui::WidgetText {
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
-    job.append(
-        &rule.name,
-        0.0,
-        egui::TextFormat {
-            font_id: font.clone(),
-            color: ui.visuals().text_color(),
-            ..Default::default()
-        },
-    );
+/// A rule as a row: its name, with a warning mark when it cannot load
+/// anything. The column it makes is painted beside it - see
+/// [`paint_rule_bar`].
+fn rule_label(ui: &egui::Ui, rule: &ChargeRule, broken: bool) -> egui::WidgetText {
+    let mut text = egui::RichText::new(&rule.name).color(ui.visuals().text_color());
     if broken {
-        job.append(
-            "⚠",
-            LABEL_GAP,
-            egui::TextFormat {
-                font_id: font,
-                color: ui.visuals().warn_fg_color,
-                ..Default::default()
-            },
-        );
-        return job.into();
+        text = egui::RichText::new(format!("{}  ⚠", rule.name)).color(ui.visuals().warn_fg_color);
     }
-    for (index, deck) in rule.decks.iter().enumerate() {
-        let color = library
-            .products
-            .iter()
-            .find(|product| product.name == deck.product)
-            .map_or(ui.visuals().weak_text_color(), |product| {
-                egui::Color32::from_rgb(product.color[0], product.color[1], product.color[2])
-            });
-        job.append(
-            "▮",
-            if index == 0 { LABEL_GAP } else { 0.0 },
-            egui::TextFormat {
-                font_id: font.clone(),
-                color,
-                ..Default::default()
-            },
+    text.into()
+}
+
+/// The column a rule loads, lying on its side at the right of its row:
+/// collar at the left, each deck as long as it would be down a hole of
+/// `depth` metres, so "a long column under a short stem" reads at a glance
+/// and two rules that differ only in their lengths read apart.
+fn paint_rule_bar(ui: &egui::Ui, slot: egui::Rect, rule: &ChargeRule, library: &BlastLibrary, depth: f64) {
+    let Ok(charge) = crate::model::blast::lay_rule(rule, &library.products, 0.0, depth) else {
+        return;
+    };
+    let bar = egui::Rect::from_min_size(
+        egui::pos2(slot.left(), slot.center().y - RULE_BAR_HEIGHT * 0.5),
+        egui::vec2(RULE_BAR_WIDTH, RULE_BAR_HEIGHT),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(bar, 2.0, ui.visuals().extreme_bg_color);
+    let x = |at: f64| bar.left() + (at / depth).clamp(0.0, 1.0) as f32 * bar.width();
+    for deck in &charge.decks {
+        let [red, green, blue] = deck.color.map(|channel| (channel * 255.0) as u8);
+        painter.rect_filled(
+            egui::Rect::from_x_y_ranges(x(deck.from)..=x(deck.to), bar.y_range()),
+            0.0,
+            egui::Color32::from_rgb(red, green, blue),
         );
     }
-    job.into()
+    painter.rect_stroke(bar, 2.0, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(90)), egui::StrokeKind::Inside);
 }
 
 /// A rule spelled out deck by deck, for its row's hover text.
@@ -432,19 +424,19 @@ fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
                 ..Default::default()
             },
         );
-        let detail = match product.kind {
-            crate::model::blast::DeckKind::Explosive => format!("{:.2} g/cm³", product.density),
-            kind => kind.label(),
-        };
-        job.append(
-            &detail,
-            LABEL_GAP,
-            egui::TextFormat {
-                font_id: font,
-                color: ui.visuals().weak_text_color(),
-                ..Default::default()
-            },
-        );
+        // Only an explosive has anything to add: the inert products'
+        // names already say what they are.
+        if product.kind == crate::model::blast::DeckKind::Explosive {
+            job.append(
+                &format!("{:.2} g/cm³", product.density),
+                LABEL_GAP,
+                egui::TextFormat {
+                    font_id: font,
+                    color: ui.visuals().weak_text_color(),
+                    ..Default::default()
+                },
+            );
+        }
         let response = ExplorerEntry::new(egui::Id::new(("charge_product", product.name.as_str())), job)
             .leading_icon(unthemed_icon!("charge_swatch.svg"), color)
             .show(ui)
@@ -469,88 +461,4 @@ fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
             }
         });
     }
-}
-
-/// What the active pattern adds up to: how it is tied, what it is loaded
-/// with, and how hard it hits in its busiest 8 ms.
-fn draw_shot_summary(ui: &mut egui::Ui, editor: &EditorState) {
-    let Some(analysis) = editor.blast_analysis.as_deref() else {
-        explorer_note(ui, tr!(literal = "Pick a pattern in the viewport bar"));
-        return;
-    };
-    let round = &editor.blast_round;
-    let holes = analysis.times.len();
-    let number = |value: f64, decimals: usize| {
-        use thousands::Separable;
-        format!("{value:.decimals$}").separate_with_commas()
-    };
-    let mut rows: Vec<(String, String, Option<egui::Color32>)> = vec![
-        (
-            tr!(literal = "Holes"),
-            tr_format!(literal = "%holes% · %loaded% loaded", holes = holes, loaded = analysis.charged_holes),
-            None,
-        ),
-        (tr!(literal = "Connectors"), round.connectors.to_string(), None),
-    ];
-    if round.initiations.is_empty() {
-        rows.push((tr!(literal = "Initiation"), tr!(literal = "None set"), Some(ui.visuals().warn_fg_color)));
-    }
-    if round.unreached > 0 {
-        rows.push((
-            tr!(literal = "Unreached"),
-            tr_format!(literal = "%count% hole(s)", count = round.unreached),
-            Some(ui.visuals().warn_fg_color),
-        ));
-    }
-    if let Some(duration) = analysis.duration_ms {
-        rows.push((tr!(literal = "Duration"), format!("{} ms", number(duration, 0)), None));
-        rows.push((
-            tr!(literal = "Peak holes / 8 ms"),
-            tr_format!(
-                literal = "%count% at %time% ms",
-                count = analysis.peak_holes.value,
-                time = number(analysis.peak_holes.start_ms, 0)
-            ),
-            None,
-        ));
-    }
-    if analysis.total_mass_kg > 0.0 {
-        rows.push((tr!(literal = "Explosive"), format!("{} kg", number(analysis.total_mass_kg, 0)), None));
-        if analysis.duration_ms.is_some() {
-            rows.push((
-                tr!(literal = "MIC (8 ms)"),
-                tr_format!(
-                    literal = "%mass% kg at %time% ms",
-                    mass = number(analysis.peak_mass.value, 0),
-                    time = number(analysis.peak_mass.start_ms, 0)
-                ),
-                None,
-            ));
-        }
-        if let Some(powder_factor) = analysis.powder_factor() {
-            rows.push((tr!(literal = "Powder factor"), format!("{powder_factor:.2} kg/m³"), None));
-        }
-    }
-    if analysis.duration_ms.is_some() {
-        let [tight, good, slack] = analysis.band_counts(editor.blast_review.limits);
-        rows.push((
-            tr!(literal = "Relief"),
-            tr_format!(literal = "%tight% tight · %good% good · %slack% slack", tight = tight, good = good, slack = slack),
-            (tight > 0).then_some(egui::Color32::from_rgb(0xDE, 0x33, 0x38)),
-        ));
-    }
-    let weak = ui.visuals().weak_text_color();
-    let strong = ui.visuals().text_color();
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(SUMMARY_INDENT);
-        egui::Grid::new("shot_summary_grid").num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
-            for (label, value, color) in rows {
-                ui.label(egui::RichText::new(label).color(weak));
-                ui.label(egui::RichText::new(value).color(color.unwrap_or(strong)));
-                ui.end_row();
-            }
-        });
-    });
-    ui.add_space(6.0);
 }
