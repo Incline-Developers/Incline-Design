@@ -44,9 +44,9 @@ impl DeckKind {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Explosive => tr!(literal = "Explosive"),
-            Self::Stemming => tr!(literal = "Stemming"),
-            Self::Air => tr!(literal = "Air deck"),
+            Self::Explosive => tr!("blast-explosive"),
+            Self::Stemming => tr!("blast-rule-stemming"),
+            Self::Air => tr!("blast-rule-air-deck"),
         }
     }
 }
@@ -109,27 +109,27 @@ impl ChargeRule {
     /// Why the rule cannot load anything, or `None` when it is sound.
     pub(crate) fn problem(&self, products: &[ChargeProduct]) -> Option<String> {
         if self.name.trim().is_empty() {
-            return Some(tr!(literal = "Give the rule a name"));
+            return Some(tr!("blast-rule-give-rule-name"));
         }
         if self.decks.is_empty() {
-            return Some(tr!(literal = "Add at least one deck"));
+            return Some(tr!("blast-rule-add-least-one-deck"));
         }
         if self.decks.iter().filter(|deck| deck.length == DeckLength::Fill).count() > 1 {
-            return Some(tr!(literal = "Only one deck can fill the rest of the hole"));
+            return Some(tr!("blast-rule-only-one-deck-can-fill-rest"));
         }
         if self
             .decks
             .iter()
             .any(|deck| matches!(deck.length, DeckLength::Fixed(length) if !(length.is_finite() && length > 0.0)))
         {
-            return Some(tr!(literal = "Deck lengths must be greater than zero"));
+            return Some(tr!("blast-rule-deck-lengths-must-greater-than-zero"));
         }
         if let Some(deck) = self.decks.iter().find(|deck| !products.iter().any(|product| product.name == deck.product)) {
-            return Some(crate::i18n::tr_format!(literal = "No product named '%name%'", name = &deck.product));
+            return Some(crate::i18n::tr!("blast-rule-no-product-named-name", name = deck.product.to_string()));
         }
         let explosive = |deck: &RuleDeck| products.iter().any(|product| product.name == deck.product && product.kind == DeckKind::Explosive);
         if !self.decks.iter().any(explosive) {
-            return Some(tr!(literal = "A rule needs at least one explosive deck"));
+            return Some(tr!("blast-rule-rule-needs-least-one-explosive-deck"));
         }
         None
     }

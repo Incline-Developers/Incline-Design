@@ -80,8 +80,29 @@ pub(crate) fn context_menu_popup<R>(
     title: impl Into<egui::WidgetText>,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<egui::InnerResponse<R>> {
-    let title = title.into();
+    popup_with_close(response, title.into(), egui::PopupCloseBehavior::CloseOnClick, add_contents)
+}
+
+/// [`context_menu_popup`] for a menu holding fields rather than only rows:
+/// a click on a value or a colour inside it leaves it open, and only a click
+/// outside closes it. Rows still close it through `ui.close()`.
+pub(crate) fn context_menu_popup_with_fields<R>(
+    response: &egui::Response,
+    title: impl Into<egui::WidgetText>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
+    popup_with_close(response, title.into(), egui::PopupCloseBehavior::CloseOnClickOutside, add_contents)
+}
+
+/// The right-click popup both of the above open, closing on `close`.
+fn popup_with_close<R>(
+    response: &egui::Response,
+    title: egui::WidgetText,
+    close: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
     egui::Popup::context_menu(response)
+        .close_behavior(close)
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
         .width(MENU_WIDTH)
         .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))

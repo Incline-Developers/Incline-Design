@@ -533,6 +533,10 @@ impl CameraController {
     }
 
     pub(crate) fn update_camera(&mut self, camera: &mut Camera, projection: &mut Projection, dt: Duration, screen_size: Size) {
+        if !self.has_pending_updates() {
+            Self::reconcile_zoom(camera, projection);
+            return;
+        }
         let dt = dt.as_secs_f64();
 
         // Calculate direction unit vectors (Z-up: horizontal plane is XY)
@@ -553,12 +557,8 @@ impl CameraController {
         // Position-based transformations
         let to_target_distance_modifier = (camera.target - camera.position).dot(scrollward).abs();
 
-        camera.position += movement_forward * forward_movement;
-        camera.position += movement_right * right_movement;
-        camera.position.z += vertical_movement;
-
-        // Update target
-        camera.target = camera.position + scrollward * to_target_distance_modifier;
+        let translation = movement_forward * forward_movement + movement_right * right_movement + DVec3::new(0.0, 0.0, vertical_movement);
+        camera.translate(translation);
 
         // Scroll / zoom-like motion
         let mouse_loc_rel = point(self.mouse_loc.0, self.mouse_loc.1, screen_size);
@@ -617,7 +617,10 @@ impl CameraController {
             self.orbit_anchor = None;
             self.orbit_releasing = false;
         }
+        Self::reconcile_zoom(camera, projection);
+    }
 
+    fn reconcile_zoom(camera: &Camera, projection: &mut Projection) {
         // Scale orthographic bounds by camera-to-target distance for zoom effect
         let dist = (camera.target - camera.position).dot(camera.forward()).abs();
         projection.zoom = dist.max(MIN_ORTHO_ZOOM);
@@ -796,6 +799,16 @@ impl FlyCameraController {
     }
 
     pub(crate) fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
+        // No input, no change: `Graphics::update` calls this every frame fly
+        // mode is enabled, pending or not. The capture flag still gets its
+        // idle frame, or it survives to swallow the next real input.
+        if !self.has_pending_updates() && !self.skip_movement_frame {
+            return;
+        }
+
+        // Runs on every input frame, not just a look frame, so movement and
+        // ease-out stay consistent with yaw/pitch; the early return above is
+        // what keeps a truly idle frame bit-stable.
         let target_distance = camera.position.distance(camera.target);
         let horizontal_sign = if self.invert_horizontal_look { 1.0 } else { -1.0 };
         let vertical_sign = if self.invert_vertical_look { 1.0 } else { -1.0 };

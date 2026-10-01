@@ -22,14 +22,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_working_sections},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
@@ -74,6 +74,9 @@ const META_ID: &str = "incline:id";
 /// Depth ranges each hole is drawn over, where not the whole trace, keyed by
 /// the hole's position in its dataset.
 const META_RENDER_RANGES: &str = "incline:render_ranges";
+/// Where each hole's orientation came from, keyed like the render ranges and
+/// written only for holes whose source is known.
+const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
@@ -93,7 +96,7 @@ pub(crate) struct ProjectSnapshot {
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
     pub(crate) point_clouds: Vec<OpenPointCloud>,
     pub(crate) rasters: Vec<OpenRasterTexture>,
-    /// Every explorer folder in the project, for all six sections. The single
+    /// Every explorer folder in the project, for every section. The single
     /// source of truth for export: `designs`'s own `ProjectFile::folders` is
     /// not consulted, so there is exactly one registry to keep in sync.
     pub(crate) folders: FolderRegistry,
@@ -198,6 +201,7 @@ pub(crate) struct ImportedDrillHoles {
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: crate::model::drill_hole::DrillColorState,
+    pub(crate) geophysics: Option<Arc<crate::model::geophysics::GeophysicsLink>>,
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
@@ -229,7 +233,7 @@ pub(crate) struct ImportBundle {
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
     pub(crate) rasters: Vec<ImportedRaster>,
-    /// Every explorer folder decoded so far, for all six sections. Populated
+    /// Every explorer folder decoded so far, for every section. Populated
     /// from the OMF project record before any element is walked, so
     /// per-element membership below always resolves against it, and grown by
     /// `ensure` for a name the project record did not list.
@@ -417,10 +421,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
     }
 
     make_element_names_unique(&mut elements);
-    let fallback_name = tr!(literal = "Incline Design project");
+    let fallback_name = tr!("common-incline-design-project");
     let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { fallback_name.as_str() } else { &snapshot.name });
     project.application = format!("Incline {}", env!("CARGO_PKG_VERSION"));
-    project.description = tr!(literal = "Mining data exported by Incline");
+    project.description = tr!("omf-mining-data-exported-incline");
     if let Some(design) = snapshot.designs.as_ref()
         && !design.metadata.coordinate_reference_system.trim().is_empty()
     {
@@ -470,6 +474,33 @@ fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: Sect
 
 fn kind(element: &omf_crate::Element) -> Option<&str> {
     element.metadata.get(META_KIND).and_then(Value::as_str)
+}
+
+/// A drillhole dataset written before the shared collars, traces and
+/// intervals: its parts cannot be read, so it is skipped rather than failing
+/// the open.
+fn old_drill_layout(element: &omf_crate::Element) -> bool {
+    let omf_crate::Geometry::Composite(composite) = &element.geometry else {
+        return false;
+    };
+    kind(element) == Some("drillhole_dataset")
+        && !["drillhole_collars", "drillhole_traces", "drillhole_intervals"]
+            .iter()
+            .all(|part| composite.elements.iter().any(|child| kind(child) == Some(part)))
+}
+
+/// The names of the old-layout drillhole datasets among `elements`, nested
+/// ones included.
+fn old_drill_datasets(elements: &[omf_crate::Element]) -> Vec<String> {
+    let mut names = Vec::new();
+    for element in elements {
+        if old_drill_layout(element) {
+            names.push(element_name(element).to_owned());
+        } else if let omf_crate::Geometry::Composite(composite) = &element.geometry {
+            names.extend(old_drill_datasets(&composite.elements));
+        }
+    }
+    names
 }
 
 fn element_name(element: &omf_crate::Element) -> &str {
@@ -1225,7 +1256,12 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         open.state.source_format.as_deref(),
         "drill-holes",
     );
-    put(&mut element, META_STYLE, json!({ "loaded": open.state.loaded, "color": open.color }));
+    let mut style = json!({ "loaded": open.state.loaded, "color": open.color });
+    // The link and its index only: the readings stay in the linked files.
+    if let Some(link) = open.geophysics.as_deref() {
+        style["geophysics"] = serde_json::to_value(link)?;
+    }
+    put(&mut element, META_STYLE, style);
     let ties = open.dataset.stored_ties();
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
@@ -1242,6 +1278,15 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         .collect::<serde_json::Map<_, _>>();
     if !render_ranges.is_empty() {
         put(&mut element, META_RENDER_RANGES, Value::Object(render_ranges));
+    }
+    let orientation_sources = holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| hole.orientation_source != OrientationSource::Unknown)
+        .map(|(index, hole)| Ok((index.to_string(), serde_json::to_value(hole.orientation_source)?)))
+        .collect::<Result<serde_json::Map<_, _>>>()?;
+    if !orientation_sources.is_empty() {
+        put(&mut element, META_ORIENTATION_SOURCES, Value::Object(orientation_sources));
     }
     Ok(Some(element))
 }
@@ -1727,16 +1772,13 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     };
     let written_by_incline = project.application.starts_with("Incline ");
     if !project.description.trim().is_empty() && !written_by_incline {
-        bundle.warnings.push(tr!(literal = "Project description is not retained"));
+        bundle.warnings.push(tr!("omf-project-description-not-retained"));
     }
     if !project.author.trim().is_empty() {
-        bundle.warnings.push(tr!(literal = "Project author is not retained"));
+        bundle.warnings.push(tr!("omf-project-author-not-retained"));
     }
     if !project.application.trim().is_empty() && !project.application.starts_with("Incline ") {
-        bundle.warnings.push(tr_format!(
-            literal = "Project application metadata '%application%' is not retained",
-            application = &project.application
-        ));
+        bundle.warnings.push(tr!("omf-application-metadata-dropped", application = project.application.to_string()));
     }
     // Parsed before any element is walked, so a name on an element's own
     // META_FOLDER below always has something to resolve against.
@@ -1750,15 +1792,21 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     }
     let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
-        bundle.warnings.push(tr_format!(
-            literal = "Project has unsupported metadata keys: %keys%",
-            keys = unsupported_project_metadata.join(", ")
-        ));
-    }
-    if !problems.is_empty() {
         bundle
             .warnings
-            .push(tr_format!(literal = "OMF validation warnings: %warnings%", warnings = format!("{problems:?}")));
+            .push(tr!("omf-unsupported-metadata-keys", keys = unsupported_project_metadata.join(", ").to_string()));
+    }
+    if !problems.is_empty() {
+        bundle.warnings.push(tr!("omf-validation-warnings", warnings = format!("{problems:?}")));
+    }
+    // Drillhole datasets in the older per-hole layout are left out, not read,
+    // so the rest of the project still opens.
+    let old_drill = old_drill_datasets(&project.elements);
+    if !old_drill.is_empty() {
+        bundle.warnings.push(tr!(
+            "omf-skipped-drillhole-data-saved-older",
+            names = (old_drill.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ")).to_string()
+        ));
     }
     let mut decoder = Decoder {
         reader: &reader,
@@ -1844,6 +1892,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn walk(&mut self, element: &omf_crate::Element) -> Result<()> {
+        if old_drill_layout(element) {
+            return Ok(());
+        }
         self.record_unsupported_content(element);
         if self.backing.is_some() && !style_loaded(element.metadata.get(META_STYLE)) && self.defer_element(element)? {
             return Ok(());
@@ -1907,21 +1958,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             return natural;
         };
         let section = SectionKind::from_key(key).unwrap_or_else(|| {
-            self.bundle.warnings.push(tr_format!(
-                literal = "Element '%name%' names an unknown section '%section%'",
-                name = &element.name,
-                section = key
-            ));
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-names-unknown-section", name = element.name.to_string(), section = key.to_string()));
             natural
         });
         if section.admits(kind) {
             return section;
         }
-        self.bundle.warnings.push(tr_format!(
-            literal = "Element '%name%' names section '%section%' which cannot show this kind of item in this build",
-            name = &element.name,
-            section = key
-        ));
+        self.bundle
+            .warnings
+            .push(tr!("omf-element-unsupported-section", name = element.name.to_string(), section = key.to_string()));
         section.healed_for(kind)
     }
 
@@ -1931,6 +1978,22 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let locator = DeferredAsset::new(self.backing.clone()?, self.element_path.clone());
         self.indexed.push((locator.element_path.clone(), locator.indexed.clone()));
         Some(locator)
+    }
+
+    /// Warn once when a drill-hole dataset's saved `incline:style` JSON named
+    /// working sections the lenient reader had to pass over, so a malformed
+    /// entry stays visible without resetting the colours saved beside it.
+    /// Shared by the deferred and resident drill-hole read paths: `walk`
+    /// sends a given element through exactly one of them per decode, so
+    /// calling this from both never doubles the warning for one load.
+    fn warn_skipped_working_sections(&mut self, name: &str, style: Option<&Value>) {
+        let Some(color) = style.and_then(|style| style.get("color")) else { return };
+        let count = skipped_working_sections(color);
+        if count > 0 {
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-has-count-unreadable", name = name.to_string(), count = count.to_string()));
+        }
     }
 
     /// Construct only explorer metadata. In particular, do not read any
@@ -1969,7 +2032,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba: Arc::new(Vec::new()),
                     world_to_uv: style_value(style, "world_to_uv").unwrap_or([0.0; 6]),
                     projection: style_value(style, "projection").unwrap_or_else(|| self.project_crs.clone()),
-                    driver_name: tr!(literal = "OMF texture"),
+                    driver_name: tr!("omf-texture"),
                 },
             });
             return Ok(true);
@@ -1989,6 +2052,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             };
             let section = self.element_section(element, MemberKind::DrillHole);
             let folder = self.element_folder(element, section);
+            self.warn_skipped_working_sections(&name, style);
             self.bundle.drill_holes.push(ImportedDrillHoles {
                 preferred_id,
                 source_name,
@@ -2006,7 +2070,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name,
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
-                color: style_value(style, "color").unwrap_or_default(),
+                color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+                geophysics: style_geophysics(style),
                 folder,
                 section,
             });
@@ -2165,6 +2230,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_STYLE,
             META_ID,
             META_RENDER_RANGES,
+            META_ORIENTATION_SOURCES,
             META_TIE_INS,
             META_CHARGES,
         ];
@@ -2937,9 +3003,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     }
                     Err(error) => crate::userspace_warn!(
                         "{}",
-                        crate::i18n::tr_format!(
-                            literal = "Ignoring the colour map on OMF attribute '%attribute%': %error%",
-                            attribute = &attribute.name,
+                        crate::i18n::tr!(
+                            "omf-ignoring-colour-map-omf-attribute",
+                            attribute = attribute.name.to_string(),
                             error = format!("{error:#}")
                         )
                     ),
@@ -3009,6 +3075,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 trace: Vec::new(),
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
+                orientation_source: OrientationSource::Unknown,
             })
             .collect::<Vec<_>>();
 
@@ -3044,6 +3111,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 from: from.unwrap_or(f64::NAN),
                 to: to.unwrap_or(f64::NAN),
                 values: BTreeMap::new(),
+                logged: None,
             })
             .collect::<Vec<_>>();
         for attribute in intervals
@@ -3084,6 +3152,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
+        if let Some(sources) = element.metadata.get(META_ORIENTATION_SOURCES).and_then(Value::as_object) {
+            for (index, source) in sources {
+                if let (Some(hole), Ok(source)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), OrientationSource::deserialize(source)) {
+                    hole.orientation_source = source;
+                }
+            }
+        }
         if holes.is_empty() {
             return Ok(None);
         }
@@ -3095,11 +3170,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         {
             let dropped = dataset.apply_stored_ties(stored);
             if dropped > 0 {
-                self.bundle.warnings.push(tr_format!(
-                    literal = "Element '%name%' has %count% tie-in(s) naming holes it no longer contains",
-                    name = &element.name,
-                    count = dropped
-                ));
+                self.bundle
+                    .warnings
+                    .push(tr!("omf-element-name-has-count-tie", name = element.name.to_string(), count = dropped.to_string()));
             }
         }
         if let Some(value) = element.metadata.get(META_CHARGES)
@@ -3107,10 +3180,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         {
             let dropped = dataset.apply_stored_charges(stored);
             if dropped > 0 {
-                self.bundle.warnings.push(tr_format!(
-                    literal = "Element '%name%' has %count% charge(s) naming holes it no longer contains",
-                    name = &element.name,
-                    count = dropped
+                self.bundle.warnings.push(tr!(
+                    "omf-element-name-has-count-charge-naming",
+                    name = element.name.to_string(),
+                    count = dropped.to_string()
                 ));
             }
         }
@@ -3118,6 +3191,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let path = virtual_path(self.source_name, element_name(element), "omf");
         let section = self.element_section(element, MemberKind::DrillHole);
         let folder = self.element_folder(element, section);
+        let style = element.metadata.get(META_STYLE);
+        self.warn_skipped_working_sections(element_name(element), style);
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -3131,8 +3206,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 dataset,
             },
             deferred: None,
-            is_loaded: style_loaded(element.metadata.get(META_STYLE)),
-            color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
+            is_loaded: style_loaded(style),
+            color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+            geophysics: style_geophysics(style),
             folder,
             section,
         }))
@@ -3273,7 +3349,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba,
                     world_to_uv,
                     projection,
-                    driver_name: tr!(literal = "OMF texture"),
+                    driver_name: tr!("omf-texture"),
                 },
                 folder,
                 section,
@@ -3542,12 +3618,20 @@ fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str)
     T::deserialize(style?.get(key)?).ok()
 }
 
+/// A drill-hole dataset's geophysics link; a project saved before links has
+/// none.
+fn style_geophysics(style: Option<&Value>) -> Option<Arc<crate::model::geophysics::GeophysicsLink>> {
+    let mut link = style_value::<crate::model::geophysics::GeophysicsLink>(style, "geophysics")?;
+    link.sort();
+    Some(Arc::new(link))
+}
+
 fn file_stem(path: &str) -> String {
     Path::new(path)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| tr!(literal = "OMF import"))
+        .unwrap_or_else(|| tr!("omf-import"))
 }
 
 fn safe_component(name: &str) -> String {

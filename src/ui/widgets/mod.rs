@@ -3,7 +3,9 @@
 pub(crate) mod collapsible_section;
 pub(crate) mod color;
 pub(crate) mod context_menu;
+pub(crate) mod data_table;
 pub(crate) mod explorer;
+pub(crate) mod log_traces;
 pub(crate) mod menu;
 pub(crate) mod progress;
 pub(crate) mod toolbar;

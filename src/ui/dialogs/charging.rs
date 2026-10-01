@@ -2,7 +2,7 @@
 //! either.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         blast::{ChargeProduct, ChargeRule, DeckKind, DeckLength, RuleDeck, lay_rule},
         drill_hole::OpenDrillHoleDataset,
@@ -36,43 +36,45 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     let mut open = true;
     let mut close = false;
     let title = if dialog.original.is_some() {
-        tr!(literal = "Edit Charge Product")
+        tr!("charging-edit-charge-product")
     } else {
-        tr!(literal = "New Charge Product")
+        tr!("charging-new-charge-product")
     };
     let library = &editor.blast_library;
     DragableMenu::new("charge_product_dialog", title).open(&mut open).min_width(320.0).show(ui.ctx(), |ui| {
         let product = &mut dialog.product;
-        MenuFieldText::new(tr!(literal = "Name"), &mut product.name).hint_text(tr!(literal = "Required")).show(ui);
+        MenuFieldText::new(tr!("survey-system-name"), &mut product.name)
+            .hint_text(tr!("dialog-rename-field-hint"))
+            .show(ui);
         let kind_label = product.kind.label();
         MenuFieldCombo::new(
             "charge_product_kind",
-            tr!(literal = "Kind"),
+            tr!("survey-kind"),
             &mut product.kind,
             kind_label,
             DeckKind::ALL.map(|kind| (kind, kind.label().into())),
         )
-        .help_text(tr!(literal = "Explosive decks add mass and are primed; stemming and air decks take length only."))
+        .help_text(tr!("charging-explosive-decks-add-mass-primed-stemming"))
         .show(ui);
         if product.kind == DeckKind::Explosive {
-            MenuFieldF64::new(tr!(literal = "Density"), &mut product.density, 0.05..=3.0)
-                .help_text(tr!(literal = "In-hole density. Mass per metre is this times the hole's cross-section."))
+            MenuFieldF64::new(tr!("charging-density"), &mut product.density, 0.05..=3.0)
+                .help_text(tr!("charging-density-hint"))
                 .speed(0.01)
                 .suffix(" g/cm³")
                 .show(ui);
         }
         let mut color = egui::Color32::from_rgb(product.color[0], product.color[1], product.color[2]);
-        menu::MenuFieldColor32::new(tr!(literal = "Colour"), &mut color).show(ui);
+        menu::MenuFieldColor32::new(tr!("common-colour"), &mut color).show(ui);
         product.color = [color.r(), color.g(), color.b()];
 
         let name = product.name.trim();
         let clash = library.products.iter().any(|other| other.name == name && dialog.original.as_deref() != Some(name));
         if clash {
-            ui.colored_label(ui.visuals().error_fg_color, tr!(literal = "Another product already has this name"));
+            ui.colored_label(ui.visuals().error_fg_color, tr!("charging-another-product-already-has-name"));
         }
         let can_save = !name.is_empty() && !clash;
         menu::menu_actions(ui, |ui| {
-            if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!(literal = "Save")).primary().enabled(can_save)).clicked()) && can_save {
+            if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                 let mut product = product.clone();
                 product.name = name.to_owned();
                 commands.push(UiCommand::SaveChargeProduct {
@@ -81,7 +83,7 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 });
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -143,9 +145,9 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     let mut open = true;
     let mut close = false;
     let title = if dialog.original.is_some() {
-        tr!(literal = "Edit Charge Rule")
+        tr!("charging-edit-charge-rule")
     } else {
-        tr!(literal = "New Charge Rule")
+        tr!("charging-new-charge-rule")
     };
     DragableMenu::new("charge_rule_dialog", title)
         .open(&mut open)
@@ -154,23 +156,25 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui.ctx(), |ui| {
             let rule = &mut dialog.rule;
-            MenuFieldText::new(tr!(literal = "Name"), &mut rule.name).hint_text(tr!(literal = "Required")).show(ui);
+            MenuFieldText::new(tr!("survey-system-name"), &mut rule.name)
+                .hint_text(tr!("dialog-rename-field-hint"))
+                .show(ui);
 
-            menu::menu_section(ui, tr!(literal = "Decks, collar to toe"));
+            menu::menu_section(ui, tr!("charging-decks-collar-toe"));
             // Laid on the preview hole, for the length a fill deck comes to.
             let laid = lay_rule(rule, &products, 0.0, depth).ok();
             draw_deck_table(ui, rule, &products, laid.as_ref());
 
-            menu::menu_section(ui, tr!(literal = "Priming"));
+            menu::menu_section(ui, tr!("charging-priming"));
             draw_priming(ui, rule);
 
-            menu::menu_section(ui, tr!(literal = "Preview"));
+            menu::menu_section(ui, tr!("charging-preview"));
             let preview = dialog.preview.as_mut().expect("set above");
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(tr!(literal = "On a"));
+                ui.label(tr!("charging-preview-on-a"));
                 ui.add(egui::DragValue::new(&mut preview.0).range(0.5..=200.0).speed(0.1).max_decimals(1).suffix(" m"));
-                ui.label(tr!(literal = "hole of"));
+                ui.label(tr!("charging-preview-hole-of"));
                 let mut millimetres = preview.1 * 1_000.0;
                 if ui
                     .add(
@@ -188,8 +192,8 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 if let Some(pattern) = from_pattern
                     && (pattern.0 - preview.0).abs() + (pattern.1 - preview.1).abs() > 1.0e-9
                     && ui
-                        .link(tr!(literal = "use the pattern's"))
-                        .on_hover_text(tr!(literal = "Preview on the active pattern's median hole"))
+                        .link(tr!("charging-preview-use-pattern"))
+                        .on_hover_text(tr!("charging-preview-active-pattern-median-hole"))
                         .clicked()
                 {
                     *preview = pattern;
@@ -202,21 +206,21 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                     ui.colored_label(ui.visuals().error_fg_color, problem);
                 }
                 (None, None) => {
-                    ui.colored_label(ui.visuals().warn_fg_color, tr!(literal = "The fixed decks are longer than this hole"));
+                    ui.colored_label(ui.visuals().warn_fg_color, tr!("charging-fixed-decks-longer-than-hole"));
                 }
                 (None, Some(charge)) => {
                     draw_preview_bar(ui, charge, depth);
                     ui.add_space(4.0);
                     let explosive: f64 = charge.decks.iter().filter(|deck| deck.kind == DeckKind::Explosive).map(|deck| deck.length()).sum();
                     let mass = charge.mass_kg(Some(diameter));
-                    let mut stats = vec![tr_format!(literal = "%mass% kg explosive", mass = format!("{mass:.1}"))];
+                    let mut stats = vec![tr!("charging-mass-kg-explosive", mass = format!("{mass:.1}"))];
                     if explosive > 0.0 {
-                        stats.push(tr_format!(
-                            literal = "%rate% kg/m",
+                        stats.push(tr!(
+                            "charging-rate-kg-m",
                             rate = format!("{:.1}", (mass - charge.primers.iter().map(|primer| primer.booster_kg).sum::<f64>()) / explosive)
                         ));
                     }
-                    stats.push(tr_format!(literal = "%count% primer(s)", count = charge.primers.len()));
+                    stats.push(tr!("charging-count-primer", count = charge.primers.len().to_string()));
                     ui.label(egui::RichText::new(stats.join("  ·  ")).weak());
                 }
             }
@@ -224,7 +228,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             let name = rule.name.trim().to_owned();
             let clash = rules.iter().any(|other| other.name == name && dialog.original.as_deref() != Some(name.as_str()));
             if clash {
-                ui.colored_label(ui.visuals().error_fg_color, tr!(literal = "Another rule already has this name"));
+                ui.colored_label(ui.visuals().error_fg_color, tr!("charging-another-rule-already-has-name"));
             }
             let can_save = problem.is_none() && !clash;
             menu::menu_actions(ui, |ui| {
@@ -237,7 +241,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         reload,
                     });
                 };
-                if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!(literal = "Save")).primary().enabled(can_save)).clicked()) && can_save {
+                if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                     save(false);
                     close = true;
                 }
@@ -245,13 +249,13 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 // leaves loaded holes alone - unless asked to bring them up to it.
                 if loaded_with_original > 0
                     && ui
-                        .add(MenuButton::new(tr_format!(literal = "Save and Reload %count% Hole(s)", count = loaded_with_original)).enabled(can_save))
+                        .add(MenuButton::new(tr!("charging-save-reload-count-hole", count = loaded_with_original.to_string())).enabled(can_save))
                         .clicked()
                 {
                     save(true);
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -279,7 +283,7 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
     let count = rule.decks.len();
     let weak = ui.visuals().weak_text_color();
     egui::Grid::new("rule_deck_table").num_columns(5).spacing([8.0, 4.0]).show(ui, |ui| {
-        for heading in [String::new(), tr!(literal = "Product"), tr!(literal = "Length"), String::new(), String::new()] {
+        for heading in [String::new(), tr!("confirmations-product"), tr!("charging-length"), String::new(), String::new()] {
             ui.label(egui::RichText::new(heading).small().color(weak));
         }
         ui.end_row();
@@ -312,8 +316,8 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
                     DeckLength::Fill => {
                         let rest = laid.and_then(|charge| charge.decks.get(index)).map(|deck| deck.length());
                         let text = match rest {
-                            Some(rest) => tr_format!(literal = "rest · %length% m", length = format!("{rest:.2}")),
-                            None => tr!(literal = "rest"),
+                            Some(rest) => tr!("charging-rest-length-m", length = format!("{rest:.2}")),
+                            None => tr!("charging-rest"),
                         };
                         ui.label(egui::RichText::new(text).italics().color(weak));
                     }
@@ -321,8 +325,8 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
             );
             let fill = deck.length == DeckLength::Fill;
             if ui
-                .selectable_label(fill, tr!(literal = "Fill"))
-                .on_hover_text(tr!(literal = "This deck takes whatever length the fixed decks leave. One deck per rule fills."))
+                .selectable_label(fill, tr!("common-fill"))
+                .on_hover_text(tr!("charging-deck-takes-whatever-length-fixed-decks"))
                 .clicked()
             {
                 if fill {
@@ -333,13 +337,13 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
             }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                if row_action(ui, "↑", index > 0, tr!(literal = "Move up")) {
+                if row_action(ui, "↑", index > 0, tr!("object-edit-move-up")) {
                     swap = Some((index - 1, index));
                 }
-                if row_action(ui, "↓", index + 1 < count, tr!(literal = "Move down")) {
+                if row_action(ui, "↓", index + 1 < count, tr!("object-edit-move-down")) {
                     swap = Some((index, index + 1));
                 }
-                if row_action(ui, "×", true, tr!(literal = "Remove deck")) {
+                if row_action(ui, "×", true, tr!("charging-remove-deck")) {
                     remove = Some(index);
                 }
             });
@@ -370,7 +374,7 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
         rule.decks.remove(index);
     }
     ui.add_space(4.0);
-    if ui.add(MenuButton::new(tr!(literal = "Add Deck"))).clicked() {
+    if ui.add(MenuButton::new(tr!("charging-add-deck"))).clicked() {
         let product = products.iter().find(|product| product.kind == DeckKind::Stemming).or(products.first());
         rule.decks.push(RuleDeck {
             product: product.map_or_else(String::new, |product| product.name.clone()),
@@ -386,17 +390,9 @@ fn draw_priming(ui: &mut egui::Ui, rule: &mut ChargeRule) {
         let heading = |ui: &mut egui::Ui, text: String, help: String| {
             ui.label(egui::RichText::new(text).small().color(weak)).on_hover_text(help);
         };
-        heading(
-            ui,
-            tr!(literal = "Downhole delay"),
-            tr!(literal = "The in-hole detonator. A hole fires this long after its surface signal arrives."),
-        );
-        heading(
-            ui,
-            tr!(literal = "Primer height"),
-            tr!(literal = "How far above the base of each explosive deck its primer sits."),
-        );
-        heading(ui, tr!(literal = "Booster"), tr!(literal = "Cast booster mass in each primer."));
+        heading(ui, tr!("charging-downhole-delay"), tr!("charging-hole-detonator-hole-fires-long-after"));
+        heading(ui, tr!("charging-primer-height"), tr!("charging-how-far-above-base-each-explosive"));
+        heading(ui, tr!("charging-booster"), tr!("charging-cast-booster-mass-each-primer"));
         ui.end_row();
         let width = (RULE_DIALOG_WIDTH - 32.0) / 3.0;
         ui.add_sized(
@@ -496,11 +492,11 @@ pub(crate) fn draw_delete_blast_item_dialog(ui: &mut egui::Ui, editor: &mut Edit
         BlastLibraryItem::Product(name) => {
             let users = editor.blast_library.rules.iter().filter(|rule| rule.decks.iter().any(|deck| &deck.product == name)).count();
             (
-                tr!(literal = "Product"),
-                (users > 0).then(|| tr_format!(literal = "%count% rule(s) load this product and will need another chosen.", count = users)),
+                tr!("confirmations-product"),
+                (users > 0).then(|| tr!("charging-count-rule-load-product-will-need", count = users.to_string())),
             )
         }
-        BlastLibraryItem::Rule(_) => (tr!(literal = "Rule"), Some(tr!(literal = "Holes already loaded with it keep their charge."))),
+        BlastLibraryItem::Rule(_) => (tr!("charging-rule"), Some(tr!("charging-holes-already-loaded-keep-their-charge"))),
     };
     let title = tr!("dialog-delete-title", kind = kind);
     let mut open = true;

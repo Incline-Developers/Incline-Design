@@ -9,7 +9,7 @@
 //! fired state sit in the scene where the holes are.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         blast::{BlastAnalysis, ChargeDeck, DeckKind, Primer, ReliefBand, VIBRATION_WINDOW_MS},
         drill_hole::OpenDrillHoleDataset,
@@ -361,8 +361,8 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
             tile_frame(ui.visuals()).show(ui, |ui| {
                 ui.set_width(LEGEND_WIDTH);
                 let weak = ui.visuals().weak_text_color();
-                ui.label(egui::RichText::new(tr!(literal = "Burden relief")).strong());
-                ui.label(egui::RichText::new(tr!(literal = "ms per metre to the last neighbour to fire")).small().color(weak));
+                ui.label(egui::RichText::new(tr!("blast-burden-relief")).strong());
+                ui.label(egui::RichText::new(tr!("blast-ms-per-metre-last-neighbour-fire")).small().color(weak));
                 ui.add_space(4.0);
 
                 let ramp = crate::model::blast::relief_ramp(*limits);
@@ -404,13 +404,13 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
                 let high_rect = egui::Rect::from_min_size(egui::pos2(high_left, row.top() + 2.0), field);
                 let high = limits.high;
                 ui.put(low_rect, egui::DragValue::new(&mut limits.low).range(0.1..=high).speed(0.1).max_decimals(1).suffix(" ms/m"))
-                    .on_hover_text(tr!(literal = "Below this a hole fires before the rock in front of it has moved: tight."));
+                    .on_hover_text(tr!("blast-below-hole-fires-before-rock-front"));
                 let low = limits.low;
                 ui.put(
                     high_rect,
                     egui::DragValue::new(&mut limits.high).range(low..=1_000.0).speed(0.1).max_decimals(1).suffix(" ms/m"),
                 )
-                .on_hover_text(tr!(literal = "Above this the rock in front has long gone: slack, with cut-off and flyrock risk."));
+                .on_hover_text(tr!("blast-above-rock-front-has-long-gone"));
                 ui.add_space(6.0);
 
                 // Counts as chips in each band's colour.
@@ -426,10 +426,10 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
                         });
                     };
                     let band_color = |value: f64| color32(crate::model::blast::relief_color(value, *limits));
-                    chip(ui, band_color(limits.low * 0.5), tight, tr!(literal = "tight"));
-                    chip(ui, band_color((limits.low + limits.high) * 0.5), good, tr!(literal = "good"));
-                    chip(ui, band_color(limits.high * 1.4), slack, tr!(literal = "slack"));
-                    chip(ui, egui::Color32::WHITE, free, tr!(literal = "free face"));
+                    chip(ui, band_color(limits.low * 0.5), tight, tr!("blast-tight"));
+                    chip(ui, band_color((limits.low + limits.high) * 0.5), good, tr!("blast-good"));
+                    chip(ui, band_color(limits.high * 1.4), slack, tr!("blast-slack"));
+                    chip(ui, egui::Color32::WHITE, free, tr!("blast-free-face"));
                 });
             });
         });
@@ -496,34 +496,34 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
                     if let Some(analysis) = analysis {
                         let index = hover.hole.hole;
                         match analysis.times[index] {
-                            Some(time) => row(tr!(literal = "Fires at"), format!("{time:.0} ms"), None),
-                            None if analysis.is_empty_hole(index) => row(tr!(literal = "Fires at"), tr!(literal = "empty, won't detonate"), None),
-                            None => row(tr!(literal = "Fires at"), tr!(literal = "not reached"), Some(warn)),
+                            Some(time) => row(tr!("blast-fires-at"), format!("{time:.0} ms"), None),
+                            None if analysis.is_empty_hole(index) => row(tr!("blast-fires-at"), tr!("blast-empty-won-t-detonate"), None),
+                            None => row(tr!("blast-fires-at"), tr!("blast-not-reached"), Some(warn)),
                         }
                         let band = analysis.band(index, editor.blast_review.limits);
                         let relief = match (analysis.relief[index], analysis.relieved_by[index]) {
                             (Some(value), Some(by)) => {
                                 let name = dataset.dataset.holes.get(by).map_or("?", |hole| hole.dhid.as_str());
-                                tr_format!(literal = "%value% ms/m from %hole%", value = format!("{value:.1}"), hole = name)
+                                tr!("blast-value-ms-m-from-hole", value = format!("{value:.1}"), hole = name.to_string())
                             }
-                            _ if band == ReliefBand::Free => tr!(literal = "fires first: free face"),
+                            _ if band == ReliefBand::Free => tr!("blast-fires-first-free-face"),
                             _ => "-".to_owned(),
                         };
                         let color = match (band, analysis.relief[index]) {
                             (ReliefBand::Tight | ReliefBand::Slack, Some(value)) => Some(color32(crate::model::blast::relief_color(value, editor.blast_review.limits))),
                             _ => None,
                         };
-                        row(tr!(literal = "Relief"), relief, color);
+                        row(tr!("blast-relief"), relief, color);
                         if let Some(charge) = charge {
-                            row(tr!(literal = "Explosive"), format!("{:.1} kg", analysis.mass_kg[index]), None);
+                            row(tr!("blast-explosive"), format!("{:.1} kg", analysis.mass_kg[index]), None);
                             if let Some(powder_factor) = analysis.hole_powder_factor(index) {
-                                row(tr!(literal = "Powder factor"), format!("{powder_factor:.2} kg/m³"), None);
+                                row(tr!("blast-powder-factor"), format!("{powder_factor:.2} kg/m³"), None);
                             }
-                            row(tr!(literal = "Rule"), charge.rule.clone(), None);
+                            row(tr!("charging-rule"), charge.rule.clone(), None);
                         }
                     } else if let Some(charge) = charge {
-                        row(tr!(literal = "Explosive"), format!("{:.1} kg", charge.mass_kg(hole.diameter)), None);
-                        row(tr!(literal = "Rule"), charge.rule.clone(), None);
+                        row(tr!("blast-explosive"), format!("{:.1} kg", charge.mass_kg(hole.diameter)), None);
+                        row(tr!("charging-rule"), charge.rule.clone(), None);
                     }
                 });
                 match charge {
@@ -533,7 +533,7 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
                     }
                     None => {
                         ui.add_space(2.0);
-                        ui.label(egui::RichText::new(tr!(literal = "Not loaded")).weak().italics());
+                        ui.label(egui::RichText::new(tr!("blast-not-loaded")).weak().italics());
                     }
                 }
             });
@@ -562,10 +562,10 @@ pub(crate) fn draw_column_with_legend(ui: &mut egui::Ui, decks: &[ChargeDeck], p
             }
             if let Some(primer) = primers.first() {
                 ui.label(
-                    egui::RichText::new(tr_format!(
-                        literal = "%count% primer(s) · %delay% ms downhole",
-                        count = primers.len(),
-                        delay = primer.delay_ms
+                    egui::RichText::new(tr!(
+                        "blast-count-primer-delay-ms-downhole",
+                        count = primers.len().to_string(),
+                        delay = primer.delay_ms.to_string()
                     ))
                     .small()
                     .weak(),
@@ -648,7 +648,7 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
             .fixed_pos(canvas_rect.center_bottom() - egui::vec2(0.0, TILE_MARGIN))
             .show(ui.ctx(), |ui| {
                 tile_frame(ui.visuals()).show(ui, |ui| {
-                    ui.label(tr!(literal = "Set an initiation point and tie the holes in to play the round"));
+                    ui.label(tr!("blast-set-initiation-point-tie-holes-play"));
                 });
             });
         editor.blast_review.playing = false;
@@ -679,27 +679,23 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                 ui.set_width(width - 20.0);
                 ui.horizontal(|ui| {
                     if review.playing {
-                        if transport_button(ui, Transport::Pause, tr!(literal = "Pause")).clicked() {
+                        if transport_button(ui, Transport::Pause, tr!("blast-pause")).clicked() {
                             review.playing = false;
                         }
-                    } else if transport_button(ui, Transport::Play, tr!(literal = "Play")).clicked() {
+                    } else if transport_button(ui, Transport::Play, tr!("blast-play")).clicked() {
                         if review.playhead_ms >= end {
                             review.playhead_ms = 0.0;
                         }
                         review.playing = true;
                     }
-                    if transport_button(ui, Transport::Rewind, tr!(literal = "Back to the start")).clicked() {
+                    if transport_button(ui, Transport::Rewind, tr!("blast-back-start")).clicked() {
                         review.playhead_ms = 0.0;
                     }
                     ui.label(egui::RichText::new(format!("{:.0} ms", review.playhead_ms.min(duration))).strong());
-                    ui.label(egui::RichText::new(tr_format!(literal = "of %duration% ms", duration = format!("{duration:.0}"))).weak());
+                    ui.label(egui::RichText::new(tr!("blast-duration-ms", duration = format!("{duration:.0}"))).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let speed_label = |speed: f64| {
-                            if speed >= 1.0 {
-                                tr!(literal = "Real time")
-                            } else {
-                                format!("{:.0}× slower", 1.0 / speed)
-                            }
+                            if speed >= 1.0 { tr!("blast-real-time") } else { format!("{:.0}× slower", 1.0 / speed) }
                         };
                         egui::ComboBox::from_id_salt("blast_timeline_speed")
                             .selected_text(speed_label(review.speed))
@@ -716,9 +712,8 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                             let mut limit = review.mic_limit_kg.unwrap_or(analysis.peak_mass.value.max(1.0).round());
                             let mut on = review.mic_limit_kg.is_some();
                             ui.add_enabled(on, egui::DragValue::new(&mut limit).range(1.0..=1_000_000.0).speed(5.0).max_decimals(0).suffix(" kg"));
-                            ui.checkbox(&mut on, tr!(literal = "MIC limit")).on_hover_text(tr!(
-                                literal = "The most explosive allowed to detonate in any 8 ms at this site. Windows over it are flagged."
-                            ));
+                            ui.checkbox(&mut on, tr!("blast-mic-limit"))
+                                .on_hover_text(tr!("blast-most-explosive-allowed-detonate-any-8"));
                             review.mic_limit_kg = on.then_some(limit);
                         }
                     });
@@ -730,42 +725,34 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
                 }
                 ui.add_space(2.0);
                 if !loaded {
-                    ui.label(
-                        egui::RichText::new(tr!(
-                            literal = "No holes are loaded: the surface signal plays, but nothing detonates. Load holes with the Charge Holes tool."
-                        ))
-                        .weak(),
-                    );
+                    ui.label(egui::RichText::new(tr!("blast-no-holes-loaded-surface-signal-plays")).weak());
                     return;
                 }
                 let (holes, mass) = analysis.window_at(review.playhead_ms - VIBRATION_WINDOW_MS + 1.0e-9);
                 ui.horizontal(|ui| {
-                    let mut now = tr_format!(literal = "Now: %holes% hole(s)", holes = holes);
+                    let mut now = tr!("blast-now-holes-hole", holes = holes.to_string());
                     if analysis.total_mass_kg > 0.0 {
                         now.push_str(&format!(" · {mass:.0} kg"));
                     }
-                    now.push_str(&tr!(literal = " in 8 ms"));
+                    now.push(' ');
+                    now.push_str(&tr!("blast-in-8-ms"));
                     ui.label(now);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let has_mass = analysis.total_mass_kg > 0.0;
                         let peak = if has_mass { analysis.peak_mass } else { analysis.peak_holes };
                         let mut text = if has_mass {
-                            tr_format!(
-                                literal = "Peak %mass% kg at %time% ms",
-                                mass = format!("{:.0}", peak.value),
-                                time = format!("{:.0}", peak.start_ms)
-                            )
+                            tr!("blast-peak-mass-kg-time-ms", mass = format!("{:.0}", peak.value), time = format!("{:.0}", peak.start_ms))
                         } else {
-                            tr_format!(literal = "Peak %holes% hole(s) at %time% ms", holes = peak.value, time = format!("{:.0}", peak.start_ms))
+                            tr!("blast-peak-holes-hole-time-ms", holes = peak.value.to_string(), time = format!("{:.0}", peak.start_ms))
                         };
                         // Red only for a broken limit: a peak is not a fault.
                         let color = match review.mic_limit_kg.filter(|_| has_mass) {
                             Some(limit) if peak.value > limit => {
-                                text.push_str(&tr_format!(literal = ", %over% kg over", over = format!("{:.0}", peak.value - limit)));
+                                text.push_str(&tr!("blast-peak-over-limit", over = format!("{:.0}", peak.value - limit)));
                                 TIMELINE_PEAK
                             }
                             Some(_) => {
-                                text.push_str(&tr!(literal = ", within limit"));
+                                text.push_str(&tr!("blast-peak-within-limit"));
                                 TIMELINE_WITHIN
                             }
                             None => ui.visuals().text_color(),
@@ -883,9 +870,9 @@ fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, en
         tick += step;
     }
 
-    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal).on_hover_text(tr!(
-        literal = "Top: the surface signal lighting each downline. Below: detonations. Click or drag to move the playhead."
-    ));
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_text(tr!("blast-top-surface-signal-lighting-each-downline"));
     if (response.dragged() || response.clicked())
         && let Some(pointer) = response.interact_pointer_pos()
     {

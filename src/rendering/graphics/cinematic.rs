@@ -299,6 +299,7 @@ impl<'a> Graphics<'a> {
                 point_cloud_style: &self.point_cloud_style_bind_group_layout,
                 block_model_transparency_composite: &self.block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &self.block_model_volume_upscale_bind_group_layout,
+                drill_selection: self.drill_hole_gpu.selection_layout(),
             },
             HDR_FORMAT,
             MSAA_SAMPLE_COUNT,
@@ -507,7 +508,7 @@ impl<'a> Graphics<'a> {
         });
 
         let scene_camera_bind_group = Self::create_scene_camera_bind_group(device, &scene_camera_layout, &self.camera_buffer, &params_buffer, &shadow_array_view, &shadow_sampler);
-        userspace_log!("{}", crate::i18n::tr_format!(literal = "Cinematic view shadows: %method%", method = "cascaded shadow maps"));
+        userspace_log!("{}", crate::i18n::tr!("cinematic-shadows-method", method = "cascaded shadow maps"));
 
         CinematicPipelines {
             scene,

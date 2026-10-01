@@ -1,12 +1,12 @@
 use crate::{
     app::App,
-    i18n::tr_format,
+    i18n::tr,
     model::{Axis, Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
 };
 
 macro_rules! batch_property {
-    ($self:expr, $ids:expr, $update_fn:expr, $log:literal $(, $arg_name:ident = $arg:expr)*) => {{
+    ($self:expr, $ids:expr, $update_fn:expr, $log:expr) => {{
         let Some(project) = $self.workspace.active_project_mut() else {
             return;
         };
@@ -23,7 +23,7 @@ macro_rules! batch_property {
         if !cmds.is_empty() {
             $self.execute_edit(Command::Batch(cmds));
         }
-        $self.log_when_gesture_ends(tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
+        $self.log_when_gesture_ends($log);
         $self.invalidate_geometry();
     }};
 }
@@ -38,7 +38,7 @@ impl<'a> App<'a> {
                     Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color = new_color,
                 }
             },
-            "Batch-set color on %count% object(s)"
+            tr!("cmd-property-batch-set-color-count-object", count = ids.len().to_string())
         );
     }
 
@@ -51,7 +51,7 @@ impl<'a> App<'a> {
                     *c = closed;
                 }
             },
-            "Batch-set closed on %count% polyline(s)"
+            tr!("cmd-property-batch-set-closed-count-polyline", count = ids.len().to_string())
         );
     }
 
@@ -64,7 +64,7 @@ impl<'a> App<'a> {
                     *fill = new_fill;
                 }
             },
-            "Batch-set fill style on %count% object(s)"
+            tr!("cmd-property-batch-set-fill-style-count", count = ids.len().to_string())
         );
     }
 
@@ -77,7 +77,7 @@ impl<'a> App<'a> {
                     *line_weight = weight;
                 }
             },
-            "Batch-set line weight on %count% polyline(s)"
+            tr!("cmd-property-batch-set-line-weight-count", count = ids.len().to_string())
         );
     }
 
@@ -88,8 +88,7 @@ impl<'a> App<'a> {
             |obj: &mut Object| {
                 obj.set_axis_position(axis, value);
             },
-            "Batch-set %axis% value on %count% object(s)",
-            axis = axis.label()
+            tr!("cmd-property-batch-set-axis-value-count", count = ids.len().to_string(), axis = axis.label().to_string())
         )
     }
 
@@ -137,16 +136,16 @@ impl<'a> App<'a> {
         self.editor.selected_handles = selected_after.into_iter().map(SceneEntityId::Object).collect();
         self.invalidate_geometry();
         let action = if copy {
-            crate::i18n::tr!(literal = "Copied")
+            crate::i18n::tr!("cmd-property-copied")
         } else {
-            crate::i18n::tr!(literal = "Moved")
+            crate::i18n::tr!("cmd-property-moved")
         };
         userspace_log!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "%action% %count% object(s) to layer %layer%",
-                action = action,
-                count = ids.len(),
+            crate::i18n::tr!(
+                "cmd-property-action-count-object-s-layer",
+                action = action.to_string(),
+                count = ids.len().to_string(),
                 layer = format!("{target_layer:?}")
             )
         );

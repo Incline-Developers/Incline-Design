@@ -1,7 +1,7 @@
 //! Interactive Drill & Blast pattern creation.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout},
     ui::{
         state::{EditorState, UiCommand},
@@ -94,24 +94,21 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     let boundary_label = if editor.drill_pattern_boundary_id.is_some() {
         editor.drill_pattern_boundary_name.clone()
     } else {
-        tr!(literal = "None picked")
+        tr!("drill-pattern-none-picked")
     };
     let layout_label = editor.drill_pattern_layout.label();
 
-    DragableMenu::new("drill_pattern_dialog", tr!(literal = "Create Drill Pattern"))
+    DragableMenu::new("drill_pattern_dialog", tr!("common-create-drill-pattern"))
         .open(&mut open)
         .min_width(DIALOG_MIN_WIDTH)
         .max_width(440.0)
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui.ctx(), |ui| {
-            menu::menu_note(
-                ui,
-                tr!(literal = "Choose a closed blast boundary, then tune the grid. The drill holes update live in the viewport."),
-            );
+            menu::menu_note(ui, tr!("drill-pattern-choose-closed-blast-boundary-then"));
             ui.add_space(6.0);
 
-            MenuField::new(tr!(literal = "Blast shape"))
-                .help_text(tr!(literal = "The closed design polyline whose XY footprint will be filled with holes."))
+            MenuField::new(tr!("drill-pattern-blast-shape"))
+                .help_text(tr!("drill-pattern-closed-design-polyline-whose-xy"))
                 .show(ui, |ui, row_height, column_width| {
                     let button_width = PICK_BUTTON_WIDTH;
                     let label_width = (column_width - ui.spacing().item_spacing.x - button_width).max(80.0);
@@ -120,9 +117,9 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         ui.add_sized([label_width, row_height], egui::TextEdit::singleline(&mut display).interactive(false))
                             .on_hover_text(&boundary_label);
                         let button_text = if editor.drill_pattern_awaiting_shape_pick {
-                            tr!(literal = "Cancel")
+                            tr!("common-cancel")
                         } else {
-                            tr!(literal = "Pick")
+                            tr!("drill-pattern-pick")
                         };
                         if ui.add(MenuButton::new(button_text).min_width(button_width)).clicked() {
                             if editor.drill_pattern_awaiting_shape_pick {
@@ -142,76 +139,67 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 let status = editor
                     .viewport_pick_hover_label
                     .clone()
-                    .unwrap_or_else(|| tr!(literal = "Move over a closed polyline, then click it in the viewport. Esc cancels the pick."));
+                    .unwrap_or_else(|| tr!("drill-pattern-move-over-closed-polyline-then"));
                 ui.add_space(4.0);
                 menu::menu_note(ui, status);
             }
 
             ui.add_space(4.0);
-            MenuFieldF64::new(tr!(literal = "Burden"), &mut editor.drill_pattern_burden, 0.01..=1_000_000.0)
-                .help_text(tr!(literal = "Perpendicular distance between pattern rows."))
+            MenuFieldF64::new(tr!("drill-pattern-burden"), &mut editor.drill_pattern_burden, 0.01..=1_000_000.0)
+                .help_text(tr!("drill-pattern-spacing-help"))
                 .speed(0.1)
-                .suffix(tr!(literal = " m"))
+                .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
-            MenuFieldF64::new(tr!(literal = "Spacing"), &mut editor.drill_pattern_spacing, 0.01..=1_000_000.0)
-                .help_text(tr!(literal = "Distance between holes along each pattern row."))
+            MenuFieldF64::new(tr!("drill-pattern-spacing"), &mut editor.drill_pattern_spacing, 0.01..=1_000_000.0)
+                .help_text(tr!("drill-pattern-distance-between-holes-along-each"))
                 .speed(0.1)
-                .suffix(tr!(literal = " m"))
+                .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
-            MenuFieldF64::new(tr!(literal = "Rotation"), &mut editor.drill_pattern_rotation_deg, -360.0..=360.0)
-                .help_text(tr_format!(
-                    literal = "Counter-clockwise pattern rotation from the global %axis% axis.",
-                    axis = crate::model::survey::axis_name(0)
-                ))
+            MenuFieldF64::new(tr!("drill-pattern-rotation"), &mut editor.drill_pattern_rotation_deg, -360.0..=360.0)
+                .help_text(tr!("drill-pattern-rotation-help", axis = crate::model::survey::axis_name(0).to_string()))
                 .speed(1.0)
                 .suffix("°")
                 .show(ui);
             MenuFieldF64::new(
-                tr_format!(literal = "%axis% offset", axis = crate::model::survey::axis_name(0)),
+                tr!("drill-pattern-axis-offset", axis = crate::model::survey::axis_name(0).to_string()),
                 &mut editor.drill_pattern_offset_x,
                 -1_000_000.0..=1_000_000.0,
             )
-            .help_text(tr_format!(
-                literal = "Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.",
-                axis = crate::model::survey::axis_name(0)
-            ))
+            .help_text(tr!("drill-pattern-shift-pattern-grid-along-global", axis = crate::model::survey::axis_name(0).to_string()))
             .speed(0.1)
-            .suffix(tr!(literal = " m"))
+            .suffix(format!(" {}", tr!("common-m")))
             .show(ui);
             MenuFieldF64::new(
-                tr_format!(literal = "%axis% offset", axis = crate::model::survey::axis_name(1)),
+                tr!("drill-pattern-axis-offset", axis = crate::model::survey::axis_name(1).to_string()),
                 &mut editor.drill_pattern_offset_y,
                 -1_000_000.0..=1_000_000.0,
             )
-            .help_text(tr_format!(
-                literal = "Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.",
-                axis = crate::model::survey::axis_name(1)
-            ))
+            .help_text(tr!("drill-pattern-shift-pattern-grid-along-global", axis = crate::model::survey::axis_name(1).to_string()))
             .speed(0.1)
-            .suffix(tr!(literal = " m"))
+            .suffix(format!(" {}", tr!("common-m")))
             .show(ui);
             MenuFieldCombo::new(
                 "drill_pattern_layout",
-                tr!(literal = "Arrangement"),
+                tr!("drill-pattern-arrangement"),
                 &mut editor.drill_pattern_layout,
                 layout_label,
                 crate::model::drill_hole::DrillPatternLayout::ALL.map(|layout| (layout, layout.label().into())),
             )
-            .help_text(tr!(literal = "Staggered offsets every second row by half the spacing."))
+            .help_text(tr!("drill-pattern-staggered-offsets-every-second-row"))
             .show(ui);
-            MenuFieldF64::new(tr!(literal = "Hole diameter"), &mut editor.drill_pattern_diameter_mm, 25.0..=1_000.0)
-                .help_text(tr!(literal = "Finished hole diameter. Entered in millimetres and stored with every generated hole."))
+            MenuFieldF64::new(tr!("drill-pattern-hole-diameter"), &mut editor.drill_pattern_diameter_mm, 25.0..=1_000.0)
+                .help_text(tr!("drill-pattern-diameter-help"))
                 .speed(1.0)
                 .suffix(" mm")
                 .show(ui);
-            MenuFieldF64::new(tr!(literal = "Hole depth"), &mut editor.drill_pattern_depth, 0.01..=100_000.0)
-                .help_text(tr!(literal = "Vertical depth below each collar."))
+            MenuFieldF64::new(tr!("drill-pattern-hole-depth"), &mut editor.drill_pattern_depth, 0.01..=100_000.0)
+                .help_text(tr!("drill-pattern-vertical-depth-below-each-collar"))
                 .speed(0.5)
-                .suffix(tr!(literal = " m"))
+                .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
-            MenuFieldText::new(tr!(literal = "Pattern name"), &mut editor.drill_pattern_name)
-                .help_text(tr!(literal = "Name of the drillhole dataset created in the project."))
-                .hint_text(tr!(literal = "e.g. West Cut 03"))
+            MenuFieldText::new(tr!("drill-pattern-pattern-name"), &mut editor.drill_pattern_name)
+                .help_text(tr!("drill-pattern-name-help"))
+                .hint_text(tr!("drill-pattern-name-hint"))
                 .show(ui);
 
             ui.add_space(6.0);
@@ -221,9 +209,9 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 let count = editor.drill_pattern_preview_collars.len();
                 menu::menu_note(
                     ui,
-                    tr_format!(
-                        literal = "Preview: %count% hole(s) · %diameter% mm diameter · %depth% m deep",
-                        count = count,
+                    tr!(
+                        "drill-pattern-preview-count-hole-s-diameter",
+                        count = count.to_string(),
                         diameter = format!("{:.0}", editor.drill_pattern_diameter_mm),
                         depth = format!("{:.2}", editor.drill_pattern_depth)
                     ),
@@ -239,7 +227,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && !editor.drill_pattern_awaiting_shape_pick;
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if (ui.add(MenuButton::new(tr!(literal = "Create")).primary().enabled(can_create)).clicked() || (confirm && can_create)) && can_create {
+                if (ui.add(MenuButton::new(tr!("common-create")).primary().enabled(can_create)).clicked() || (confirm && can_create)) && can_create {
                     commands.push(UiCommand::CreateDrillPattern {
                         name: editor.drill_pattern_name.trim().to_owned(),
                         collars: editor.drill_pattern_preview_collars.clone(),
@@ -247,7 +235,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         diameter: editor.drill_pattern_diameter_mm / 1_000.0,
                     });
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
