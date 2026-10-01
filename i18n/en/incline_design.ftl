@@ -431,8 +431,6 @@ cmd-commands-count-point-s-layer = { $count } point(s) on '{ $layer }'
 cmd-commands-kind-layer = { $kind } on '{ $layer }'
 cmd-commands-no-control-strings = No control strings
 cmd-commands-no-extent = No extent
-cmd-commands-project-coordinate-system-cleared = Project coordinate system cleared
-cmd-commands-project-coordinate-system-set-system = Project coordinate system set to { $system }
 cmd-commands-select-holes-place-reference-points = Select the holes to place reference points on
 cmd-triangulate-needs-selection = Select the objects to triangulate before running Create Triangulation
 cmd-commands-select-one-loaded-block-model = Select one loaded block model before creating an ore triangulation from it
@@ -1278,7 +1276,6 @@ explorer-lock = Lock
 explorer-new-collection = New Collection
 explorer-no-collection = No Collection
 explorer-select-all-objects = Select All Objects
-explorer-settings = Settings...
 explorer-source-name = Source: { $name }
 explorer-unload = Unload
 explorer-unlock = Unlock
@@ -1494,10 +1491,6 @@ menu-count-files-selected = { $count } files selected
 
 ## Modelling strings
 
-modelling-settings-crs-help = The coordinate system every point and surface in this project is in. Defined under Survey; a project-level setting, whichever place it is set from.
-modelling-settings-modelling-settings = Modelling Settings
-modelling-settings-not-set = Not set
-modelling-settings-survey-datum = Survey datum
 
 ## Object strings
 
@@ -1881,7 +1874,6 @@ state-set-object-colour = Set Object Colour
 state-set-object-fill = Set Object Fill
 state-set-point-visibility = Set Point Visibility
 state-set-polyline-closed = Set Polyline Closed
-state-set-project-coordinate-system = Set Project Coordinate System
 state-set-raster-lock = Set Raster Lock
 state-set-standard-view = Set Standard View
 state-set-topology-wireframes = Set Topology Wireframes
