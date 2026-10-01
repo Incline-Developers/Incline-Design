@@ -606,7 +606,6 @@ cmd-slice-set-section-grid-enabled = Weka gridi ya sehemu = { $enabled }
 cmd-split-created-2-open-polylines = Mistari 2 ya pointi nyingi iliyo wazi imeundwa
 cmd-split-line = Gawanya Mstari
 cmd-split-points-needs-interior-vertex = Gawanya kwa Vidokezo: chagua kipeo cha ndani cha mstari ulio wazi
-cmd-split-points-needs-non-adjacent-vertices = Gawanya kwa Vidokezo: chagua vipeo viwili visivyo jirani vya mstari wa pointi nyingi
 cmd-split-polyline-into-two = Mstari wa chanzo wa pointi nyingi umegawanywa kuwa mistari miwili iliyo wazi ya pointi nyingi
 cmd-text-edit-finished = Umemaliza kuhariri maandishi ya kitu { $object_id }
 cmd-text-updated = Umesasisha maandishi kwenye kitu { $object_id }

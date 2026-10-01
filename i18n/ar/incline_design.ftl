@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = تفعيل شبكة المقطع = { $enabl
 cmd-split-created-2-open-polylines = تم إنشاء خطين متعددين مفتوحين
 cmd-split-line = تقسيم الخط
 cmd-split-points-needs-interior-vertex = التقسيم عند النقاط: اختر رأسًا داخليًا للخط المفتوح
-cmd-split-points-needs-non-adjacent-vertices = التقسيم عند النقاط: اختر رأسين غير متجاورين من الخط المتعدد
 cmd-split-polyline-into-two = قُسّم الخط المتعدد المصدر إلى خطين متعددين مفتوحين
 cmd-text-edit-finished = انتهى تحرير نص الكائن { $object_id }
 cmd-text-updated = تم تحديث النص على الكائن { $object_id }

@@ -572,7 +572,6 @@ cmd-slice-set-section-grid-enabled = Grelha da secção ativada = { $enabled }
 cmd-split-created-2-open-polylines = 2 polilinhas abertas criadas
 cmd-split-line = Dividir linha
 cmd-split-points-needs-interior-vertex = Dividir nos pontos: escolha um vértice interior da linha aberta
-cmd-split-points-needs-non-adjacent-vertices = Dividir nos pontos: escolha dois vértices não adjacentes da polilinha
 cmd-split-polyline-into-two = Polilinha de origem dividida em duas polilinhas abertas
 cmd-text-edit-finished = Edição de texto concluída no objeto { $object_id }
 cmd-text-updated = Texto atualizado no objeto { $object_id }

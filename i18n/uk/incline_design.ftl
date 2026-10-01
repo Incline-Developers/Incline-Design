@@ -620,7 +620,6 @@ cmd-slice-set-section-grid-enabled = Сітку перерізу увімкне�
 cmd-split-created-2-open-polylines = Створено 2 розімкнені полілінії
 cmd-split-line = Розділити лінію
 cmd-split-points-needs-interior-vertex = Розділення за точками: виберіть внутрішню вершину розімкненої лінії
-cmd-split-points-needs-non-adjacent-vertices = Розділення за точками: виберіть дві несуміжні вершини полілінії
 cmd-split-polyline-into-two = Вихідну полілінію розділено на дві розімкнені полілінії
 cmd-text-edit-finished = Редагування тексту об'єкта { $object_id } завершено
 cmd-text-updated = Текст об'єкта { $object_id } оновлено

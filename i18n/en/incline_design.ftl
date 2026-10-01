@@ -768,7 +768,6 @@ cmd-slice-set-section-grid-enabled = Set section grid = { $enabled }
 cmd-split-created-2-open-polylines = Created 2 open polylines
 cmd-split-line = Split Line
 cmd-split-points-needs-interior-vertex = Split At Points: choose an interior vertex of the open line
-cmd-split-points-needs-non-adjacent-vertices = Split At Points: choose two non-adjacent polyline vertices
 cmd-split-polyline-into-two = Split source polyline into two open polylines
 cmd-text-edit-finished = Finished text edit for object { $object_id }
 cmd-text-updated = Updated text on object { $object_id }

@@ -616,7 +616,6 @@ cmd-slice-set-section-grid-enabled = Kesit ızgarası etkin = { $enabled }
 cmd-split-created-2-open-polylines = 2 açık çoklu çizgi oluşturuldu
 cmd-split-line = Çizgiyi Böl
 cmd-split-points-needs-interior-vertex = Noktalarda Böl: açık çizginin bir iç köşesini seçin
-cmd-split-points-needs-non-adjacent-vertices = Noktalarda Böl: komşu olmayan iki çoklu çizgi köşesi seçin
 cmd-split-polyline-into-two = Kaynak çoklu çizgi iki açık çoklu çizgiye bölündü
 cmd-text-edit-finished = { $object_id } nesnesi için metin düzenleme tamamlandı
 cmd-text-updated = { $object_id } nesnesindeki metin güncellendi
