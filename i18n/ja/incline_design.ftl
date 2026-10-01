@@ -603,7 +603,6 @@ cmd-slice-set-section-grid-enabled = 断面グリッド有効 = { $enabled }
 cmd-split-created-2-open-polylines = 開いたポリラインを2本作成しました
 cmd-split-line = 線を分割
 cmd-split-points-needs-interior-vertex = 点で分割: 開いた線の内部の頂点を選択してください
-cmd-split-points-needs-non-adjacent-vertices = 点で分割: 隣接しない2つのポリライン頂点を選択してください
 cmd-split-polyline-into-two = 元のポリラインを2本の開いたポリラインに分割しました
 cmd-text-edit-finished = オブジェクト { $object_id } のテキスト編集を完了しました
 cmd-text-updated = オブジェクト { $object_id } のテキストを更新しました

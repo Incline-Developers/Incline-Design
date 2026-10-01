@@ -601,7 +601,6 @@ cmd-slice-set-section-grid-enabled = Bật lưới mặt cắt = { $enabled }
 cmd-split-created-2-open-polylines = Đã tạo 2 đường đa tuyến hở
 cmd-split-line = Chia tách đường
 cmd-split-points-needs-interior-vertex = Chia tách tại điểm: chọn một đỉnh bên trong của đường hở
-cmd-split-points-needs-non-adjacent-vertices = Chia tách tại điểm: chọn hai đỉnh không liền kề của đường đa tuyến
 cmd-split-polyline-into-two = Đã chia tách đường đa tuyến nguồn thành hai đường đa tuyến hở
 cmd-text-edit-finished = Đã hoàn tất sửa văn bản cho đối tượng { $object_id }
 cmd-text-updated = Đã cập nhật văn bản trên đối tượng { $object_id }

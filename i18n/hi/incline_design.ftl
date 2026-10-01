@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = सेक्शन ग्रिड सक�
 cmd-split-created-2-open-polylines = 2 खुली पॉलीलाइन बनाई गईं
 cmd-split-line = रेखा विभाजित करें
 cmd-split-points-needs-interior-vertex = बिंदुओं पर विभाजित करें: खुली रेखा का कोई आंतरिक शीर्ष चुनें
-cmd-split-points-needs-non-adjacent-vertices = बिंदुओं पर विभाजित करें: पॉलीलाइन के दो गैर-सन्निकट शीर्ष चुनें
 cmd-split-polyline-into-two = स्रोत पॉलीलाइन को दो खुली पॉलीलाइन में विभाजित किया गया
 cmd-text-edit-finished = ऑब्जेक्ट { $object_id } का पाठ संपादन पूरा हुआ
 cmd-text-updated = ऑब्जेक्ट { $object_id } पर पाठ अपडेट किया गया

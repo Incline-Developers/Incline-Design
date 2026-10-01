@@ -608,7 +608,6 @@ cmd-slice-set-section-grid-enabled = 슬라이스 그리드 설정 = { $enabled 
 cmd-split-created-2-open-polylines = 열린 폴리라인 2개를 생성했습니다
 cmd-split-line = 선 분할
 cmd-split-points-needs-interior-vertex = 점에서 분할: 열린 선의 내부 정점을 선택하세요
-cmd-split-points-needs-non-adjacent-vertices = 점에서 분할: 인접하지 않은 폴리라인 정점 두 개를 선택하세요
 cmd-split-polyline-into-two = 원본 폴리라인을 열린 폴리라인 두 개로 분할했습니다
 cmd-text-edit-finished = 객체 { $object_id }의 텍스트 편집을 완료했습니다
 cmd-text-updated = 객체 { $object_id }의 텍스트를 업데이트했습니다

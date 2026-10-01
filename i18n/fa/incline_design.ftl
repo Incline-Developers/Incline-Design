@@ -574,7 +574,6 @@ cmd-slice-set-section-grid-enabled = شبکه مقطع فعال = { $enabled }
 cmd-split-created-2-open-polylines = ۲ چندخطی باز ایجاد شد
 cmd-split-line = تقسیم خط
 cmd-split-points-needs-interior-vertex = تقسیم در نقاط: یک رأس داخلی از خط باز انتخاب کنید
-cmd-split-points-needs-non-adjacent-vertices = تقسیم در نقاط: دو رأس غیرمجاور چندخطی را انتخاب کنید
 cmd-split-polyline-into-two = چندخطی مبدأ به دو چندخطی باز تقسیم شد
 cmd-text-edit-finished = ویرایش متن شیء { $object_id } پایان یافت
 cmd-text-updated = متن روی شیء { $object_id } به‌روزرسانی شد

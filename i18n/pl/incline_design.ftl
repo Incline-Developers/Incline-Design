@@ -642,7 +642,6 @@ cmd-slice-set-section-grid-enabled = Siatka przekroju włączona = { $enabled }
 cmd-split-created-2-open-polylines = Utworzono 2 polilinie otwarte
 cmd-split-line = Podziel linię
 cmd-split-points-needs-interior-vertex = Podział w punktach: wybierz wewnętrzny wierzchołek linii otwartej
-cmd-split-points-needs-non-adjacent-vertices = Podział w punktach: wybierz dwa niesąsiadujące wierzchołki polilinii
 cmd-split-polyline-into-two = Podzielono polilinię źródłową na dwie polilinie otwarte
 cmd-text-edit-finished = Zakończono edycję tekstu obiektu { $object_id }
 cmd-text-updated = Zaktualizowano tekst obiektu { $object_id }

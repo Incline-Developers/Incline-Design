@@ -625,7 +625,6 @@ cmd-slice-set-section-grid-enabled = Сетка сечения включена 
 cmd-split-created-2-open-polylines = Созданы 2 разомкнутые полилинии
 cmd-split-line = Разделить линию
 cmd-split-points-needs-interior-vertex = Разделение по точкам: выберите внутреннюю вершину разомкнутой линии
-cmd-split-points-needs-non-adjacent-vertices = Разделение по точкам: выберите две несмежные вершины полилинии
 cmd-split-polyline-into-two = Исходная полилиния разделена на две разомкнутые полилинии
 cmd-text-edit-finished = Редактирование текста объекта { $object_id } завершено
 cmd-text-updated = Текст объекта { $object_id } обновлён

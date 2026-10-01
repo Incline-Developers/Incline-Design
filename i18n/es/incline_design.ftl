@@ -572,7 +572,6 @@ cmd-slice-set-section-grid-enabled = Cuadrícula de sección activada = { $enabl
 cmd-split-created-2-open-polylines = Se crearon 2 polilíneas abiertas
 cmd-split-line = Dividir línea
 cmd-split-points-needs-interior-vertex = Dividir en puntos: seleccione un vértice interior de la línea abierta
-cmd-split-points-needs-non-adjacent-vertices = Dividir en puntos: seleccione dos vértices no adyacentes de la polilínea
 cmd-split-polyline-into-two = Se dividió la polilínea de origen en dos polilíneas abiertas
 cmd-text-edit-finished = Se terminó de editar el texto del objeto { $object_id }
 cmd-text-updated = Se actualizó el texto del objeto { $object_id }

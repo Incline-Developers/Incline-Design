@@ -616,7 +616,6 @@ cmd-slice-set-section-grid-enabled = Griglia della sezione attiva = { $enabled }
 cmd-split-created-2-open-polylines = Create 2 polilinee aperte
 cmd-split-line = Dividi linea
 cmd-split-points-needs-interior-vertex = Dividi ai punti: scegli un vertice interno della linea aperta
-cmd-split-points-needs-non-adjacent-vertices = Dividi ai punti: scegli due vertici non adiacenti della polilinea
 cmd-split-polyline-into-two = Divisa la polilinea sorgente in due polilinee aperte
 cmd-text-edit-finished = Modifica del testo completata per l'oggetto { $object_id }
 cmd-text-updated = Testo aggiornato sull'oggetto { $object_id }
