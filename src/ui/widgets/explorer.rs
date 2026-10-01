@@ -96,6 +96,8 @@ pub(crate) struct ExplorerEntryResponse {
     pub(crate) response: egui::Response,
     pub(crate) visibility_clicked: bool,
     pub(crate) lock_clicked: bool,
+    /// The space [`ExplorerEntry::trailing`] reserved, for the caller to paint.
+    pub(crate) trailing: Option<egui::Rect>,
 }
 
 /// One trailing icon toggle. Returns whether it was clicked.
@@ -144,6 +146,7 @@ pub(crate) struct ExplorerEntry {
     toggles: Option<EntryToggles>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
     draggable: bool,
+    trailing: f32,
 }
 
 impl ExplorerEntry {
@@ -156,7 +159,16 @@ impl ExplorerEntry {
             toggles: None,
             leading_icon: None,
             draggable: false,
+            trailing: 0.0,
         }
+    }
+
+    /// Hold `width` clear at the row's right edge for the caller to paint a
+    /// glyph of its own into - see [`ExplorerEntryResponse::trailing`]. The
+    /// label truncates against it, the way it does against the toggles.
+    pub(crate) fn trailing(mut self, width: f32) -> Self {
+        self.trailing = width;
+        self
     }
 
     pub(crate) fn selected(mut self, selected: bool) -> Self {
@@ -202,6 +214,7 @@ impl ExplorerEntry {
             toggles,
             leading_icon,
             draggable,
+            trailing,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -233,7 +246,7 @@ impl ExplorerEntry {
                 // as a floor, so the name would truncate at the row's edge and
                 // shove the toggles past it - which is what stopped the panel
                 // from being dragged narrower than its longest entry.
-                let label_width = (ui.available_width() - if toggles.is_some() { 2.0 * TOGGLE_WIDTH } else { 0.0 }).max(0.0);
+                let label_width = (ui.available_width() - if toggles.is_some() { 2.0 * TOGGLE_WIDTH } else { 0.0 } - trailing).max(0.0);
                 let response = ui
                     .allocate_ui_with_layout(egui::vec2(label_width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.add(
@@ -246,6 +259,7 @@ impl ExplorerEntry {
                         )
                     })
                     .inner;
+                let trailing = (trailing > 0.0).then(|| ui.allocate_exact_size(egui::vec2(trailing, height), egui::Sense::hover()).0);
                 let (visibility_clicked, lock_clicked) = match toggles {
                     Some(EntryToggles { visible, locked }) => {
                         let visibility_clicked = entry_toggle(
@@ -278,6 +292,7 @@ impl ExplorerEntry {
                     response,
                     visibility_clicked,
                     lock_clicked,
+                    trailing,
                 }
             })
             .inner

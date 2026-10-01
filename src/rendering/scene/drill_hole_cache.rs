@@ -10,9 +10,17 @@ use crate::{
     i18n::tr,
     model::drill_hole::{
         COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DISC_MIN_PIXEL_LENGTH, DrillColorState,
-        DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillValue, HoleDisc, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieIn, hole_discs,
+        DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillValue, HoleDisc, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow, TieIn, hole_discs,
     },
 };
+
+/// Dashes a redundant tie is broken into.
+const TIE_DASHES: usize = 5;
+/// Chevron size as a multiple of the collar marker's radius.
+const TIE_CHEVRON_MARKER_SCALE: f64 = 1.4;
+
+/// The part of a loaded hole no deck reaches - subdrill left open, say.
+const UNLOADED_TRACE_COLOR: [f32; 3] = [0.55, 0.55, 0.58];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,8 +121,8 @@ struct SelectionHeader {
 /// [`HoleSelection::key`] changed. Bit layout: holes occupy
 /// `[0, hole_count)`; tie-ins occupy `[hole_count, hole_count + tie_count)`,
 /// indexed by their position in `dataset.dataset.ties` (not the position
-/// among ties that survive [`build_tie_instances`]'s `filter_map`, so a tie
-/// with a dangling hole reference still owns a stable, if unused, bit).
+/// among the ties [`build_tie_instances`] draws, so a tie with a dangling
+/// hole reference still owns a stable, if unused, bit).
 struct SelectionBits {
     header: SelectionHeader,
     words: Vec<u32>,
@@ -165,7 +173,7 @@ fn selection_bits_for(hole_count: usize, ties: &[TieIn], selection: &HoleSelecti
         }
     }
     for (index, tie) in ties.iter().enumerate() {
-        if selection.contains_tie(tie.from, tie.to) {
+        if selection.contains_tie(tie.a, tie.b) {
             let bit = hole_count + index;
             words[bit / 32] |= 1 << (bit % 32);
         }
@@ -421,7 +429,8 @@ impl DrillHoleGpuCache {
                 continue;
             }
             let selection = HoleSelection::of(dataset, editor);
-            let key = dataset_key(dataset, scene_origin, string_color);
+            let blast = BlastPaint::of(dataset, editor);
+            let key = dataset_key(dataset, scene_origin, string_color, &blast);
             let selection_key = selection.key();
             let action = sync_action(self.entries.get(&dataset.id).map(|cached| (cached.key, cached.selection_key)), key, selection_key);
             if action == SyncAction::Keep {
@@ -463,7 +472,7 @@ impl DrillHoleGpuCache {
                         )
                     }
                     _ => {
-                        let built = build_segment_instances(dataset, scene_origin, string_color);
+                        let built = build_segment_instances(dataset, scene_origin, string_color, &blast);
                         match dataset.color.hole_style {
                             DrillHoleStyle::StringAndDiscs => self.disc_spans.insert(dataset, built.disc_spans),
                             DrillHoleStyle::TrueDiameter => self.disc_spans.remove(dataset.id),
@@ -492,7 +501,7 @@ impl DrillHoleGpuCache {
                             );
                         }
 
-                        let ties = build_tie_instances(dataset, scene_origin);
+                        let ties = build_tie_instances(dataset, scene_origin, &blast);
                         let tie_buffer = (!ties.is_empty()).then(|| {
                             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                 label: Some("Drillhole Tie-In Instances"),
@@ -716,8 +725,51 @@ fn string_color_for(background: [f32; 4]) -> [f32; 3] {
     [rgba[0], rgba[1], rgba[2]]
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> u64 {
+/// What Drill & Blast adds to how a dataset is drawn: loaded decks down the
+/// holes, and ties muted under a review. The reviews' own marks - the
+/// heatmap, the contours, the timeline - are egui geometry over the scene,
+/// so neither a moving playhead nor a dragged relief limit rebuilds anything
+/// here.
+struct BlastPaint {
+    charges: bool,
+    mute_ties: bool,
+}
+
+/// Ties under a review: grey, so what the review draws over them reads.
+const MUTED_TIE_COLOR: [f32; 3] = [0.42, 0.42, 0.45];
+
+impl BlastPaint {
+    fn of(dataset: &OpenDrillHoleDataset, editor: &crate::ui::state::EditorState) -> Self {
+        Self {
+            charges: editor.shows_charges() && !dataset.dataset.charges.is_empty(),
+            mute_ties: editor.review_showing_over(dataset.id),
+        }
+    }
+
+    fn hash(&self, hash: &mut DefaultHasher) {
+        self.charges.hash(hash);
+        self.mute_ties.hash(hash);
+    }
+
+    /// The hole's charge, when charges are being drawn and it has one.
+    fn charge<'a>(&self, dataset: &'a OpenDrillHoleDataset, hole: usize) -> Option<&'a crate::model::blast::HoleCharge> {
+        self.charges.then(|| dataset.dataset.charges.get(&hole)).flatten()
+    }
+}
+
+/// A charged hole's colour at `depth`: its deck's product, or the unloaded
+/// grey where no deck reaches.
+fn deck_color(charge: &crate::model::blast::HoleCharge, depth: f64) -> [f32; 3] {
+    charge
+        .decks
+        .iter()
+        .find(|deck| deck.from <= depth && depth < deck.to)
+        .map_or(UNLOADED_TRACE_COLOR, |deck| deck.color)
+}
+
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3], blast: &BlastPaint) -> u64 {
     let mut hash = DefaultHasher::new();
+    blast.hash(&mut hash);
     dataset.id.hash(&mut hash);
     dataset.state.loaded.hash(&mut hash);
     // Hole positions are not hashed one by one: an edit to the geometry - the
@@ -847,7 +899,7 @@ fn merge_raw_segments(segments: Vec<RawSegment>, cos_threshold: f64) -> Vec<RawS
     merged
 }
 
-fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> SegmentBuild {
+fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3], blast: &BlastPaint) -> SegmentBuild {
     if !dataset.state.loaded {
         return SegmentBuild {
             instances: Vec::new(),
@@ -859,14 +911,15 @@ fn build_segment_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, 
         };
     }
     match dataset.color.hole_style {
-        DrillHoleStyle::TrueDiameter => build_true_diameter_instances(dataset, scene_origin),
-        DrillHoleStyle::StringAndDiscs => build_string_and_disc_instances(dataset, scene_origin, string_color),
+        DrillHoleStyle::TrueDiameter => build_true_diameter_instances(dataset, scene_origin, blast),
+        DrillHoleStyle::StringAndDiscs => build_string_and_disc_instances(dataset, scene_origin, string_color, blast),
     }
 }
 
 /// The true-diameter look: one cylinder per merged run at the hole's
-/// drilled diameter, cut wherever the active field's value changes.
-fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> SegmentBuild {
+/// drilled diameter, cut wherever the active field's value changes - or, on
+/// a loaded hole, wherever a deck starts or ends.
+fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, blast: &BlastPaint) -> SegmentBuild {
     let mut instances = Vec::new();
     let mut stations = 0usize;
     let mut before_merge = 0usize;
@@ -883,7 +936,15 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
         // Interval boundaries are extra cuts, not extra pieces of their own:
         // `trace_pieces` already cuts at every station and render-range end.
         let mut cuts = Vec::new();
-        if let Some(field) = field {
+        // A loaded hole is drawn as its column: each deck in its product's
+        // colour, in place of any interval colouring.
+        let charge = blast.charge(dataset, index);
+        if let Some(charge) = charge {
+            for deck in &charge.decks {
+                cuts.push(deck.from.clamp(min_depth, max_depth));
+                cuts.push(deck.to.clamp(min_depth, max_depth));
+            }
+        } else if let Some(field) = field {
             for interval in &hole.intervals {
                 if interval.values.contains_key(&field.key) {
                     cuts.push(interval.from.clamp(min_depth, max_depth));
@@ -897,7 +958,7 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
         }
 
         // Only the coloured path reads this sweep.
-        let interval_order = field.is_some().then(|| {
+        let interval_order = (field.is_some() && charge.is_none()).then(|| {
             let mut order: Vec<usize> = (0..hole.intervals.len()).collect();
             order.sort_by(|&a, &b| hole.intervals[a].from.total_cmp(&hole.intervals[b].from));
             order
@@ -929,9 +990,12 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
                 start: piece.start,
                 end: piece.end,
                 radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5 * dataset.color.radius_scale) as f32),
-                color: field
-                    .and_then(|field| value.map(|value| evaluate_color_with(&field.kind, value, &dataset.color, &sections)))
-                    .unwrap_or([1.0; 3]),
+                color: match charge {
+                    Some(charge) => deck_color(charge, midpoint),
+                    None => field
+                        .and_then(|field| value.map(|value| evaluate_color_with(&field.kind, value, &dataset.color, &sections)))
+                        .unwrap_or([1.0; 3]),
+                },
                 selection_index: index as u32,
                 depth_rank: 0.0,
             });
@@ -972,7 +1036,7 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
 /// the draw (`passes::draw_drill_holes`) can emit every string before any
 /// disc: with no depth test on the x-ray pipeline, draw order is the only
 /// thing standing between a disc and the string underneath it.
-fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3]) -> SegmentBuild {
+fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, string_color: [f32; 3], blast: &BlastPaint) -> SegmentBuild {
     let mut strings = Vec::new();
     let mut discs = Vec::new();
     let mut stations = 0usize;
@@ -992,14 +1056,25 @@ fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin:
         if hole.trace.len() >= 2 {
             let min_depth = hole.trace.first().unwrap().depth;
             let max_depth = hole.trace.last().unwrap().depth;
-            let pieces = hole.trace_pieces(min_depth, max_depth, &[]);
+            // A loaded hole's string takes its decks' colours.
+            let charge = blast.charge(dataset, index);
+            let cuts: Vec<f64> = charge
+                .map(|charge| {
+                    charge
+                        .decks
+                        .iter()
+                        .flat_map(|deck| [deck.from.clamp(min_depth, max_depth), deck.to.clamp(min_depth, max_depth)])
+                        .collect()
+                })
+                .unwrap_or_default();
+            let pieces = hole.trace_pieces(min_depth, max_depth, &cuts);
             let raw_segments: Vec<RawSegment> = pieces
                 .iter()
                 .map(|piece| RawSegment {
                     start: piece.start,
                     end: piece.end,
                     radius: 0.0,
-                    color: string_color,
+                    color: charge.map_or(string_color, |charge| deck_color(charge, (piece.from + piece.to) * 0.5)),
                     selection_index: index as u32,
                     depth_rank: 0.0,
                 })
@@ -1200,39 +1275,80 @@ fn bucket_instances(instances: Vec<DrillSegmentInstance>) -> (Vec<DrillSegmentIn
 /// The surface connectors, drawn collar to collar through the same instanced
 /// cylinder the traces use. A tie has no thickness of its own, so it takes a
 /// world radius from the holes it joins and scales with them until reaching
-/// the shared two-pixel screen floor. `selection_index` stamps the tie's own
-/// slot in the dataset's selection bitset - `hole_count + i`, where `i` is
-/// this tie's position in `dataset.dataset.ties` - matching
-/// [`selection_bits_for`] bit for bit.
-fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillSegmentInstance> {
+/// the shared two-pixel screen floor. Every instance a tie is drawn with
+/// stamps the tie's own slot in the dataset's selection bitset -
+/// `hole_count + i`, where `i` is this tie's position in
+/// `dataset.dataset.ties` - matching [`selection_bits_for`] bit for bit.
+///
+/// Ties are undirected, so the round decides which way each was crossed: a
+/// chevron at its middle points the way the signal went, and one no first
+/// signal came over - a loop, a backup, two fronts meeting - is drawn broken.
+fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, blast: &BlastPaint) -> Vec<DrillSegmentInstance> {
     let holes = &dataset.dataset.holes;
     let hole_count = holes.len() as u32;
-    dataset
-        .dataset
-        .ties
-        .iter()
-        .enumerate()
-        .filter_map(|(tie_index, tie)| {
-            let from = holes.get(tie.from)?;
-            let to = holes.get(tie.to)?;
-            let start = from.collar_position();
-            let end = to.collar_position();
-            (start.distance_squared(end) > 1.0e-18).then_some(DrillSegmentInstance {
-                start: (start - scene_origin).as_vec3().to_array(),
-                // A run between holes of unequal diameter takes their mean, so
-                // it reads the same whichever end it was tied from.
-                radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
-                end: (end - scene_origin).as_vec3().to_array(),
+    let flows = dataset.dataset.tie_flows(&dataset.dataset.firing_times());
+    let mut instances = Vec::with_capacity(dataset.dataset.ties.len() * 3);
+    for (tie_index, (tie, flow)) in dataset.dataset.ties.iter().zip(flows).enumerate() {
+        let (Some(a), Some(b)) = (holes.get(tie.a), holes.get(tie.b)) else {
+            continue;
+        };
+        let (start, end) = (a.collar_position(), b.collar_position());
+        let length = start.distance(end);
+        if length <= 1.0e-9 {
+            continue;
+        }
+        // A run between holes of unequal diameter takes their mean, so it
+        // reads the same from either end.
+        let hole_radius = (a.render_radius() + b.render_radius()) * 0.5;
+        let radius = (hole_radius * TIE_RADIUS_SCALE) as f32;
+        let color = if blast.mute_ties { MUTED_TIE_COLOR } else { tie.color };
+        let selection_index = hole_count + tie_index as u32;
+        let mut push = |from: DVec3, to: DVec3| {
+            instances.push(DrillSegmentInstance {
+                start: (from - scene_origin).as_vec3().to_array(),
+                radius,
+                end: (to - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
-                color: tie.color,
-                selection_index: hole_count + tie_index as u32,
+                color,
+                selection_index,
                 pixel_length: 0.0,
                 depth_rank: 0.0,
                 disc_start: [0.0; 3],
                 disc_end: [0.0; 3],
-            })
-        })
-        .collect()
+            });
+        };
+        let along = (end - start) / length;
+        match flow {
+            TieFlow::Redundant => {
+                for dash in 0..TIE_DASHES {
+                    let from = start.lerp(end, (2 * dash) as f64 / (2 * TIE_DASHES - 1) as f64);
+                    let to = start.lerp(end, (2 * dash + 1) as f64 / (2 * TIE_DASHES - 1) as f64);
+                    push(from, to);
+                }
+            }
+            TieFlow::AToB | TieFlow::BToA | TieFlow::Unreached => {
+                push(start, end);
+                let direction = match flow {
+                    TieFlow::AToB => along,
+                    TieFlow::BToA => -along,
+                    _ => continue,
+                };
+                // Sized off the collar marker so it reads beside the holes,
+                // but never more than a fifth of a short tie.
+                let size = (hole_radius * COLLAR_MARKER_RADIUS_SCALE * TIE_CHEVRON_MARKER_SCALE).min(length * 0.2);
+                let side = direction.cross(DVec3::Z).normalize_or_zero();
+                if side == DVec3::ZERO {
+                    continue;
+                }
+                let middle = start.lerp(end, 0.5);
+                let tip = middle + direction * size * 0.5;
+                let back = middle - direction * size * 0.5;
+                push(back + side * size * 0.6, tip);
+                push(back - side * size * 0.6, tip);
+            }
+        }
+    }
+    instances
 }
 
 fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillCollarInstance> {

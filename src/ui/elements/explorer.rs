@@ -547,7 +547,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
-            let products = (editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast).then(|| super::products::draw_products_panel(ui, editor));
+            let products = (editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast).then(|| super::products::draw_products_panel(ui, editor, commands));
             if products.is_none() {
                 ui.skip_ahead_auto_ids(1);
             }

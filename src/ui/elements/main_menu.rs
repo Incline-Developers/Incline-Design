@@ -285,7 +285,9 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // drawing tools are on the way in.
     let survives = match editor.active_tool {
         ActiveTool::None | ActiveTool::VerticalSlice | ActiveTool::PickRotationCentre => true,
-        ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint => workspace == Workspace::DrillAndBlast,
+        ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles => {
+            workspace == Workspace::DrillAndBlast
+        }
         _ => workspace.has_production_tools(),
     };
     if !survives {
