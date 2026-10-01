@@ -163,9 +163,14 @@ impl<'a> App<'a> {
 
         // Taken here, before the renderer sees it, or one notch would both walk the section and zoom it.
         let slice_walked = !gui_consumed && self.slice_walk_scroll(&event);
+        // The welcome splash's backdrop takes every click, but a middle press
+        // normally gets past egui to the camera. Hold presses back while the
+        // splash is up so it cannot be panned behind; releases still pass, so
+        // a drag begun before it opened cannot stick.
+        let splash_blocks_press = !self.startup_dialog_dismissed && matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, .. });
         let graphics_consumed = !slice_walked
             && self.graphics.as_mut().is_some_and(|graphics| {
-                if gui_consumed && !graphics.should_receive_event_when_gui_consumed(&event) {
+                if gui_consumed && (splash_blocks_press || !graphics.should_receive_event_when_gui_consumed(&event)) {
                     return false;
                 }
 

@@ -1128,9 +1128,9 @@ pub(crate) struct EditorState {
     pub(crate) ui_size_percent: f64,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
-    /// Show the construction grid on the world XY plane at Z=0. Per-session
-    /// like the other view toggles above: shown at the start of every run and
-    /// never written to the config.
+    /// Show the construction grid on the world XY plane at Z=0. Never written
+    /// to the config; set as each project arrives instead - on for a new one,
+    /// off for one opened from storage.
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
@@ -2340,7 +2340,7 @@ impl EditorState {
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: true,
+            show_xy_grid: false,
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             show_preferences: false,

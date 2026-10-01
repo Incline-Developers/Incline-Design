@@ -209,6 +209,8 @@ impl<'a> App<'a> {
             }
         };
         self.set_active_project(opened);
+        // A grid at Z=0 sits far from real data and swings under it while orbiting.
+        self.editor.show_xy_grid = false;
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
