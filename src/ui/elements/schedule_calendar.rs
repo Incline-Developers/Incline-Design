@@ -1018,7 +1018,7 @@ fn crusher_hover(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
         CalendarCell::Period(period) => period,
     };
     let resolved = match calendar.limit_at(period) {
-        Some(limit) => tr_format!(literal = "%value% t/day", value = format_tonnes(limit)),
+        Some(limit) => tr!("schedule-tonnes-per-day", value = format_tonnes(limit)),
         None => tr!("destination-unlimited"),
     };
     let source = if calendar.periods.contains_key(&period) {
