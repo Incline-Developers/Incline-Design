@@ -460,6 +460,75 @@ A fault this exposed is also fixed. SCIP reports "no dual bound" as its
 infinity, 1e20, and a solve stopped before its first root LP used to publish
 1e20 as the bound, with a matching gap. Both are now reported as absent.
 
+## Dispatch starts
+
+At the default 60 s limit the day-by-day windows still failed on DreamLand's
+week. Each window gets 6 s, and SCIP could not finish a three-day window's
+first LP in that time ("gap None" in the log). The best schedule it held by
+then had the loaders working about one hour in ten. Every window ended at its
+limit, and the run published 5.86M against a 74.7M bound, with mostly idle
+Gantt rows. SCIP's heuristic emphasis (aggressive, or feasibility) changed
+nothing, and a shorter look-ahead helped later days but not the first.
+Ten times the time (600 s) still left the first three windows poor.
+
+Yet on that project digging flat out is nearly optimal, and it is cheap to
+construct. `blended/greedy.rs` does so without a solver:
+- Each interval, every loader works its highest-priority ready bar at its
+  rate, with readiness defined exactly as the replay defines it.
+- A dig bar works its blocks in authored order, back to back where the
+  formulation's `order` rows allow it.
+- Each block's materials are split in proportion and sent to their
+  best-paying destinations first, within crusher days, dump and pile
+  capacity, and truck hours. Loaders take shared room in order of what
+  their bar pays best.
+
+On DreamLand's week it builds a schedule worth 74.50M in 22 ms, which the
+replay accepts.
+
+The dispatch schedule is only ever a start:
+- **Windows:** every day-by-day window is offered its own dispatch schedule.
+  It is completed and checked by SCIP exactly as the stitched seed is, so the
+  seeded-mode workaround applies to the window too.
+- **Single solves:** a horizon solved in one piece, or one whose day-by-day
+  start failed, is offered the dispatch schedule for the whole horizon.
+- **Fallback:** a dispatch schedule the replay rejects, or SCIP will not
+  complete, is logged and the solve runs as before. Chunked piles are not
+  dispatched.
+
+The dispatcher's limits on reclaim:
+- It reclaims into a destination whose admission depends on the blend only
+  when the pile's released blend clears the boundary by the formulation's
+  margin.
+- It never reclaims where a grade-conditional value applies.
+
+DreamLand, from the app's captured request, 60 s limit:
+
+| horizon | before | with dispatch starts |
+|---|---|---|
+| 1 day | 11.2M optimal, 4.3 s | 11.2M optimal, 0.6 s |
+| 3 days | FeasibleLimit at 60 s | 33.6M optimal, 6.0 s |
+| 4 days | 6.10M at 60 s | 44.8M, proven by the relaxation bound, 10 s |
+| 7 days | 5.86M at 60 s | 74.50M at 60 s, 0.29 % below the 74.71M bound |
+
+Fixtures through `execute_scip_blend`, 40 s:
+
+| fixture | before | with dispatch starts |
+|---|---|---|
+| competition 24 h | 5,700 | 5,700 |
+| competition 72 h | 13,500 | 15,900 |
+| competition 168 h | 31,500 | 33,900 |
+| graded 24 / 72 / 168 h | optimal in 0.08 / 0.96 / 2.7 s | optimal in 0.04 / 0.10 / 0.34 s |
+
+On the competition fixture's 24 h the first dispatcher was worse than the
+unseeded solve (4,500 against 5,700):
+- It refused every reclaim into a crusher with a minimum grade.
+- It let direct feed fill the crusher ahead of reclaim worth more.
+
+Fixing both brought it to 5,700. A started solve can stop at its gap target
+(`GapLimit`) rather than close the gap exactly. The developer check that
+required `Optimal` now accepts either, and still requires an optimal
+termination.
+
 ## Relaxation bound from HiGHS
 
 SCIP's own bound on a long horizon arrives late, because its first LP is

@@ -9,6 +9,7 @@
 //! | [`input`] | the scenario contract and the stockpile semantics it encodes |
 //! | [`grade`] | which reserve fields may be used as a grade, and why most may not |
 //! | [`replay`] | an independent physical replay of a published schedule |
+//! | [`greedy`] | a dispatch schedule built without a solver, for SCIP to start from |
 //! | [`rolling`] | windows, carried state and stitching for day-by-day solving |
 //! | [`iterative`] | the iterative fixed-grade HiGHS method |
 //! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
@@ -42,6 +43,7 @@
 
 pub(crate) mod formulation;
 pub(crate) mod grade;
+pub(crate) mod greedy;
 pub(crate) mod input;
 #[cfg(feature = "blend-experiment")]
 pub(crate) mod iterative;

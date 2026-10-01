@@ -34,6 +34,7 @@ use crate::model::schedule::{
         Activity, DestinationKind, SourceId, TaskKind,
         blended::{
             formulation::BlendSizes,
+            greedy,
             input::BlendInput,
             relaxation::{RelaxationBound, relaxation_bound},
             replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
@@ -459,6 +460,26 @@ pub(crate) fn execute_scip_blend(
             Err(problem) => log::warn!("schedule run {}: day-by-day seed not offered to SCIP: {problem}", out.identity.run_id),
         }
         out.timings.solver += started.elapsed();
+    } else {
+        // No day-by-day schedule: start from a dispatch schedule instead.
+        activity.set(3);
+        let started = Instant::now();
+        match dispatch_start(&out.input, remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE)), cancel) {
+            Ok((values, value)) => {
+                log::info!(
+                    "schedule run {}: starting from a dispatch schedule worth {value:.2}, completed in {:.2?}",
+                    out.identity.run_id,
+                    started.elapsed()
+                );
+                completed = Some(values);
+            }
+            Err(_) if cancel.is_cancelled() => {
+                out.stop(ScipTermination::Cancelled, "cancelled while completing the dispatch schedule");
+                return out;
+            }
+            Err(problem) => log::warn!("schedule run {}: no dispatch start: {problem}", out.identity.run_id),
+        }
+        out.timings.solver += started.elapsed();
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
@@ -509,7 +530,7 @@ pub(crate) fn execute_scip_blend(
         model = match offer_seed(model, values) {
             Ok((model, stored)) => {
                 if !stored {
-                    log::warn!("schedule run {}: SCIP rejected the completed day-by-day seed", out.identity.run_id);
+                    log::warn!("schedule run {}: SCIP rejected the completed seed", out.identity.run_id);
                 }
                 model
             }
@@ -776,6 +797,29 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
         if built.sizes.variables > out.sizes.variables {
             out.sizes = built.sizes;
         }
+
+        // A window starts from its dispatch schedule, so SCIP returns
+        // nothing worse even when its first LP takes longer than the window
+        // has; see `greedy`.
+        let phase = Instant::now();
+        let start = match dispatch_start(&input, limit.map(|limit| limit.mul_f64(SEED_COMPLETION_SHARE)), cancel) {
+            Ok((values, value)) => {
+                log::info!(
+                    "schedule run {}: {label} starts from a dispatch schedule worth {value:.2}, completed in {:.2?}",
+                    out.identity.run_id,
+                    phase.elapsed()
+                );
+                Some(values)
+            }
+            Err(_) if cancel.is_cancelled() => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Err(problem) => {
+                log::warn!("schedule run {}: {label} has no dispatch start: {problem}", out.identity.run_id);
+                None
+            }
+        };
+        out.timings.solver += phase.elapsed();
+        let limit = limit.map(|limit| limit.saturating_sub(phase.elapsed()));
+
         let model = if options.diagnostic_logging {
             built.model.show_output()
         } else {
@@ -785,6 +829,17 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipS
             Ok(model) => model,
             Err(problem) => return DayByDay::Stop(ScipTermination::BackendFailure, problem),
         };
+        if let Some(values) = start.as_ref() {
+            model = match offer_seed(model, values) {
+                Ok((model, stored)) => {
+                    if !stored {
+                        log::warn!("schedule run {}: SCIP rejected {label}'s dispatch start", out.identity.run_id);
+                    }
+                    model
+                }
+                Err(problem) => return DayByDay::Stop(ScipTermination::BackendFailure, problem),
+            };
+        }
         // The window's own progress record: the published diagnostics
         // describe the whole-horizon solve alone.
         let audit = Arc::new(adapter::InterruptAudit::default());
@@ -1052,8 +1107,26 @@ fn ipopt_options_file() -> Option<&'static str> {
 const SEED_BAND_ABSOLUTE: f64 = 1e-3;
 const SEED_BAND_RELATIVE: f64 = 1e-3;
 
-/// Complete the stitched schedule into a full solution of the whole-horizon
-/// model, as values by variable name.
+/// A dispatch schedule for `input` (see [`greedy`]), replayed and completed
+/// into a start SCIP can be offered, or why there is none.
+///
+/// It is only ever a start: SCIP checks it against the model before storing
+/// it, and whatever SCIP returns is replayed again on its own.
+fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
+    let mut solution = greedy::dispatch(input).ok_or("the dispatcher does not handle chunked piles")?;
+    // The rows are the dispatcher's own, so the objective they report is
+    // what the replay values them at.
+    solution.reported_objective = replay_cancellable(input, &solution, &cancel.signal()).ok_or("cancelled")?.replayed_objective;
+    let checked = replay_cancellable(input, &solution, &cancel.signal()).ok_or("cancelled")?;
+    if !checked.is_valid() {
+        let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
+        return Err(format!("the replay rejected the dispatch schedule: {issue}"));
+    }
+    Ok((complete_seed(input, &solution, limit, cancel)?, checked.replayed_objective))
+}
+
+/// Complete a schedule - the stitched day-by-day one, or a dispatch
+/// schedule - into a full solution of its model, as values by variable name.
 ///
 /// A second copy of the model is built with every movement and segment
 /// duration held to the seed's value, give or take [`SEED_BAND_ABSOLUTE`]
@@ -1532,7 +1605,10 @@ mod developer_checks {
         let input = Arc::new(graded_blend_world(3));
         let result = execute_scip_blend(input, identity(1), ScipSolveOptions::default(), &CancelFlag::default(), &ScipActivity::default(), &|_| {});
         assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
-        assert_eq!(result.backend_status, Some(Status::Optimal));
+        // Started from an optimal dispatch schedule, SCIP may stop at the gap
+        // target rather than close the gap exactly.
+        assert_eq!(result.termination, ScipTermination::Optimal);
+        assert!(matches!(result.backend_status, Some(Status::Optimal | Status::GapLimit)), "{:?}", result.backend_status);
         assert!(result.replay.as_ref().is_some_and(|report| report.is_valid()));
         assert!(result.timings.solver > Duration::ZERO);
         assert!(result.timings.formulation > Duration::ZERO);
