@@ -1744,8 +1744,6 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
-    /// The Modelling branch's settings dialog: the datum the model is built in.
-    pub(crate) show_modelling_settings: bool,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -2092,7 +2090,6 @@ impl EditorState {
             || self.drill_hole_color_dialog.is_some()
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
-            || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
@@ -2727,7 +2724,6 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
-            show_modelling_settings: false,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -3554,10 +3550,6 @@ pub(crate) enum UiCommand {
         controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
     },
-    OpenModellingSettings,
-    /// The project's coordinate system, in its stored spelling; empty clears
-    /// it.
-    SetProjectCoordinateSystem(String),
     /// One point per hole at the chosen boundary of a working section, as a
     /// new layer, on the holes the command was opened on.
     BuildReferencePoints {
@@ -3902,7 +3894,6 @@ impl UiCommand {
             | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
-            | Self::OpenModellingSettings
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
@@ -4112,10 +4103,6 @@ impl UiCommand {
                     Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
                     None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
-            ),
-            Self::SetProjectCoordinateSystem(stored) => report(
-                tr!("state-set-project-coordinate-system"),
-                if stored.is_empty() { tr!("common-none") } else { stored.clone() },
             ),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
@@ -4430,8 +4417,6 @@ pub(crate) struct UiProjectView {
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
-    /// The active project's coordinate system as stored; empty when unset.
-    pub(crate) coordinate_reference_system: String,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
     /// Every explorer folder, across every section.

@@ -1236,7 +1236,6 @@ fn draw_global_dialogs(
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, commands);
-    dialogs::modelling_settings::draw_modelling_settings_dialog(root_ui, editor, project, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
     dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
     dialogs::charging::draw_charge_rule_dialog(root_ui, editor, drill_holes, commands);

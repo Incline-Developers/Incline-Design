@@ -28,7 +28,7 @@ use crate::{
     i18n::tr,
     model::{Command, SceneEntityId},
     ui::state::{ActiveTool, TriCreatePhase, UiCommand},
-    userspace_error, userspace_log, userspace_warn,
+    userspace_error, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -122,8 +122,6 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferencePoints
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
-                | UiCommand::OpenModellingSettings
-                | UiCommand::SetProjectCoordinateSystem(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
         );
@@ -645,33 +643,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
-            UiCommand::OpenModellingSettings => {
-                self.editor.show_modelling_settings = true;
-                Ok(())
-            }
-            UiCommand::SetProjectCoordinateSystem(stored) => {
-                let changed = self.workspace.active_project_mut().is_some_and(|project| {
-                    let metadata = &mut project.project.metadata;
-                    if metadata.coordinate_reference_system == stored {
-                        false
-                    } else {
-                        metadata.coordinate_reference_system = stored.clone();
-                        true
-                    }
-                });
-                if changed {
-                    self.touch_active_project_content();
-                    userspace_log!(
-                        "{}",
-                        if stored.is_empty() {
-                            tr!("cmd-commands-project-coordinate-system-cleared")
-                        } else {
-                            tr!("cmd-commands-project-coordinate-system-set-system", system = stored.to_string())
-                        }
-                    );
-                }
-                Ok(())
-            }
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
                 self.build_reference_points(holes, field, target, side);
                 Ok(())
