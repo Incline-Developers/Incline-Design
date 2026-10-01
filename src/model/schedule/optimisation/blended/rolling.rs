@@ -117,6 +117,7 @@ pub(crate) fn plan(input: &BlendInput, lookahead_h: f64) -> Option<Vec<Window>> 
 #[derive(Clone, Debug)]
 pub(crate) struct Carry {
     ground: BTreeMap<GroundId, f64>,
+    target_totals: BTreeMap<(usize, u32), (f64, f64)>,
     /// Released opening tonnes and contained quantity per grade.
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
     /// A chunked pile's chunks: tonnes, contained quantity per grade, and
@@ -133,6 +134,7 @@ impl Carry {
     pub(crate) fn opening(input: &BlendInput) -> Self {
         let grades = input.grades.count();
         Self {
+            target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
             ground: input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect(),
             piles: input.piles.iter().map(|pile| (pile.id, pile.total_opening(grades))).collect(),
             chunks: input
@@ -314,6 +316,8 @@ impl Carry {
             qualifications: full.qualifications.clone(),
             conditional_values: full.conditional_values.clone(),
             grade_limits: full.grade_limits.clone(),
+            grade_targets: full.grade_targets.clone(),
+            target_opening: self.target_totals.iter().map(|(&(i, p), &(t, q))| (i, p, t, q)).collect(),
         }
     }
 
@@ -352,6 +356,13 @@ impl Carry {
                 *self.crusher_used.entry((candidate.destination, interval.day() as usize)).or_default() += row.tonnes_t;
             }
         }
+        super::replay::accumulate_target_receipts(
+            full,
+            solution.movements.iter().filter(|row| row.interval < window.committed),
+            &replay.movement_contained,
+            window.first,
+            &mut self.target_totals,
+        );
         let last = window.committed - 1;
         for pile in &full.piles {
             if let Some(state) = replay.pile_intervals.get(&(pile.id, last)) {

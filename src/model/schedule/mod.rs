@@ -18,6 +18,7 @@ pub(crate) mod cashflow;
 pub(crate) mod delays;
 pub(crate) mod destinations;
 pub(crate) mod experiment;
+pub(crate) mod grade_targets;
 pub(crate) mod inventory;
 pub(crate) mod optimisation;
 pub(crate) mod result;
@@ -506,6 +507,7 @@ pub(crate) enum ScheduleError {
     InvalidValue,
     /// An id that names no cashflow rule in this plan.
     UnknownCashflowRule,
+    InvalidGradeTarget,
     /// A summed coefficient or movement value no finite number can express.
     UnrepresentableValue,
     /// A currency label that is empty once trimmed.
@@ -607,6 +609,7 @@ impl ScheduleError {
             Self::TruckClassInUse(rules) => tr!("truck-error-class-in-use", rules = rules.join(", ")),
             Self::UnrepresentableTransport => tr!("truck-error-unrepresentable"),
             Self::InvalidValue => tr!("cashflow-error-invalid-value"),
+            Self::InvalidGradeTarget => tr!("grade-target-invalid"),
             Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
             Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
             Self::EmptyCurrency => tr!("cashflow-error-empty-currency"),
@@ -694,6 +697,15 @@ pub(crate) struct SchedulePlan {
     /// movement value, not an invented objective coefficient.
     #[serde(default)]
     cashflow: CashflowConfig,
+    /// Soft grade targets on crusher receipts, one calendar per crusher and
+    /// tracked grade. A calendar for an untracked grade is kept but ignored.
+    #[serde(default)]
+    crusher_grade_calendars: Vec<grade_targets::CrusherGradeCalendar>,
+    /// Destination grade targets from a short-lived unreleased build, read
+    /// and dropped so such a project still opens: stockpile and dump grades
+    /// are steered by routing, and crusher targets live in the Calendar.
+    #[serde(default, rename = "grade_targets", skip_serializing)]
+    retired_grade_targets: grade_targets::Retired,
     #[serde(default = "default_currency")]
     currency: String,
     /// Explicit settings for schedule optimisation; see [`experiment`].
@@ -725,6 +737,8 @@ impl Default for SchedulePlan {
             routing: RoutingConfig::default(),
             trucks: TruckFleetConfig::default(),
             cashflow: CashflowConfig::default(),
+            crusher_grade_calendars: Vec::new(),
+            retired_grade_targets: grade_targets::Retired,
             currency: default_currency(),
             experiment: experiment::ExperimentConfig::default(),
             delays: DelayConfig::default(),
@@ -770,6 +784,7 @@ impl SchedulePlan {
             && self.routing.is_pristine()
             && self.trucks.is_empty()
             && self.cashflow.is_empty()
+            && self.crusher_grade_calendars.is_empty()
             && self.currency == cashflow::DEFAULT_CURRENCY
             && self.experiment.is_pristine()
             && self.delays.is_empty()
@@ -852,6 +867,48 @@ impl SchedulePlan {
     /// so one committed truck edit is one undo step.
     pub(crate) fn trucks_mut(&mut self) -> &mut TruckFleetConfig {
         &mut self.trucks
+    }
+
+    pub(crate) fn crusher_grade_calendars(&self) -> &[grade_targets::CrusherGradeCalendar] {
+        &self.crusher_grade_calendars
+    }
+
+    pub(crate) fn crusher_grade_calendar(&self, destination: DestinationId, field: crate::model::ReserveFieldId) -> std::borrow::Cow<'_, grade_targets::CrusherGradeCalendar> {
+        match self.crusher_grade_calendars.iter().find(|c| c.destination == destination && c.field == field) {
+            Some(calendar) => std::borrow::Cow::Borrowed(calendar),
+            None => std::borrow::Cow::Owned(grade_targets::CrusherGradeCalendar::new(destination, field)),
+        }
+    }
+
+    /// Spreadsheet batches are validated as a whole, so a pasted band is one
+    /// undo step and intermediate cell values cannot reject a valid final band.
+    pub(crate) fn set_grade_target_cells(&mut self, edits: &[grade_targets::GradeTargetCellEdit]) -> ScheduleResult {
+        let mut calendars = self.crusher_grade_calendars.clone();
+        for edit in edits {
+            let DestinationId::Standalone(id) = edit.destination else {
+                return Err(ScheduleError::UnknownDestination);
+            };
+            if !self.routing.standalone(id).is_some_and(|d| d.kind == DestinationKind::Crusher) {
+                return Err(ScheduleError::UnknownDestination);
+            }
+            let position = match calendars.iter().position(|c| c.destination == edit.destination && c.field == edit.field) {
+                Some(position) => position,
+                None => {
+                    calendars.push(self.crusher_grade_calendar(edit.destination, edit.field).into_owned());
+                    calendars.len() - 1
+                }
+            };
+            calendars[position].set_cell(edit.cell, edit.input, edit.value);
+        }
+        for calendar in &calendars {
+            calendar.validate()?;
+        }
+        self.crusher_grade_calendars = calendars;
+        Ok(())
+    }
+
+    pub(crate) fn remove_destination_grade_targets(&mut self, destination: DestinationId) {
+        self.crusher_grade_calendars.retain(|c| c.destination != destination);
     }
 
     pub(crate) fn cashflow(&self) -> &CashflowConfig {
@@ -1542,6 +1599,15 @@ impl SchedulePlan {
         }
         let agents = self.agent_ids();
         self.delays.validate_loaded(&agents)?;
+        for (index, calendar) in self.crusher_grade_calendars.iter().enumerate() {
+            calendar.validate()?;
+            if self.crusher_grade_calendars[..index]
+                .iter()
+                .any(|c| c.destination == calendar.destination && c.field == calendar.field)
+            {
+                return Err(ScheduleError::InvalidGradeTarget);
+            }
+        }
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
@@ -1602,6 +1668,9 @@ impl SchedulePlan {
         // names it would not. A rename is unsaved work without being a change
         // of coefficient.
         self.cashflow.hash_content(hasher);
+        for calendar in &self.crusher_grade_calendars {
+            calendar.hash_content(hasher);
+        }
         self.cashflow.hash_names(hasher);
         self.currency.hash(hasher);
         self.experiment.hash_content(hasher);
@@ -1667,6 +1736,12 @@ impl SchedulePlan {
             + self.routing.estimated_bytes()
             + self.trucks.estimated_bytes()
             + self.cashflow.estimated_bytes()
+            + std::mem::size_of_val(self.crusher_grade_calendars.as_slice())
+            + self
+                .crusher_grade_calendars
+                .iter()
+                .map(|c| c.periods.len() * std::mem::size_of::<(CalendarPeriod, grade_targets::GradeTargetOverride)>())
+                .sum::<usize>()
             + self.currency.len()
             + self.experiment.estimated_bytes()
             + self.delays.estimated_bytes()

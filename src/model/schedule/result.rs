@@ -130,7 +130,7 @@ pub(crate) struct Delivery {
     /// Signed movement value, every matching rule added, conditional rules
     /// valued at their authored boundaries.
     pub(crate) value: f64,
-    /// Contained quantity per tracked grade, in tonnes of the component,
+    /// Weighted quantity (tonnes × stored grade) per tracked grade,
     /// aligned with [`CalculatedSchedule::grades`].
     pub(crate) contained: Vec<f64>,
 }
@@ -401,6 +401,7 @@ pub(crate) struct SolveReport {
     pub(crate) boundary_rows: usize,
     pub(crate) boundary_tonnes_t: f64,
     pub(crate) boundary_value_slack: f64,
+    pub(crate) target_value_tolerance: f64,
     /// How far the solver's own objective may sit above the published one
     /// through conditional-value indicator tolerance.
     pub(crate) indicator_leak_value: f64,
@@ -422,6 +423,7 @@ pub(crate) struct PeriodTotals {
     dig: BTreeMap<(LoaderAgentId, u32), f64>,
     reclaim: BTreeMap<(LoaderAgentId, u32), f64>,
     received: BTreeMap<(DestinationId, u32), f64>,
+    received_contained: BTreeMap<(DestinationId, u32), Vec<f64>>,
     reclaimed: BTreeMap<(DestinationId, u32), f64>,
     closing: BTreeMap<(DestinationId, u32), (f64, Vec<f64>)>,
     truck_hours: BTreeMap<(TruckClassId, u32), f64>,
@@ -477,6 +479,13 @@ impl PeriodTotals {
             apportion(delivery.start_h, delivery.end_h, delivery.tonnes, |period, share| {
                 *totals.received.entry((delivery.destination, period)).or_default() += share;
             });
+            for (grade, &quantity) in delivery.contained.iter().enumerate() {
+                apportion(delivery.start_h, delivery.end_h, quantity, |period, share| {
+                    let quantities = totals.received_contained.entry((delivery.destination, period)).or_default();
+                    quantities.resize(quantities.len().max(grade + 1), 0.0);
+                    quantities[grade] += share;
+                });
+            }
             if let WorkSource::Stockpile(pile) = delivery.source {
                 apportion(delivery.start_h, delivery.end_h, delivery.tonnes, |period, share| {
                     *totals.reclaimed.entry((pile, period)).or_default() += share;
@@ -537,6 +546,15 @@ impl PeriodTotals {
         self.flow(&self.received, (destination, period), period)
     }
 
+    /// Tonnes-weighted actual delivered grade, including mining and reclaim.
+    pub(crate) fn received_grade(&self, destination: DestinationId, period: u32, grade: usize) -> Option<f64> {
+        let tonnes = self.received(destination, period)?;
+        if tonnes <= 1e-6 {
+            return None;
+        }
+        Some(*self.received_contained.get(&(destination, period))?.get(grade)? / tonnes)
+    }
+
     pub(crate) fn reclaimed(&self, pile: DestinationId, period: u32) -> Option<f64> {
         self.flow(&self.reclaimed, (pile, period), period)
     }
@@ -565,6 +583,18 @@ impl PeriodTotals {
     }
 }
 
+/// One target day, recomputed from actual deliveries by independent replay.
+#[derive(Clone, Debug)]
+pub(crate) struct GradeTargetResult {
+    pub(crate) specification: super::grade_targets::GradeTarget,
+    /// The absolute calendar day.
+    pub(crate) period: u32,
+    pub(crate) tonnes: f64,
+    /// Tonnes times grade, in the grade's stored scale.
+    pub(crate) contained: f64,
+    pub(crate) penalty: f64,
+}
+
 /// One accepted calculation, in project terms.
 #[derive(Clone, Debug)]
 pub(crate) struct CalculatedSchedule {
@@ -591,6 +621,7 @@ pub(crate) struct CalculatedSchedule {
     /// Each reclaim bar's cap, as captured.
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
+    pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
     pub(crate) periods: PeriodTotals,
     by_bar: HashMap<BarId, Vec<usize>>,
@@ -613,6 +644,7 @@ pub(crate) struct ScheduleParts {
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
+    pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
 }
 
@@ -666,6 +698,7 @@ impl CalculatedSchedule {
             bar_blocks: parts.bar_blocks,
             reclaim_caps: parts.reclaim_caps,
             grades: parts.grades,
+            grade_targets: parts.grade_targets,
             report: parts.report,
             periods,
             by_bar,

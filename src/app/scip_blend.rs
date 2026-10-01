@@ -1039,7 +1039,13 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         stitched.keep(&full, window, &solution, paid);
     }
 
-    let solution = stitched.finish();
+    let mut solution = stitched.finish();
+    if !full.grade_targets.is_empty() {
+        let Some(checked) = replay_cancellable(&full, &solution, &cancel.signal()) else {
+            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during target scoring".into());
+        };
+        solution.reported_objective -= checked.grade_target_penalty;
+    }
     let phase = Instant::now();
     let checked = replay_cancellable(&full, &solution, &cancel.signal());
     out.timings.replay += phase.elapsed();
@@ -1529,7 +1535,11 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
         if !pile_ids.insert(pile.id) || !pile.capacity_t.is_finite() || pile.capacity_t <= 0.0 {
             return Err(format!("invalid or duplicate pile {}", pile.id.0));
         }
-        if !pile.opening_t.is_finite() || pile.opening_t < 0.0 || pile.opening_q.len() != grades || pile.opening_q.iter().any(|q| !q.is_finite() || *q < 0.0) {
+        if !pile.opening_t.is_finite()
+            || pile.opening_t < 0.0
+            || pile.opening_q.len() != grades
+            || pile.opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (pile.opening_t == 0.0 && *q != 0.0))
+        {
             return Err(format!("invalid opening data on pile {}", pile.id.0));
         }
         if pile.chunks.is_empty() && !pile.chunk_opening.is_empty() {
@@ -1546,7 +1556,7 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
                 || !tonnes.is_finite()
                 || *tonnes < 0.0
                 || *tonnes > pile.chunks[position]
-                || contained.iter().any(|q| !q.is_finite() || *q < 0.0 || *q > *tonnes)
+                || contained.iter().any(|q| !q.is_finite() || *q < 0.0 || (*tonnes == 0.0 && *q != 0.0))
             {
                 return Err(format!("invalid opening on pile {} chunk {position}", pile.id.0));
             }
@@ -1556,7 +1566,7 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
             || opening_t < 0.0
             || opening_t > pile.capacity_t
             || opening_q.len() != grades
-            || opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || *q > opening_t)
+            || opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (opening_t == 0.0 && *q != 0.0))
         {
             return Err(format!("invalid opening on pile {}", pile.id.0));
         }
@@ -1610,6 +1620,51 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
             || matches!(destination.kind, DestinationKind::Stockpile(pile) if !pile_ids.contains(&pile))
         {
             return Err(format!("invalid destination {}", destination.id.0));
+        }
+    }
+    let mut target_ids = BTreeSet::new();
+    let mut marginal_cost = 0.0;
+    let ceilings = crate::model::schedule::optimisation::blended::input::grade_ceilings(input);
+    for (index, target) in input.grade_targets.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let specification = &target.specification;
+        if target.grade >= grades
+            || !destinations.contains(&target.destination)
+            || !target_ids.insert((target.destination, target.grade, target.day))
+            || specification.validate().is_err()
+        {
+            return Err(format!("invalid grade target {index}"));
+        }
+        marginal_cost += specification
+            .hinges()
+            .iter()
+            .map(|&(boundary, _, slope)| slope * boundary.abs().max((ceilings[target.grade] - boundary).abs()))
+            .sum::<f64>();
+        use crate::model::schedule::grade_targets::{TARGET_PERIOD_H, target_day};
+        if input
+            .intervals
+            .iter()
+            .any(|interval| interval.end_h > (f64::from(target_day(interval.start_h)) + 1.0) * TARGET_PERIOD_H + 1e-9)
+        {
+            return Err(format!("an interval crosses grade target {index}'s period boundary"));
+        }
+    }
+    if !marginal_cost.is_finite() {
+        return Err("grade target marginal costs cannot be represented".into());
+    }
+    let mut opening_ids = BTreeSet::new();
+    for &(target, period, tonnes, contained) in &input.target_opening {
+        if target >= input.grade_targets.len()
+            || !opening_ids.insert((target, period))
+            || !tonnes.is_finite()
+            || tonnes < 0.0
+            || !contained.is_finite()
+            || contained < 0.0
+            || (tonnes == 0.0 && contained != 0.0)
+        {
+            return Err("invalid carried grade target receipts".into());
         }
     }
     let trucks: BTreeSet<_> = input.trucks.iter().map(|truck| truck.id).collect();
@@ -1677,7 +1732,7 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
         if cancel.is_cancelled() {
             return Ok(());
         }
-        if !destinations.contains(&limit.destination) || limit.grade >= grades || !limit.minimum.is_finite() || !(0.0..=1.0).contains(&limit.minimum) {
+        if !destinations.contains(&limit.destination) || limit.grade >= grades || !limit.minimum.is_finite() || limit.minimum < 0.0 {
             return Err("invalid grade limit".into());
         }
     }
@@ -1685,10 +1740,7 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
         bounds.iter().all(|bound| {
             bound.grade < grades
                 && (bound.lower.is_some() || bound.upper.is_some())
-                && [bound.lower, bound.upper]
-                    .into_iter()
-                    .flatten()
-                    .all(|end| end.value.is_finite() && (0.0..=1.0).contains(&end.value))
+                && [bound.lower, bound.upper].into_iter().flatten().all(|end| end.value.is_finite() && end.value >= 0.0)
                 && match (bound.lower, bound.upper) {
                     (Some(lower), Some(upper)) => lower.value <= upper.value,
                     _ => true,

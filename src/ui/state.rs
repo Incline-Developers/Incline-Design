@@ -5021,6 +5021,7 @@ impl UiCommand {
                 // result in place, and a line per keystroke-commit would bury
                 // the log the same way a rename would.
                 | ScheduleEdit::RenameDestination { .. }
+                | ScheduleEdit::SetGradeTargetCells { .. }
                 | ScheduleEdit::SetDestinationCapacity { .. }
                 | ScheduleEdit::RenameRule { .. }
                 | ScheduleEdit::SetRuleEnabled { .. }
@@ -6121,6 +6122,10 @@ pub(crate) enum ScheduleEdit {
     /// Delete a standalone destination. Refused, with the rules named, while
     /// any rule still delivers to it.
     DeleteDestination(crate::model::schedule::StandaloneDestinationId),
+    /// Set crusher grade-target cells in the Calendar, validated as one batch.
+    SetGradeTargetCells {
+        edits: Vec<crate::model::schedule::grade_targets::GradeTargetCellEdit>,
+    },
     /// Set a stockpile's or dump's maximum tonnes, or clear it for unlimited.
     /// Addressed by destination id, so it reaches a solid-backed destination
     /// and a standalone one the same way.
@@ -6849,6 +6854,10 @@ pub(crate) enum CalendarRow {
     /// A balance at the end of the period: a stockpile's closing inventory,
     /// opening stock included, or a dump's cumulative deposit.
     Cumulative,
+    /// One editable input of a crusher's daily grade target.
+    GradeInput(crate::model::ReserveFieldId, crate::model::schedule::grade_targets::GradeTargetInput),
+    /// The tonnes-weighted grade a crusher received that day.
+    GradeActual(crate::model::ReserveFieldId),
     /// The schedule's movement value for the period, in the plan's currency.
     Value,
 }
@@ -6867,7 +6876,7 @@ impl CalendarRow {
     pub(crate) fn is_calculated(self) -> bool {
         matches!(
             self,
-            Self::DigTonnes | Self::ReclaimTonnes | Self::TruckHours | Self::Received | Self::Reclaimed | Self::Cumulative | Self::Value
+            Self::DigTonnes | Self::ReclaimTonnes | Self::TruckHours | Self::Received | Self::Reclaimed | Self::Cumulative | Self::GradeActual(_) | Self::Value
         )
     }
 
@@ -6946,6 +6955,8 @@ pub(crate) struct ScheduleCalendarView {
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
     pub(crate) collapsed: std::collections::HashSet<CalendarOwner>,
+    /// Crusher grades whose target inputs are shown; folded away by default.
+    pub(crate) grade_expanded: std::collections::HashSet<(crate::model::schedule::DestinationId, crate::model::ReserveFieldId)>,
     pub(crate) selection: Option<CalendarSelection>,
     pub(crate) draft: Option<CalendarCellDraft>,
     pub(crate) error: Option<String>,
@@ -6959,6 +6970,7 @@ impl Default for ScheduleCalendarView {
             scroll_x: 0.0,
             scroll_y: 0.0,
             collapsed: Default::default(),
+            grade_expanded: Default::default(),
             selection: None,
             draft: None,
             error: None,

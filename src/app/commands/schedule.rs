@@ -80,6 +80,7 @@ impl crate::app::App<'_> {
             ScheduleEdit::AddDestination { name, kind } => self.add_destination(name, kind),
             ScheduleEdit::RenameDestination { destination, name } => self.edit_routing(|routing| routing.rename_standalone(destination, &name)),
             ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
+            ScheduleEdit::SetGradeTargetCells { edits } => self.edit_schedule(|plan| plan.set_grade_target_cells(&edits)),
             ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
             ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
             ScheduleEdit::AddRule { name, destinations } => self.add_destination_rule(name, destinations),
@@ -400,8 +401,10 @@ impl crate::app::App<'_> {
     /// behalf.
     fn delete_destination(&mut self, destination: crate::model::schedule::StandaloneDestinationId) {
         let mut removed = false;
-        self.edit_routing(|routing| {
-            routing.remove_standalone(destination)?;
+        self.edit_schedule(|plan| {
+            plan.routing_mut().remove_standalone(destination)?;
+            let id = crate::model::schedule::DestinationId::Standalone(destination);
+            plan.remove_destination_grade_targets(id);
             removed = true;
             Ok(())
         });

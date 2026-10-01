@@ -427,6 +427,7 @@ pub(crate) fn publish(
         boundary_rows: replay.boundary_rows,
         boundary_tonnes_t: replay.boundary_tonnes_t,
         boundary_value_slack: replay.boundary_value_slack,
+        target_value_tolerance: replay.target_value_tolerance,
         indicator_leak_value: replay.indicator_leak_value,
         omitted_rows: omitted_rows + solution.adjustments.movement_count,
         omitted_tonnes_t: omitted_tonnes_t + solution.adjustments.movement_total_t,
@@ -446,6 +447,21 @@ pub(crate) fn publish(
         bar_blocks: identities.bar_blocks.clone(),
         reclaim_caps: identities.reclaim_caps.clone(),
         grades: identities.grades.iter().map(|(field, _, unit)| (*field, *unit)).collect(),
+        grade_targets: replay
+            .target_totals
+            .iter()
+            .map(|(&(index, period), &(tonnes, contained))| {
+                let specification = input.grade_targets[index].specification.clone();
+                let penalty = specification.penalty(tonnes, contained);
+                crate::model::schedule::result::GradeTargetResult {
+                    specification,
+                    period,
+                    tonnes,
+                    contained,
+                    penalty,
+                }
+            })
+            .collect(),
         report,
     });
     explain_idle(&mut schedule, input, &lookup);

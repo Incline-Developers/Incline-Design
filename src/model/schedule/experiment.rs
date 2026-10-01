@@ -13,10 +13,9 @@
 //!   planner authored, so the representation is chosen per pile and defaults
 //!   to [`StockpileRepresentation::NotConfigured`] - which blocks a run that
 //!   uses that pile and blocks nothing else.
-//! - **What a grade column means.** Nothing in a project records whether `Fe`
-//!   is `0.62` or `62`, and guessing from the name or the magnitude would
-//!   produce a blend that is wrong by two orders of magnitude while looking
-//!   plausible. The unit is stated per field.
+//! - **Which grade columns to track.** Numeric tonnes-weighted fields can be
+//!   carried through blends, targets and actuals. Their stored numbers are
+//!   used directly, whether a value is written as `0.62` or `62`.
 //!
 //! This is persisted with the plan and edited through ordinary undoable
 //! commands in every build, including the browser, where schedule
@@ -40,27 +39,14 @@ pub(crate) const DEFAULT_SOLVE_SECONDS: f64 = 60.0;
 /// restating: one default, in one place.
 pub(crate) const DEFAULT_RELATIVE_GAP: f64 = 1e-4;
 
-/// The unit a grade column is written in.
-///
-/// Deliberately two explicit cases rather than a scale factor: the question a
-/// planner is asked is "is this a fraction or a percent", and a free scale
-/// invites a project where `Fe` is divided by 1000.
+/// Legacy unit settings remain readable. New tracking uses Stored and capture
+/// always blends in the field's stored scale, including for legacy selections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) enum GradeUnit {
-    /// A mass fraction in `0..=1`.
     Fraction,
-    /// A percentage in `0..=100`.
     Percent,
-}
-
-impl GradeUnit {
-    pub(crate) fn label(self) -> String {
-        match self {
-            Self::Fraction => tr!("experiment-grade-unit-fraction"),
-            Self::Percent => tr!("experiment-grade-unit-percent"),
-        }
-    }
+    Stored,
 }
 
 /// How one stockpile's inventory is represented to the optimiser.
@@ -132,7 +118,8 @@ pub(crate) struct ExperimentConfig {
     /// Solver wall-clock budget. Preparation and replay sit outside it.
     pub(crate) solve_seconds: f64,
     pub(crate) relative_gap: f64,
-    /// The grade columns the blend tracks, each with its stated unit. Ordered,
+    /// The tracked grade columns. Legacy unit tags are retained for file
+    /// compatibility; capture now uses stored numbers directly. Ordered,
     /// because the model indexes grades by position.
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
     /// Per-stockpile representation, keyed by destination. Sorted by key so a

@@ -246,6 +246,9 @@ impl crate::app::App<'_> {
         // bar's window, priority, ground and reclaim cap.
         probe.hash(&mut hasher);
         let plan = document.schedule();
+        for calendar in plan.crusher_grade_calendars() {
+            calendar.hash_content(&mut hasher);
+        }
         // Reserve field *definitions*: a condition or a grade reads a field
         // through one, so re-aggregating or deleting one is an input change.
         for field in document.reserve_fields() {
@@ -310,7 +313,7 @@ impl crate::app::App<'_> {
         }
         // The hours delay lists and rosters take each machine out.
         plan.delays().hash_calendar(&plan.agent_ids(), self.planning_end_h(), &mut hasher);
-        // Resolution, grade units and stockpile representation.
+        // Resolution, tracked grades (legacy tags retained) and pile representation.
         plan.experiment().hash_semantics(&mut hasher);
         let key = hasher.finish();
         self.schedule_semantic_cache.set(Some((project.runtime_id, document.revision(), probe, key)));

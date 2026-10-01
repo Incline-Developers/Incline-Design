@@ -18,7 +18,9 @@ use crate::{
         Document,
         schedule::{
             CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, LoaderAgent,
-            SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations, experiment::GradeUnit, result::CalculatedSchedule,
+            SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations,
+            grade_targets::{GradeTargetCellEdit, GradeTargetInput, GradeTargetValue},
+            result::CalculatedSchedule,
         },
     },
     ui::{
@@ -72,12 +74,31 @@ struct DestinationRow {
 /// anything.
 struct Figures<'a> {
     result: Option<&'a CalculatedSchedule>,
-    /// Grade names and units, aligned with the result's grades.
-    grades: Vec<(String, GradeUnit)>,
+    /// Grade names, aligned with the result's grades.
+    grades: Vec<String>,
     currency: String,
+    field_names: Vec<(crate::model::ReserveFieldId, String)>,
 }
 
 impl Figures<'_> {
+    fn field_name(&self, field: crate::model::ReserveFieldId) -> String {
+        self.field_names
+            .iter()
+            .find(|(id, _)| *id == field)
+            .map_or_else(|| field.0.to_string(), |(_, name)| name.clone())
+    }
+
+    /// The day's priced target behind a grade Actual cell, when it received tonnes.
+    fn target_result(&self, address: CalendarCellAddress) -> Option<&crate::model::schedule::result::GradeTargetResult> {
+        let CalendarRow::GradeActual(field) = address.row else { return None };
+        let CalendarCell::Period(CalendarPeriod(day)) = address.cell else { return None };
+        let destination = address.destination()?;
+        self.result?
+            .grade_targets
+            .iter()
+            .find(|v| v.period == day && v.specification.destination == destination && v.specification.field == field && v.tonnes > 1e-6)
+    }
+
     /// One calculated cell's figure and whether its period is only partly
     /// covered, or `None` where the calculation answers for nothing: no
     /// current result, a period beyond the calculated horizon, or the Default
@@ -95,8 +116,13 @@ impl Figures<'_> {
                 Some(DestinationKind::Stockpile) => periods.closing(address.destination()?, period)?.0,
                 _ => periods.cumulative(address.destination()?, period)?,
             },
+            CalendarRow::GradeActual(field) => {
+                let result = self.result?;
+                let grade = result.grades.iter().position(|(id, _)| *id == field)?;
+                periods.received_grade(address.destination()?, period, grade)?
+            }
             CalendarRow::Value => periods.value(period)?,
-            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit => return None,
+            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::GradeInput(..) => return None,
         };
         Some((value, periods.is_partial(period)))
     }
@@ -113,13 +139,7 @@ impl Figures<'_> {
             .grades
             .iter()
             .zip(contained)
-            .map(|((name, unit), contained)| {
-                let fraction = contained / tonnes;
-                match unit {
-                    GradeUnit::Percent => format!("{name} {}%", trimmed_number(fraction * 100.0)),
-                    GradeUnit::Fraction => format!("{name} {}", trimmed_number(fraction)),
-                }
-            })
+            .map(|(name, contained)| format!("{name} {}", trimmed_number(contained / tonnes)))
             .collect();
         Some(tr!("schedule-calendar-closing-grades", grades = grades.join(" · ")))
     }
@@ -153,7 +173,7 @@ fn destination_rows(plan: &SchedulePlan, document: &Document) -> Vec<Destination
 fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
     match kind {
         // A crusher has no storage, so it has no inventory to report - and it
-        // has the one editable destination row, its daily budget.
+        // has an editable daily budget and grade inputs beneath its receipts.
         DestinationKind::Crusher => &[CalendarRow::CrusherLimit, CalendarRow::Received],
         DestinationKind::Stockpile => &[CalendarRow::Received, CalendarRow::Reclaimed, CalendarRow::Cumulative],
         DestinationKind::Dump => &[CalendarRow::Received, CalendarRow::Cumulative],
@@ -177,18 +197,18 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
                 result
                     .grades
                     .iter()
-                    .map(|(field, unit)| {
-                        let name = document
+                    .map(|(field, _)| {
+                        document
                             .reserve_fields()
                             .iter()
                             .find(|entry| entry.id == *field)
-                            .map_or_else(|| format!("{}", field.0), |entry| entry.name.clone());
-                        (name, *unit)
+                            .map_or_else(|| format!("{}", field.0), |entry| entry.name.clone())
                     })
                     .collect()
             })
             .unwrap_or_default(),
         currency: plan.currency().to_owned(),
+        field_names: document.reserve_fields().iter().map(|f| (f.id, f.name.clone())).collect(),
     };
     let destinations = destination_rows(plan, document);
     editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
@@ -199,7 +219,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let toolbar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TOOLBAR_H.min(rect.height())));
             let grid = egui::Rect::from_min_max(egui::pos2(rect.left(), toolbar.bottom()), rect.max);
             draw_toolbar(ui, toolbar, editor, commands);
-            if plan.agents().is_empty() {
+            if plan.agents().is_empty() && destinations.is_empty() && plan.trucks().classes.is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
                 draw_grid(ui, grid, editor, plan, &destinations, &figures, project.active_session, commands);
@@ -255,6 +275,7 @@ fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u3
         .flat_map(|agent| agent.calendar.periods.keys())
         .chain(plan.routing().standalone.iter().flat_map(|entry| entry.crusher.periods.keys()))
         .chain(plan.trucks().classes.iter().flat_map(|class| class.calendar.periods.keys()))
+        .chain(plan.crusher_grade_calendars().iter().flat_map(|calendar| calendar.periods.keys()))
         .map(|period| period.0.saturating_add(2))
         .max()
         .unwrap_or(0);
@@ -299,7 +320,25 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
             rows.push(Row::Group(owner));
             if !editor.schedule_calendar.collapsed.contains(&owner) {
                 rows.extend(destination_row_kinds(destination.kind).iter().map(|row| Row::Field(owner, *row)));
+                rows.extend(destination_grade_rows(plan, destination, editor).into_iter().map(|row| Row::Field(owner, row)));
             }
+        }
+    }
+    rows
+}
+
+/// A crusher's grade rows, shared by drawing, keyboard navigation and
+/// rectangular clipboard edits: per tracked grade, the received grade, and
+/// beneath it the target's inputs while that grade is expanded.
+fn destination_grade_rows(plan: &SchedulePlan, destination: &DestinationRow, editor: &EditorState) -> Vec<CalendarRow> {
+    if destination.kind != DestinationKind::Crusher {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    for &(field, _) in &plan.experiment().grades {
+        rows.push(CalendarRow::GradeActual(field));
+        if editor.schedule_calendar.grade_expanded.contains(&(destination.id, field)) {
+            rows.extend(GradeTargetInput::ALL.into_iter().map(|input| CalendarRow::GradeInput(field, input)));
         }
     }
     rows
@@ -506,6 +545,7 @@ fn draw_row(
     let depth = match row {
         Row::Schedule | Row::Loaders | Row::Trucks | Row::Destinations => 0,
         Row::Group(_) | Row::Field(CalendarOwner::Schedule, _) => 1,
+        Row::Field(_, CalendarRow::GradeInput(..)) => 3,
         Row::Field(..) => 2,
     };
     for level in 0..depth {
@@ -586,8 +626,31 @@ fn draw_row(
                 CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
             };
             let text_left = label_start + 18.0;
-            let label = row_label(kind, destination_kind, &figures.currency);
-            if kind.is_calculated() {
+            let label = row_label(kind, destination_kind, &figures.currency, figures);
+            if let (CalendarRow::GradeActual(field), CalendarOwner::Destination(destination)) = (kind, owner) {
+                // The received grade heads its target's inputs, which fold
+                // away beneath it: the grade is the summary, the band detail.
+                let key = (destination, field);
+                let expanded = editor.schedule_calendar.grade_expanded.contains(&key);
+                let label_rect = egui::Rect::from_min_max(egui::pos2(label_start, rect.top()), egui::pos2(hierarchy.right(), rect.bottom()));
+                let response = ui
+                    .interact(label_rect, ui.id().with(("schedule_calendar_grade", destination, field)), egui::Sense::click())
+                    .on_hover_text(tr!("grade-calendar-expand-help"));
+                paint_label(
+                    ui,
+                    hierarchy,
+                    label_start + 4.0,
+                    &format!("{}  {label}", if expanded { "▾" } else { "▸" }),
+                    LabelStyle::Field,
+                );
+                if response.clicked() {
+                    if expanded {
+                        editor.schedule_calendar.grade_expanded.remove(&key);
+                    } else {
+                        editor.schedule_calendar.grade_expanded.insert(key);
+                    }
+                }
+            } else if kind.is_calculated() {
                 // A lock beside a quieter label: the tint alone would be the
                 // only thing saying this row cannot be typed into, and colour
                 // alone is not enough to say it.
@@ -640,7 +703,7 @@ fn draw_row(
 
 /// What one row is called. A crusher's receipts are what it *processed*, and a
 /// stockpile's balance is its closing inventory, opening stock included.
-fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &str) -> String {
+fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &str, figures: &Figures<'_>) -> String {
     match row {
         CalendarRow::Input(CalendarField::Availability) => tr!("schedule-calendar-availability"),
         CalendarRow::Input(CalendarField::Utilisation) => tr!("schedule-calendar-utilisation"),
@@ -662,6 +725,10 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
             Some(DestinationKind::Dump) => tr!("destination-calendar-deposited"),
             _ => tr!("destination-calendar-closing"),
         },
+        // Nested under their grade, so they need not repeat its name.
+        CalendarRow::GradeInput(_, GradeTargetInput::Penalty) => tr!("grade-calendar-penalty-row", currency = currency.to_owned()),
+        CalendarRow::GradeInput(_, input) => input.label(),
+        CalendarRow::GradeActual(field) => figures.field_name(field),
         CalendarRow::Value => tr!("schedule-calendar-value", currency = currency.to_owned()),
     }
 }
@@ -751,7 +818,7 @@ fn draw_cell(
     }
     let response = ui.interact(rect, cell_id(ui, address), egui::Sense::click());
     if response.clicked() {
-        if !commit_draft(editor, session, commands) {
+        if !commit_draft(editor, plan, session, commands) {
             return;
         }
         let extend = ui.input(|input| input.modifiers.shift);
@@ -813,13 +880,22 @@ fn draw_cell(
             editor.schedule_calendar.draft = None;
             editor.schedule_calendar.error = None;
         } else if commit
-            && commit_draft(editor, session, commands)
+            && commit_draft(editor, plan, session, commands)
             && let Some(nav) = move_key
         {
             move_selection(editor, plan, destinations, nav);
         }
     } else {
-        let color = if selected { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
+        let target = figures.target_result(address);
+        let color = if selected {
+            ui.visuals().selection.stroke.color
+        } else if let Some(v) = target {
+            let grade = v.contained / v.tonnes;
+            let outside = v.specification.lower.is_some_and(|lower| grade < lower - 1e-9) || v.specification.upper.is_some_and(|upper| grade > upper + 1e-9);
+            if outside { ui.visuals().warn_fg_color } else { egui::Color32::from_rgb(72, 170, 110) }
+        } else {
+            ui.visuals().text_color()
+        };
         ui.painter().with_clip_rect(rect).text(
             rect.right_center() - egui::vec2(6.0, 0.0),
             egui::Align2::RIGHT_CENTER,
@@ -843,6 +919,7 @@ fn destination_kind(destinations: &[DestinationRow], address: CalendarCellAddres
 fn format_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::TruckHours => format_hours(value),
+        CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format_money(value),
         _ => format_tonnes(value),
     }
@@ -851,6 +928,7 @@ fn format_figure(row: CalendarRow, value: f64) -> String {
 /// The same figure as plain digits, for the clipboard.
 fn raw_figure(row: CalendarRow, value: f64) -> String {
     match row {
+        CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format!("{:.2}", if value == 0.0 { 0.0 } else { value }),
         _ => tonnes_number(value),
     }
@@ -863,6 +941,7 @@ fn display_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Opt
         CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
         CalendarRow::Truck(field) => truck_text(plan, address, field),
         CalendarRow::CrusherLimit => crusher_text(plan, address),
+        CalendarRow::GradeInput(..) => raw_cell_text(plan, address),
         row => match figures.figure(address, destination_kind(destinations, address)) {
             Some((value, true)) => format!("{} *", format_figure(row, value)),
             Some((value, false)) => format_figure(row, value),
@@ -876,6 +955,41 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
         CalendarRow::Input(_) => agent.map(|agent| resolved_hover(plan, agent, address)),
         CalendarRow::Truck(field) => Some(truck_hover(plan, address, field)),
         CalendarRow::CrusherLimit => Some(crusher_hover(plan, address)),
+        CalendarRow::GradeInput(field, input) => {
+            let destination = address.destination()?;
+            let calendar = plan.crusher_grade_calendar(destination, field);
+            let values = match address.cell {
+                CalendarCell::Default => calendar.defaults.clone(),
+                CalendarCell::Period(day) => calendar.resolved(day),
+            };
+            let value = values.get(input).map(trimmed_number).unwrap_or_else(|| tr!("grade-calendar-none"));
+            Some(tr!("grade-calendar-input-help", value = value))
+        }
+        // Penalty first, then the band it was priced against.
+        CalendarRow::GradeActual(_) => {
+            let (_, partial) = figures.figure(address, destination_kind(destinations, address))?;
+            let mut lines = Vec::new();
+            if let Some(v) = figures.target_result(address) {
+                let spec = &v.specification;
+                let limit = |limit: Option<f64>| limit.map_or_else(|| "—".to_owned(), trimmed_number);
+                lines.push(tr!(
+                    "grade-calendar-actual-penalty",
+                    currency = figures.currency.clone(),
+                    penalty = format_money(v.penalty),
+                    rate = format_money(v.penalty / v.tonnes)
+                ));
+                lines.push(tr!(
+                    "grade-calendar-actual-band",
+                    lower = limit(spec.lower),
+                    target = trimmed_number(spec.target),
+                    upper = limit(spec.upper)
+                ));
+            }
+            if partial {
+                lines.push(tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(figures.result?.periods.coverage_end_h())));
+            }
+            (!lines.is_empty()).then(|| lines.join("\n"))
+        }
         row => {
             let kind = destination_kind(destinations, address);
             let (_, partial) = figures.figure(address, kind)?;
@@ -1050,7 +1164,7 @@ fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {
 fn editable(address: CalendarCellAddress) -> bool {
     match address.row {
         CalendarRow::Truck(_) => address.truck().is_some(),
-        CalendarRow::CrusherLimit => crusher_target(address).is_some(),
+        CalendarRow::CrusherLimit | CalendarRow::GradeInput(..) => crusher_target(address).is_some(),
         // Both default rates are the class's, shown here and edited in Setup.
         CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate)),
         // Calculated: selectable so it can be copied, and nothing more.
@@ -1060,6 +1174,7 @@ fn editable(address: CalendarCellAddress) -> bool {
         | CalendarRow::Received
         | CalendarRow::Reclaimed
         | CalendarRow::Cumulative
+        | CalendarRow::GradeActual(_)
         | CalendarRow::Value => false,
     }
 }
@@ -1115,6 +1230,19 @@ fn raw_cell_text(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
             },
             (None, _) => String::new(),
         },
+        CalendarRow::GradeInput(field, input) => {
+            let Some(destination) = address.destination() else { return String::new() };
+            let calendar = plan.crusher_grade_calendar(destination, field);
+            match address.cell {
+                CalendarCell::Default => calendar.defaults.get(input).map(trimmed_number).unwrap_or_default(),
+                CalendarCell::Period(day) => calendar
+                    .periods
+                    .get(&day)
+                    .and_then(|row| row.get(input))
+                    .map(|v| v.number().map(trimmed_number).unwrap_or_else(|| tr!("grade-calendar-none")))
+                    .unwrap_or_default(),
+            }
+        }
         CalendarRow::Truck(field) => truck_raw_text(plan, address, field),
         _ => address.agent().and_then(|id| plan.agent(id)).map(|agent| raw_text(agent, address)).unwrap_or_default(),
     }
@@ -1313,8 +1441,60 @@ fn begin_edit(editor: &mut EditorState, plan: &SchedulePlan, address: CalendarCe
     });
 }
 
-fn commit_draft(editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) -> bool {
+fn parse_grade_cell(_input: GradeTargetInput, text: &str) -> Result<Option<GradeTargetValue>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.eq_ignore_ascii_case(&tr!("grade-calendar-none")) || text == "—" {
+        return Ok(Some(GradeTargetValue::Clear));
+    }
+    let value = text
+        .trim_end_matches('%')
+        .replace(',', "")
+        .parse::<f64>()
+        .map_err(|_| tr!("schedule-calendar-invalid-number"))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(tr!("grade-calendar-invalid"));
+    }
+    Ok(Some(GradeTargetValue::Number(value)))
+}
+
+fn validate_grade_edits(plan: &SchedulePlan, edits: &[GradeTargetCellEdit]) -> Result<(), String> {
+    let mut trial = plan.clone();
+    trial.set_grade_target_cells(edits).map_err(|e| e.message())
+}
+
+fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) -> bool {
     let Some(draft) = editor.schedule_calendar.draft.as_mut() else { return true };
+    if let CalendarRow::GradeInput(field, input) = draft.address.row {
+        let Some(destination) = draft.address.destination() else { return true };
+        let result = parse_grade_cell(input, &draft.text).and_then(|value| {
+            let edits = vec![GradeTargetCellEdit {
+                destination,
+                field,
+                cell: draft.address.cell,
+                input,
+                value,
+            }];
+            validate_grade_edits(plan, &edits)?;
+            Ok(edits)
+        });
+        match result {
+            Ok(edits) => {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits }));
+                editor.schedule_calendar.draft = None;
+                editor.schedule_calendar.error = None;
+                return true;
+            }
+            Err(error) => {
+                draft.error = Some(error.clone());
+                draft.request_focus = true;
+                editor.schedule_calendar.error = Some(error);
+                return false;
+            }
+        }
+    }
     // A crusher budget is the one destination input, and it commits through its
     // own edit: the loader calendar and the crusher calendar are different
     // things with different cells.
@@ -1447,6 +1627,7 @@ fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &Edit
             continue;
         }
         rows.extend(destination_row_kinds(destination.kind).iter().map(|row| (owner, *row)));
+        rows.extend(destination_grade_rows(plan, destination, editor).into_iter().map(|row| (owner, row)));
     }
     rows
 }
@@ -1571,12 +1752,25 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
     let mut edits = Vec::new();
     let mut crusher_edits = Vec::new();
     let mut truck_edits = Vec::new();
+    let mut grade_edits = Vec::new();
     for row in r0..=r1 {
         for column in c0..=c1 {
             let Some(address) = address_at(editor, plan, destinations, row, column) else { continue };
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if let CalendarRow::GradeInput(field, input) = address.row {
+                if let Some(destination) = address.destination() {
+                    grade_edits.push(GradeTargetCellEdit {
+                        destination,
+                        field,
+                        cell: address.cell,
+                        input,
+                        value: None,
+                    });
+                }
+                continue;
             }
             if let Some(field) = address.row.truck_field() {
                 if let Some(class) = address.truck() {
@@ -1610,6 +1804,13 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
             });
         }
     }
+    if !grade_edits.is_empty() {
+        if let Err(error) = validate_grade_edits(plan, &grade_edits) {
+            editor.schedule_calendar.error = Some(error);
+            return;
+        }
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits: grade_edits }));
+    }
     editor.schedule_calendar.error = None;
     if !edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits }));
@@ -1632,6 +1833,7 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     let mut edits = Vec::new();
     let mut crusher_edits = Vec::new();
     let mut truck_edits = Vec::new();
+    let mut grade_edits = Vec::new();
     for (row_offset, values) in rows.iter().enumerate() {
         for (column_offset, text) in values.iter().enumerate() {
             let Some(address) = address_at(editor, plan, destinations, start_row + row_offset, start_column.saturating_add(column_offset as u32)) else {
@@ -1641,6 +1843,23 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if let CalendarRow::GradeInput(field, input) = address.row {
+                let Some(destination) = address.destination() else { return };
+                match parse_grade_cell(input, text) {
+                    Ok(value) => grade_edits.push(GradeTargetCellEdit {
+                        destination,
+                        field,
+                        cell: address.cell,
+                        input,
+                        value,
+                    }),
+                    Err(error) => {
+                        editor.schedule_calendar.error = Some(error);
+                        return;
+                    }
+                }
+                continue;
             }
             if let Some(field) = address.row.truck_field() {
                 let Some(class) = address.truck() else {
@@ -1697,6 +1916,13 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
                 value,
             });
         }
+    }
+    if !grade_edits.is_empty() {
+        if let Err(error) = validate_grade_edits(plan, &grade_edits) {
+            editor.schedule_calendar.error = Some(error);
+            return;
+        }
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits: grade_edits }));
     }
     editor.schedule_calendar.error = None;
     if !edits.is_empty() {

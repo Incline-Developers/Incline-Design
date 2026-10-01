@@ -269,6 +269,8 @@ fn compare(label: &str, input: &BlendInput, seconds: u64) {
 fn known_blend_is_preserved() {
     let grades = grade_table(&["Fe"], &[(1, vec![60.0]), (2, vec![50.0]), (3, vec![70.0])]);
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(3, 1.0),
         segments_per_interval: 1,
         grades,
@@ -318,6 +320,8 @@ fn known_blend_is_preserved() {
 fn empty_pile_and_release_timing() {
     let grades = grade_table(&["Fe"], &[(1, vec![60.0])]);
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(2, 1.0),
         segments_per_interval: 1,
         grades,
@@ -364,6 +368,8 @@ fn empty_pile_and_release_timing() {
 fn partial_reclaim_keeps_the_blend_across_two_grades() {
     let grades = grade_table(&["Fe", "SiO2"], &[(1, vec![60.0, 5.0])]);
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(2, 1.0),
         segments_per_interval: 1,
         grades,
@@ -410,6 +416,8 @@ fn partial_reclaim_keeps_the_blend_across_two_grades() {
 #[test]
 fn a_full_pile_can_receive_while_it_is_reclaimed() {
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(1, 1.0),
         segments_per_interval: 1,
         grades: grade_table(&["Fe"], &[(1, vec![60.0])]),
@@ -493,6 +501,8 @@ fn authored_bar_priority_is_mandatory() {
     let mut rich = dig_task(11, 0, &[2], 1.0);
     rich.priority = 1;
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(1, 1.0),
         segments_per_interval: 1,
         grades: grade_table(&["Fe"], &[(1, vec![60.0]), (2, vec![60.0])]),
@@ -539,6 +549,8 @@ fn a_partial_bar_window_does_not_win_the_whole_interval() {
     let mut half = dig_task(0, 0, &[1], 0.5);
     half.window_end_h = 0.5;
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(1, 1.0),
         segments_per_interval: 1,
         grades: grade_table(&["Fe"], &[(1, vec![60.0])]),
@@ -579,6 +591,8 @@ fn minimum_grade_forces_a_blending_decision() {
     // receiving enough 80% material can the pile's blend qualify.
     let grades = grade_table(&["Fe"], &[(1, vec![50.0]), (2, vec![80.0])]);
     let build = |dig_rate: f64| BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(3, 1.0),
         segments_per_interval: 1,
         grades: grade_table(&["Fe"], &[(1, vec![50.0]), (2, vec![80.0])]),
@@ -638,6 +652,8 @@ fn dig_and_reclaim_share_the_crusher_budget() {
         crusher_daily_t: vec![Some(600.0)],
     };
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(2, 1.0),
         segments_per_interval: 1,
         grades,
@@ -1031,6 +1047,8 @@ fn parcel_backend_comparison() {
 fn authored_order_survives_economics() {
     let grades = grade_table(&["Fe"], &[(1, vec![60.0]), (2, vec![60.0])]);
     let input = BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(2, 1.0),
         segments_per_interval: 2,
         grades,
@@ -1090,6 +1108,8 @@ fn blended_horizon_benchmark() {
             let count = hours;
             let grades = grade_table(&["Fe"], &[(1, vec![55.0]), (2, vec![70.0])]);
             let input = BlendInput {
+                grade_targets: Vec::new(),
+                target_opening: Vec::new(),
                 intervals: intervals(count, 1.0),
                 segments_per_interval: 2,
                 grades,
@@ -1200,6 +1220,8 @@ fn chunk_world_hours(order: ReclaimOrder, chunks: usize, hours: usize) -> BlendI
         })
         .collect();
     BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(hours, 1.0),
         segments_per_interval: 1,
         grades,
@@ -1352,6 +1374,8 @@ fn crusher(id: u32, days: usize, daily_t: f64) -> Destination {
 /// before any reclaim qualifies.
 pub(crate) fn graded_blend_world(hours: usize) -> BlendInput {
     BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(hours, 1.0),
         segments_per_interval: 2,
         grades: grade_table(&["Fe"], &[(1, vec![50.0]), (2, vec![80.0])]),
@@ -1394,6 +1418,8 @@ pub(crate) fn graded_blend_world(hours: usize) -> BlendInput {
 fn threshold_trap_world() -> BlendInput {
     let hours = 8;
     BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(hours, 1.0),
         segments_per_interval: 2,
         grades: grade_table(&["Fe"], &[(1, vec![62.0]), (2, vec![55.0])]),
@@ -1441,6 +1467,8 @@ fn dynamic_chunk_world(order: ReclaimOrder, hours: usize) -> BlendInput {
     pile.chunks = vec![300.0; 4];
     pile.order = order;
     BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(hours, 1.0),
         segments_per_interval: 2,
         grades: grade_table(&["Fe"], &[(1, vec![45.0]), (2, vec![85.0])]),
@@ -1496,6 +1524,8 @@ fn dynamic_chunk_world(order: ReclaimOrder, hours: usize) -> BlendInput {
 pub(crate) fn competition_world(hours: usize) -> BlendInput {
     let days = hours.div_ceil(24);
     BlendInput {
+        grade_targets: Vec::new(),
+        target_opening: Vec::new(),
         intervals: intervals(hours, 1.0),
         segments_per_interval: 2,
         grades: grade_table(&["Fe"], &[(1, vec![48.0]), (2, vec![82.0]), (3, vec![65.0])]),

@@ -29,11 +29,12 @@ use std::collections::BTreeMap;
 
 use crate::model::{ReserveAggregation, ReserveField, ReserveFieldId, schedule::optimisation::MaterialId};
 
-/// The unit a grade column is expressed in, and therefore the conversion to a
-/// dimensionless mass fraction. Stated explicitly: nothing in the project
-/// metadata records whether "Fe" means 0.62 or 62.
+/// Stored numeric grades are used by project capture. Legacy fraction/percent
+/// cases remain available to the historical experiment fixtures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum GradeBasis {
+    /// An ordinary numeric grade in its stored scale.
+    Stored,
     /// Already a mass fraction in `0..=1`.
     Fraction,
     /// A percentage in `0..=100`.
@@ -41,10 +42,10 @@ pub(crate) enum GradeBasis {
 }
 
 impl GradeBasis {
-    /// Convert a captured value to a dimensionless mass fraction.
+    /// Convert a historical basis, or keep a stored numeric grade unchanged.
     pub(crate) fn to_fraction(self, value: f64) -> f64 {
         match self {
-            Self::Fraction => value,
+            Self::Stored | Self::Fraction => value,
             Self::Percent => value / 100.0,
         }
     }
@@ -145,14 +146,15 @@ impl GradeField {
     /// The largest fraction this basis can legitimately represent.
     fn ceiling(&self) -> f64 {
         match self.basis {
+            GradeBasis::Stored => f64::MAX,
             GradeBasis::Fraction => 1.0,
             GradeBasis::Percent => 1.0,
         }
     }
 }
 
-/// Per-material grade values, already converted to dimensionless mass
-/// fractions, for every grade the experiment tracks.
+/// Per-material numeric grades in the selected basis. Project capture uses
+/// the stored numbers, without percentage/fraction conversion.
 ///
 /// Built once by the experimental input builder. Every material that can
 /// reach a blended pile must have a value for every tracked grade - the
@@ -201,7 +203,7 @@ impl GradeTable {
         self.fields.len()
     }
 
-    /// Mass fraction of `grade` in `material`.
+    /// Numeric grade in the captured basis (stored scale for real projects).
     pub(crate) fn fraction(&self, material: MaterialId, grade: usize) -> Option<f64> {
         self.values.get(&material).and_then(|row| row.get(grade).copied())
     }

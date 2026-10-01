@@ -483,12 +483,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // Only the fields the blend actually needs: an unmapped field nothing
     // reads must not block a run.
     let mut grade_fields = Vec::new();
-    for (field, unit) in &experiment.grades {
-        let basis = match unit {
-            GradeUnit::Fraction => GradeBasis::Fraction,
-            GradeUnit::Percent => GradeBasis::Percent,
-        };
-        match GradeField::accept(*field, basis, &source.fields, Some(source.tonnage_field)) {
+    for (field, _) in &experiment.grades {
+        match GradeField::accept(*field, GradeBasis::Stored, &source.fields, Some(source.tonnage_field)) {
             Ok(accepted) => grade_fields.push(accepted),
             Err(rejection) => problems.push(CaptureDiagnostic::new(field_name(&source.fields, *field), rejection.message()).at(ScheduleStep::Configuration)),
         }
@@ -614,11 +610,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                         }
                     };
                     let fraction = grade.basis.to_fraction(value);
-                    if !(0.0..=1.0).contains(&fraction) {
+                    if !fraction.is_finite() || fraction < 0.0 {
                         problems.push(
                             CaptureDiagnostic::new(
                                 format!("{} · {}", view.name.clone(), lot.name.clone()),
-                                format!("'{}' is {value}, which is outside the range its declared unit allows", grade.name),
+                                format!("'{}' is {value}, which must be a finite, non-negative numeric grade", grade.name),
                             )
                             .at(ScheduleStep::Stockpiles),
                         );
@@ -773,12 +769,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     break;
                 }
                 // The *captured* value, in the field's own unit. The grade
-                // table applies the declared basis once; converting here as
-                // well would divide a percentage by a hundred twice.
-                if !(0.0..=1.0).contains(&grade.basis.to_fraction(raw)) {
+                // table retains the stored scale; no unit conversion is needed.
+                if raw < 0.0 {
                     problems.push(CaptureDiagnostic::new(
                         block.name.clone(),
-                        format!("'{}' is {raw}, which is outside the range its declared unit allows", grade.name),
+                        format!("'{}' is {raw}, which must be a finite, non-negative numeric grade", grade.name),
                     ));
                     sound = false;
                     break;
@@ -864,7 +859,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
     };
     for grade in &grade_fields {
-        let unit = experiment.grade_unit(grade.field).unwrap_or(GradeUnit::Fraction);
+        let unit = GradeUnit::Stored;
         identities.grades.push((grade.field, grade.name.clone(), unit));
     }
 
@@ -1279,6 +1274,43 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
     }
 
+    let mut grade_targets = Vec::new();
+    let mut authored = Vec::new();
+    // A calendar for a grade no longer tracked is kept for when it is tracked
+    // again, and prices nothing meanwhile: its rows are not shown either.
+    for calendar in plan.crusher_grade_calendars().iter().filter(|c| grade_fields.iter().any(|field| field.field == c.field)) {
+        for day in 0..days {
+            if cancel.is_cancelled() {
+                return Err(Vec::new());
+            }
+            if let Some(specification) = calendar.specification(crate::model::schedule::CalendarPeriod(day as u32)) {
+                authored.push((specification, day as u32));
+            }
+        }
+    }
+    for (target, day) in &authored {
+        let Some(&destination) = destination_ids.get(&target.destination) else {
+            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("grade-target-missing-destination")).at(ScheduleStep::Configuration));
+            continue;
+        };
+        // Tracked, by the filter above; grades are blended in their stored
+        // numbers, so the authored band needs no conversion.
+        let Some(grade) = grade_fields.iter().position(|field| field.field == target.field) else {
+            continue;
+        };
+        let specification = target.clone();
+        if specification.validate().is_err() {
+            problems.push(CaptureDiagnostic::new(field_name(fields, target.field), crate::i18n::tr!("grade-target-invalid")).at(ScheduleStep::Destinations));
+            continue;
+        }
+        grade_targets.push(crate::model::schedule::optimisation::blended::input::BlendGradeTarget {
+            destination,
+            grade,
+            specification,
+            day: *day,
+        });
+    }
+
     // ---- event budget and size guard ---------------------------------------
     let derived = derived_segments(&intervals, &loaders, &tasks, &movements);
     let event_capacity = experiment.event_capacity.unwrap_or(SEGMENT_CEILING);
@@ -1316,6 +1348,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         qualifications,
         conditional_values,
         grade_limits: Vec::new(),
+        grade_targets,
+        target_opening: Vec::new(),
     };
     let stats = CaptureStats {
         duration: started.elapsed(),
@@ -1489,8 +1523,8 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
                 }
                 let endpoint = |bound: &crate::model::schedule::destinations::Bound| -> Result<GradeEndpoint, String> {
                     let value = grades[position].basis.to_fraction(bound.value);
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(format!("'{name}' bound {} is outside the range its declared unit allows", bound.value));
+                    if !value.is_finite() || value < 0.0 {
+                        return Err(format!("'{name}' bound {} must be finite and non-negative", bound.value));
                     }
                     Ok(GradeEndpoint {
                         value,
@@ -1730,6 +1764,16 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
             bound.lower.map(|end| (end.value.to_bits(), end.inclusive)).hash(&mut hasher);
             bound.upper.map(|end| (end.value.to_bits(), end.inclusive)).hash(&mut hasher);
         }
+    }
+    for target in &input.grade_targets {
+        target.destination.0.hash(&mut hasher);
+        target.grade.hash(&mut hasher);
+        target.day.hash(&mut hasher);
+        target.specification.lower.map(f64::to_bits).hash(&mut hasher);
+        target.specification.target.to_bits().hash(&mut hasher);
+        target.specification.upper.map(f64::to_bits).hash(&mut hasher);
+        target.specification.penalty_per_tonne.to_bits().hash(&mut hasher);
+        target.specification.outside_multiplier.to_bits().hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -2134,17 +2178,16 @@ mod project_capture_checks {
         assert_eq!(input.intervals.len(), 6, "intervals: {:?}", input.intervals);
         assert!((input.intervals.last().expect("an interval").end_h - 24.0).abs() < 1e-9);
 
-        // Ground: the measured tonnes, unchanged, and the grades converted
-        // from percent to a mass fraction.
+        // Ground: measured tonnes and stored numeric grades, unchanged.
         assert_eq!(input.ground.len(), 2);
         assert!((input.ground.iter().map(|source| source.tonnes_t).sum::<f64>() - 3_500.0).abs() < 1e-6);
         let first = input.ground[0].material[0].material;
-        assert!((input.grades.fraction(first, 0).expect("Fe") - 0.62).abs() < 1e-12, "Fe was not converted from percent");
+        assert!((input.grades.fraction(first, 0).expect("Fe") - 62.0).abs() < 1e-12, "Fe did not retain its stored scale");
 
         // Opening inventory: 1,000 t at 58%, reconciled against the lot.
         let pile = input.piles.first().expect("a captured pile");
         assert!((pile.opening_t - 1_000.0).abs() < 1e-9);
-        assert!((pile.opening_q[0] - 580.0).abs() < 1e-9, "opening contained Fe {}", pile.opening_q[0]);
+        assert!((pile.opening_q[0] - 58_000.0).abs() < 1e-9, "opening contained Fe {}", pile.opening_q[0]);
         assert!(pile.chunks.is_empty(), "a blended pile carries no chunks");
 
         // Dig order and bar priority are mandatory and survive capture.
@@ -2186,7 +2229,7 @@ mod project_capture_checks {
         assert_eq!(reclaim_targets, vec![dense(fixture.crusher)]);
         assert_eq!(input.qualifications.len(), 1);
         assert_eq!(input.qualifications[0].destination, dense(fixture.crusher));
-        assert_eq!(input.qualifications[0].alternatives[0].bounds[0].lower.unwrap().value, 0.60);
+        assert_eq!(input.qualifications[0].alternatives[0].bounds[0].lower.unwrap().value, 60.0);
 
         // Cashflow adds: crusher feed pays 60 and haulage costs 2 everywhere.
         let to_crusher = input
@@ -2250,7 +2293,7 @@ mod project_capture_checks {
             )
             .expect("conditions");
         let captured = capture(&fixture).expect("an upper bound on a tracked grade is supported");
-        assert_eq!(captured.input.qualifications[0].alternatives[0].bounds[0].upper.unwrap().value, 0.70);
+        assert_eq!(captured.input.qualifications[0].alternatives[0].bounds[0].upper.unwrap().value, 70.0);
 
         // A stockpile with no representation chosen.
         let mut fixture = project();
@@ -2356,7 +2399,7 @@ mod project_capture_checks {
         assert_eq!(pile.chunks.len(), 3, "one opening lot and two receiving chunks");
         assert!((pile.chunk_opening[0].0 - 1_000.0).abs() < 1e-9, "the opening lot did not become a closed chunk");
         assert_eq!(pile.chunk_opening[1], (0.0, vec![0.0]));
-        assert!((pile.chunk_opening[0].1[0] - 580.0).abs() < 1e-9);
+        assert!((pile.chunk_opening[0].1[0] - 58_000.0).abs() < 1e-9);
 
         assert_eq!(capture.stats.mixed_blocks, 1);
         assert_eq!(capture.input.ground.len(), 2, "a mixed block must stay one physical dig block");
@@ -2532,7 +2575,7 @@ mod project_capture_checks {
         assert!(closing.tonnes_t <= 5_000.0 + 1e-6, "the pile closed above its capacity at {}", closing.tonnes_t);
         if moved.processed_t > 1e-6 {
             let delivered_grade = input.qualifications[0].alternatives[0].bounds[0].lower.unwrap().value;
-            assert!((delivered_grade - 0.60).abs() < 1e-12);
+            assert!((delivered_grade - 60.0).abs() < 1e-12);
         }
         println!(
             "captured project: mined {:.1} t, reclaimed {:.1} t, processed {:.1} t, objective {:?}, closing {:.1} t",

@@ -38,7 +38,7 @@
 //!
 //! For pile `p`, interval `k`, grade `g`, writing `T` for tonnes and `Q` for
 //! contained quantity (units: `Q` is tonnes of the graded component, so a
-//! dimensionless mass fraction times tonnes):
+//! tonnes times the grade in its captured numeric scale):
 //!
 //! ```text
 //! T_open[p, k+1] = T_open[p, k] + T_recv[p, k] - T_recl[p, k]
@@ -177,7 +177,7 @@ impl BlendPile {
     }
 }
 
-/// One end of a grade interval, in mass fraction.
+/// One end of a grade interval in the captured numeric scale.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GradeEndpoint {
     pub(crate) value: f64,
@@ -402,6 +402,23 @@ impl ConditionalValue {
     }
 }
 
+/// One day's soft grade target on a destination's receipts, in the captured
+/// grade scale.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BlendGradeTarget {
+    pub(crate) destination: DestinationId,
+    pub(crate) grade: usize,
+    pub(crate) specification: crate::model::schedule::grade_targets::GradeTarget,
+    /// The absolute calendar day whose receipts this target prices.
+    pub(crate) day: u32,
+}
+
+impl BlendGradeTarget {
+    pub(crate) fn applies(&self, hour: f64) -> bool {
+        crate::model::schedule::grade_targets::target_day(hour) == self.day
+    }
+}
+
 /// Shared scenario input for the blended experiments. Deliberately a separate
 /// contract from the accepted `OptimisationInput`: its stockpile semantics
 /// differ, so reusing the same type would invite comparing objectives that do
@@ -426,9 +443,15 @@ pub(crate) struct BlendInput {
     pub(crate) conditional_values: Vec<ConditionalValue>,
     /// Older developer scenarios only. Real project capture leaves this empty.
     pub(crate) grade_limits: Vec<GradeLimit>,
+    #[serde(default)]
+    pub(crate) grade_targets: Vec<BlendGradeTarget>,
+    /// Prior receipts, keyed by target position and absolute period. A vector
+    /// keeps the solver-process JSON contract independent of map key encoding.
+    #[serde(default)]
+    pub(crate) target_opening: Vec<(usize, u32, f64, f64)>,
 }
 
-/// Numerical convention for a grade boundary, in mass fraction.
+/// Numerical convention for a grade boundary in the captured numeric scale.
 ///
 /// SCIP satisfies constraints to `numerics/feastol` (1e-6 by default), so a
 /// bare `>=` on a blended grade can be *met* with up to that much violation:
@@ -476,7 +499,7 @@ pub(crate) const GRADE_MARGIN: f64 = 1e-6;
 /// alone does not protect a small reclaim. For a delivery of `T` tonnes the
 /// band this adds is `GRADE_CUSHION_T / T` in grade: 1e-8 at 1,000 t.
 pub(crate) const GRADE_CUSHION_T: f64 = 1e-5;
-/// The highest mass fraction any material in the scenario can carry, per
+/// The highest numeric grade any material in the scenario can carry, per
 /// grade: the upper bound the model places on contained quantity.
 ///
 /// Every source of material counts - the captured dig materials *and* the
@@ -492,7 +515,7 @@ pub(crate) fn grade_ceilings(input: &BlendInput) -> Vec<f64> {
     let mut raise = |tonnes: f64, contained: &[f64]| {
         if tonnes > 0.0 {
             for (ceiling, quantity) in ceilings.iter_mut().zip(contained) {
-                *ceiling = ceiling.max((quantity / tonnes).clamp(0.0, 1.0));
+                *ceiling = ceiling.max((quantity / tonnes).max(0.0));
             }
         }
     };

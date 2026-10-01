@@ -41,9 +41,10 @@ feasible schedules.
 
 ## Grade thresholds
 
-Grades are internal mass fractions. Percent input divides values and
-thresholds by 100; fraction input is unchanged. Authored bounds are preserved.
-Replay uses only arithmetic slack δ = 1e-9 fraction (1e-7 percentage points).
+Project grades and thresholds use stored numeric values without unit conversion.
+Blending conserves tonnes × grade; actuals divide that quantity by tonnes.
+Historical experiment fixtures still support fractional bases. Authored bounds
+are preserved. Replay uses arithmetic slack δ = 1e-9 in the tracked scale.
 
 | Authored comparison | Replay test, internal units | Conditional reward permission |
 | --- | --- | --- |
@@ -712,7 +713,7 @@ moved, as large as the most negative movement value plus a tie-break of 1e-7
 of the largest value per tonne. An interval sees nothing after itself, so
 without the credit waste worth nothing until it is moved would never be dug.
 When every movement pays, the credit is only the tie-break, so the
-destination choice is purely by value. HiGHS runs single-threaded, so the
+destination choice is by movement value less any soft grade penalty on a crusher's daily blend. Soft targets enlarge the production credit by a physical bound on their marginal cost, so the initial schedule continues working even without positive cashflow values. HiGHS runs single-threaded, so the
 same input always gives the same schedule.
 
 What a run does now:
@@ -1008,3 +1009,4 @@ running DreamLand through the process, and Windows and macOS. There,
 `current_exe` and pipe handling are standard library, and a debug Windows build
 starts the process with `CREATE_NO_WINDOW`.
 
+Soft crusher grade targets, their daily accounting and penalty curve are described in [Scheduling grade targets](scheduling-grade-targets.md).

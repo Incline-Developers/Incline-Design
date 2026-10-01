@@ -116,6 +116,12 @@ pub(crate) struct ClosingState {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReplayReport {
+    pub(crate) movement_contained: BTreeMap<(usize, usize), Vec<f64>>,
+    pub(crate) target_totals: BTreeMap<(usize, u32), (f64, f64)>,
+    pub(crate) grade_target_penalty: f64,
+    /// Money corresponding to the contained-tonne feasibility tolerance in
+    /// target allocation and deviation rows. Never replaces the replayed cost.
+    pub(crate) target_value_tolerance: f64,
     /// Every **physical** rule the replayed timeline breaks, in plain words:
     /// conservation, capacity, release timing, resource limits, authored
     /// order, chunk lifecycle. A candidate with any of these is not a
@@ -347,6 +353,16 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             continue;
         };
         replayed += row.tonnes_t * candidate.value_per_tonne().unwrap_or(0.0);
+        if !input.grade_targets.is_empty() && candidate.activity != Activity::Reclaim {
+            let contained = checker.report.movement_contained.entry((row.candidate, row.interval)).or_insert_with(|| vec![0.0; grades]);
+            for (g, q) in contained.iter_mut().enumerate() {
+                if let Some(fraction) = input.grades.fraction(candidate.material, g) {
+                    *q += row.tonnes_t * fraction;
+                } else if input.grade_targets.iter().any(|t| t.grade == g && t.destination == candidate.destination) {
+                    checker.report.issues.push(format!("grade target movement {} has no grade {g}", row.candidate));
+                }
+            }
+        }
     }
     checker.report.replayed_objective = replayed;
 
@@ -635,26 +651,63 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         return None;
     }
 
+    checker.report.target_totals = target_totals(input, solution, &checker.report.movement_contained);
+    checker.report.grade_target_penalty = target_penalty(input, &checker.report.target_totals);
+    checker.report.replayed_objective -= checker.report.grade_target_penalty;
+    // Each reclaim cell allocates contained metal independently; each hinge
+    // introduces a linear feasibility residual. Price those physical residuals
+    // at their authored slopes instead of relaxing reconciliation by a dollar
+    // constant or a fraction of the entire objective.
+    for &(index, period) in checker.report.target_totals.keys() {
+        let target = &input.grade_targets[index];
+        let cells: BTreeSet<_> = solution
+            .movements
+            .iter()
+            .filter(|row| {
+                input
+                    .movements
+                    .get(row.candidate)
+                    .is_some_and(|movement| movement.destination == target.destination && movement.activity == Activity::Reclaim)
+                    && input
+                        .intervals
+                        .get(row.interval)
+                        .is_some_and(|interval| crate::model::schedule::grade_targets::target_day(interval.start_h) == period)
+            })
+            .map(|row| (row.candidate, row.interval, row.segment))
+            .collect();
+        let slopes: f64 = target.specification.hinges().iter().map(|&(_, _, slope)| slope).sum();
+        checker.report.target_value_tolerance += REPLAY_TOLERANCE_T * slopes * (1.0 + cells.len() as f64);
+    }
+    checker.report.boundary_value_slack += checker.report.target_value_tolerance;
     checker.report.objective_difference = checker.report.replayed_objective - solution.reported_objective;
+    let ceilings = super::input::grade_ceilings(input);
     let largest_unit_value = input
         .movements
         .iter()
         .filter_map(|movement| movement.value_per_tonne().ok())
         .map(f64::abs)
         .chain(input.conditional_values.iter().map(|entry| entry.value_per_tonne.abs()))
+        .chain(input.grade_targets.iter().map(|target| {
+            target
+                .specification
+                .hinges()
+                .iter()
+                .map(|&(boundary, _, slope)| slope * boundary.abs().max((ceilings[target.grade] - boundary).abs()))
+                .sum::<f64>()
+        }))
         .fold(0.0_f64, f64::max);
     let extraction_effect = solution.adjustments.movement_total_t * largest_unit_value;
     let arithmetic_effect = 1e-10 * solution.reported_objective.abs().max(1.0);
     // The model values a conditional rule conservatively within one margin of
     // its boundary, so the authored (published) value may exceed the raw
     // objective by at most what those deliveries could shift - never fall
-    // below it.
+    // below it, apart from the separately priced target feasibility residuals.
     let difference = checker.report.objective_difference;
-    let below = -(extraction_effect + arithmetic_effect + checker.report.indicator_leak_value);
+    let below = -(extraction_effect + arithmetic_effect + checker.report.indicator_leak_value + checker.report.target_value_tolerance);
     let above = extraction_effect + arithmetic_effect + checker.report.boundary_value_slack;
     if !solution.reported_objective.is_finite() || difference < below || difference > above {
         checker.report.issues.push(format!(
-            "published cashflow {:.9} does not reconcile with raw solver objective {:.9}; extraction permits {:.3e}, grade boundaries {:.3e} and indicator tolerance {:.3e}",
+            "published net value {:.9} does not reconcile with raw solver objective {:.9}; extraction permits {:.3e}, grade/target allowance {:.3e} and indicator tolerance {:.3e}",
             checker.report.replayed_objective,
             solution.reported_objective,
             extraction_effect + arithmetic_effect,
@@ -836,6 +889,7 @@ fn replay_pile(
 ) -> ClosingState {
     let input = checker.input;
     let (mut open_t, mut open_q) = pile.total_opening(grades);
+    let ceilings = super::input::grade_ceilings(input);
 
     for interval in &input.intervals {
         if checker.cancelled() {
@@ -981,6 +1035,20 @@ fn replay_pile(
         };
 
         // Grade eligibility on what was actually delivered (§6).
+        for row in movements.iter().filter(|row| row.interval == k) {
+            if !checker.input.grade_targets.is_empty()
+                && checker
+                    .input
+                    .movements
+                    .get(row.candidate)
+                    .is_some_and(|candidate| candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id))
+            {
+                let contained = checker.report.movement_contained.entry((row.candidate, k)).or_insert_with(|| vec![0.0; grades]);
+                for (q, fraction) in contained.iter_mut().zip(&delivered_blend) {
+                    *q += row.tonnes_t * fraction;
+                }
+            }
+        }
         check_grade_limits(checker, pile, k, reclaimed_t, &reclaimed_q, &delivered_blend, destinations, movements);
         for row in movements.iter().filter(|row| row.interval == k && row.tonnes_t > REPLAY_TOLERANCE_T) {
             let Some(candidate) = checker.input.movements.get(row.candidate) else { continue };
@@ -1036,8 +1104,8 @@ fn replay_pile(
                     pile.id.0
                 ));
             }
-            // Contained quantity can never exceed its own tonnage.
-            if closing_q > closing_t.max(0.0) + REPLAY_TOLERANCE_T {
+            // Weighted content cannot exceed tonnes × the richest source grade.
+            if closing_q > closing_t.max(0.0) * ceilings[g] + REPLAY_TOLERANCE_T {
                 checker.report.issues.push(format!(
                     "pile {} holds {closing_q:.6} t of grade {g} in {closing_t:.6} t of material after interval {k}",
                     pile.id.0
@@ -1360,4 +1428,58 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
         }
     }
     drawn
+}
+
+/// Aggregate actual contained quantities into absolute target periods.
+pub(crate) fn target_totals(input: &BlendInput, solution: &BlendSolution, contained: &BTreeMap<(usize, usize), Vec<f64>>) -> BTreeMap<(usize, u32), (f64, f64)> {
+    if input.grade_targets.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut totals: BTreeMap<_, _> = input.target_opening.iter().map(|&(target, period, t, q)| ((target, period), (t, q))).collect();
+    accumulate_target_receipts(input, solution.movements.iter(), contained, 0, &mut totals);
+    totals
+}
+
+/// Add retained receipts without copying the window input or its inventory.
+pub(crate) fn accumulate_target_receipts<'a>(
+    input: &BlendInput,
+    movements: impl Iterator<Item = &'a MovementRow>,
+    contained: &BTreeMap<(usize, usize), Vec<f64>>,
+    interval_offset: usize,
+    totals: &mut BTreeMap<(usize, u32), (f64, f64)>,
+) {
+    if input.grade_targets.is_empty() {
+        return;
+    }
+    let mut tonnes: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    for row in movements {
+        *tonnes.entry((row.candidate, row.interval)).or_default() += row.tonnes_t;
+    }
+    for ((candidate, local_interval), t) in tonnes {
+        let Some(movement) = input.movements.get(candidate) else { continue };
+        let Some(interval) = input.intervals.get(interval_offset + local_interval) else {
+            continue;
+        };
+        for (index, target) in input
+            .grade_targets
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| target.destination == movement.destination && target.applies(interval.start_h))
+        {
+            let entry = totals.entry((index, crate::model::schedule::grade_targets::target_day(interval.start_h))).or_default();
+            entry.0 += t;
+            entry.1 += contained.get(&(candidate, local_interval)).and_then(|q| q.get(target.grade)).copied().unwrap_or(0.0);
+        }
+    }
+}
+
+/// Incremental cost: carried receipts have already been charged by an earlier window.
+pub(crate) fn target_penalty(input: &BlendInput, totals: &BTreeMap<(usize, u32), (f64, f64)>) -> f64 {
+    let closing: f64 = totals.iter().map(|(&(index, _), &(t, q))| input.grade_targets[index].specification.penalty(t, q)).sum();
+    let opening: f64 = input
+        .target_opening
+        .iter()
+        .map(|&(index, _, t, q)| input.grade_targets[index].specification.penalty(t, q))
+        .sum();
+    closing - opening
 }

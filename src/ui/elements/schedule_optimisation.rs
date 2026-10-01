@@ -86,7 +86,10 @@ pub(crate) fn draw_optimisation(
     let candidates: Vec<_> = document
         .reserve_fields()
         .iter()
-        .filter(|field| matches!(field.aggregation, ReserveAggregation::WeightedAverage { .. }))
+        .filter(|field| {
+            matches!(field.aggregation, ReserveAggregation::WeightedAverage { weight_field } if Some(weight_field) == plan.tonnage_field())
+                || experiment.grade_unit(field.id).is_some()
+        })
         .collect();
     let rows_used = 7 + candidates.len() + usize::from(candidates.is_empty());
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
@@ -131,28 +134,23 @@ pub(crate) fn draw_optimisation(
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentEventCapacity { capacity }));
         }
-        // A unit per grade, stated. Nothing here infers one from the field's
-        // name or from how big its values happen to be.
+        // Tracking is all a grade asks for: capture blends its stored numbers.
         if candidates.is_empty() {
             rows.readonly(&tr!("experiment-grades"), &tr!("experiment-no-grade-fields"), None, None);
         }
         for field in &candidates {
-            let mut unit = experiment.grade_unit(field.id);
-            let selected = unit.map_or_else(|| tr!("experiment-grade-unmapped"), GradeUnit::label);
-            let response = rows.combo(
-                ("experiment_grade", field.id.0),
-                &field.name,
-                &mut unit,
-                &selected,
-                [
-                    (None, tr!("experiment-grade-unmapped")),
-                    (Some(GradeUnit::Fraction), GradeUnit::Fraction.label()),
-                    (Some(GradeUnit::Percent), GradeUnit::Percent.label()),
-                ],
-            );
-            if response.changed() && unit != experiment.grade_unit(field.id) {
-                edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentGradeUnit { field: field.id, unit }));
+            let mut tracked = experiment.grade_unit(field.id).is_some();
+            let response = rows.checkbox(&tr!("experiment-track-grade", grade = field.name.clone()), &mut tracked);
+            if response.changed() {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetExperimentGradeUnit {
+                        field: field.id,
+                        unit: tracked.then_some(GradeUnit::Stored),
+                    },
+                ));
             }
+            response.on_hover_text(tr!("experiment-grade-units-help"));
         }
     });
     commands.append(&mut edits);

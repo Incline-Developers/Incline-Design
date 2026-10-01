@@ -2707,8 +2707,6 @@ schedule-class-reclaim-rate = Reclaim rate (t/h)
 
 # Schedule optimisation settings
 experiment-error-invalid-setting = That value is not one this setting accepts.
-experiment-grade-unit-fraction = Fraction (0–1)
-experiment-grade-unit-percent = Percent (0–100)
 experiment-representation-none = Not configured
 experiment-representation-blended = Blended pile
 experiment-representation-chunks = Ordered blended chunks
@@ -2726,7 +2724,6 @@ experiment-solve-seconds = Solve time limit (s)
 experiment-relative-gap = Relative gap target
 experiment-grades = Grades
 experiment-no-grade-fields = No tonnes-weighted average field is defined, so no blend grade can be tracked.
-experiment-grade-unmapped = Not used
 experiment-representation = Representation
 experiment-representation-help = Choose how this stockpile is represented to the schedule optimiser. Nothing is chosen for you, and the authored lots are never rewritten.
 experiment-blended-help = Reclaim uses the pile's tonnes-weighted average grades. Opening lots are combined into one blend, so FIFO/LIFO does not apply.
@@ -3002,3 +2999,20 @@ literal-the-selected-surface-whose-elevation-range-will-be-clipped-close-the-dia
 literal-unload-source-surface-a55bec2876068fb8 = Unload source surface
 literal-unload-source-topology-ff3ff8496dc8dc90 = Unload source topology
 literal-use-625ad019db843f94 = Use
+
+# Soft grade targets
+grade-target-invalid = Use a finite, non-negative target and penalty; lower must be below target and upper above it. Set at least one limit and an outside multiplier of at least 1.
+grade-target-missing-destination = A grade target names a missing destination. Remove the target or restore the destination.
+grade-target-lower = Lower limit
+grade-target-value = Target
+grade-target-upper = Upper limit
+grade-target-content-penalty = Content penalty
+grade-calendar-penalty-row = Penalty ({ $currency }/t)
+grade-calendar-none = None
+grade-calendar-invalid = Enter a finite, non-negative grade or penalty per tonne.
+grade-calendar-expand-help = Grade received each day. Click to show its target, limits and penalty.
+grade-calendar-input-help = Resolved: { $value }. Blank inherits Default; None clears it for the day. Penalty is per tonne at a limit and doubles beyond it.
+grade-calendar-actual-penalty = Penalty { $currency } { $penalty } ({ $rate }/t)
+grade-calendar-actual-band = Limits { $lower } – { $upper }, target { $target }
+experiment-grade-units-help = Track a grade to blend it, target it and report it. Its stored numbers are used as they are, so enter targets on the same scale as the data.
+experiment-track-grade = Track { $grade }

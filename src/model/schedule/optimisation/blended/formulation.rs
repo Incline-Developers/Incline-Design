@@ -181,10 +181,8 @@ pub(crate) trait Rows {
 // symmetry these rows are easiest to read with.
 /// Build the blended model.
 ///
-/// The objective is movement value, maximised - the same primary objective
-/// the accepted backend uses, so that a blended run and a parcel run at least
-/// measure value in the same currency even though their stockpile semantics
-/// differ.
+/// The objective is movement value less destination-period grade penalties,
+/// maximised. Both use the schedule's authored currency and tonnage basis.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FormulationCancelled;
 
@@ -1393,8 +1391,10 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         }
     }
 
-    // The objective - movement value, maximised - is carried on the movement
-    // columns themselves; see [`Rows::valued`].
+    formulate_targets(rows, input)?;
+
+    // Movement value less period grade penalties, maximised; each valued
+    // column carries its coefficient directly.
     Ok(())
 }
 
@@ -2285,4 +2285,104 @@ fn source_key(source: SourceId) -> String {
 /// collide because a pile is either chunked or not.
 pub(crate) fn chunk_key(chunk: usize, interval: usize, horizon: usize) -> usize {
     chunk * horizon.max(1) + interval
+}
+
+/// Allocate reclaim content to its routed movements using the same delivered
+/// blend, then price positive deviations on each destination's period total.
+fn formulate_targets<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
+    if input.grade_targets.is_empty() {
+        return Ok(());
+    }
+    let movement = rows.columns().movement.clone();
+    let ceilings = super::input::grade_ceilings(input);
+    let needed: BTreeSet<usize> = input.grade_targets.iter().map(|target| target.grade).collect();
+    let mut content: BTreeMap<(usize, usize, usize, usize), R::Var> = BTreeMap::new();
+    let mut balances = BTreeMap::new();
+    for (&(candidate, k, segment), tonnes) in &movement {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        let movement = &input.movements[candidate];
+        let SourceId::Stockpile(pile) = movement.source else { continue };
+        if movement.activity != Activity::Reclaim {
+            continue;
+        }
+        for &grade in &needed {
+            let Some(total_t) = rows.columns().recl_t.get(&(pile, k)).cloned() else { continue };
+            let Some(total_q) = rows.columns().recl_q.get(&(pile, k, grade)).cloned() else {
+                continue;
+            };
+            let bound = input.piles.iter().find(|p| p.id == pile).map_or(0.0, |p| p.capacity_t);
+            let q = rows.cont(bound * ceilings[grade], &format!("targetq_{candidate}_{k}_{segment}_{grade}"));
+            rows.leq(
+                vec![(q.clone(), 1.0), (tonnes.clone(), -ceilings[grade])],
+                0.0,
+                &format!("targetbox_{candidate}_{k}_{segment}_{grade}"),
+            );
+            rows.mix(
+                pile,
+                k,
+                grade,
+                q.clone(),
+                total_t,
+                tonnes.clone(),
+                total_q.clone(),
+                &format!("targetmix_{candidate}_{k}_{segment}_{grade}"),
+            );
+            balances.entry((pile, k, grade)).or_insert_with(|| vec![(total_q, -1.0)]).push((q.clone(), 1.0));
+            content.insert((candidate, k, segment, grade), q);
+        }
+    }
+    for ((pile, k, grade), balance) in balances {
+        rows.eq(balance, 0.0, &format!("targetbalance_{}_{k}_{grade}", pile.0));
+    }
+    for (index, target) in input.grade_targets.iter().enumerate() {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        // Each pair is movement tonnes and content; dig content is expanded
+        // directly into the row below instead of introducing a column.
+        let mut selected = BTreeMap::new();
+        for (&(candidate, k, segment), tonnes) in &movement {
+            if input.movements[candidate].destination == target.destination && target.applies(input.intervals[k].start_h) {
+                selected
+                    .entry(crate::model::schedule::grade_targets::target_day(input.intervals[k].start_h))
+                    .or_insert_with(Vec::new)
+                    .push((candidate, k, segment, tonnes.clone()));
+            }
+        }
+        for &(_, period, _, _) in input.target_opening.iter().filter(|&&(i, _, _, _)| i == index) {
+            selected.entry(period).or_default();
+        }
+        for (period, selected) in selected {
+            let (opening_t, opening_q) = input
+                .target_opening
+                .iter()
+                .find(|&&(i, p, _, _)| i == index && p == period)
+                .map_or((0.0, 0.0), |&(_, _, t, q)| (t, q));
+            for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
+                if slope == 0.0 {
+                    continue;
+                }
+                let slack = rows.valued(f64::INFINITY, -slope, &format!("targetpenalty_{index}_{period}_{hinge}"));
+                let mut terms = vec![(slack, -1.0)];
+                for (candidate, k, segment, tonnes) in &selected {
+                    if let Some(q) = content.get(&(*candidate, *k, *segment, target.grade)) {
+                        terms.push((q.clone(), direction));
+                        terms.push((tonnes.clone(), -direction * boundary));
+                    } else {
+                        let fraction = input.grades.fraction(input.movements[*candidate].material, target.grade).unwrap_or(0.0);
+                        terms.push((tonnes.clone(), direction * (fraction - boundary)));
+                    }
+                }
+                rows.leq(terms, -direction * (opening_q - boundary * opening_t), &format!("targetdeviation_{index}_{period}_{hinge}"));
+            }
+            let prior = target.specification.penalty(opening_t, opening_q);
+            if prior != 0.0 {
+                let credit = rows.valued(1.0, prior, &format!("targetprior_{index}_{period}"));
+                rows.eq(vec![(credit, 1.0)], 1.0, &format!("targetpriorfix_{index}_{period}"));
+            }
+        }
+    }
+    Ok(())
 }

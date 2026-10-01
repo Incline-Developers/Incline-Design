@@ -27,12 +27,14 @@
 //!   not allotted to loaders beforehand: the program shares them out.
 //!
 //! The objective is the interval's movement value plus, for each tonne moved,
-//! a production credit: the smallest that makes every movement worth making.
+//! a production credit that covers negative value and the maximum marginal
+//! target penalty, keeping production preferable to standing.
 //! An interval sees nothing after itself, so without the credit a block whose
 //! material is worth nothing until it is out of the way would never be dug,
-//! and the ore behind it never reached. With every movement worth something,
-//! which is the normal case, the credit is a tie-break of 1e-7 of the largest
-//! value per tonne, and so are authored routing preferences.
+//! and the ore behind it never reached. With positive values and no soft
+//! targets, the credit is a tie-break of 1e-7 of the largest
+//! value per tonne, and so are authored routing preferences. Soft targets
+//! subtract the running destination-period penalty from that objective.
 //!
 //! Nothing here looks past the interval, so it claims nothing about the
 //! horizon's optimum: stockpiling for later, saving a crusher day for better
@@ -94,6 +96,7 @@ pub(crate) fn dispatch(input: &BlendInput) -> Result<BlendSolution, String> {
 /// The dispatcher's physical state, walked forward an interval at a time.
 struct State<'a> {
     input: &'a BlendInput,
+    target_totals: BTreeMap<(usize, u32), (f64, f64)>,
     ground: BTreeMap<GroundId, f64>,
     /// Released opening tonnes and contained quantity per grade; a chunked
     /// pile's is the sum of its chunks.
@@ -177,7 +180,22 @@ impl<'a> State<'a> {
         }
         let values: Vec<f64> = input.movements.iter().map(|candidate| candidate.value_per_tonne().unwrap_or(0.0)).collect();
         let tie = TIE_WEIGHT * values.iter().fold(1.0_f64, |largest, value| largest.max(value.abs()));
-        let credit = -values.iter().copied().fold(0.0_f64, f64::min) + tie;
+        // Bound marginal target cost over the grades carried by actual sources. This
+        // keeps production preferable even when no movement values exist.
+        let ceilings = super::input::grade_ceilings(input);
+        let mut target_costs = BTreeMap::<(DestinationId, usize), f64>::new();
+        for target in &input.grade_targets {
+            let cost = target
+                .specification
+                .hinges()
+                .iter()
+                .map(|&(boundary, _, slope)| slope * boundary.abs().max((ceilings[target.grade] - boundary).abs()))
+                .sum::<f64>();
+            let entry = target_costs.entry((target.destination, target.grade)).or_default();
+            *entry = entry.max(cost);
+        }
+        let target_credit: f64 = target_costs.values().sum();
+        let credit = -values.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
         let latest = input.movements.iter().map(|candidate| candidate.routing_preference).max().unwrap_or(0);
         let weight = input
             .movements
@@ -187,6 +205,7 @@ impl<'a> State<'a> {
             .collect();
         Self {
             input,
+            target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
             ground: input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect(),
             piles: input.piles.iter().map(|pile| (pile.id, pile.total_opening(input.grades.count()))).collect(),
             chunks: input
@@ -393,6 +412,30 @@ impl<'a> State<'a> {
         if columns.is_empty() && extractions.is_empty() {
             return Ok(Plan::default());
         }
+        for (index, target) in input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(interval.start_h)) {
+            let period = crate::model::schedule::grade_targets::target_day(interval.start_h);
+            let (opening_t, opening_q) = self.target_totals.get(&(index, period)).copied().unwrap_or_default();
+            for (boundary, direction, slope) in target.specification.hinges() {
+                if slope == 0.0 {
+                    continue;
+                }
+                let slack = problem.add_column(-slope, 0.0..);
+                let mut terms = vec![(slack, -1.0)];
+                for &(candidate, column) in &columns {
+                    let movement = &input.movements[candidate];
+                    if movement.destination != target.destination {
+                        continue;
+                    }
+                    let fraction = match movement.source {
+                        SourceId::Stockpile(pile) if movement.activity == Activity::Reclaim => self.released(pile).and_then(|r| r.blend.get(target.grade).copied()),
+                        _ => input.grades.fraction(movement.material, target.grade),
+                    }
+                    .unwrap_or(0.0);
+                    terms.push((column, direction * (fraction - boundary)));
+                }
+                problem.add_row(..=-direction * (opening_q - boundary * opening_t), terms);
+            }
+        }
         let mut model = problem.optimise(Sense::Maximise);
         model.make_quiet();
         // One thread, so the same input always gives the same schedule.
@@ -504,6 +547,19 @@ impl<'a> State<'a> {
                 }
                 _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
             };
+            for (i, target) in input
+                .grade_targets
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.destination == candidate.destination && t.applies(interval.start_h))
+            {
+                let entry = self
+                    .target_totals
+                    .entry((i, crate::model::schedule::grade_targets::target_day(interval.start_h)))
+                    .or_default();
+                entry.0 += tonnes;
+                entry.1 += tonnes * blend.get(target.grade).copied().unwrap_or(0.0);
+            }
             let Some(destination) = input.destinations.iter().find(|entry| entry.id == candidate.destination) else {
                 continue;
             };
@@ -721,7 +777,7 @@ impl<'a> State<'a> {
                 tonnes_t,
             })
             .collect();
-        let reported_objective = movements
+        let reported_objective: f64 = movements
             .iter()
             .map(|row| row.tonnes_t * input.movements[row.candidate].value_per_tonne().unwrap_or(0.0))
             .sum();
@@ -729,7 +785,7 @@ impl<'a> State<'a> {
             movements,
             durations: self.durations,
             chunks: self.chunk_rows,
-            reported_objective,
+            reported_objective: reported_objective - super::replay::target_penalty(input, &self.target_totals),
             adjustments: ExtractionAdjustments::default(),
         }
     }
