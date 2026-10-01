@@ -737,10 +737,6 @@ cmd-reference-surface-selected-point-has-non-finite = A selected point has non-f
 cmd-reference-surface-selected-points-span-count-layers = The selected points span { $count } layers; the surface is placed under { $section }
 cmd-reference-surface-control-string-index-has-two = Control string { $index } has two vertices within { $distance } m of ({ $x }, { $y }) in plan at different heights
 cmd-reference-surface-run-record-used-point = Run record: { $used } point(s) used of { $picks } pick(s) given, { $merged } merged, { $left_out } under control strings left out ({ $overridden } at another height); { $method }, { $spacing } m spacing; by { $author } on { $date }
-cmd-reference-surface-curvature-contrast-clear-most = curvature contrast { $contrast } (clear at { $most } or less), sag { $sag } m across the domain's equivalent diameter of { $width } m (clear at { $least } m or more), { $holes } holes per wavelength (clear at { $gate } or more)
-cmd-reference-surface-none = none
-cmd-reference-surface-method-axis-azimuth-degrees = { $method }, axis { $azimuth } degrees from grid north, ratio { $ratio }; { $decided }
-cmd-reference-surface-method-no-clear-axis = { $method }, no clear axis, ratio 1; { $decided }
 cmd-reference-surface-count-pair-s-points-closer = { $count } pair(s) of points closer than { $spacing } m in plan are steeper than { $degrees } degrees; the grid cannot follow them without ripples:
 cmd-reference-surface-steep-pair = ({ $ax }, { $ay }, { $az }) and ({ $bx }, { $by }, { $bz }): { $distance } m apart, { $rise } m in height, { $slope } degrees
 cmd-reference-surface-surface-could-not-cut = The surface could not be cut along the extent near ({ $x }, { $y })
@@ -1516,19 +1512,14 @@ modelling-settings-crs-help = The coordinate system every point and surface in t
 modelling-settings-modelling-settings = Modelling Settings
 modelling-settings-not-set = Not set
 modelling-settings-survey-datum = Survey datum
-modelling-settings-auto-axis-thin-plate-spline = Auto-axis thin plate spline
-modelling-settings-auto-axis-note = The mask must hold one straight fold; draw one per fold or limb. The axis is read from the points inside it and the surface stretched 4 times along it; with no clear axis, no stretch.
 modelling-settings-thin-plate-spline-exact = Thin plate spline, exact
-modelling-settings-anisotropic-thin-plate-spline = Anisotropic thin plate spline
+modelling-settings-anisotropic-spline = Anisotropic spline
+modelling-settings-auto-axis-spline = Auto-axis spline
 modelling-settings-surface-method = Surface method
 modelling-settings-hermite-dips = Hermite with dips (needs dip measurements)
 modelling-settings-steep-pair-distance = Steep-pair distance
 modelling-settings-steep-pair-distance-help = Pairs of points closer than this in plan, and steeper than the angle below, are named when a build succeeds. Never refused or repaired.
 modelling-settings-steep-pair-angle = Steep-pair angle
-modelling-settings-fold-axis-direction = Fold axis direction
-modelling-settings-fold-axis-direction-help = The fold axis, in degrees clockwise from grid north. An axis, so 0 and 180 are the same.
-modelling-settings-stretch-ratio = Stretch ratio
-modelling-settings-stretch-ratio-help = How many times farther the surface reaches along the axis than across it. 1 is no stretch.
 modelling-settings-surface-help = How Build Surface draws its grid. Project-level settings, saved with the project.
 
 ## Object strings
@@ -1696,11 +1687,7 @@ progress-task-finished = { $task }: Finished
 project-item = Item
 project-steep-pair-distance-positive = The steep-pair distance must be a positive number of metres
 project-steep-pair-angle-range = The steep-pair angle must be more than 0 and at most 90 degrees
-project-fold-axis-direction-range = The fold axis direction must be from 0 to 360 degrees
-project-stretch-ratio-range = The stretch ratio must be from 1 to { $max }
 project-thin-plate-spline-exact = thin plate spline, exact
-project-anisotropic-thin-plate-spline = anisotropic thin plate spline, axis { $azimuth } degrees, ratio { $ratio }
-project-auto-axis-thin-plate-spline = auto-axis thin plate spline
 project-method-steep-pairs-under = Method: { $method } · steep pairs under { $distance } m steeper than { $degrees } degrees
 
 ## Properties strings

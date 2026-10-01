@@ -1827,7 +1827,7 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     // Settings that fail to read, or to validate, are dropped for the
     // defaults and said so, never half applied.
     if let Some(value) = project.metadata.get(META_MODELLING) {
-        match ModellingSettings::deserialize(value).ok().filter(|settings| settings.problem().is_none()) {
+        match ModellingSettings::read(value).filter(|settings| settings.problem().is_none()) {
             Some(settings) => bundle.modelling = settings,
             None => bundle.warnings.push(tr!("omf-modelling-settings-unreadable")),
         }

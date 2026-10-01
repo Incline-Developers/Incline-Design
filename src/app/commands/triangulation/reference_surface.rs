@@ -14,11 +14,9 @@ use crate::{
     model::{
         Document, LayerId,
         kernel::{self, PolyContainment, SegSeg},
-        progress::{Phase, Progress},
-        project::{ModellingSettings, SurfaceMethod},
+        progress::Progress,
+        project::ModellingSettings,
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, RbfSurface, SteepPair},
-        rbf_anisotropic::{AnisotropicSurface, Stretch},
-        rbf_autoaxis::{self, AutoAxisSpline, AutoAxisSurface, AxisEstimate},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
     },
 };
@@ -67,7 +65,7 @@ struct SurfaceMesh {
     /// extent clips it. Counted for the log.
     heights: Vec<f64>,
     #[allow(dead_code)]
-    spline: Spline,
+    spline: RbfSurface,
     /// Picks given.
     picks: usize,
     /// Points the spline passes through: the picks kept and the control
@@ -95,86 +93,11 @@ struct SurfaceMesh {
     steep: Vec<SteepPair>,
     /// The settings the surface was built with.
     settings: ModellingSettings,
-    /// What the auto-axis method read off the extent's points, for the run
-    /// record; `None` for the other methods.
-    axis: Option<AxisEstimate>,
 }
 
 /// A pick a control left out at another height: the plan position, the
 /// pick's own elevation, and the control's.
 type Override = (DVec2, f64, f64);
-
-/// The surface a build fitted, by the settings' method. Both pass exactly
-/// through the merged points and answer in project coordinates.
-enum Spline {
-    Exact(RbfSurface),
-    /// Fitted in a plan frame stretched across a fold axis, made of the
-    /// exact spline.
-    Anisotropic(AnisotropicSurface),
-}
-
-impl Spline {
-    /// The settings' method through `points`. A stretch of 1 is no stretch,
-    /// so it takes the exact spline's own path and gives its bytes. The
-    /// auto-axis method reads its axis over the extent `ring`, whose ground
-    /// `inside` tells, and says what it read.
-    fn fit(
-        points: &[DVec3],
-        settings: &ModellingSettings,
-        ring: &[DVec2],
-        inside: impl Fn(DVec2) -> bool + Sync,
-        cancel: &CancelFlag,
-        progress: &Phase,
-    ) -> Result<(Self, Option<AxisEstimate>)> {
-        Ok(match settings.surface_method {
-            SurfaceMethod::AnisotropicThinPlateSpline if settings.axis_ratio != 1.0 => {
-                let stretch = Stretch {
-                    azimuth: settings.axis_azimuth,
-                    ratio: settings.axis_ratio,
-                };
-                (Self::Anisotropic(AnisotropicSurface::fit(points, stretch, cancel, progress)?), None)
-            }
-            SurfaceMethod::AutoAxis => {
-                let AutoAxisSurface { spline, estimate } = AutoAxisSurface::fit(points, ring, inside, cancel, progress)?;
-                let spline = match spline {
-                    AutoAxisSpline::Exact(spline) => Self::Exact(spline),
-                    AutoAxisSpline::Stretched(spline) => Self::Anisotropic(spline),
-                };
-                (spline, Some(estimate))
-            }
-            _ => (Self::Exact(RbfSurface::fit(points, cancel, progress)?), None),
-        })
-    }
-
-    fn height(&self, at: DVec2) -> f64 {
-        match self {
-            Self::Exact(spline) => spline.height(at),
-            Self::Anisotropic(spline) => spline.height(at),
-        }
-    }
-
-    /// The merged points in project coordinates, canonical order.
-    fn points(&self) -> &[DVec3] {
-        match self {
-            Self::Exact(spline) => spline.points(),
-            Self::Anisotropic(spline) => spline.points(),
-        }
-    }
-
-    fn point_count(&self) -> usize {
-        match self {
-            Self::Exact(spline) => spline.point_count(),
-            Self::Anisotropic(spline) => spline.point_count(),
-        }
-    }
-
-    fn merged(&self) -> usize {
-        match self {
-            Self::Exact(spline) => spline.merged(),
-            Self::Anisotropic(spline) => spline.merged(),
-        }
-    }
-}
 
 /// Who built a surface and when, for its run record.
 #[derive(Clone, Default)]
@@ -555,7 +478,7 @@ fn grid_surface_from_points(
             merged = surface.merged.to_string(),
             left_out = surface.left_out.to_string(),
             overridden = surface.overridden.len().to_string(),
-            method = method_record(&surface.settings, surface.axis.as_ref()),
+            method = surface.settings.method_description(),
             spacing = surface.lattice.spacing().to_string(),
             author = stamp.author.to_string(),
             date = stamp.date.to_string()
@@ -591,35 +514,6 @@ fn grid_surface_from_points(
         userspace_warn!("{}", steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees));
     }
     session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
-}
-
-/// The method as the run record names it. The auto-axis method adds the
-/// axis it declared, or that it found none, and the three readings that
-/// decided it, each beside its threshold.
-fn method_record(settings: &ModellingSettings, axis: Option<&AxisEstimate>) -> String {
-    let Some(estimate) = axis else {
-        return settings.method_description();
-    };
-    let decided = tr!(
-        "cmd-reference-surface-curvature-contrast-clear-most",
-        contrast = estimate.least.map_or_else(|| tr!("cmd-reference-surface-none"), |(_, contrast)| format!("{contrast:.3}")),
-        most = rbf_autoaxis::MOST_CONTRAST.to_string(),
-        sag = format!("{:.1}", estimate.sag),
-        width = format!("{:.0}", estimate.width),
-        least = rbf_autoaxis::LEAST_SAG.to_string(),
-        holes = format!("{:.2}", estimate.holes_per_wavelength),
-        gate = rbf_autoaxis::LEAST_HOLES_PER_WAVELENGTH.to_string()
-    );
-    match estimate.axis {
-        Some(azimuth) => tr!(
-            "cmd-reference-surface-method-axis-azimuth-degrees",
-            method = settings.method_description(),
-            azimuth = format!("{azimuth:.1}"),
-            ratio = rbf_autoaxis::AXIS_RATIO.to_string(),
-            decided = decided
-        ),
-        None => tr!("cmd-reference-surface-method-no-clear-axis", method = settings.method_description(), decided = decided),
-    }
 }
 
 /// Every pair of points closer than `within` in plan and steeper than
@@ -722,10 +616,9 @@ fn surface_mesh(
     // The grid is planned before the fit, so a grid over the node budget
     // is refused before the system is allocated.
     let plan = grid_plan(ring, &bands, DEFAULT_SPACING, cancel)?;
-    let (spline, axis) = Spline::fit(&fitted, settings, ring, |at| inside(&bands, at), cancel, &progress.phase(0.0, 0.5))?;
-    // Read off the merged points, in project coordinates whatever the
-    // method, so a pair the merge settled is not named again; a warning
-    // only, nothing is dropped or moved.
+    let spline = RbfSurface::fit(&fitted, cancel, &progress.phase(0.0, 0.5))?;
+    // Read off the merged points, so a pair the merge settled is not named
+    // again; a warning only, nothing is dropped or moved.
     let steep = rbf::steep_pairs(spline.points(), settings.steep_distance, settings.steep_degrees)?;
     let heights = plan.lattice.heights(|at| spline.height(at), |at| inside(&bands, at), cancel, &progress.phase(0.5, 0.95))?;
     let (vertices, faces) = grid_mesh(&plan, &heights, &spline, &cancelled)?;
@@ -755,7 +648,6 @@ fn surface_mesh(
         left_out,
         steep,
         settings: *settings,
-        axis,
     })
 }
 
@@ -1580,7 +1472,7 @@ fn runs_near_edges(bands: &RingBands, y: f64, bounds: &LatticeBox, count: usize,
 /// (see [`grid_plan`]). Nodes take their heights from the grid and the
 /// points on the mask's edge from the spline. Memory for the vertices and
 /// faces is reserved before either is made.
-fn grid_mesh(plan: &GridPlan, heights: &[f64], spline: &Spline, cancelled: &dyn Fn() -> bool) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
+fn grid_mesh(plan: &GridPlan, heights: &[f64], spline: &RbfSurface, cancelled: &dyn Fn() -> bool) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
     const UNUSED: u32 = u32::MAX;
     let lattice = &plan.lattice;
     // The number of a run of `count` nodes from `column` along `row`, which

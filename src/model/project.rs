@@ -268,11 +268,6 @@ pub(crate) enum SurfaceMethod {
     /// The thin plate spline, exact through every point.
     #[default]
     ThinPlateSpline,
-    /// The same spline fitted in a plan frame stretched across a fold axis.
-    AnisotropicThinPlateSpline,
-    /// The stretched spline along the fold axis the points inside the
-    /// domain show, or the exact spline where they show no clear one.
-    AutoAxis,
 }
 
 /// The Modelling branch's project-level settings for Build Surface. The
@@ -286,21 +281,9 @@ pub(crate) struct ModellingSettings {
     /// spacing.
     pub(crate) steep_distance: f64,
     pub(crate) steep_degrees: f64,
-    /// The fold axis for the anisotropic method, in degrees clockwise from
-    /// grid north; an axis, so 0 and 180 are one.
-    pub(crate) axis_azimuth: f64,
-    /// How many times farther a point reaches along the axis than across
-    /// it; 1 is no stretch.
-    pub(crate) axis_ratio: f64,
 }
 
 impl ModellingSettings {
-    /// The largest stretch offered. Past it the stretched frame squeezes
-    /// points along the axis so close, against the spread across it, that
-    /// the spline's system loses digits, and no fold drilled closer across
-    /// its axis than along it by more than that is expected.
-    pub(crate) const MAX_AXIS_RATIO: f64 = 20.0;
-
     fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -308,7 +291,7 @@ impl ModellingSettings {
     pub(crate) fn hash_into(&self, hasher: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
         self.surface_method.hash(hasher);
-        for value in [self.steep_distance, self.steep_degrees, self.axis_azimuth, self.axis_ratio] {
+        for value in [self.steep_distance, self.steep_degrees] {
             value.to_bits().hash(hasher);
         }
     }
@@ -321,28 +304,34 @@ impl ModellingSettings {
         if !(self.steep_degrees.is_finite() && self.steep_degrees > 0.0 && self.steep_degrees <= 90.0) {
             return Some(tr!("project-steep-pair-angle-range"));
         }
-        if !(self.axis_azimuth.is_finite() && (0.0..=360.0).contains(&self.axis_azimuth)) {
-            return Some(tr!("project-fold-axis-direction-range"));
-        }
-        if !(self.axis_ratio.is_finite() && (1.0..=Self::MAX_AXIS_RATIO).contains(&self.axis_ratio)) {
-            return Some(tr!("project-stretch-ratio-range", max = Self::MAX_AXIS_RATIO.to_string()));
-        }
         None
+    }
+
+    /// The settings as a project stored them. A method Build Surface no
+    /// longer has, and the settings only it read, quietly give way to the
+    /// exact spline, so an older project still opens.
+    pub(crate) fn read(stored: &serde_json::Value) -> Option<Self> {
+        let mut stored = stored.clone();
+        if let Some(fields) = stored.as_object_mut() {
+            let removed = fields
+                .get("surface_method")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|method| ["anisotropic_thin_plate_spline", "auto_axis"].contains(&method));
+            if removed {
+                fields.remove("surface_method");
+            }
+            fields.remove("axis_azimuth");
+            fields.remove("axis_ratio");
+        }
+        Self::deserialize(&stored).ok()
     }
 }
 
 impl ModellingSettings {
-    /// The method as the run record and the Build Surface dialog name it,
-    /// with the axis and the ratio when they apply.
+    /// The method as the run record and the Build Surface dialog name it.
     pub(crate) fn method_description(&self) -> String {
         match self.surface_method {
             SurfaceMethod::ThinPlateSpline => tr!("project-thin-plate-spline-exact"),
-            SurfaceMethod::AnisotropicThinPlateSpline => tr!(
-                "project-anisotropic-thin-plate-spline",
-                azimuth = trimmed(self.axis_azimuth, 1),
-                ratio = trimmed(self.axis_ratio, 2)
-            ),
-            SurfaceMethod::AutoAxis => tr!("project-auto-axis-thin-plate-spline"),
         }
     }
 
@@ -373,8 +362,6 @@ impl Default for ModellingSettings {
             surface_method: SurfaceMethod::ThinPlateSpline,
             steep_distance: 5.0,
             steep_degrees: 80.0,
-            axis_azimuth: 0.0,
-            axis_ratio: 1.0,
         }
     }
 }
