@@ -527,6 +527,7 @@ impl<'a> Graphics<'a> {
                     .iter()
                     .map(|contour| crate::ui::state::ProjectedContour {
                         time_ms: contour.time_ms,
+                        major: contour.major,
                         points: contour
                             .points
                             .iter()
@@ -542,9 +543,9 @@ impl<'a> Graphics<'a> {
                     .collect(),
                 None => Vec::new(),
             };
-            // Every collar of the pattern the timeline is playing over, for
-            // the signal and the detonations it draws.
-            let timeline = editor.active_drill_hole.filter(|id| editor.timeline_playing_over(*id)).and_then(|id| {
+            // Every collar of the pattern under review, for the timeline's
+            // signal and detonations and the heatmap's surface.
+            let timeline = editor.active_drill_hole.filter(|id| editor.review_showing_over(*id)).and_then(|id| {
                 drill_holes
                     .iter()
                     .find(|dataset| dataset.id == id && dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))

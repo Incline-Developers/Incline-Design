@@ -393,28 +393,43 @@ pub(crate) enum ReliefBand {
     Unfired,
 }
 
-pub(crate) const RELIEF_TIGHT_COLOR: [f32; 3] = [0.87, 0.20, 0.22];
-pub(crate) const RELIEF_GOOD_COLOR: [f32; 3] = [0.22, 0.74, 0.38];
-pub(crate) const RELIEF_SLACK_COLOR: [f32; 3] = [0.24, 0.52, 0.96];
-pub(crate) const RELIEF_FREE_COLOR: [f32; 3] = [0.98, 0.98, 0.98];
-pub(crate) const RELIEF_UNFIRED_COLOR: [f32; 3] = [0.35, 0.35, 0.38];
+/// The relief heatmap's colour ramp, as (ms per metre, colour) stops placed
+/// against the limits: deep red where the burden is badly confined, through
+/// amber at the low limit to green across the good band, cyan at the high
+/// limit and on to blue where the rock in front has long gone.
+pub(crate) fn relief_ramp(limits: ReliefLimits) -> [(f64, [f32; 3]); 6] {
+    [
+        (0.0, [0.55, 0.06, 0.12]),
+        (limits.low * 0.5, [0.86, 0.20, 0.18]),
+        (limits.low, [0.98, 0.70, 0.16]),
+        ((limits.low + limits.high) * 0.5, [0.26, 0.78, 0.38]),
+        (limits.high, [0.18, 0.70, 0.86]),
+        (limits.high * 1.75, [0.24, 0.30, 0.90]),
+    ]
+}
 
-impl ReliefBand {
-    pub(crate) fn color(self) -> [f32; 3] {
-        match self {
-            Self::Free => RELIEF_FREE_COLOR,
-            Self::Tight => RELIEF_TIGHT_COLOR,
-            Self::Good => RELIEF_GOOD_COLOR,
-            Self::Slack => RELIEF_SLACK_COLOR,
-            Self::Unfired => RELIEF_UNFIRED_COLOR,
+/// The colour `value` ms/m takes on the heatmap.
+pub(crate) fn relief_color(value: f64, limits: ReliefLimits) -> [f32; 3] {
+    let ramp = relief_ramp(limits);
+    if value <= ramp[0].0 {
+        return ramp[0].1;
+    }
+    for pair in ramp.windows(2) {
+        let ((low, from), (high, to)) = (pair[0], pair[1]);
+        if value <= high {
+            let t = if high > low { ((value - low) / (high - low)) as f32 } else { 1.0 };
+            return [0, 1, 2].map(|channel| from[channel] + (to[channel] - from[channel]) * t);
         }
     }
+    ramp[ramp.len() - 1].1
 }
 
 /// One line of equal firing time, as a run of world points.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TimeContour {
     pub(crate) time_ms: f64,
+    /// Drawn heavier and labelled; the minor lines between fill in the shape.
+    pub(crate) major: bool,
     pub(crate) points: Vec<DVec3>,
     /// Whether the run closes on itself.
     pub(crate) closed: bool,
@@ -467,6 +482,8 @@ pub(crate) struct BlastAnalysis {
     /// Every tie that carried a first signal, in the direction it carried it.
     pub(crate) signal_paths: Vec<SignalPath>,
     pub(crate) contours: Vec<TimeContour>,
+    /// The collar mesh the heatmap is laid over, as hole index triples.
+    pub(crate) triangles: Vec<[usize; 3]>,
     pub(crate) duration_ms: Option<f64>,
     pub(crate) charged_holes: usize,
     pub(crate) total_mass_kg: f64,
@@ -569,9 +586,14 @@ impl BlastAnalysis {
         let duration_ms = firing_order.last().and_then(|last| times[*last]);
 
         let (peak_holes, peak_mass) = window_peaks(&firing_order, &times, &mass_kg);
-        let contour_step_ms = duration_ms.map_or(0.0, |duration| nice_step(duration / 12.0));
+        // Minor lines about twenty to the round; every second or fifth one
+        // major, so the majors land on round numbers - 100 over 50s, 100
+        // over 20s, 50 over 10s.
+        let contour_step_ms = duration_ms.map_or(0.0, |duration| nice_step(duration / 20.0));
         let contours = if contour_step_ms > 0.0 {
-            mesh.contours(&collars, &times, contour_step_ms)
+            let mantissa = contour_step_ms / 10f64.powf(contour_step_ms.log10().floor());
+            let major_every = if (mantissa - 5.0).abs() < 1.0e-6 { 2 } else { 5 };
+            mesh.contours(&collars, &times, contour_step_ms, major_every)
         } else {
             Vec::new()
         };
@@ -592,6 +614,7 @@ impl BlastAnalysis {
             firing_order,
             signal_paths,
             contours,
+            triangles: mesh.triangles,
             duration_ms,
             peak_holes,
             peak_mass,
@@ -816,11 +839,12 @@ impl CollarMesh {
 
     /// Lines of equal time across the mesh, every `step` ms, stitched from
     /// triangle crossings into runs.
-    fn contours(&self, collars: &[DVec3], times: &[Option<f64>], step: f64) -> Vec<TimeContour> {
+    fn contours(&self, collars: &[DVec3], times: &[Option<f64>], step: f64, major_every: usize) -> Vec<TimeContour> {
         let Some(max) = times.iter().flatten().copied().reduce(f64::max) else {
             return Vec::new();
         };
         let mut contours = Vec::new();
+        let mut index = 1usize;
         let mut level = step;
         while level < max && contours.len() < 10_000 {
             // Each crossing segment joins two triangle edges, keyed by their
@@ -846,15 +870,45 @@ impl CollarMesh {
                     segments.push([from, to]);
                 }
             }
-            contours.extend(
-                stitch(&segments, &points)
-                    .into_iter()
-                    .map(|(points, closed)| TimeContour { time_ms: level, points, closed }),
-            );
-            level += step;
+            contours.extend(stitch(&segments, &points).into_iter().map(|(points, closed)| TimeContour {
+                time_ms: level,
+                major: index.is_multiple_of(major_every),
+                points: smooth(points, closed),
+                closed,
+            }));
+            index += 1;
+            level = step * index as f64;
         }
         contours
     }
+}
+
+/// Round a contour run's corners off: two passes of Chaikin's corner
+/// cutting. A run crosses each triangle in a straight segment, so raw it
+/// kinks at every edge of the collar mesh; cut, it reads as the smooth front
+/// it describes. An open run keeps its ends where they are.
+fn smooth(mut points: Vec<DVec3>, closed: bool) -> Vec<DVec3> {
+    for _ in 0..2 {
+        if points.len() < 3 {
+            return points;
+        }
+        let count = points.len();
+        let pairs = if closed { count } else { count - 1 };
+        let mut cut = Vec::with_capacity(pairs * 2 + 2);
+        if !closed {
+            cut.push(points[0]);
+        }
+        for index in 0..pairs {
+            let (a, b) = (points[index], points[(index + 1) % count]);
+            cut.push(a.lerp(b, 0.25));
+            cut.push(a.lerp(b, 0.75));
+        }
+        if !closed {
+            cut.push(points[count - 1]);
+        }
+        points = cut;
+    }
+    points
 }
 
 /// Join crossing segments that share an edge into the longest runs they make.

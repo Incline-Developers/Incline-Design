@@ -1857,7 +1857,7 @@ pub(crate) struct EditorState {
     /// The hole under the pointer, for the hole card.
     pub(crate) blast_hover: Option<BlastHover>,
     /// Every collar of the active dataset in window pixels, refreshed each
-    /// frame while the timeline is open; `None` for one off screen.
+    /// frame while a review is showing; `None` for one off screen.
     pub(crate) blast_collars_px: Vec<Option<(f32, f32)>>,
     /// Window pixels one world unit spans at the pattern, for sizing the
     /// timeline's marks against the collars they sit on.
@@ -2836,22 +2836,13 @@ impl EditorState {
             .or_else(|| rules.first())
     }
 
-    /// The relief heatmap's reading of `dataset`'s collars, while it is the
-    /// review on show. The timeline takes over the pattern while it is open -
-    /// it draws its own layer, see [`Self::timeline_playing_over`] - so the
-    /// heatmap stands down for it.
-    pub(crate) fn relief_collar_paint(&self, dataset: DrillHoleId) -> Option<(&crate::model::blast::BlastAnalysis, crate::model::blast::ReliefLimits)> {
-        if self.timeline_playing_over(dataset) || !self.blast_review.relief {
-            return None;
-        }
-        self.reviewing(dataset).then_some(())?;
-        Some((self.blast_analysis.as_deref()?, self.blast_review.limits))
-    }
-
-    /// Whether the blast timeline is open over `dataset`: its ties are muted
-    /// so the signal and the detonations the timeline draws stand out.
-    pub(crate) fn timeline_playing_over(&self, dataset: DrillHoleId) -> bool {
-        self.blast_review.timeline && self.reviewing(dataset) && self.blast_analysis.is_some()
+    /// Whether a review of the fired pattern - timeline, heatmap or contours -
+    /// is showing over `dataset`. Its ties are muted while one is, so what the
+    /// review draws over them reads, and its collars are projected each
+    /// frame for that drawing.
+    pub(crate) fn review_showing_over(&self, dataset: DrillHoleId) -> bool {
+        let review = &self.blast_review;
+        (review.timeline || review.relief || review.contours) && self.reviewing(dataset) && self.blast_analysis.is_some()
     }
 
     fn reviewing(&self, dataset: DrillHoleId) -> bool {
@@ -4441,6 +4432,7 @@ impl Default for BlastReview {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProjectedContour {
     pub(crate) time_ms: f64,
+    pub(crate) major: bool,
     pub(crate) points: Vec<Option<(f32, f32)>>,
     pub(crate) closed: bool,
 }

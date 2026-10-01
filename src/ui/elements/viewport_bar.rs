@@ -690,16 +690,11 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
             .button_side(side)
             .selected(review.timeline && has_active_dataset),
     );
-    // The timeline takes the pattern over, so it and the static reviews
-    // exclude each other: turning one on puts the other away. Contours and
-    // the heatmap read well together and stay independent of each other.
+    // Independent of each other: they layer - the heatmap's field, the
+    // contour lines over it, the timeline's signal and detonations on top.
     if timeline.clicked() {
         review.timeline = !review.timeline;
         review.playing = false;
-        if review.timeline {
-            review.contours = false;
-            review.relief = false;
-        }
     }
 
     let contours = ui.add_enabled(
@@ -711,10 +706,6 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     );
     if contours.clicked() {
         review.contours = !review.contours;
-        if review.contours {
-            review.timeline = false;
-            review.playing = false;
-        }
     }
 
     let relief = ui.add_enabled(
@@ -726,9 +717,5 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     );
     if relief.clicked() {
         review.relief = !review.relief;
-        if review.relief {
-            review.timeline = false;
-            review.playing = false;
-        }
     }
 }

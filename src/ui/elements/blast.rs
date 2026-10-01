@@ -11,7 +11,7 @@
 use crate::{
     i18n::{tr, tr_format},
     model::{
-        blast::{BlastAnalysis, ChargeDeck, DeckKind, Primer, RELIEF_FREE_COLOR, RELIEF_GOOD_COLOR, RELIEF_SLACK_COLOR, RELIEF_TIGHT_COLOR, ReliefBand, VIBRATION_WINDOW_MS},
+        blast::{BlastAnalysis, ChargeDeck, DeckKind, Primer, ReliefBand, VIBRATION_WINDOW_MS},
         drill_hole::OpenDrillHoleDataset,
     },
     ui::{
@@ -23,11 +23,9 @@ use crate::{
 
 /// Early and late ends of the contour ramp: amber through to violet, so the
 /// direction the round runs in reads off the colours alone.
-const CONTOUR_EARLY: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xD0, 0x40);
-const CONTOUR_LATE: egui::Color32 = egui::Color32::from_rgb(0x8C, 0x52, 0xFF);
-/// A contour run shorter than this on screen goes unlabelled: its label
-/// would cover more than it named.
-const CONTOUR_LABEL_MIN_PX: f32 = 90.0;
+/// Opacity of the heatmap's colour field over the scene.
+const RELIEF_SURFACE_ALPHA: u8 = 150;
+const LEGEND_WIDTH: f32 = 240.0;
 /// Gap between a floating tile and the canvas edge, and between tiles.
 const TILE_MARGIN: f32 = 12.0;
 /// Playback rates offered by the timeline, as firing ms per real ms.
@@ -75,8 +73,12 @@ pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, d
     if editor.active_workspace != Workspace::DrillAndBlast {
         return;
     }
-    draw_contours(ui, editor, canvas_rect);
     let analysis = editor.blast_analysis.clone();
+    // The field under the lines: heatmap first, contours over it.
+    if let Some(analysis) = analysis.as_deref().filter(|_| editor.blast_review.relief) {
+        draw_relief_surface(ui, editor, analysis, canvas_rect);
+    }
+    draw_contours(ui, editor, canvas_rect);
     let active_visible = editor
         .active_drill_hole
         .is_some_and(|id| drill_holes.iter().any(|dataset| dataset.id == id && dataset.state.loaded));
@@ -86,13 +88,36 @@ pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, d
                 draw_timeline_scene(ui, editor, analysis, dataset, canvas_rect);
             }
             draw_timeline(ui, editor, analysis, canvas_rect);
-        } else if editor.blast_review.relief {
+        }
+        if editor.blast_review.relief {
             draw_relief_legend(ui, editor, analysis, canvas_rect);
         }
     }
     draw_hole_card(ui, editor, analysis.as_deref(), drill_holes, canvas_rect);
 }
 
+/// Contour colours from the round's first line to its last: plasma, yellow
+/// through orange and magenta to violet, so which way the round runs reads
+/// off the colours alone and every stop holds up on the grey ground.
+const CONTOUR_RAMP: [egui::Color32; 5] = [
+    egui::Color32::from_rgb(0xF0, 0xF9, 0x21),
+    egui::Color32::from_rgb(0xFC, 0xA6, 0x36),
+    egui::Color32::from_rgb(0xE1, 0x64, 0x62),
+    egui::Color32::from_rgb(0xB1, 0x2A, 0x90),
+    egui::Color32::from_rgb(0x6A, 0x00, 0xA8),
+];
+/// Room left along a major line between one label and the next.
+const CONTOUR_LABEL_SPACING_PX: f32 = 280.0;
+
+fn contour_color(t: f32) -> egui::Color32 {
+    let scaled = t.clamp(0.0, 1.0) * (CONTOUR_RAMP.len() - 1) as f32;
+    let index = (scaled.floor() as usize).min(CONTOUR_RAMP.len() - 2);
+    CONTOUR_RAMP[index].lerp_to_gamma(CONTOUR_RAMP[index + 1], scaled - index as f32)
+}
+
+/// Lines of equal firing time, the way a topographic map draws height: a
+/// faint minor line between heavier majors, and the majors labelled along
+/// their length with the label turned to run with the line.
 fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     if editor.blast_contours_px.is_empty() {
         return;
@@ -101,62 +126,140 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let latest = editor.blast_contours_px.iter().map(|contour| contour.time_ms).fold(0.0, f64::max).max(1.0);
     let font = egui::FontId::proportional(11.0);
-    let halo = menu::menu_surface(ui.visuals()).gamma_multiply(0.85);
-    let mut labels: Vec<egui::Rect> = Vec::new();
-    for contour in &editor.blast_contours_px {
-        let color = CONTOUR_EARLY.lerp_to_gamma(CONTOUR_LATE, (contour.time_ms / latest) as f32);
-        let stroke = egui::Stroke::new(1.6, color);
-        let to_pos = |point: (f32, f32)| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point);
-        // Runs between clipped points are drawn piecewise.
-        let mut run: Vec<egui::Pos2> = Vec::new();
-        let mut longest: (f32, Vec<egui::Pos2>) = (0.0, Vec::new());
-        let mut flush = |run: &mut Vec<egui::Pos2>| {
-            if run.len() >= 2 {
-                let length: f32 = run.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
-                if length > longest.0 {
-                    longest = (length, run.clone());
-                }
-                painter.add(egui::Shape::line(std::mem::take(run), stroke));
-            }
-            run.clear();
+    let halo = menu::menu_surface(ui.visuals()).gamma_multiply(0.9);
+    let mut labels: Vec<[egui::Pos2; 4]> = Vec::new();
+    let to_pos = |point: (f32, f32)| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point);
+
+    // Minors first so the majors draw over them where they run close.
+    let mut order: Vec<&crate::ui::state::ProjectedContour> = editor.blast_contours_px.iter().collect();
+    order.sort_by_key(|contour| contour.major);
+    for contour in order {
+        let color = contour_color((contour.time_ms / latest) as f32);
+        let stroke = if contour.major {
+            egui::Stroke::new(2.2, color)
+        } else {
+            egui::Stroke::new(1.0, color.gamma_multiply(0.6))
         };
+        // Clipped points split a contour into separately drawn pieces.
         let closing = contour.closed.then(|| contour.points.first().copied().flatten()).flatten();
+        let mut pieces: Vec<Vec<egui::Pos2>> = vec![Vec::new()];
         for point in contour.points.iter().copied().chain(closing.map(Some)) {
             match point {
-                Some(point) => run.push(to_pos(point)),
-                None => flush(&mut run),
+                Some(point) => pieces.last_mut().expect("never empty").push(to_pos(point)),
+                None => pieces.push(Vec::new()),
             }
         }
-        flush(&mut run);
-
-        // One label per run, at the middle of its longest visible piece, and
-        // only where it neither crowds another label nor overruns a short run.
-        let (length, points) = longest;
-        if length < CONTOUR_LABEL_MIN_PX {
+        for piece in pieces.iter().filter(|piece| piece.len() >= 2) {
+            painter.add(egui::Shape::line(piece.clone(), stroke));
+        }
+        if !contour.major {
             continue;
         }
-        let mut walked = 0.0;
-        let anchor = points
-            .windows(2)
-            .find_map(|pair| {
-                let step = pair[0].distance(pair[1]);
-                if walked + step >= length * 0.5 {
-                    let t = if step > 0.0 { (length * 0.5 - walked) / step } else { 0.0 };
-                    Some(pair[0].lerp(pair[1], t))
-                } else {
-                    walked += step;
-                    None
+        let text = format!("{:.0}", contour.time_ms);
+        for piece in pieces.iter().filter(|piece| piece.len() >= 2) {
+            let length: f32 = piece.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+            let count = (length / CONTOUR_LABEL_SPACING_PX).floor() as usize;
+            for slot in 0..count.max(usize::from(length > CONTOUR_LABEL_SPACING_PX * 0.4)) {
+                let at = if count == 0 { length * 0.5 } else { (slot as f32 + 0.5) * length / count as f32 };
+                let Some((anchor, direction)) = point_along(piece, at) else {
+                    continue;
+                };
+                // Turned to the line, but never upside down.
+                let mut angle = direction.y.atan2(direction.x);
+                if angle > std::f32::consts::FRAC_PI_2 {
+                    angle -= std::f32::consts::PI;
+                } else if angle < -std::f32::consts::FRAC_PI_2 {
+                    angle += std::f32::consts::PI;
                 }
-            })
-            .unwrap_or(points[0]);
-        let galley = painter.layout_no_wrap(format!("{:.0}", contour.time_ms), font.clone(), color);
-        let rect = egui::Rect::from_center_size(anchor, galley.size() + egui::vec2(6.0, 2.0));
-        if !canvas_rect.contains_rect(rect) || labels.iter().any(|other| other.expand(4.0).intersects(rect)) {
+                let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
+                let half = galley.size() * 0.5 + egui::vec2(4.0, 1.0);
+                let rotation = egui::emath::Rot2::from_angle(angle);
+                let corners = [
+                    egui::vec2(-half.x, -half.y),
+                    egui::vec2(half.x, -half.y),
+                    egui::vec2(half.x, half.y),
+                    egui::vec2(-half.x, half.y),
+                ]
+                .map(|corner| anchor + rotation * corner);
+                let bounds = egui::Rect::from_points(&corners);
+                if !canvas_rect.contains_rect(bounds) || labels.iter().any(|other| egui::Rect::from_points(other).expand(6.0).intersects(bounds)) {
+                    continue;
+                }
+                painter.add(egui::Shape::convex_polygon(corners.to_vec(), halo, egui::Stroke::new(1.0, color.gamma_multiply(0.6))));
+                let origin = anchor - rotation * (galley.size() * 0.5);
+                painter.add(egui::epaint::TextShape::new(origin, galley, color).with_angle(angle));
+                labels.push(corners);
+            }
+        }
+    }
+}
+
+/// The point `distance` along a polyline, and the direction it runs there.
+fn point_along(points: &[egui::Pos2], distance: f32) -> Option<(egui::Pos2, egui::Vec2)> {
+    let mut walked = 0.0;
+    for pair in points.windows(2) {
+        let step = pair[0].distance(pair[1]);
+        if step > 0.0 && walked + step >= distance {
+            let t = (distance - walked) / step;
+            return Some((pair[0].lerp(pair[1], t), (pair[1] - pair[0]) / step));
+        }
+        walked += step;
+    }
+    None
+}
+
+/// The relief heatmap: each hole's relief laid over the triangulated
+/// pattern and blended across every triangle, so the round reads as a field
+/// of hot and cold ground rather than a scatter of coloured dots.
+///
+/// A hole that fires first has no relief of its own; it takes the mean of
+/// its triangle's other corners, so the ground around an initiation point is
+/// coloured by the holes about it rather than left as a hole in the map.
+fn draw_relief_surface(ui: &egui::Ui, editor: &EditorState, analysis: &BlastAnalysis, canvas_rect: egui::Rect) {
+    let collars = &editor.blast_collars_px;
+    if collars.len() != analysis.times.len() {
+        return;
+    }
+    let limits = editor.blast_review.limits;
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let mut mesh = egui::Mesh::default();
+    for triangle in &analysis.triangles {
+        let Some(corners) = triangle
+            .iter()
+            .map(|hole| collars[*hole].map(|point| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        if triangle.iter().any(|hole| analysis.times[*hole].is_none()) {
             continue;
         }
-        painter.rect_filled(rect, GROUP_CORNER_RADIUS, halo);
-        painter.galley(rect.center() - galley.size() * 0.5, galley, color);
-        labels.push(rect);
+        let values = triangle.map(|hole| analysis.relief[hole]);
+        let known: Vec<f64> = values.iter().flatten().copied().collect();
+        if known.is_empty() {
+            continue;
+        }
+        let fallback = known.iter().sum::<f64>() / known.len() as f64;
+        let base = mesh.vertices.len() as u32;
+        for (corner, value) in corners.iter().zip(values) {
+            let [red, green, blue] = crate::model::blast::relief_color(value.unwrap_or(fallback), limits);
+            let color = egui::Color32::from_rgba_unmultiplied((red * 255.0) as u8, (green * 255.0) as u8, (blue * 255.0) as u8, RELIEF_SURFACE_ALPHA);
+            mesh.colored_vertex(*corner, color);
+        }
+        mesh.add_triangle(base, base + 1, base + 2);
+    }
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    painter.add(egui::Shape::mesh(mesh));
+    // The collars over the colour, small and plain, so the holes still read
+    // as points on the field.
+    let dot = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200);
+    for point in collars.iter().flatten() {
+        painter.circle(
+            egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point),
+            1.8,
+            dot,
+            egui::Stroke::new(0.6, egui::Color32::from_black_alpha(140)),
+        );
     }
 }
 
@@ -233,9 +336,10 @@ fn draw_timeline_scene(ui: &egui::Ui, editor: &EditorState, analysis: &BlastAnal
     }
 }
 
-/// The key to the relief heatmap, with its two limits editable in place: the
-/// bands are a judgement about this rock, and the collars recolour as they
-/// are dragged.
+/// The key to the relief heatmap: the colour ramp as a bar with the two
+/// limits marked on it and editable beneath, and how many holes fall in each
+/// band. The limits are a judgement about this rock, and the field recolours
+/// as they are dragged.
 fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalysis, canvas_rect: egui::Rect) {
     let limits = &mut editor.blast_review.limits;
     let [tight, good, slack] = analysis.band_counts(*limits);
@@ -246,42 +350,56 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
         .fixed_pos(canvas_rect.left_bottom() + egui::vec2(TILE_MARGIN, -TILE_MARGIN))
         .show(ui.ctx(), |ui| {
             tile_frame(ui.visuals()).show(ui, |ui| {
+                ui.set_width(LEGEND_WIDTH);
                 ui.label(egui::RichText::new(tr!(literal = "Burden relief")).strong());
                 ui.label(egui::RichText::new(tr!(literal = "ms per metre to the last neighbour to fire")).small().weak());
+                ui.add_space(6.0);
+
+                let ramp = crate::model::blast::relief_ramp(*limits);
+                let top = ramp[ramp.len() - 1].0.max(1.0e-6);
+                let (bar, _) = ui.allocate_exact_size(egui::vec2(LEGEND_WIDTH, 12.0), egui::Sense::hover());
+                let x = |value: f64| bar.left() + (value / top).clamp(0.0, 1.0) as f32 * bar.width();
+                let mut mesh = egui::Mesh::default();
+                for pair in ramp.windows(2) {
+                    let ((from_value, from), (to_value, to)) = (pair[0], pair[1]);
+                    let base = mesh.vertices.len() as u32;
+                    for (value, color) in [(from_value, from), (to_value, to)] {
+                        mesh.colored_vertex(egui::pos2(x(value), bar.top()), color32(color));
+                        mesh.colored_vertex(egui::pos2(x(value), bar.bottom()), color32(color));
+                    }
+                    mesh.add_triangle(base, base + 1, base + 2);
+                    mesh.add_triangle(base + 1, base + 2, base + 3);
+                }
+                ui.painter().add(egui::Shape::mesh(mesh));
+                let tick = egui::Stroke::new(1.5, ui.visuals().strong_text_color());
+                for value in [limits.low, limits.high] {
+                    ui.painter()
+                        .line_segment([egui::pos2(x(value), bar.top() - 3.0), egui::pos2(x(value), bar.bottom() + 3.0)], tick);
+                }
                 ui.add_space(4.0);
-                egui::Grid::new("relief_legend_grid").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
-                    let swatch = |ui: &mut egui::Ui, color: [f32; 3]| {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle(rect.center(), 5.5, color32(color), egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
-                    };
-                    let count = |ui: &mut egui::Ui, count: usize| {
-                        ui.label(egui::RichText::new(count.to_string()).weak());
-                    };
-                    swatch(ui, RELIEF_TIGHT_COLOR);
-                    ui.horizontal(|ui| {
-                        ui.label(tr!(literal = "Tight, below"));
-                        ui.add(egui::DragValue::new(&mut limits.low).range(0.1..=limits.high).speed(0.1).max_decimals(1).suffix(" ms/m"));
-                    });
-                    count(ui, tight);
-                    ui.end_row();
-                    swatch(ui, RELIEF_GOOD_COLOR);
-                    ui.label(tr!(literal = "Good"));
-                    count(ui, good);
-                    ui.end_row();
-                    swatch(ui, RELIEF_SLACK_COLOR);
-                    ui.horizontal(|ui| {
-                        ui.label(tr!(literal = "Slack, above"));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(egui::RichText::new(tr!(literal = "Tight below")).small());
+                    let high = limits.high;
+                    ui.add(egui::DragValue::new(&mut limits.low).range(0.1..=high).speed(0.1).max_decimals(1));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let low = limits.low;
-                        ui.add(egui::DragValue::new(&mut limits.high).range(low..=1_000.0).speed(0.1).max_decimals(1).suffix(" ms/m"));
+                        ui.add(egui::DragValue::new(&mut limits.high).range(low..=1_000.0).speed(0.1).max_decimals(1));
+                        ui.label(egui::RichText::new(tr!(literal = "slack above")).small());
                     });
-                    count(ui, slack);
-                    ui.end_row();
-                    swatch(ui, RELIEF_FREE_COLOR);
-                    ui.label(tr!(literal = "Fires first: free face"));
-                    count(ui, free);
-                    ui.end_row();
                 });
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(tr_format!(
+                        literal = "%tight% tight · %good% good · %slack% slack · %free% free face",
+                        tight = tight,
+                        good = good,
+                        slack = slack,
+                        free = free
+                    ))
+                    .small()
+                    .weak(),
+                );
             });
         });
 }
@@ -360,7 +478,10 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
                             _ if band == ReliefBand::Free => tr!(literal = "fires first: free face"),
                             _ => "-".to_owned(),
                         };
-                        let color = matches!(band, ReliefBand::Tight | ReliefBand::Slack).then(|| color32(band.color()));
+                        let color = match (band, analysis.relief[index]) {
+                            (ReliefBand::Tight | ReliefBand::Slack, Some(value)) => Some(color32(crate::model::blast::relief_color(value, editor.blast_review.limits))),
+                            _ => None,
+                        };
                         row(tr!(literal = "Relief"), relief, color);
                         if let Some(charge) = charge {
                             row(tr!(literal = "Explosive"), format!("{:.1} kg", analysis.mass_kg[index]), None);

@@ -6,12 +6,9 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::model::{
-    blast::{BlastAnalysis, ReliefLimits},
-    drill_hole::{
-        COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId,
-        DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow,
-    },
+use crate::model::drill_hole::{
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
+    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE, TieFlow,
 };
 
 /// Dashes a redundant tie is broken into.
@@ -108,7 +105,7 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
-            let collars = build_collar_instances(dataset, scene_origin, &selection, &blast);
+            let collars = build_collar_instances(dataset, scene_origin, &selection);
             let collar_buffer = (!collars.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Collar Instances"),
@@ -270,40 +267,29 @@ impl HoleSelection {
 }
 
 /// What Drill & Blast adds to how a dataset is drawn: loaded decks down the
-/// holes, collars painted by the relief heatmap, and ties muted under the
-/// timeline. The timeline's own marks are egui geometry over the scene, so a
-/// moving playhead never rebuilds anything here.
-struct BlastPaint<'a> {
+/// holes, and ties muted under a review. The reviews' own marks - the
+/// heatmap, the contours, the timeline - are egui geometry over the scene,
+/// so neither a moving playhead nor a dragged relief limit rebuilds anything
+/// here.
+struct BlastPaint {
     charges: bool,
-    relief: Option<(&'a BlastAnalysis, ReliefLimits)>,
     mute_ties: bool,
 }
 
-/// Ties under the timeline: grey, so the burning fuse drawn over them reads.
+/// Ties under a review: grey, so what the review draws over them reads.
 const MUTED_TIE_COLOR: [f32; 3] = [0.42, 0.42, 0.45];
 
-impl<'a> BlastPaint<'a> {
-    fn of(dataset: &OpenDrillHoleDataset, editor: &'a crate::ui::state::EditorState) -> Self {
+impl BlastPaint {
+    fn of(dataset: &OpenDrillHoleDataset, editor: &crate::ui::state::EditorState) -> Self {
         Self {
             charges: editor.shows_charges() && !dataset.dataset.charges.is_empty(),
-            relief: editor.relief_collar_paint(dataset.id),
-            mute_ties: editor.timeline_playing_over(dataset.id),
+            mute_ties: editor.review_showing_over(dataset.id),
         }
     }
 
     fn hash(&self, hash: &mut DefaultHasher) {
         self.charges.hash(hash);
         self.mute_ties.hash(hash);
-        if let Some((analysis, limits)) = self.relief {
-            std::ptr::from_ref(analysis).hash(hash);
-            limits.low.to_bits().hash(hash);
-            limits.high.to_bits().hash(hash);
-        }
-    }
-
-    fn collar_fill(&self, hole: usize) -> Option<[f32; 3]> {
-        let (analysis, limits) = self.relief?;
-        Some(analysis.band(hole, limits).color())
     }
 }
 
@@ -496,7 +482,7 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
     instances
 }
 
-fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection, blast: &BlastPaint) -> Vec<DrillCollarInstance> {
+fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
     if !dataset.state.loaded {
         return Vec::new();
     }
@@ -512,7 +498,7 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
         .map(|(index, hole)| {
             let (outline, fill) = match selected_colors {
                 Some(colors) if selection.contains(index) => colors,
-                _ => (COLLAR_MARKER_OUTLINE_COLOR, blast.collar_fill(index).unwrap_or(COLLAR_MARKER_FILL_COLOR)),
+                _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
             };
             let center = hole.collar_position();
             let hole_radius = hole.render_radius();
