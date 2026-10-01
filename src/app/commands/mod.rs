@@ -182,6 +182,12 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::ShowTrackedProjectInFileManager(path) => file::show_in_file_manager(&path),
             UiCommand::CloseStartupDialog => {
+                // A project picked from the splash is still opening: leave the
+                // splash up until it lands rather than dropping the user on the
+                // empty startup project while the load runs behind it.
+                if self.project_open_pending() {
+                    return Ok(());
+                }
                 self.startup_dialog_dismissed = true;
                 // Dismissing the splash leaves the application on a project,
                 // never on nothing: closing a project puts the splash back, so
