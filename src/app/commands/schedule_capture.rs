@@ -169,6 +169,9 @@ pub(crate) struct CaptureIdentities {
     pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
     /// Each scoped reclaim bar's cap.
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
+    /// Calendar delays (delay lists and rosters) per captured loader, merged:
+    /// the hours it was given no rate for them.
+    pub(crate) delays: Vec<(LoaderAgentId, f64, f64)>,
     /// Every stockpile's authored opening tonnes, whether or not the run uses
     /// it, so an untouched pile still reports the stock it holds.
     pub(crate) pile_openings: Vec<(ProjectDestinationId, f64)>,
@@ -242,8 +245,15 @@ struct ScopedBar {
 }
 
 enum ScopedWork {
-    Dig { members: Vec<(usize, f64)> },
-    Reclaim { sources: Vec<ProjectDestinationId>, maximum_t: Option<f64> },
+    Dig {
+        members: Vec<(usize, f64)>,
+    },
+    Reclaim {
+        sources: Vec<ProjectDestinationId>,
+        maximum_t: Option<f64>,
+    },
+    /// A delay bar: holds its loader while it has priority.
+    Delay,
 }
 
 /// Where one captured ground source came from, and what it is made of.
@@ -376,6 +386,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             return Err(Vec::new());
         }
         let Some(agent) = bar.agent else {
+            // An unassigned delay holds no machine, so it is not a fault.
             if bar.is_reclaim() || !bar.members().is_empty() {
                 problems.push(CaptureDiagnostic::new(bar.name().to_owned(), "this bar is not assigned to a loader"));
             }
@@ -389,7 +400,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if !(start_h.is_finite() && end_h.is_finite()) || end_h <= start_h {
             continue;
         }
-        let work = if let Some(reclaim) = bar.reclaim() {
+        let work = if bar.delay().is_some() {
+            ScopedWork::Delay
+        } else if let Some(reclaim) = bar.reclaim() {
             ScopedWork::Reclaim {
                 sources: reclaim.sources.clone(),
                 maximum_t: reclaim.maximum_t,
@@ -431,7 +444,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             work,
         });
     }
-    if scoped.is_empty() && problems.is_empty() {
+    if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && problems.is_empty() {
         problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-work")));
     }
 
@@ -862,6 +875,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let id = LoaderId(loader_ids.len() as u32);
         loader_ids.insert(bar.agent, id);
         identities.loaders.push((id, bar.agent, agent.name.clone()));
+        // Delay lists and rosters: the machine has no rate for those hours.
+        // Their edges are interval boundaries, so an interval is either
+        // wholly delayed or not at all.
+        let delayed = plan.delays().merged_for(bar.agent, horizon_h);
+        for &(start, end) in &delayed {
+            rate_changes.extend([start, end].into_iter().filter(|at| *at > 0.0 && *at < horizon_h));
+            identities.delays.push((bar.agent, start, end));
+        }
         for calendar in [&dig, &reclaim] {
             let mut at = 0.0_f64;
             while let Some(next) = calendar.next_change_after(at) {
@@ -922,19 +943,31 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // ---- per-interval rates and truck hours --------------------------------
     let loaders: Vec<Loader> = compiled
         .iter()
-        .map(|(id, _, dig, reclaim)| Loader {
-            id: *id,
-            rates: intervals
+        .map(|(id, agent, dig, reclaim)| {
+            let delayed: Vec<(f64, f64)> = identities
+                .delays
                 .iter()
-                .map(|interval| IntervalRate {
-                    interval: interval.index,
-                    // The rate at the interval's own start: a calendar change
-                    // inside an interval cannot happen, because every change
-                    // is an interval boundary above.
-                    dig_tph: dig.rate_at(interval.start_h),
-                    reclaim_tph: reclaim.rate_at(interval.start_h),
-                })
-                .collect(),
+                .filter(|(owner, _, _)| owner == agent)
+                .map(|(_, start, end)| (*start, *end))
+                .collect();
+            Loader {
+                id: *id,
+                rates: intervals
+                    .iter()
+                    .map(|interval| {
+                        // The rate at the interval's own start: a calendar
+                        // change or delay edge inside an interval cannot
+                        // happen, because every one is an interval boundary
+                        // above.
+                        let stood = delayed.iter().any(|(start, end)| *start <= interval.start_h + 1e-9 && interval.start_h < *end - 1e-9);
+                        IntervalRate {
+                            interval: interval.index,
+                            dig_tph: if stood { 0.0 } else { dig.rate_at(interval.start_h) },
+                            reclaim_tph: if stood { 0.0 } else { reclaim.rate_at(interval.start_h) },
+                        }
+                    })
+                    .collect(),
+            }
         })
         .collect();
     let mut trucks: Vec<TruckClass> = Vec::new();
@@ -999,6 +1032,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     maximum_t: *maximum_t,
                 }
             }
+            ScopedWork::Delay => TaskKind::Delay,
         };
         identities.tasks.push((id, bar.bar, bar.name.clone()));
         tasks.push(Task {
@@ -1209,6 +1243,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     }
                 }
             }
+            // A delay moves nothing, so it has no candidates.
+            TaskKind::Delay => {}
         }
     }
 
@@ -1592,6 +1628,7 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
                 }
                 maximum_t.map(f64::to_bits).hash(&mut hasher);
             }
+            TaskKind::Delay => 2u8.hash(&mut hasher),
         }
     }
     for entry in &input.ground {

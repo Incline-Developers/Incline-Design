@@ -506,6 +506,14 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
         };
         let interval = input.intervals[position];
         let (start_h, end_h) = (interval.start_h, interval.end_h);
+        if lookup
+            .identities
+            .delays
+            .iter()
+            .any(|(owner, from, to)| *owner == agent && *from <= start_h + 1e-9 && start_h < *to - 1e-9)
+        {
+            return (IdleReason::Delayed, Vec::new());
+        }
         let (dig_tph, reclaim_tph) = input
             .loaders
             .iter()
@@ -526,12 +534,11 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
         let rate_for = |kind: &TaskKind| match kind {
             TaskKind::Dig { .. } => dig_tph,
             TaskKind::Reclaim { .. } => reclaim_tph,
+            TaskKind::Delay => 0.0,
         };
-        if open.iter().all(|task| rate_for(&task.kind) <= 0.0) {
-            return (IdleReason::Unavailable, Vec::new());
-        }
-        let mut sources = Vec::new();
-        for task in open.iter().filter(|task| rate_for(&task.kind) > 0.0) {
+        // What each bar could work at the start of the interval.
+        let task_sources = |task: &crate::model::schedule::optimisation::Task| -> Vec<SourceId> {
+            let mut sources = Vec::new();
             match &task.kind {
                 // Ground is dug in order: what the machine could be on is the
                 // first block of the sequence that still holds any.
@@ -555,8 +562,32 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
                         }
                     }
                 }
+                TaskKind::Delay => {}
+            }
+            sources
+        };
+        // A delay bar holds the machine when no bar above it had work.
+        let mut ordered = open.clone();
+        ordered.sort_by(|left, right| {
+            (left.priority, left.window_start_h, left.id)
+                .partial_cmp(&(right.priority, right.window_start_h, right.id))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for task in &ordered {
+            if task.window_start_h > start_h + 1e-9 || task.window_end_h < end_h - 1e-9 {
+                continue;
+            }
+            if matches!(task.kind, TaskKind::Delay) {
+                return (IdleReason::Delayed, Vec::new());
+            }
+            if rate_for(&task.kind) > 0.0 && !task_sources(task).is_empty() {
+                break;
             }
         }
+        if open.iter().all(|task| rate_for(&task.kind) <= 0.0) {
+            return (IdleReason::Unavailable, Vec::new());
+        }
+        let sources: Vec<SourceId> = open.iter().filter(|task| rate_for(&task.kind) > 0.0).flat_map(|task| task_sources(task)).collect();
         if sources.is_empty() {
             return (IdleReason::WorkFinished, Vec::new());
         }

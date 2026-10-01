@@ -561,6 +561,8 @@ pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bo
     match task.kind {
         TaskKind::Dig { .. } => rate.dig_tph > 0.0,
         TaskKind::Reclaim { .. } => rate.reclaim_tph > 0.0,
+        // A delay holds the loader whatever its rate.
+        TaskKind::Delay => true,
     }
 }
 

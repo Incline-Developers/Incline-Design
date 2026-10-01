@@ -50,7 +50,7 @@ fn parse_rate(text: &str) -> Result<f64, String> {
 /// Why this name cannot be committed, for the inline badge beside it. The
 /// command layer checks the same rules; this is so the user is told before
 /// pressing anything rather than after.
-fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<String> {
+pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Some(crate::model::schedule::ScheduleError::EmptyName.message());

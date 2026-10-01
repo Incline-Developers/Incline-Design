@@ -224,22 +224,24 @@ impl<'a> State<'a> {
                 let task = authored_tasks(input, loader)
                     .into_iter()
                     .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph, &opening_ground))?;
-                Some(match &input.tasks[task].kind {
-                    TaskKind::Dig { sequence } => Bar {
+                match &input.tasks[task].kind {
+                    TaskKind::Dig { sequence } => Some(Bar {
                         loader,
                         task,
                         capacity: rate.dig_tph * duration,
                         blocks: self.next_block(loader, sequence, None, &opening_ground).into_iter().collect(),
-                    },
-                    TaskKind::Reclaim { maximum_t, .. } => Bar {
+                    }),
+                    TaskKind::Reclaim { maximum_t, .. } => Some(Bar {
                         loader,
                         task,
                         capacity: maximum_t.map_or(rate.reclaim_tph * duration, |maximum| {
                             (rate.reclaim_tph * duration).min(maximum - self.reclaimed.get(&task).copied().unwrap_or(0.0))
                         }),
                         blocks: Vec::new(),
-                    },
-                })
+                    }),
+                    // The loader's highest-priority bar is a delay: it stands.
+                    TaskKind::Delay => None,
+                }
             })
             .collect();
 
@@ -355,6 +357,7 @@ impl<'a> State<'a> {
                         }
                     }
                 }
+                TaskKind::Delay => {}
             }
             problem.add_row(..=bar.capacity.max(0.0), loader_total);
         }
@@ -629,6 +632,7 @@ impl<'a> State<'a> {
                     && maximum_t.is_none_or(|maximum| self.reclaimed.get(&bar).copied().unwrap_or(0.0) < maximum - NEGLIGIBLE_T)
                     && approved_sources.iter().any(|pile| self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T))
             }
+            TaskKind::Delay => true,
         }
     }
 

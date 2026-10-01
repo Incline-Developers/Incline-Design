@@ -23,6 +23,11 @@
 //!   executed nothing inside the calculated horizon. Hovering it gives the
 //!   reason the result found and what would change it.
 //!
+//! Delays are drawn from the plan, not the result: delay lists and rosters
+//! as a tint of their type's colour across the machine's row, delay bars in
+//! that colour. New bars are dragged onto a row from the chips in the
+//! top-left corner; a delay asks for its type when it lands.
+//!
 //! Dragging the middle of a bar moves its whole window; dragging either edge
 //! resizes it, and the same window can be typed in exactly. The drag previews
 //! in [`crate::ui::state::GanttDrag`] and commits once on release, so one drag
@@ -50,8 +55,8 @@ use crate::{
         elements::schedule_calendar::format_tonnes,
         fonts::bold,
         state::{
-            BarNameDialog, BarWindowDialog, GanttDrag, GanttDragMode, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
-            ScheduleRepairTarget, UiCommand,
+            BarNameDialog, BarWindowDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog, ScheduleBarView,
+            ScheduleEdit, ScheduleRepairTarget, ScheduleStep, UiCommand,
         },
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -305,7 +310,7 @@ fn layout_markers(ui: &egui::Ui, editor: &EditorState, plan: &SchedulePlan, body
         .iter()
         .map(|bar| {
             let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
-            let galley = ui.painter().layout_no_wrap(bar_label(bar, report), font.clone(), color);
+            let galley = ui.painter().layout_no_wrap(bar_label(bar, report, Some(plan)), font.clone(), color);
             Marker {
                 extent: BarExtent::of(view, bar.window, body),
                 galley,
@@ -711,6 +716,8 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     draw_ruler(ui, ruler, editor.gantt, interval, bands > 1.0);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
     draw_grid(ui, body, editor.gantt, interval);
+    draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
+    draw_palette(ui, corner, editor);
     // Taken out for the duration of the frame rather than cloned: the bars
     // need it while `editor` is borrowed mutably for the drag and the
     // selection, and a calculated schedule is not a small value to copy once
@@ -726,10 +733,12 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // The lanes first and the bars over them, both after the canvas: a click
     // on a bar is a click on the bar rather than a pan of the timeline, and a
     // right-click on empty lane space is that lane's own menu.
-    draw_row_menus(ui, body, editor, &layout.rows, session, commands);
+    draw_row_menus(ui, body, editor, plan, &layout.rows, session, commands);
     draw_bars(ui, body, editor, plan, destinations, &layout, session, commands, schedule.as_deref());
     // Idle is a row-level indicator, under every lane of the machine.
     draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
+    draw_palette_drop(ui, body, editor, plan, &layout.rows, session, commands);
+    draw_delay_drop_menu(ui, editor, plan, session, commands);
     // Over everything, because it marks an instant across all of it, and last
     // so its handle takes the pointer from the bars it crosses.
     let horizon_h = schedule.as_deref().map_or(0.0, |schedule| schedule.requested_end_h);
@@ -759,6 +768,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
                         start_h: 0.0,
                         end_h: Some(crate::model::schedule::SCHEDULE_PERIOD_H),
                     },
+                    insert_lane: false,
                 },
             ));
         }
@@ -942,7 +952,7 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
 /// marker, the sequence editor's title and its discard prompt cannot end up
 /// calling the same bar three different things.
 pub(crate) fn bar_display_name(editor: &EditorState, bar: &ScheduleBar) -> String {
-    bar_label(bar, editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id))
+    bar_label(bar, editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id), None)
 }
 
 /// What one bar's marker says.
@@ -951,7 +961,15 @@ pub(crate) fn bar_display_name(editor: &EditorState, bar: &ScheduleBar) -> Strin
 /// borrows the ground-derived label the readiness report built from its
 /// members' pit, bench and blast. Neither carries tonnes or a block count:
 /// the marker names the work, and the figures belong in the hover.
-fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>) -> String {
+fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, plan: Option<&SchedulePlan>) -> String {
+    // A delay is named by its type unless the user named it.
+    if let Some(work) = bar.delay() {
+        return if bar.has_custom_name() {
+            bar.name().to_owned()
+        } else {
+            plan.map_or_else(|| tr!("gantt-palette-delay"), |plan| super::schedule_delays::delay_look(plan, work.kind).1)
+        };
+    }
     if bar.has_custom_name() {
         if bar.reclaim().is_some() {
             format!("↺ {}", bar.name())
@@ -972,7 +990,7 @@ fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>) -> String {
 
 /// Everything the bar's hover says: what it is, the period it may be worked
 /// in, what a current run made of it, and why it is not ready.
-fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: WorkWindow, schedule: Option<&CalculatedSchedule>) -> String {
+fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: WorkWindow, schedule: Option<&CalculatedSchedule>, plan: &SchedulePlan) -> String {
     let span = match window.end_h {
         Some(end) => tr!(
             "schedule-gantt-window-span",
@@ -982,9 +1000,13 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         None => tr!("schedule-gantt-window-open", from = instant_label(window.start_h * GanttView::HOUR)),
     };
     let mut lines = vec![
-        bar_label(bar, report),
+        bar_label(bar, report, Some(plan)),
         tr_format!(literal = "%label%: %span%", label = tr!("schedule-gantt-window"), span = span),
     ];
+    if bar.delay().is_some() {
+        lines.push(tr!("gantt-delay-bar-note"));
+        return lines.join("\n");
+    }
     if let Some(work) = bar.reclaim() {
         // The permitted piles, named. The marker cannot list them - it says a
         // count - so this is where a planner reads back what the bar may draw
@@ -1057,6 +1079,7 @@ const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
 /// The short name and the explanation of one idle reason.
 fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
     match reason {
+        Some(IdleReason::Delayed) => (tr!("idle-delayed"), tr!("idle-delayed-note")),
         Some(IdleReason::Unavailable) => (tr!("idle-unavailable"), tr!("idle-unavailable-note")),
         Some(IdleReason::NoWork) => (tr!("idle-no-work"), tr!("idle-no-work-note")),
         Some(IdleReason::WorkFinished) => (tr!("idle-work-finished"), tr!("idle-work-finished-note")),
@@ -1100,7 +1123,8 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
         } else {
             &unassigned
         };
-        for span in idle.iter().filter(|span| span.agent == agent) {
+        // Delays are drawn as delays, not as idle time.
+        for span in idle.iter().filter(|span| span.agent == agent && span.reason != Some(IdleReason::Delayed)) {
             let rect = span_rect(view, body, span.start_h, span.end_h, top, IDLE_STRIP);
             if rect.intersects(body) {
                 painter.rect_filled(rect.intersect(body), 0.0, IDLE_COLOR);
@@ -1118,7 +1142,10 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
             continue;
         };
         let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
-        let Some(span) = idle.iter().find(|span| span.agent == agent && span.start_h <= at_h && at_h < span.end_h) else {
+        let Some(span) = idle
+            .iter()
+            .find(|span| span.agent == agent && span.reason != Some(IdleReason::Delayed) && span.start_h <= at_h && at_h < span.end_h)
+        else {
             continue;
         };
         response.on_hover_ui_at_pointer(|ui| {
@@ -1618,7 +1645,12 @@ fn draw_bars(
                     let response = ui.interact(rect.intersect(body), ui.id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
                     let is_selected = selected == Some(bar.id);
                     let ready = report.is_some_and(|report| report.ready);
-                    let fill = if ready { visuals.selection.bg_fill } else { visuals.widgets.inactive.bg_fill };
+                    let delay = bar.delay().map(|work| super::schedule_delays::delay_look(plan, work.kind).0);
+                    let fill = match delay {
+                        Some(color) => color,
+                        None if ready => visuals.selection.bg_fill,
+                        None => visuals.widgets.inactive.bg_fill,
+                    };
                     let stroke = if is_selected {
                         egui::Stroke::new(2.0, visuals.selection.stroke.color)
                     } else if report.is_some_and(|report| !report.problems.is_empty()) {
@@ -1656,10 +1688,17 @@ fn draw_bars(
                     // the bar is a period now, and a label spilling past its
                     // end would read as work that runs on past the window.
                     if rect.width() > 16.0 {
-                        ui.painter_at(rect.intersect(body)).galley(
+                        // On a delay's own colour the label is white or black,
+                        // whichever reads.
+                        let text = match delay {
+                            Some(color) if (u32::from(color.r()) * 299 + u32::from(color.g()) * 587 + u32::from(color.b()) * 114) / 1000 > 150 => egui::Color32::BLACK,
+                            Some(_) => egui::Color32::WHITE,
+                            None => visuals.strong_text_color(),
+                        };
+                        ui.painter_at(rect.intersect(body)).galley_with_override_text_color(
                             egui::pos2(rect.left() + 6.0, rect.center().y - marker.galley.size().y * 0.5),
                             marker.galley.clone(),
-                            visuals.strong_text_color(),
+                            text,
                         );
                     }
                     // The calculated work, in the band above the bar. Drawn
@@ -1742,7 +1781,7 @@ fn draw_bars(
                     {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                     }
-                    let menu_label = bar_label(bar, report);
+                    let menu_label = bar_label(bar, report, Some(plan));
                     context_menu_popup(&response, &menu_label, |ui| {
                         if bar.dig_order().is_some() && ContextMenuAction::new(tr!("schedule-bar-edit-sequence")).show(ui).clicked() {
                             // Opening reads the bar and nothing else: the
@@ -1752,6 +1791,28 @@ fn draw_bars(
                             editor.solids_view_selection.clear();
                             editor.selected_blast = None;
                             ui.close();
+                        }
+                        // A delay's type, chosen from the list the Delays page
+                        // keeps; the current one is ticked.
+                        if let Some(work) = bar.delay() {
+                            ui.label(egui::RichText::new(tr!("gantt-delay-change-type")).weak());
+                            for entry in &plan.delays().types {
+                                if ContextMenuAction::new(entry.name.clone()).checked(work.kind == Some(entry.id)).show(ui).clicked() {
+                                    commands.push(UiCommand::schedule(
+                                        session,
+                                        ScheduleEdit::SetDelayBarType {
+                                            bar: bar.id,
+                                            kind: Some(entry.id),
+                                        },
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                            if ContextMenuAction::new(tr!("delay-untyped")).checked(work.kind.is_none()).show(ui).clicked() {
+                                commands.push(UiCommand::schedule(session, ScheduleEdit::SetDelayBarType { bar: bar.id, kind: None }));
+                                ui.close();
+                            }
+                            ui.separator();
                         }
                         if let Some(work) = bar.reclaim()
                             && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
@@ -1842,7 +1903,17 @@ fn draw_bars(
                     // left edge says nothing about the hour being asked about.
                     response.on_hover_ui_at_pointer(|ui| {
                         ui.set_min_width(260.0);
-                        ui.label(bar_tooltip(bar, report, window, schedule));
+                        ui.label(bar_tooltip(bar, report, window, schedule, plan));
+                        // A delay list or roster under the pointer: the bar
+                        // covers most of the row, so this is where it is read.
+                        if let Some(agent) = bar.agent
+                            && let Some(pos) = ui.ctx().pointer_hover_pos()
+                            && let Some((heading, span)) = calendar_delay_tooltip(plan, agent, view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR)
+                        {
+                            ui.separator();
+                            ui.label(bold(&heading));
+                            ui.label(span);
+                        }
                     });
                 }
             }
@@ -1899,7 +1970,7 @@ fn previewed(drag: GanttDrag) -> Placement {
 ///
 /// Sensed after the bars, so a right-click that lands on a bar opens the bar's
 /// menu rather than this one.
-fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
+fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
     if !body.is_positive() {
         return;
     }
@@ -1917,6 +1988,18 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
             }
             let id = ui.id().with(("gantt_lane", index, lane));
             let response = ui.interact(rect, id, egui::Sense::click());
+            // A delay list or roster under the pointer, named. The bars take
+            // the hover where they sit, so this answers only for open lane.
+            if let Some(agent) = row.agent
+                && let Some(pos) = response.hover_pos()
+                && let Some((heading, span)) = calendar_delay_tooltip(plan, agent, view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR)
+            {
+                response.clone().on_hover_ui_at_pointer(|ui| {
+                    ui.label(bold(&heading));
+                    ui.label(span);
+                    ui.label(egui::RichText::new(tr!("gantt-delay-calendar-note")).weak());
+                });
+            }
             // Where along the timeline the menu was opened, remembered as it
             // opens: the row inside it is clicked a frame or more later, by
             // which time the pointer is over the menu rather than the lane.
@@ -1949,8 +2032,22 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                                 start_h,
                                 end_h: Some(start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
                             },
+                            insert_lane: false,
                         },
                     ));
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("delay-add-bar")).show(ui).clicked() {
+                    let start_h = (ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR).round();
+                    let pos = ui.ctx().pointer_latest_pos().unwrap_or(rect.center());
+                    editor.gantt_delay_drop = Some(DelayDrop {
+                        session,
+                        agent: row.agent,
+                        priority,
+                        insert: false,
+                        start_h,
+                        pos,
+                    });
                     ui.close();
                 }
                 if ContextMenuAction::new(tr!("reclaim-add-bar")).show(ui).clicked() {
@@ -1993,4 +2090,297 @@ fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
         egui::TextStyle::Body.resolve(ui.style()),
         ui.visuals().weak_text_color(),
     );
+}
+
+/// How long a bar dropped from the palette is to begin with: a day of work, or
+/// a shift's worth of delay. Something to resize, as a right-clicked bar is.
+fn palette_length_h(item: GanttPaletteItem) -> f64 {
+    match item {
+        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim => crate::model::schedule::SCHEDULE_PERIOD_H,
+        GanttPaletteItem::Delay => 12.0,
+    }
+}
+
+fn palette_label(item: GanttPaletteItem) -> String {
+    match item {
+        GanttPaletteItem::Dig => tr!("gantt-palette-dig"),
+        GanttPaletteItem::Reclaim => tr!("gantt-palette-reclaim"),
+        GanttPaletteItem::Delay => tr!("gantt-palette-delay"),
+    }
+}
+
+fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
+    match item {
+        GanttPaletteItem::Dig => WORKING_COLOR,
+        GanttPaletteItem::Reclaim => RECLAIM_COLOR,
+        GanttPaletteItem::Delay => super::schedule_delays::UNTYPED_DELAY_COLOR,
+    }
+}
+
+/// The chips in the corner above the machine names: drag one onto a row to
+/// make that kind of bar there.
+fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState) {
+    let items = [GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay];
+    let inner = corner.shrink2(egui::vec2(6.0, 3.0));
+    if !inner.is_positive() {
+        return;
+    }
+    let height = inner.height().min(18.0);
+    let gap = 4.0;
+    let width = ((inner.width() - gap * (items.len() - 1) as f32) / items.len() as f32).min(64.0);
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let visuals = ui.visuals().clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let left = inner.left() + index as f32 * (width + gap);
+        let chip = egui::Rect::from_min_size(egui::pos2(left, inner.center().y - height * 0.5), egui::vec2(width, height));
+        let response = ui
+            .interact(chip, ui.id().with(("gantt_palette", index)), egui::Sense::drag())
+            .on_hover_text(tr!("gantt-palette-hint", item = palette_label(item)));
+        let fill = if response.hovered() || editor.gantt_palette_drag == Some(item) {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            visuals.widgets.inactive.bg_fill
+        };
+        ui.painter().rect_filled(chip, GROUP_CORNER_RADIUS, fill);
+        // A swatch of the colour the bar will be, beside its name.
+        let swatch = egui::Rect::from_min_size(egui::pos2(chip.left() + 4.0, chip.center().y - 3.5), egui::vec2(7.0, 7.0));
+        ui.painter().rect_filled(swatch, 1.0, palette_color(item));
+        ui.painter_at(chip).text(
+            egui::pos2(swatch.right() + 4.0, chip.center().y),
+            egui::Align2::LEFT_CENTER,
+            palette_label(item),
+            font.clone(),
+            visuals.text_color(),
+        );
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if response.drag_started() {
+            editor.gantt_palette_drag = Some(item);
+        }
+    }
+}
+
+/// A palette chip being carried over the timeline: where it would land is
+/// shown as the slot and the instant, and letting go there makes the bar.
+#[allow(clippy::too_many_arguments, reason = "the drop needs the frame's layout, the plan and somewhere to put the edit")]
+fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(item) = editor.gantt_palette_drag else { return };
+    let (pointer, released, cancelled) = ui.input_mut(|input| {
+        (
+            input.pointer.interact_pos(),
+            !input.pointer.button_down(egui::PointerButton::Primary),
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+        )
+    });
+    if cancelled {
+        editor.gantt_palette_drag = None;
+        return;
+    }
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    let scroll = editor.gantt.row_scroll;
+    let view = editor.gantt;
+    let target = pointer.filter(|pos| body.contains(*pos)).and_then(|pos| {
+        let placement = placement_at(pos.y, body, scroll, rows)?;
+        // On the hour: a bar dropped by hand is never meant to start at 06:47.
+        let start_h = (view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR).round().max(0.0);
+        Some((pos, placement, start_h))
+    });
+    let painter = ui.painter_at(body);
+    let visuals = ui.visuals().clone();
+    if let Some((_, placement, start_h)) = target
+        && let Some(top) = placement_top(placement, body, scroll, rows)
+    {
+        let slot = if placement.insert {
+            egui::Rect::from_min_size(egui::pos2(body.left(), top - 1.5), egui::vec2(body.width(), 3.0))
+        } else {
+            egui::Rect::from_min_size(egui::pos2(body.left(), top), egui::vec2(body.width(), BAR_TOP + plan.bar_height() + BAR_BOTTOM))
+        };
+        let fill = if placement.insert {
+            visuals.selection.stroke.color
+        } else {
+            visuals.selection.bg_fill.gamma_multiply(0.18)
+        };
+        painter.rect_filled(slot.intersect(body), GROUP_CORNER_RADIUS, fill);
+        let ghost = span_rect(view, body, start_h, start_h + palette_length_h(item), top + BAR_TOP, plan.bar_height());
+        painter.rect_filled(ghost, GROUP_CORNER_RADIUS, palette_color(item).gamma_multiply(0.55));
+        painter.rect_stroke(ghost, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, palette_color(item)), egui::StrokeKind::Inside);
+    }
+    if let Some(pos) = pointer {
+        // The chip under the pointer, over everything, so it is plain what is
+        // being carried even outside the timeline.
+        let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.id().with("gantt_palette_ghost")));
+        let text = match target {
+            Some((_, _, start_h)) => format!("{} · {}", palette_label(item), instant_label(start_h * GanttView::HOUR)),
+            None => palette_label(item),
+        };
+        let galley = layer.layout_no_wrap(text, egui::TextStyle::Small.resolve(ui.style()), visuals.strong_text_color());
+        let rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 10.0), galley.size() + egui::vec2(12.0, 6.0));
+        layer.rect_filled(rect, GROUP_CORNER_RADIUS, visuals.window_fill);
+        layer.rect_stroke(rect, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, palette_color(item)), egui::StrokeKind::Inside);
+        layer.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.strong_text_color());
+    }
+    ui.ctx().request_repaint();
+    if !released {
+        return;
+    }
+    editor.gantt_palette_drag = None;
+    let Some((pos, placement, start_h)) = target else { return };
+    let window = WorkWindow {
+        start_h,
+        end_h: Some(start_h + palette_length_h(item)),
+    };
+    match item {
+        GanttPaletteItem::Dig => commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::AddBar {
+                name: String::new(),
+                agent: placement.agent,
+                priority: placement.priority,
+                window,
+                insert_lane: placement.insert,
+            },
+        )),
+        GanttPaletteItem::Reclaim => {
+            editor.reclaim_bar_dialog = Some(ReclaimBarDialog {
+                target: None,
+                sources: Vec::new(),
+                agent: placement.agent,
+                priority: placement.priority,
+                start: start_h.to_string(),
+                end: (start_h + palette_length_h(item)).to_string(),
+                maximum: String::new(),
+            });
+        }
+        GanttPaletteItem::Delay => {
+            editor.gantt_delay_drop = Some(DelayDrop {
+                session,
+                agent: placement.agent,
+                priority: placement.priority,
+                insert: placement.insert,
+                start_h,
+                pos,
+            });
+        }
+    }
+}
+
+/// The menu a dropped delay bar opens: which kind of delay it is.
+fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(drop) = editor.gantt_delay_drop.filter(|drop| drop.session == session) else {
+        editor.gantt_delay_drop = None;
+        return;
+    };
+    let mut chosen: Option<Option<crate::model::schedule::DelayTypeId>> = None;
+    let mut close = false;
+    let mut open_setup = false;
+    let area = egui::Area::new(ui.id().with("gantt_delay_drop"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drop.pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                ui.set_max_width(220.0);
+                ui.label(bold(&tr!("gantt-delay-type-title")));
+                ui.add_space(2.0);
+                let swatch_row = |ui: &mut egui::Ui, color: egui::Color32, name: String| {
+                    let response = ui.add(egui::Button::new(format!("     {name}")).frame(false).min_size(egui::vec2(ui.available_width(), 0.0)));
+                    let swatch = egui::Rect::from_min_size(egui::pos2(response.rect.left() + 4.0, response.rect.center().y - 5.0), egui::vec2(10.0, 10.0));
+                    ui.painter().rect_filled(swatch, 2.0, color);
+                    response.clicked()
+                };
+                for entry in &plan.delays().types {
+                    if swatch_row(ui, super::schedule_delays::delay_color(entry.color), entry.name.clone()) {
+                        chosen = Some(Some(entry.id));
+                    }
+                }
+                if swatch_row(ui, super::schedule_delays::UNTYPED_DELAY_COLOR, tr!("delay-untyped")) {
+                    chosen = Some(None);
+                }
+                ui.separator();
+                if ui.add(egui::Button::new(tr!("gantt-delay-types-setup")).frame(false)).clicked() {
+                    open_setup = true;
+                }
+            });
+        });
+    if area.response.clicked_elsewhere() || ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        close = true;
+    }
+    if let Some(kind) = chosen {
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::AddDelayBar {
+                agent: drop.agent,
+                priority: drop.priority,
+                window: WorkWindow {
+                    start_h: drop.start_h,
+                    end_h: Some(drop.start_h + palette_length_h(GanttPaletteItem::Delay)),
+                },
+                kind,
+                insert_lane: drop.insert,
+            },
+        ));
+        close = true;
+    }
+    if open_setup {
+        editor.planning_page = PlanningPage::Schedule;
+        editor.schedule_subpage = PlanningSubpage::Setup;
+        editor.schedule_setup_step = ScheduleStep::Delays;
+        editor.schedule_selected_delay = Some(crate::ui::state::DelaySelection::Types);
+        close = true;
+    }
+    if close {
+        editor.gantt_delay_drop = None;
+    }
+}
+
+/// Delay lists and rosters on each machine's row: a tint of the delay's
+/// colour across the row, with a solid edge along its top. Behind the bars,
+/// because a delay is the machine's calendar rather than a bar of its own.
+fn draw_calendar_delays(ui: &egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, plan: &SchedulePlan, rows: &[Row]) {
+    if plan.delays().lists.is_empty() && plan.delays().rosters.is_empty() {
+        return;
+    }
+    let painter = ui.painter_at(body);
+    let end_h = view.end_seconds() / GanttView::HOUR;
+    let start_h = view.start_seconds / GanttView::HOUR;
+    for row in rows {
+        let Some(agent) = row.agent else { continue };
+        let top = body.top() + row.top - scroll;
+        if top + row.height < body.top() || top > body.bottom() {
+            continue;
+        }
+        for span in plan.delays().spans_for(agent, end_h) {
+            if span.end_h <= start_h {
+                continue;
+            }
+            let (color, _) = super::schedule_delays::delay_look(plan, span.kind);
+            let rect = span_rect(view, body, span.start_h, span.end_h, top, row.height);
+            painter.rect_filled(rect, 0.0, color.gamma_multiply(0.22));
+            painter.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + 2.0)), 0.0, color);
+        }
+    }
+}
+
+/// What a calendar delay at `at_h` on `agent` is, for a hover.
+fn calendar_delay_tooltip(plan: &SchedulePlan, agent: LoaderAgentId, at_h: f64) -> Option<(String, String)> {
+    let span = plan
+        .delays()
+        .spans_for(agent, at_h + 1.0)
+        .into_iter()
+        .find(|span| span.start_h <= at_h && at_h < span.end_h)?;
+    let (_, kind) = super::schedule_delays::delay_look(plan, span.kind);
+    let source = match span.source {
+        crate::model::schedule::delays::DelaySource::List(id) => plan.delays().list(id).map(|list| list.title.clone()).unwrap_or_default(),
+        crate::model::schedule::delays::DelaySource::Roster(id) => plan.delays().roster(id).map(|roster| roster.name.clone()).unwrap_or_default(),
+    };
+    Some((
+        tr!("gantt-delay-heading", kind = kind, source = source),
+        tr!(
+            "schedule-span-hours",
+            from = instant_label(span.start_h * GanttView::HOUR),
+            to = instant_label(span.end_h * GanttView::HOUR),
+            hours = format!("{:.1}", span.end_h - span.start_h)
+        ),
+    ))
 }

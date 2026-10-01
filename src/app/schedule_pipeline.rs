@@ -473,6 +473,11 @@ impl crate::app::App<'_> {
             })
             .collect();
         let agents_step = hash_of((classes_step, agents));
+        // Delays are checked as each is edited, so the step has nothing to
+        // re-validate and a delay edit must not send Setup back to be run:
+        // planners edit delays all the time. A calculated schedule still
+        // retires on one, through `App::schedule_semantic_key`.
+        let delays_step = hash_of((agents_step, "delays"));
 
         // Transport inputs hang off the fleet and go no further in the Setup
         // chain. A calculated schedule's own currentness reads them through
@@ -649,6 +654,7 @@ impl crate::app::App<'_> {
             configuration,
             classes_step,
             agents_step,
+            delays_step,
             truck_classes_step,
             stockpiles_step,
             dumps_step,
@@ -878,6 +884,7 @@ impl crate::app::App<'_> {
             ScheduleStep::Configuration => self.evaluate_schedule_configuration(),
             ScheduleStep::LoaderClasses => self.evaluate_loader_classes(),
             ScheduleStep::LoaderAgents => self.evaluate_loader_agents(),
+            ScheduleStep::Delays => self.evaluate_delays(),
             ScheduleStep::Stockpiles => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Stockpile),
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
@@ -956,6 +963,19 @@ impl crate::app::App<'_> {
         StageOutcome::Settled {
             diagnostics,
             entities: classes.len(),
+        }
+    }
+
+    /// Delays are optional, and every edit is checked as it is made, so the
+    /// step has nothing to block on: it counts what there is.
+    fn evaluate_delays(&self) -> StageOutcome {
+        let entities = self.workspace.active_document().map_or(0, |document| {
+            let delays = document.schedule().delays();
+            delays.types.len() + delays.lists.len() + delays.rosters.len()
+        });
+        StageOutcome::Settled {
+            diagnostics: Vec::new(),
+            entities,
         }
     }
 

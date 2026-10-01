@@ -77,6 +77,10 @@ impl Execution {
 /// is the reason given, checked in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum IdleReason {
+    /// A delay list or roster takes the machine out, or a delay bar holds it
+    /// with priority. The Gantt draws those itself, so it does not mark this
+    /// as idle.
+    Delayed,
     /// The calendar gives the machine no rate: availability, utilisation or
     /// the rate itself is zero.
     Unavailable,

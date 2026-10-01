@@ -1408,6 +1408,14 @@ fn log_model_structure(run_id: u64, input: &BlendInput) {
                 maximum_t,
                 rate
             ),
+            TaskKind::Delay => log::info!(
+                "schedule run {run_id}: task {:?} loader {:?} priority {} window {:.1}-{:.1} h, delay",
+                task.id,
+                task.loader,
+                task.priority,
+                task.window_start_h,
+                task.window_end_h
+            ),
         }
     }
     for (family, size) in crate::model::schedule::optimisation::blended::formulation::family_sizes(input) {

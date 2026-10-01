@@ -52,7 +52,13 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetBarHeight(height) => self.set_bar_height(height),
-            ScheduleEdit::AddBar { name, agent, priority, window } => self.add_bar(name, agent, priority, window),
+            ScheduleEdit::AddBar {
+                name,
+                agent,
+                priority,
+                window,
+                insert_lane,
+            } => self.add_bar(name, agent, priority, window, insert_lane),
             ScheduleEdit::RenameBar { bar, name } => self.rename_bar(bar, name),
             ScheduleEdit::DeleteBar(bar) => self.delete_bar(bar),
             ScheduleEdit::CopyBar(bar) => self.copy_bar(bar),
@@ -161,6 +167,26 @@ impl crate::app::App<'_> {
                 plan.experiment_mut().set_solve_seconds(seconds)?;
                 plan.experiment_mut().set_relative_gap(relative_gap)
             }),
+            ScheduleEdit::AddDelayBar {
+                agent,
+                priority,
+                window,
+                kind,
+                insert_lane,
+            } => self.add_delay_bar(agent, priority, window, kind, insert_lane),
+            ScheduleEdit::SetDelayBarType { bar, kind } => self.edit_schedule(|plan| plan.set_delay_bar_kind(bar, kind)),
+            ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
+            ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
+            ScheduleEdit::SetDelayTypeColor { kind, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.set_type_color(kind, color))),
+            ScheduleEdit::DeleteDelayType(kind) => self.edit_schedule(|plan| plan.remove_delay_type(kind)),
+            ScheduleEdit::AddDelayList { title } => self.add_delay_list(title),
+            ScheduleEdit::RenameDelayList { list, title } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_list(list, &title))),
+            ScheduleEdit::SetDelayListType { list, kind } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.set_list_kind(list, kind))),
+            ScheduleEdit::SetDelayListEntries { list, entries } => self.edit_schedule(|plan| plan.edit_delays(|delays, agents| delays.set_list_entries(list, entries, agents))),
+            ScheduleEdit::DeleteDelayList(list) => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.remove_list(list))),
+            ScheduleEdit::AddRoster { name } => self.add_roster(name),
+            ScheduleEdit::SetRoster(roster) => self.edit_schedule(|plan| plan.edit_delays(|delays, agents| delays.set_roster(roster, agents))),
+            ScheduleEdit::DeleteRoster(roster) => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.remove_roster(roster))),
             ScheduleEdit::SetExperimentGradeUnit { field, unit } => self.edit_schedule(|plan| plan.experiment_mut().set_grade_unit(field, unit)),
             ScheduleEdit::SetExperimentEventCapacity { capacity } => self.edit_schedule(|plan| plan.experiment_mut().set_event_capacity(capacity)),
             ScheduleEdit::SetStockpileRepresentation { destination, representation } => {
@@ -542,15 +568,72 @@ impl crate::app::App<'_> {
         self.edit_schedule(|plan| plan.set_bar_height(height));
     }
 
-    fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow) {
+    fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, insert_lane: bool) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            added = Some(plan.add_bar(&name, agent, priority, window)?);
+            let id = plan.add_bar(&name, agent, priority, window)?;
+            if insert_lane {
+                plan.open_lane(agent, priority);
+                plan.set_bar_priority(id, priority)?;
+            }
+            added = Some(id);
             Ok(())
         });
         if let Some(id) = added {
             self.editor.schedule_selected_bar = Some(id);
             self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Add a delay bar and select it.
+    fn add_delay_bar(
+        &mut self,
+        agent: Option<LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+        insert_lane: bool,
+    ) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            let id = plan.add_delay_bar(agent, priority, window, kind)?;
+            if insert_lane {
+                plan.open_lane(agent, priority);
+                plan.set_bar_priority(id, priority)?;
+            }
+            added = Some(id);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Add a delay list, of the first delay type when there is one, and open
+    /// it on the Delays page.
+    fn add_delay_list(&mut self, title: String) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            let kind = plan.delays().types.first().map(|entry| entry.id);
+            added = Some(plan.edit_delays(|delays, _| delays.add_list(&title, kind))?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_delay = Some(crate::ui::state::DelaySelection::List(id));
+        }
+    }
+
+    /// Add a roster, untyped: a shift change is not maintenance, and the
+    /// first type is as likely to be one as the other.
+    fn add_roster(&mut self, name: String) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            added = Some(plan.edit_delays(|delays, _| delays.add_roster(&name, None))?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_delay = Some(crate::ui::state::DelaySelection::Roster(id));
         }
     }
 

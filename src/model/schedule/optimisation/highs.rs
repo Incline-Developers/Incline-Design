@@ -598,6 +598,7 @@ fn segment_budgets(input: &OptimisationInput, ground_index: &BTreeMap<GroundId, 
                                 }
                             }
                         }
+                        TaskKind::Delay => {}
                     }
                 }
                 if reclaim_task {
@@ -1297,7 +1298,7 @@ pub(super) fn solve(input: &OptimisationInput, limits: SolveLimits, cancellation
         let task = &input.tasks[task_index];
         let source = match &task.kind {
             TaskKind::Dig { sequence } => SourceId::Ground(sequence[stage]),
-            TaskKind::Reclaim { .. } => unreachable!(),
+            TaskKind::Reclaim { .. } | TaskKind::Delay => unreachable!(),
         };
         let destinations: BTreeSet<_> = routes_for(input, task.loader, Activity::Dig, source, material, interval)
             .map(|(_, candidate)| candidate.destination)
@@ -1404,6 +1405,8 @@ pub(super) fn solve(input: &OptimisationInput, limits: SolveLimits, cancellation
                                 add_constraint(&mut model, &mut formulation, Expression::from(ready.variable).eq(0.0));
                             }
                         }
+                        // Refused by validation: the parcel baseline has no delay bars.
+                        TaskKind::Delay => {}
                     }
                     add_constraint(&mut model, &mut formulation, Expression::from(selected.variable).leq(ready.variable));
                     for &earlier in &ordered[..rank] {
@@ -2547,6 +2550,7 @@ pub(super) fn solve(input: &OptimisationInput, limits: SolveLimits, cancellation
                     && match &task.kind {
                         TaskKind::Dig { sequence } => sequence.iter().any(|ground| extracted_by_ground.get(ground).copied().unwrap_or(0.0) > tolerance.tonnes_t),
                         TaskKind::Reclaim { approved_sources, .. } => approved_sources.iter().any(|pile| stock_by_pile.get(pile).copied().unwrap_or(0.0) > tolerance.tonnes_t),
+                        TaskKind::Delay => false,
                     }
             });
             if unfinished {

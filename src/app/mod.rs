@@ -2251,6 +2251,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
             self.redraw_requested = true;
         }
+        // A schedule recalculation waits for edits to settle and then needs a
+        // frame to start in: asked for here, before the frame request below,
+        // or the loop goes back to sleep with the frame still owed.
+        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.schedule_auto_deadline = None;
+            self.redraw_requested = true;
+        }
         if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
             self.slice_surface_retry_deadline = None;
             if let Some(graphics) = self.graphics.as_ref() {
@@ -2284,10 +2291,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
-            self.schedule_auto_deadline = None;
-            self.redraw_requested = true;
-        }
         let wake_deadline = wake_deadline
             .into_iter()
             .chain(self.slice_surface_retry_deadline)

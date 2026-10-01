@@ -837,6 +837,10 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
         report.reclaim = Some(ReclaimReport { source_names: resolved });
         return report;
     }
+    // A delay has no ground and no pile: nothing to resolve, nothing wrong.
+    if bar.delay().is_some() {
+        return report;
+    }
     if bar.members().is_empty() {
         report.problems.push(ReadinessProblem::Empty);
     }

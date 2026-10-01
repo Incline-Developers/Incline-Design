@@ -865,6 +865,10 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     let Some(ready) = rows.columns().ready.get(&key).cloned() else { continue };
                     let position = flat_cell(interval.index, segment, segments);
                     match &task.kind {
+                        // A delay always has its work: standing.
+                        TaskKind::Delay => {
+                            rows.eq(vec![(ready, 1.0)], 1.0, &format!("rdydelay_{loader_index}_{task_index}_{position}"));
+                        }
                         TaskKind::Dig { sequence } => {
                             // Ready while any block in the authored sequence
                             // still holds material at the start of this cell.

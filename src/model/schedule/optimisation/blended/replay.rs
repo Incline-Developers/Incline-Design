@@ -755,6 +755,7 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                                 .iter()
                                 .any(|pile| openings.get(&(*pile, interval.index)).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
                         }
+                        TaskKind::Delay => true,
                     }
                 };
 

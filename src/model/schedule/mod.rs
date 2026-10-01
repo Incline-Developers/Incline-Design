@@ -15,6 +15,7 @@
 pub(crate) mod animation;
 pub(crate) mod calendar;
 pub(crate) mod cashflow;
+pub(crate) mod delays;
 pub(crate) mod destinations;
 pub(crate) mod experiment;
 pub(crate) mod inventory;
@@ -25,6 +26,7 @@ pub(crate) mod trucking;
 
 pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, LoaderCalendar, RateKind, SCHEDULE_PERIOD_H};
 pub(crate) use cashflow::{Activity, ActivitySelection, CashflowConfig, CashflowRuleId};
+pub(crate) use delays::{DelayConfig, DelayEntry, DelayListId, DelayTypeId, Roster, RosterId};
 pub(crate) use destinations::{
     Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationSelection, FieldCondition, LoaderSelection,
     MovementSourceScope, MovementSourceSelection, PortionValue, RoutingConfig, RuleId, SourceScope, StandaloneDestinationId,
@@ -114,6 +116,17 @@ pub(crate) enum BarWork {
     Dig(DigOrder),
     /// Material taken back out of a stockpile.
     Reclaim(ReclaimWork),
+    /// Time the machine stands: while this is its highest-priority open bar
+    /// it does nothing. See [`delays`].
+    Delay(DelayWork),
+}
+
+/// A delay bar's own settings: only what kind of delay it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DelayWork {
+    #[serde(default)]
+    pub(crate) kind: Option<DelayTypeId>,
 }
 
 impl Default for BarWork {
@@ -303,21 +316,28 @@ impl ScheduleBar {
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         match &self.work {
             BarWork::Dig(order) => order.members(),
-            BarWork::Reclaim(_) => &[],
+            BarWork::Reclaim(_) | BarWork::Delay(_) => &[],
         }
     }
 
     pub(crate) fn dig_order(&self) -> Option<&DigOrder> {
         match &self.work {
             BarWork::Dig(order) => Some(order),
-            BarWork::Reclaim(_) => None,
+            BarWork::Reclaim(_) | BarWork::Delay(_) => None,
         }
     }
 
     pub(crate) fn reclaim(&self) -> Option<&ReclaimWork> {
         match &self.work {
-            BarWork::Dig(_) => None,
             BarWork::Reclaim(work) => Some(work),
+            BarWork::Dig(_) | BarWork::Delay(_) => None,
+        }
+    }
+
+    pub(crate) fn delay(&self) -> Option<&DelayWork> {
+        match &self.work {
+            BarWork::Delay(work) => Some(work),
+            BarWork::Dig(_) | BarWork::Reclaim(_) => None,
         }
     }
 
@@ -527,6 +547,10 @@ pub(crate) enum ScheduleError {
     InvalidReclaimLimit,
     /// A dig edit addressed to a reclaim bar, or the other way round.
     WrongActivity,
+    /// An id that names no delay type, delay list or roster in this plan.
+    UnknownDelay,
+    /// A delay type still used by the named bars, lists or rosters.
+    DelayTypeInUse(Vec<String>),
     /// A category condition on a rule whose sources include stockpiles, where
     /// the blended representation has no category left to test. Refused when
     /// authored; an existing one is preserved and the rule reported invalid
@@ -600,6 +624,8 @@ impl ScheduleError {
             Self::NotAStockpile => tr!("reclaim-error-not-a-stockpile"),
             Self::InvalidReclaimLimit => tr!("reclaim-error-invalid-limit"),
             Self::WrongActivity => tr!("reclaim-error-wrong-activity"),
+            Self::UnknownDelay => tr!("delay-error-unknown"),
+            Self::DelayTypeInUse(users) => tr!("delay-error-type-in-use", users = users.join(", ")),
             Self::CategoryConditionUnsupported => tr!("destination-error-category-unsupported"),
             Self::InvalidExperimentSetting => tr!("experiment-error-invalid-setting"),
         }
@@ -674,6 +700,10 @@ pub(crate) struct SchedulePlan {
     /// Persisted in every build, including WASM where calculation is unavailable.
     #[serde(default)]
     experiment: experiment::ExperimentConfig,
+    /// Delay types, delay lists and rosters; see [`delays`]. Delay bars are
+    /// bars, held with the others.
+    #[serde(default)]
+    delays: DelayConfig,
 }
 
 fn default_currency() -> String {
@@ -697,6 +727,7 @@ impl Default for SchedulePlan {
             cashflow: CashflowConfig::default(),
             currency: default_currency(),
             experiment: experiment::ExperimentConfig::default(),
+            delays: DelayConfig::default(),
         }
     }
 }
@@ -741,6 +772,7 @@ impl SchedulePlan {
             && self.cashflow.is_empty()
             && self.currency == cashflow::DEFAULT_CURRENCY
             && self.experiment.is_pristine()
+            && self.delays.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -766,6 +798,38 @@ impl SchedulePlan {
         self.routing.raise_allocator_to(&other.routing);
         self.trucks.raise_allocator_to(&other.trucks);
         self.cashflow.raise_allocator_to(&other.cashflow);
+        self.delays.raise_allocator_to(&other.delays);
+    }
+
+    pub(crate) fn delays(&self) -> &DelayConfig {
+        &self.delays
+    }
+
+    pub(crate) fn agent_ids(&self) -> Vec<LoaderAgentId> {
+        self.agents.iter().map(|agent| agent.id).collect()
+    }
+
+    /// Delete a delay type, refused while any bar, list or roster is of it.
+    pub(crate) fn remove_delay_type(&mut self, id: DelayTypeId) -> ScheduleResult {
+        let mut users: Vec<String> = self
+            .bars
+            .iter()
+            .filter(|bar| bar.delay().is_some_and(|work| work.kind == Some(id)))
+            .map(|bar| if bar.has_custom_name() { bar.name.clone() } else { tr!("delay-bar-unnamed") })
+            .collect();
+        users.extend(self.delays.type_users(id));
+        if !users.is_empty() {
+            users.dedup();
+            return Err(ScheduleError::DelayTypeInUse(users));
+        }
+        self.delays.remove_type(id)
+    }
+
+    /// Edit the delay lists and rosters, with the fleet to check rows
+    /// against. Every caller goes through the plan snapshot like the rest.
+    pub(crate) fn edit_delays<T>(&mut self, edit: impl FnOnce(&mut DelayConfig, &[LoaderAgentId]) -> ScheduleResult<T>) -> ScheduleResult<T> {
+        let agents = self.agent_ids();
+        edit(&mut self.delays, &agents)
     }
 
     pub(crate) fn routing(&self) -> &RoutingConfig {
@@ -997,6 +1061,7 @@ impl SchedulePlan {
             return Err(ScheduleError::UnknownAgent);
         }
         self.agents.retain(|agent| agent.id != id);
+        self.delays.forget_agent(id);
         for bar in &mut self.bars {
             if bar.agent == Some(id) {
                 bar.agent = None;
@@ -1131,6 +1196,42 @@ impl SchedulePlan {
         Ok(id)
     }
 
+    /// Add a delay bar: while it is the machine's highest-priority open bar,
+    /// the machine stands.
+    pub(crate) fn add_delay_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow, kind: Option<DelayTypeId>) -> ScheduleResult<BarId> {
+        if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
+            return Err(ScheduleError::UnknownAgent);
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        if kind.is_some_and(|kind| self.delays.delay_type(kind).is_none()) {
+            return Err(ScheduleError::UnknownDelay);
+        }
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            name: String::new(),
+            work: BarWork::Delay(DelayWork { kind }),
+            agent,
+            priority,
+            window,
+        });
+        Ok(id)
+    }
+
+    /// Change what kind of delay a delay bar is.
+    pub(crate) fn set_delay_bar_kind(&mut self, id: BarId, kind: Option<DelayTypeId>) -> ScheduleResult {
+        if kind.is_some_and(|kind| self.delays.delay_type(kind).is_none()) {
+            return Err(ScheduleError::UnknownDelay);
+        }
+        match &mut self.bar_mut(id)?.work {
+            BarWork::Delay(work) => work.kind = kind,
+            BarWork::Dig(_) | BarWork::Reclaim(_) => return Err(ScheduleError::WrongActivity),
+        }
+        Ok(())
+    }
+
     /// Whether a destination can be a reclaim source, as far as the plan can
     /// tell: a standalone destination it holds must be a stockpile, and a
     /// solid-backed one is the document's to judge.
@@ -1181,7 +1282,7 @@ impl SchedulePlan {
                 work.sources = sources;
                 Ok(true)
             }
-            BarWork::Dig(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1193,7 +1294,7 @@ impl SchedulePlan {
         let bar = self.bar_mut(id)?;
         match &mut bar.work {
             BarWork::Reclaim(work) => work.maximum_t = maximum_t,
-            BarWork::Dig(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1297,6 +1398,15 @@ impl SchedulePlan {
         Ok(())
     }
 
+    /// Make room for a new bar in a lane of its own at `priority`: that
+    /// machine's bars from `priority` down move one lane further out. What a
+    /// bar dropped on the seam between two lanes asks for.
+    pub(crate) fn open_lane(&mut self, agent: Option<LoaderAgentId>, priority: u32) {
+        for bar in self.bars.iter_mut().filter(|bar| bar.agent == agent && bar.priority >= priority) {
+            bar.priority = bar.priority.saturating_add(1);
+        }
+    }
+
     /// Set the period a bar may be worked in, in hours from the schedule
     /// origin.
     ///
@@ -1323,7 +1433,7 @@ impl SchedulePlan {
     fn dig_order_mut(&mut self, id: BarId) -> ScheduleResult<&mut DigOrder> {
         match &mut self.bar_mut(id)?.work {
             BarWork::Dig(order) => Ok(order),
-            BarWork::Reclaim(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Reclaim(_) | BarWork::Delay(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1426,8 +1536,12 @@ impl SchedulePlan {
                 // is not broken because the project moved on.
                 BarWork::Reclaim(work) if work.is_valid() => {}
                 BarWork::Reclaim(_) => return Err(ScheduleError::InvalidReclaimLimit),
+                BarWork::Delay(work) if work.kind.is_none_or(|kind| self.delays.delay_type(kind).is_some()) => {}
+                BarWork::Delay(_) => return Err(ScheduleError::UnknownDelay),
             }
         }
+        let agents = self.agent_ids();
+        self.delays.validate_loaded(&agents)?;
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
@@ -1491,15 +1605,21 @@ impl SchedulePlan {
         self.cashflow.hash_names(hasher);
         self.currency.hash(hasher);
         self.experiment.hash_content(hasher);
+        self.delays.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.name.hash(hasher);
-            if let Some(work) = bar.reclaim() {
-                1u8.hash(hasher);
-                work.sources.hash(hasher);
-                work.maximum_t.map(f64::to_bits).hash(hasher);
-            } else {
-                0u8.hash(hasher);
+            match &bar.work {
+                BarWork::Dig(_) => 0u8.hash(hasher),
+                BarWork::Reclaim(work) => {
+                    1u8.hash(hasher);
+                    work.sources.hash(hasher);
+                    work.maximum_t.map(f64::to_bits).hash(hasher);
+                }
+                BarWork::Delay(work) => {
+                    2u8.hash(hasher);
+                    work.kind.hash(hasher);
+                }
             }
             bar.agent.hash(hasher);
             bar.priority.hash(hasher);
@@ -1549,6 +1669,7 @@ impl SchedulePlan {
             + self.cashflow.estimated_bytes()
             + self.currency.len()
             + self.experiment.estimated_bytes()
+            + self.delays.estimated_bytes()
     }
 }
 

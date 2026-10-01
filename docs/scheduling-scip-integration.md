@@ -865,6 +865,63 @@ The status line says only how far the schedule reaches and, after Improve,
 how close it is to the best possible. The value, run number and solver
 working are in its hover.
 
+## Delays
+
+Schedule Setup has a Delays step (`model/schedule/delays.rs`,
+`ui/elements/schedule_delays.rs`) with three kinds of delay:
+
+| kind | authored as | how the schedule treats it |
+|---|---|---|
+| delay list | a titled table of machine, start and end, typed or pasted | the machine has no rate for those hours |
+| roster | a delay that repeats: first start, duration, repeat interval, optional end, and which machines | the machine has no rate for those hours |
+| delay bar | a bar on the Gantt (`BarWork::Delay`), dragged from the palette | while it is the machine's highest-priority open bar, the machine stands |
+
+Every delay can name a delay type, which is a name and a colour. The type
+is only presentation; it does not change how the schedule treats the time.
+
+Lists and rosters are the machine's calendar. Capture merges them per
+loader, makes their edges interval boundaries, and sets the dig and reclaim
+rate to zero for the intervals inside them, so every backend honours them
+without a new constraint. A delay bar is priority. Capture turns it into
+`TaskKind::Delay`, which is always ready while its window is open and
+authorises no movement:
+- In the formulation its `ready` is fixed to 1.
+- In the dispatcher it is the loader's whole interval when it is the
+  highest-priority ready bar.
+- The replay counts it as having work.
+
+So a bar in a higher lane keeps working through a delay bar, and one below
+it does not.
+
+Time a delay takes out is explained as "delayed" (`IdleReason::Delayed`).
+The Gantt does not mark it idle, because the delay is drawn itself:
+- lists and rosters as a tint of their type's colour across the row, named
+  on hover;
+- delay bars in their type's colour.
+
+The chips in the Gantt's top-left corner (Dig, Reclaim, Delay) are dragged
+onto a row to make a bar there, at the hour under the pointer. Dropping a
+chip on the seam between lanes opens a new lane.
+- A dropped delay asks for its type.
+- A dropped reclaim opens the reclaim dialog.
+- A delay bar's menu changes its type.
+
+Pasted rows are machine, start and end separated by tabs, commas or
+semicolons. A first line that is not a delay is taken as the header. A
+paste with any unreadable line is refused as a whole, and each problem is
+reported by line number. Times are written `Day 3 06:00` (day 1 is the
+first), or as a number of hours.
+
+Delay edits do not send Setup back to be run. Each edit is checked as it is
+made, so the Delays step's fingerprint stays fixed. A calculated schedule
+still goes out of date through `schedule_semantic_key`, which hashes the
+merged delay hours per machine, and Auto recalculates it.
+
+The 350 ms settle that starts an Auto recalculation used to start a run
+only on the next input event. The event loop requested its frame after it
+had already decided whether to redraw. It now asks before that decision,
+so a run starts with the pointer still.
+
 ## Solver process
 
 SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,

@@ -184,6 +184,9 @@ impl crate::app::App<'_> {
                 1u8.hash(&mut hasher);
                 work.sources.hash(&mut hasher);
                 work.maximum_t.map(f64::to_bits).hash(&mut hasher);
+            } else if bar.delay().is_some() {
+                // Its type is presentation; that it is a delay is not.
+                2u8.hash(&mut hasher);
             } else {
                 0u8.hash(&mut hasher);
             }
@@ -300,6 +303,8 @@ impl crate::app::App<'_> {
         }
         plan.trucks().hash_content(&mut hasher);
         plan.cashflow().hash_content(&mut hasher);
+        // The hours delay lists and rosters take each machine out.
+        plan.delays().hash_calendar(&plan.agent_ids(), self.planning_end_h(), &mut hasher);
         // Resolution, grade units and stockpile representation.
         plan.experiment().hash_semantics(&mut hasher);
         let key = hasher.finish();

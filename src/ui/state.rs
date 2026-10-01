@@ -2607,6 +2607,10 @@ pub(crate) struct EditorState {
     /// than a block reference: the order is what is being edited, and two
     /// positions can hold ground that resolves to nothing at all.
     pub(crate) schedule_selected_bar: Option<crate::model::schedule::BarId>,
+    /// The delay type, list or roster open on the Delays page.
+    pub(crate) schedule_selected_delay: Option<DelaySelection>,
+    /// What is being typed on the Delays page, until it is committed.
+    pub(crate) schedule_delay_draft: Option<DelayDraft>,
     pub(crate) schedule_selected_member: Option<usize>,
     /// The New Bar / Rename Bar dialog, while one is open. One dialog serves
     /// both: they ask the same question, and the target is what says which.
@@ -2623,6 +2627,10 @@ pub(crate) struct EditorState {
     /// frame, and so releasing outside the canvas leaves the bar where the
     /// last committed edit put it.
     pub(crate) gantt_drag: Option<GanttDrag>,
+    /// A palette chip being dragged onto the Gantt to make a bar.
+    pub(crate) gantt_palette_drag: Option<GanttPaletteItem>,
+    /// A delay bar dropped on the Gantt, waiting for its type to be chosen.
+    pub(crate) gantt_delay_drop: Option<DelayDrop>,
     /// Every bar's readiness against the current run, mirrored from
     /// [`crate::app::commands::schedule_readiness`] while the Gantt is on
     /// screen and empty otherwise. Read where the bars and their diagnostics
@@ -3119,6 +3127,8 @@ impl EditorState {
         self.schedule_cashflow_draft = None;
         self.schedule_selected_lot = None;
         self.schedule_lot_draft = None;
+        self.schedule_selected_delay = None;
+        self.schedule_delay_draft = None;
         self.schedule_selected_rule = None;
         self.schedule_rule_draft = None;
         self.schedule_condition_draft = None;
@@ -3750,11 +3760,15 @@ impl EditorState {
             schedule_name_draft: None,
             schedule_bar_height_draft: None,
             schedule_selected_bar: None,
+            schedule_selected_delay: None,
+            schedule_delay_draft: None,
             schedule_selected_member: None,
             bar_name_dialog: None,
             reclaim_bar_dialog: None,
             bar_window_dialog: None,
             gantt_drag: None,
+            gantt_palette_drag: None,
+            gantt_delay_drop: None,
             schedule_bar_reports: Vec::new(),
             schedule_result: None,
             schedule_run_status: String::new(),
@@ -4955,6 +4969,22 @@ impl UiCommand {
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
                 ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
+                ScheduleEdit::AddDelayType { name, .. } => report(tr!("delay-new-type"), name.clone()),
+                ScheduleEdit::DeleteDelayType(id) => report(tr!("delay-delete-type"), format!("{id:?}")),
+                ScheduleEdit::AddDelayList { title } => report(tr!("delay-new-list"), title.clone()),
+                ScheduleEdit::DeleteDelayList(id) => report(tr!("delay-delete-list"), format!("{id:?}")),
+                ScheduleEdit::AddRoster { name } => report(tr!("delay-new-roster"), name.clone()),
+                ScheduleEdit::DeleteRoster(id) => report(tr!("delay-delete-roster"), format!("{id:?}")),
+                // Delay cell edits: the Delays page and the bar's menu show
+                // the result in place.
+                ScheduleEdit::SetDelayBarType { .. }
+                | ScheduleEdit::RenameDelayType { .. }
+                | ScheduleEdit::SetDelayTypeColor { .. }
+                | ScheduleEdit::RenameDelayList { .. }
+                | ScheduleEdit::SetDelayListType { .. }
+                | ScheduleEdit::SetDelayListEntries { .. }
+                | ScheduleEdit::SetRoster(_) => None,
                 ScheduleEdit::SetName(_)
                 | ScheduleEdit::RenameClass { .. }
                 | ScheduleEdit::SetClassRate { .. }
@@ -5609,11 +5639,63 @@ impl PlanningSubpage {
 /// The same enum indexes the pipeline in [`crate::app::schedule_pipeline`] and
 /// selects which panel the Setup page draws, so a step cannot be marked in the
 /// tree without having somewhere to say why.
+/// The text of whatever the Delays page has open, as it is being typed.
+///
+/// Text, not numbers: `Day 3 06:` is not yet an instant, and the stored delay
+/// must not move until the field is left with something readable in it.
+/// `source` is what the draft was opened from; a change from elsewhere
+/// (an undo, a paste) reopens it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DelayDraft {
+    pub(crate) selection: Option<DelaySelection>,
+    pub(crate) source: String,
+    /// A list's title or a roster's name.
+    pub(crate) title: String,
+    /// One `[start, end]` per list row.
+    pub(crate) cells: Vec<[String; 2]>,
+    /// A roster's first start, duration, repeat and end.
+    pub(crate) roster: [String; 4],
+    /// Each delay type's name, in order.
+    pub(crate) type_names: Vec<String>,
+    /// The paste box, while it is open.
+    pub(crate) paste: Option<String>,
+}
+
+/// What a chip in the Gantt's palette makes when it is dropped on a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GanttPaletteItem {
+    Dig,
+    Reclaim,
+    Delay,
+}
+
+/// Where a delay bar was dropped, held while its type is chosen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DelayDrop {
+    pub(crate) session: u32,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) insert: bool,
+    pub(crate) start_h: f64,
+    /// Where the type menu opens, in screen points.
+    pub(crate) pos: egui::Pos2,
+}
+
+/// What the Delays page has open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DelaySelection {
+    Types,
+    List(crate::model::schedule::DelayListId),
+    Roster(crate::model::schedule::RosterId),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ScheduleStep {
     Configuration,
     LoaderClasses,
     LoaderAgents,
+    /// Delay types, delay lists and rosters.
+    Delays,
     TruckClasses,
     Stockpiles,
     Dumps,
@@ -5633,10 +5715,11 @@ impl ScheduleStep {
     /// name is only known once Readiness has the Solids run.
     /// Truck Classes sits with the loader fleet because it is fleet, and
     /// Trucking Rules after Destinations because a trucking rule names them.
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::Configuration,
         Self::LoaderClasses,
         Self::LoaderAgents,
+        Self::Delays,
         Self::TruckClasses,
         Self::Stockpiles,
         Self::Dumps,
@@ -5656,6 +5739,7 @@ impl ScheduleStep {
             Self::Configuration => tr!("planning-configuration"),
             Self::LoaderClasses => tr!("schedule-loader-classes"),
             Self::LoaderAgents => tr!("schedule-loader-agents"),
+            Self::Delays => tr!("delay-step"),
             Self::TruckClasses => tr!("truck-classes"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
@@ -5672,6 +5756,7 @@ impl ScheduleStep {
             Self::Configuration => "schedule_configuration",
             Self::LoaderClasses => "schedule_loader_classes",
             Self::LoaderAgents => "schedule_loader_agents",
+            Self::Delays => "schedule_delays",
             Self::TruckClasses => "schedule_truck_classes",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
@@ -5917,6 +6002,9 @@ pub(crate) enum ScheduleEdit {
         /// origin. A bar added while a later week is on screen belongs where
         /// it was asked for, not back at hour zero where it cannot be seen.
         window: crate::model::schedule::WorkWindow,
+        /// Whether `priority` names a lane to open rather than one to join,
+        /// as for [`ScheduleEdit::SetBarPlacement`].
+        insert_lane: bool,
     },
     RenameBar {
         bar: crate::model::schedule::BarId,
@@ -6287,6 +6375,58 @@ pub(crate) enum ScheduleEdit {
         destination: crate::model::schedule::DestinationId,
         capacities: Vec<f64>,
     },
+    /// Add a delay bar to one machine's lane: while it has priority the
+    /// machine stands.
+    AddDelayBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+        insert_lane: bool,
+    },
+    /// Change what kind of delay a delay bar is.
+    SetDelayBarType {
+        bar: crate::model::schedule::BarId,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+    },
+    AddDelayType {
+        name: String,
+        color: [u8; 3],
+    },
+    RenameDelayType {
+        kind: crate::model::schedule::DelayTypeId,
+        name: String,
+    },
+    SetDelayTypeColor {
+        kind: crate::model::schedule::DelayTypeId,
+        color: [u8; 3],
+    },
+    /// Refused, with the users named, while any bar, list or roster is of it.
+    DeleteDelayType(crate::model::schedule::DelayTypeId),
+    AddDelayList {
+        title: String,
+    },
+    RenameDelayList {
+        list: crate::model::schedule::DelayListId,
+        title: String,
+    },
+    SetDelayListType {
+        list: crate::model::schedule::DelayListId,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+    },
+    /// Replace one list's whole table: a cell edit, an added or deleted row
+    /// and a paste are each one undo step.
+    SetDelayListEntries {
+        list: crate::model::schedule::DelayListId,
+        entries: Vec<crate::model::schedule::DelayEntry>,
+    },
+    DeleteDelayList(crate::model::schedule::DelayListId),
+    AddRoster {
+        name: String,
+    },
+    /// Replace one roster's settings, its identity kept.
+    SetRoster(crate::model::schedule::Roster),
+    DeleteRoster(crate::model::schedule::RosterId),
 }
 
 /// One opening lot's name and its portions' tonnages as they are being typed.

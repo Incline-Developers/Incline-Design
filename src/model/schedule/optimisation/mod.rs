@@ -275,6 +275,10 @@ pub(crate) enum TaskKind {
         approved_sources: Vec<StockpileId>,
         maximum_t: Option<f64>,
     },
+    /// A delay bar: always has work while its window is open, and authorises
+    /// no movement, so while it is the loader's highest-priority ready bar
+    /// the loader stands.
+    Delay,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -467,6 +471,9 @@ impl OptimisationInput {
                     }
                 }
                 TaskKind::Dig { .. } => {}
+                // The parcel baseline predates delay bars and has no model of
+                // a bar that holds a loader without working it.
+                TaskKind::Delay => return Err(InputError::MissingReference("delay bar")),
             }
         }
         for destination in &self.destinations {
@@ -1208,6 +1215,7 @@ pub(crate) fn validate_solution(input: &OptimisationInput, result: &Optimisation
                             }
                             // No released stock: blocked, next authored task.
                         }
+                        TaskKind::Delay => {}
                     }
                 }
                 let rows: Vec<&ActivityRecord> = result
