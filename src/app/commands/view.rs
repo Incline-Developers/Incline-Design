@@ -245,6 +245,7 @@ impl<'a> App<'a> {
             &preferences,
             self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
         ))?;
@@ -337,6 +338,7 @@ pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
     workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
+    blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
 ) -> crate::app::io::Config {
@@ -373,6 +375,7 @@ pub(crate) fn config_from(
         fly_near_clip_limit: preferences.fly_near_clip_limit,
         fly_max_clip_span: preferences.fly_max_clip_span,
         delay_products,
+        blast_library,
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),

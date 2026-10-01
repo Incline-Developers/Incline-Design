@@ -2207,3 +2207,145 @@ viewport-w = W
 viewport-widen-panel-show-density = Widen the panel to show density
 viewport-widen-panel-show-density-gamma = Widen the panel to show density and gamma
 viewport-widen-panel-show-gamma = Widen the panel to show gamma
+
+## Charging dialogs
+
+charging-edit-charge-product = Edit Charge Product
+charging-new-charge-product = New Charge Product
+charging-explosive-decks-add-mass-primed-stemming = Explosive decks add mass and are primed; stemming and air decks take length only.
+charging-density = Density
+charging-density-hint = In-hole density. Mass per metre is this times the hole's cross-section.
+charging-another-product-already-has-name = Another product already has this name
+charging-edit-charge-rule = Edit Charge Rule
+charging-new-charge-rule = New Charge Rule
+charging-decks-collar-toe = Decks, collar to toe
+charging-priming = Priming
+charging-preview = Preview
+charging-preview-on-a = On a
+charging-preview-hole-of = hole of
+charging-preview-use-pattern = use the pattern's
+charging-preview-active-pattern-median-hole = Preview on the active pattern's median hole
+charging-fixed-decks-longer-than-hole = The fixed decks are longer than this hole
+charging-mass-kg-explosive = { $mass } kg explosive
+charging-rate-kg-m = { $rate } kg/m
+charging-count-primer = { $count } primer(s)
+charging-another-rule-already-has-name = Another rule already has this name
+charging-save-reload-count-hole = Save and Reload { $count } Hole(s)
+charging-length = Length
+charging-rest-length-m = rest · { $length } m
+charging-rest = rest
+charging-deck-takes-whatever-length-fixed-decks = This deck takes whatever length the fixed decks leave. One deck per rule fills.
+charging-remove-deck = Remove deck
+charging-add-deck = Add Deck
+charging-downhole-delay = Downhole delay
+charging-hole-detonator-hole-fires-long-after = The in-hole detonator. A hole fires this long after its surface signal arrives.
+charging-primer-height = Primer height
+charging-how-far-above-base-each-explosive = How far above the base of each explosive deck its primer sits.
+charging-booster = Booster
+charging-cast-booster-mass-each-primer = Cast booster mass in each primer.
+charging-count-rule-load-product-will-need = { $count } rule(s) load this product and will need another chosen.
+charging-rule = Rule
+charging-holes-already-loaded-keep-their-charge = Holes already loaded with it keep their charge.
+
+## Blast review overlays
+
+blast-burden-relief = Burden relief
+blast-ms-per-metre-last-neighbour-fire = ms per metre to the last neighbour to fire
+blast-below-hole-fires-before-rock-front = Below this a hole fires before the rock in front of it has moved: tight.
+blast-above-rock-front-has-long-gone = Above this the rock in front has long gone: slack, with cut-off and flyrock risk.
+blast-tight = tight
+blast-good = good
+blast-slack = slack
+blast-free-face = free face
+blast-fires-at = Fires at
+blast-empty-won-t-detonate = empty, won't detonate
+blast-not-reached = not reached
+blast-value-ms-m-from-hole = { $value } ms/m from { $hole }
+blast-fires-first-free-face = fires first: free face
+blast-relief = Relief
+blast-explosive = Explosive
+blast-powder-factor = Powder factor
+blast-not-loaded = Not loaded
+blast-count-primer-delay-ms-downhole = { $count } primer(s) · { $delay } ms downhole
+blast-set-initiation-point-tie-holes-play = Set an initiation point and tie the holes in to play the round
+blast-pause = Pause
+blast-play = Play
+blast-back-start = Back to the start
+blast-duration-ms = of { $duration } ms
+blast-real-time = Real time
+blast-mic-limit = MIC limit
+blast-most-explosive-allowed-detonate-any-8 = The most explosive allowed to detonate in any 8 ms at this site. Windows over it are flagged.
+blast-no-holes-loaded-surface-signal-plays = No holes are loaded: the surface signal plays, but nothing detonates. Load holes with the Charge Holes tool.
+blast-now-holes-hole = Now: { $holes } hole(s)
+blast-in-8-ms = in 8 ms
+blast-peak-mass-kg-time-ms = Peak { $mass } kg at { $time } ms
+blast-peak-holes-hole-time-ms = Peak { $holes } hole(s) at { $time } ms
+blast-peak-over-limit = , { $over } kg over
+blast-peak-within-limit = , within limit
+blast-top-surface-signal-lighting-each-downline = Top: the surface signal lighting each downline. Below: detonations. Click or drag to move the playhead.
+
+## Products palette and charge rules
+
+products-charge-rules = Charge Rules
+products-new-rule = New Rule
+products-charge-products = Charge Products
+products-new-rule-default-name = New rule
+products-no-rules = No rules
+products-load-selected-holes-count = Load Selected Holes ({ $count })
+products-unload-selected-holes-count = Unload Selected Holes ({ $count })
+products-edit-rule = Edit Rule
+products-duplicate-rule = Duplicate Rule
+products-delete-rule = Delete Rule
+products-fill-product = fill  { $product }
+products-primer-offset-m-off-each-explosive = Primer { $offset } m off each explosive deck's base, { $booster } kg booster, { $delay } ms downhole
+products-double-click-edit = Double-click to edit
+products-edit-product = Edit Product
+
+## Charging activity log
+
+blast-log-updated-charge-product-name = Updated charge product { $name }
+blast-log-added-charge-product-name = Added charge product { $name }
+blast-log-updated-charge-rule-name = Updated charge rule { $name }
+blast-log-added-charge-rule-name = Added charge rule { $name }
+blast-log-entry-no-longer-charge-library = That entry is no longer in the charge library
+blast-log-deleted-name-from-charge-library = Deleted { $name } from the charge library
+blast-log-failed-save-charge-library-error = Failed to save the charge library: { $error }
+blast-log-cannot-load-rule-problem = Cannot load with this rule: { $problem }
+blast-log-count-hole-too-short-fixed-decks = { $count } hole(s) are too short for the fixed decks of this rule and were left as they were
+blast-log-count-hole-have-no-depth-load = { $count } hole(s) have no depth to load
+blast-log-count-loaded-hole-have-no-diameter = { $count } loaded hole(s) have no diameter, so their explosive mass is unknown
+common-charge-holes = Charge Holes
+blast-log-loaded-count-hole-rule = Loaded { $count } hole(s) with { $rule }
+blast-log-unload-holes = Unload Holes
+blast-log-unloaded-count-hole = Unloaded { $count } hole(s)
+blast-log-select-holes-active-pattern-first = Select holes of the active pattern first
+blast-log-rule-no-longer-charge-library = That rule is no longer in the charge library
+blast-log-there-no-charge-rule-load-add = There is no charge rule to load with: add one in the products panel
+
+## Charge rule problems
+
+blast-rule-stemming = Stemming
+blast-rule-air-deck = Air deck
+blast-rule-give-rule-name = Give the rule a name
+blast-rule-add-least-one-deck = Add at least one deck
+blast-rule-only-one-deck-can-fill-rest = Only one deck can fill the rest of the hole
+blast-rule-deck-lengths-must-greater-than-zero = Deck lengths must be greater than zero
+blast-rule-no-product-named-name = No product named '{ $name }'
+blast-rule-rule-needs-least-one-explosive-deck = A rule needs at least one explosive deck
+
+## Console reports (Drill & Blast)
+
+state-save-charge-product = Save Charge Product
+state-save-charge-rule = Save Charge Rule
+state-delete-charge-library-entry = Delete Charge Library Entry
+
+## Viewport messages (Drill & Blast)
+
+ui-click-drag-over-holes-load-them = Click or drag over holes to load them with { $rule }
+ui-hold-shift-unload = hold Shift to unload
+ui-no-charge-rule-load = No charge rule to load with
+ui-right-click-charge-rules-heading-add = right-click the Charge Rules heading to add one
+
+## OMF warnings (Drill & Blast)
+
+omf-element-name-has-count-charge-naming = Element '{ $name }' has { $count } charge(s) naming holes it no longer contains

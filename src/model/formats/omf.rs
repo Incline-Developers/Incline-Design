@@ -83,6 +83,7 @@ const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
+const META_CHARGES: &str = "incline:charges";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -1265,6 +1266,9 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
     }
+    if !open.dataset.charges.is_empty() {
+        put(&mut element, META_CHARGES, serde_json::to_value(open.dataset.stored_charges())?);
+    }
     // Keyed by position in the collars, which is the dataset's hole order.
     let render_ranges = holes
         .iter()
@@ -2228,6 +2232,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_RENDER_RANGES,
             META_ORIENTATION_SOURCES,
             META_TIE_INS,
+            META_CHARGES,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -3168,6 +3173,18 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 self.bundle
                     .warnings
                     .push(tr!("omf-element-name-has-count-tie", name = element.name.to_string(), count = dropped.to_string()));
+            }
+        }
+        if let Some(value) = element.metadata.get(META_CHARGES)
+            && let Ok(stored) = crate::model::blast::StoredCharges::deserialize(value)
+        {
+            let dropped = dataset.apply_stored_charges(stored);
+            if dropped > 0 {
+                self.bundle.warnings.push(tr!(
+                    "omf-element-name-has-count-charge-naming",
+                    name = element.name.to_string(),
+                    count = dropped.to_string()
+                ));
             }
         }
         let dataset = Arc::new(dataset);

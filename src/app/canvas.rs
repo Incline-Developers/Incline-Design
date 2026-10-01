@@ -100,7 +100,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -115,7 +115,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {
@@ -466,6 +466,15 @@ impl<'a> App<'a> {
     /// takes any; otherwise select its holes one at a time rather than as the
     /// datasets they came from.
     fn finish_blast_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+        if self.editor.active_tool == crate::ui::state::ActiveTool::ChargeHoles {
+            let enclosed = self
+                .graphics
+                .as_ref()
+                .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+                .unwrap_or_default();
+            self.finish_charge_box(enclosed);
+            return;
+        }
         let tie_ins = self
             .graphics
             .as_ref()

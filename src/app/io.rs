@@ -227,6 +227,10 @@ pub(crate) struct Config {
     /// here with the rest of what outlives a project.
     #[serde(default = "default_delay_products")]
     pub(crate) delay_products: Vec<StoredDelayProduct>,
+    /// The charge products and loading rules, kept beside the delays for the
+    /// same reason.
+    #[serde(default)]
+    pub(crate) blast_library: crate::model::blast::BlastLibrary,
     #[serde(default)]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
@@ -303,6 +307,7 @@ impl Default for Config {
             fly_near_clip_limit: default_fly_near_clip_limit(),
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
+            blast_library: Default::default(),
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,

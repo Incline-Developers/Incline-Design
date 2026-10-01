@@ -188,6 +188,12 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::ShowTrackedProjectInFileManager(path) => file::show_in_file_manager(&path),
             UiCommand::CloseStartupDialog => {
+                // A project picked from the splash is still opening: leave the
+                // splash up until it lands rather than dropping the user on the
+                // empty startup project while the load runs behind it.
+                if self.project_open_pending() {
+                    return Ok(());
+                }
                 self.startup_dialog_dismissed = true;
                 // Dismissing the splash leaves the application on a project,
                 // never on nothing: closing a project puts the splash back, so
@@ -353,6 +359,22 @@ impl<'a> App<'a> {
             }
             UiCommand::SetInitiation { target, delay_ms } => {
                 self.set_initiation(target, delay_ms);
+                Ok(())
+            }
+            UiCommand::SaveChargeProduct { original, product } => {
+                self.save_charge_product(original, product);
+                Ok(())
+            }
+            UiCommand::SaveChargeRule { original, rule, reload } => {
+                self.save_charge_rule(original, rule, reload);
+                Ok(())
+            }
+            UiCommand::DeleteBlastLibraryItem(item) => {
+                self.delete_blast_library_item(item);
+                Ok(())
+            }
+            UiCommand::ChargeSelectedHoles { rule } => {
+                self.charge_selected_holes(rule);
                 Ok(())
             }
             UiCommand::RequestDeleteLayer(layer_id) => {
@@ -890,6 +912,7 @@ impl<'a> App<'a> {
                             &self.editor.current_preferences(),
                             order,
                             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                            self.editor.blast_library.clone(),
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
                         );
