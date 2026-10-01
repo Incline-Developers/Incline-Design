@@ -396,9 +396,32 @@ pub(crate) fn execute_scip_blend(
     let budget_started = Instant::now();
     let mut seed = None;
     let mut relaxation = None;
-    if let Some(windows) = rolling::plan(&out.input) {
+    if let Some(windows) = rolling::plan(&out.input, 0.0) {
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
-        match solve_day_by_day(&mut out, &windows, options, cancel, activity) {
+        // Days alone first; with a look-ahead only when that fails (see
+        // `rolling`), from the start and within the same share of the budget.
+        let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
+        let mut windows = windows;
+        let mut attempt = solve_day_by_day(&mut out, &windows, budget, options, cancel, activity);
+        if let DayByDay::Failed(reason) = &attempt
+            && let Some(ahead) = rolling::plan(&out.input, rolling::LOOKAHEAD_H)
+        {
+            log::warn!(
+                "schedule run {}: days solved alone failed ({reason}); solving them again with a {} h look-ahead",
+                out.identity.run_id,
+                rolling::LOOKAHEAD_H
+            );
+            windows = ahead;
+            attempt = solve_day_by_day(
+                &mut out,
+                &windows,
+                budget.map(|budget| budget.saturating_sub(budget_started.elapsed())),
+                options,
+                cancel,
+                activity,
+            );
+        }
+        match attempt {
             DayByDay::Seed(found) => {
                 let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
                 let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
@@ -540,7 +563,10 @@ pub(crate) fn execute_scip_blend(
             }
         };
     }
-    adapter::install_cancellation(&mut model, cancel.signal(), Arc::clone(&activity.interrupt));
+    // SCIP polls `interrupt`, which `watch_solve` raises for the run's own
+    // cancellation or once the relaxation bound proves the seed.
+    let interrupt = Arc::new(AtomicBool::new(false));
+    adapter::install_cancellation(&mut model, Arc::clone(&interrupt), Arc::clone(&activity.interrupt));
     if cancel.is_cancelled() {
         out.stop(ScipTermination::Cancelled, "cancelled before solve");
         return out;
@@ -548,9 +574,29 @@ pub(crate) fn execute_scip_blend(
 
     activity.set(3);
     let started = Instant::now();
-    let solved = model.solve();
+    let (finished, proof) = (AtomicBool::new(false), AtomicBool::new(false));
+    let proving = seed.as_ref().map(|found| found.solution.reported_objective).zip(options.relative_gap);
+    let solved = std::thread::scope(|scope| {
+        let (interrupt, finished_ref, proof, relaxation) = (&*interrupt, &finished, &proof, &mut relaxation);
+        scope.spawn(move || watch_solve(cancel, interrupt, finished_ref, proof, proving, relaxation));
+        let solved = model.solve();
+        finished.store(true, Ordering::Release);
+        solved
+    });
     let solve_time = started.elapsed();
     out.timings.solver += solve_time;
+    if proof.load(Ordering::Acquire)
+        && !cancel.is_cancelled()
+        && let Some(found) = seed.take()
+    {
+        log::info!(
+            "schedule run {}: the relaxation bound proves the day-by-day schedule within the gap target; whole-horizon solve stopped after {solve_time:.2?}",
+            out.identity.run_id
+        );
+        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Proven);
+        return out;
+    }
     if let Some(limit) = remaining.or(options.time_limit) {
         out.solver_limit_overshoot = solve_time.checked_sub(limit);
     }
@@ -662,6 +708,40 @@ pub(crate) fn execute_scip_blend(
     out
 }
 
+/// Pass the run's cancellation on to a whole-horizon solve until `finished`,
+/// and stop the solve early once the relaxation bound proves the seed.
+///
+/// `proving` is the seed's model objective and the gap target. SCIP left to
+/// itself would run to its time limit: a day-by-day schedule found in
+/// seconds is usually proven by the relaxation well after the whole-horizon
+/// solve has started, and SCIP's own bound on a long horizon stays loose.
+/// Whatever SCIP has found by then is set aside; it cannot be worth more
+/// than the gap target above the seed.
+fn watch_solve(cancel: &CancelFlag, interrupt: &AtomicBool, finished: &AtomicBool, proof: &AtomicBool, proving: Option<(f64, f64)>, relaxation: &mut Option<RelaxationJob>) {
+    let mut proving = proving.filter(|_| relaxation.is_some());
+    while !finished.load(Ordering::Acquire) {
+        if cancel.is_cancelled() {
+            interrupt.store(true, Ordering::Release);
+            return;
+        }
+        if let Some((raw, target)) = proving
+            && let Some(bound) = relaxation.as_mut().and_then(RelaxationJob::ready)
+        {
+            proving = None;
+            if relative_gap(raw, bound).is_some_and(|gap| gap <= target) {
+                proof.store(true, Ordering::Release);
+                interrupt.store(true, Ordering::Release);
+                return;
+            }
+        }
+        std::thread::sleep(WATCH_INTERVAL);
+    }
+}
+
+/// How often [`watch_solve`] looks at the cancellation flag and the
+/// relaxation bound.
+const WATCH_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Share of the solve budget the day-by-day windows may take between them.
 /// The rest is the whole-horizon solve's, which is the only one that can
 /// bound the result.
@@ -762,11 +842,10 @@ enum DayByDay {
 }
 
 /// Solve the horizon a day at a time (see [`rolling`]) and stitch the kept
-/// days into one schedule for the whole horizon.
-fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> DayByDay {
+/// days into one schedule for the whole horizon, all within `budget`.
+fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option<Duration>, options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> DayByDay {
     let started = Instant::now();
     let full = Arc::clone(&out.input);
-    let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
     let mut carry = Carry::opening(&full);
     let mut stitched = Stitched::new();
     for (position, &window) in windows.iter().enumerate() {

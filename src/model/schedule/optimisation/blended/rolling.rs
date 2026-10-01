@@ -4,8 +4,16 @@
 //! A week of hourly intervals is one large model, because every block stays
 //! in it from the hour it becomes reachable to the end of the horizon. Solved
 //! a day at a time the model stays near one day's size: each window holds the
-//! day being decided plus a look-ahead, only the first day is kept, and the
-//! state that day leaves behind becomes the next window's opening state.
+//! day being decided, optionally plus a look-ahead, only the first day is
+//! kept, and the state that day leaves behind becomes the next window's
+//! opening state.
+//!
+//! Days are first solved alone ([`plan`] with no look-ahead), which is
+//! fastest and on DreamLand's week also the best; only if that fails is the
+//! run planned again with [`LOOKAHEAD_H`]. A day solved alone cannot see a
+//! dead end it walks into: the chunked LIFO fixture closed every chunk on its
+//! second day, because an open chunk was worth nothing that day, and left the
+//! third day's diggers nowhere to put material.
 //!
 //! # What crosses a window boundary
 //!
@@ -51,8 +59,8 @@ use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationK
 
 /// The part of each window that is kept.
 pub(crate) const COMMIT_H: f64 = 24.0;
-/// The part of each window that is solved and then discarded, so a kept day
-/// is not decided as though the horizon ended with it.
+/// The part of a fallback window that is solved and then discarded, so a
+/// kept day is not decided as though the horizon ended with it.
 pub(crate) const LOOKAHEAD_H: f64 = 48.0;
 
 /// Remaining tonnes at or below which a block counts as finished. This is the
@@ -70,12 +78,13 @@ pub(crate) struct Window {
     pub(crate) end: usize,
 }
 
-/// The windows a horizon is solved in, or `None` when one window would cover
-/// it all.
+/// The windows a horizon is solved in, each looking `lookahead_h` past its
+/// kept day, or `None` when one window would cover it all.
 ///
 /// Days are counted from the horizon's first interval. The last window keeps
-/// everything it solves, because nothing lies beyond its look-ahead.
-pub(crate) fn plan(input: &BlendInput) -> Option<Vec<Window>> {
+/// everything it solves, because nothing lies beyond its look-ahead. No
+/// window looks past the horizon.
+pub(crate) fn plan(input: &BlendInput, lookahead_h: f64) -> Option<Vec<Window>> {
     let origin = input.intervals.first()?.start_h;
     let count = input.intervals.len();
     let until = |first: usize, hours: f64| first + input.intervals[first..].iter().take_while(|interval| interval.start_h < hours - 1e-9).count();
@@ -85,7 +94,7 @@ pub(crate) fn plan(input: &BlendInput) -> Option<Vec<Window>> {
         let day = ((input.intervals[first].start_h - origin) / COMMIT_H).floor();
         let commit_until = origin + (day + 1.0) * COMMIT_H;
         let committed_end = until(first, commit_until).max(first + 1);
-        let end = until(first, commit_until + LOOKAHEAD_H).max(committed_end);
+        let end = until(first, commit_until + lookahead_h).max(committed_end);
         if end >= count {
             windows.push(Window {
                 first,
@@ -346,8 +355,12 @@ impl Carry {
         let last = window.committed - 1;
         for pile in &full.piles {
             if let Some(state) = replay.pile_intervals.get(&(pile.id, last)) {
-                let contained = state.closing_q.iter().map(|quantity| quantity.max(0.0)).collect();
-                self.piles.insert(pile.id, (state.closing_t.max(0.0), contained));
+                // Clamped as a chunk is below: an emptied pile can close
+                // with 3e-14 contained against 0 t, which the next window's
+                // input check refuses.
+                let tonnes = state.closing_t.clamp(0.0, pile.capacity_t);
+                let contained = state.closing_q.iter().map(|quantity| quantity.clamp(0.0, tonnes)).collect();
+                self.piles.insert(pile.id, (tonnes, contained));
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
             for (c, chunk) in chunks.iter_mut().enumerate() {

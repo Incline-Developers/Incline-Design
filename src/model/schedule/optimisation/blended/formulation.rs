@@ -839,8 +839,12 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 continue;
             }
             // open_t <= capacity * stock, so open_t > 0 forces stock = 1.
-            let mut terms = opening;
-            terms.push((flag.clone(), -pile.capacity_t));
+            // Written per tonne of capacity: SCIP checks a bound relative to
+            // its size but this row against its zero right-hand side in
+            // absolute terms, so unscaled a full 200,000 t pile held within
+            // the bound's tolerance (0.06 t over) failed this row by 0.06.
+            let mut terms: Vec<_> = opening.into_iter().map(|(column, coefficient)| (column, coefficient / pile.capacity_t)).collect();
+            terms.push((flag.clone(), -1.0));
             rows.leq(terms, 0.0, &format!("stocklink_{}_{k}", pile.id.0));
             stock.insert((pile.id, k), flag);
         }

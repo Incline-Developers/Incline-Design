@@ -322,8 +322,9 @@ week (7 days x 1 h, both ROM piles blended) the first root LP alone took
 A horizon that needs more than one window is now solved in three steps,
 inside the run's one time limit:
 
-1. **Windows.** Each window is one kept day plus two days of look-ahead
-   (`blended/rolling.rs`). Only the kept day is kept; its end state opens the
+1. **Windows.** Each window is one kept day, solved alone; only if that
+   fails is the run solved again with two days of look-ahead per window (see
+   "Days alone first" below; `blended/rolling.rs`). Only the kept day is kept; its end state opens the
    next window: block remaining tonnes (finished blocks leave the input, which
    retires their columns), pile tonnes and contained quantity from the
    window's own replay, and what is left of reclaim caps, dump capacity and
@@ -569,8 +570,10 @@ The bound is used in three places:
   run's gap target of the relaxation bound, the whole-horizon solve is
   skipped. The schedule is published as optimal within that target
   (`DayByDayRole::Proven`), the same claim SCIP makes when it stops at its
-  gap limit. A SCIP result that the relaxation bound brings within the
-  target is reported as optimal in the same way.
+  gap limit. If the bound only arrives once the whole-horizon solve has
+  started, the solve is stopped when the bound proves the day-by-day
+  schedule, with the same claim. A SCIP result that the relaxation bound
+  brings within the target is reported as optimal in the same way.
 
 Bounds on the fixtures, relaxation against SCIP, with SCIP given 40 s:
 
@@ -601,6 +604,74 @@ probe, the whole-horizon model written by SCIP and relaxed by HiGHS, took
 two minutes sooner than SCIP's root LP. Its day-by-day schedule sat 0.11%
 below the final bound, above the default 0.01% gap target, so it would still
 run the whole-horizon solve.
+
+## Days alone first
+
+With dispatch starts every window began from a good schedule, and the
+look-ahead became most of each window's cost: a window solved 72 hours to
+keep 24. Solved alone, each of DreamLand's days was optimal in under half a
+second, and the week came out better than with the look-ahead. A window
+never looks past the run's horizon either way, so the look-ahead never
+planned days the user did not ask for; it only made each day's decision see
+the next two.
+
+That sight matters when a day can trap the next. On the dynamic LIFO chunk
+fixture, days solved alone closed every chunk by the end of the second day,
+because an open chunk was worth nothing within that day. The third day's
+diggers then had nowhere to put material, and its window was infeasible. So
+the run now solves the days alone first and, if that fails, solves them
+again from the start with the 48-hour look-ahead, within what is left of the
+day-by-day share of the budget. If that fails too, the whole-horizon solve
+runs from a dispatch start as before.
+
+Three fixes came out of measuring this:
+
+- **Carried pile state is clamped.** An emptied pile could close a day with
+  3e-14 contained against 0 t, which the next window's input check refused,
+  ending the day-by-day stage. Piles are now clamped as chunks already were:
+  tonnes to `0..=capacity`, contained to `0..=tonnes`.
+- **`stocklink` is written per tonne of capacity.** SCIP checks a column
+  against its bound relative to the bound, but a row against a zero
+  right-hand side in absolute terms. Days that each filled DreamLand's
+  200,000 t pile left it 0.06 t over capacity: inside the bound's tolerance,
+  but 0.06 over the unscaled `open_t - capacity * stock <= 0`, so SCIP
+  refused the completed seed. Dividing the row by the capacity changes no
+  schedule it allows.
+- **The relaxation can stop the whole-horizon solve.** Days alone are often
+  done before the relaxation bound is, so the check made when the
+  day-by-day schedule is ready found no bound yet, and SCIP then ran to its
+  time limit on a schedule that was already optimal. A watcher thread now
+  passes the run's cancellation to SCIP and also interrupts it once the
+  bound proves the seed (`watch_solve`). SCIP only acts on an interrupt at
+  its next event, so during a long root LP the stop can lag the bound by
+  several seconds; the user's Stop button has the same lag.
+
+DreamLand, from the app's captured request, 60 s limit (each column measured
+on its own):
+
+| horizon | 48 h look-ahead | days alone first |
+|---|---|---|
+| 1 day | 11.2M optimal, 0.6 s | 11.2M optimal, 0.5 s (one window, unchanged) |
+| 3 days | 33.6M optimal, 6.0 s | 33.6M proven, 2.9 s |
+| 4 days | 44.8M proven, 10 s | 44.8M early at about 2 s, proven at 16 s |
+| 7 days | 74.50M at 60 s, early result at 30 s | 74.58M at 60 s, early result at 3 s, 0.18 % below the 74.71M bound |
+
+On the week the whole-horizon solve did not improve on the day-by-day
+schedule in the remaining time. Its incumbent, the completed seed, was then
+refused by the replay because pile 0 sat 0.06 t over capacity, and the
+day-by-day schedule was kept. The replay checks capacity to 1e-5 t, while
+SCIP's bound tolerance on a 200,000 t pile is 0.2 t; that mismatch is older
+than this change and is still open.
+
+Fixtures through `execute_scip_blend`, 40 s:
+
+| fixture | 48 h look-ahead | days alone first |
+|---|---|---|
+| competition 96 h | 19,200 | 20,400 |
+| competition 168 h | 33,900 | 33,900 |
+| graded 168 h | optimal in 0.3 s | optimal in 0.1 s |
+| dynamic chunks FIFO 96 h | 9,600 in 29 s | 9,600 in 24 s |
+| dynamic chunks LIFO 96 h | 9,600 in 38 s | 9,600 in 38 s, after the fallback |
 
 ## Solver process
 
