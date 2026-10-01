@@ -85,8 +85,14 @@ pub(crate) struct DrillInterval {
     pub(crate) values: BTreeMap<String, DrillValue>,
 }
 
-/// One surface connector: the delay laid between two holes, and which way the
-/// round travels over it.
+/// One surface connector: the delay laid between two holes.
+///
+/// Undirected: the signal crosses it from whichever end it reaches first, so
+/// the way a row was drawn has no bearing on how it fires. In a tie-up that
+/// is a tree off its initiation points - nearly every shot - that is exactly
+/// the round the connectors laid outward would give, and it spares the user
+/// from having to draw every leg in firing order. See
+/// [`DrillHoleDataset::tie_flows`] for which way each one was crossed.
 ///
 /// The product is carried by value rather than by [`crate::ui::state::DelayProductId`].
 /// The palette is application configuration - its ids are handed out afresh
@@ -95,10 +101,9 @@ pub(crate) struct DrillInterval {
 /// laid, which is why editing the palette leaves a tied round alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TieIn {
-    /// Index of the hole the signal arrives at first.
-    pub(crate) from: usize,
-    /// ...and of the one it fires onward into.
-    pub(crate) to: usize,
+    /// The two holes it joins, in no particular order.
+    pub(crate) a: usize,
+    pub(crate) b: usize,
     pub(crate) delay_ms: u32,
     pub(crate) product: String,
     pub(crate) color: [f32; 3],
@@ -109,9 +114,23 @@ impl TieIn {
     /// way round either runs. Two holes are joined by one connector or none -
     /// there is nowhere to put a second - so this is the identity a new tie
     /// overwrites on.
-    pub(crate) fn joins(&self, from: usize, to: usize) -> bool {
-        (self.from == from && self.to == to) || (self.from == to && self.to == from)
+    pub(crate) fn joins(&self, a: usize, b: usize) -> bool {
+        (self.a == a && self.b == b) || (self.a == b && self.b == a)
     }
+}
+
+/// How the round crossed one tie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TieFlow {
+    /// The first signal to reach `b` came over it from `a`.
+    AToB,
+    /// The first signal to reach `a` came over it from `b`.
+    BToA,
+    /// Both ends were reached first by other routes: a loop, a backup, or
+    /// two fronts meeting. It times nothing.
+    Redundant,
+    /// No signal reaches either end.
+    Unreached,
 }
 
 /// Where a round starts, and how long after the shot is fired it goes.
@@ -145,8 +164,8 @@ impl StoredTieIns {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct StoredTieIn {
-    pub(crate) from: String,
-    pub(crate) to: String,
+    pub(crate) a: String,
+    pub(crate) b: String,
     pub(crate) delay_ms: u32,
     pub(crate) product: String,
     pub(crate) color: [f32; 3],
@@ -615,6 +634,9 @@ pub(crate) struct DrillHoleDataset {
     /// Holes the round can start at. One initiation per collar, with any
     /// number of collars participating in the same firing graph.
     pub(crate) initiations: Vec<Initiation>,
+    /// What each loaded hole is charged with, by hole index. Content, like
+    /// the ties: undone with everything else and written with the dataset.
+    pub(crate) charges: BTreeMap<usize, crate::model::blast::HoleCharge>,
 }
 
 impl DrillHoleDataset {
@@ -628,12 +650,13 @@ impl DrillHoleDataset {
             bounds,
             ties: Vec::new(),
             initiations: Vec::new(),
+            charges: BTreeMap::new(),
         }
     }
 
-    /// The connector between two holes, whichever way round it runs.
-    pub(crate) fn tie_between(&self, from: usize, to: usize) -> Option<&TieIn> {
-        self.ties.iter().find(|tie| tie.joins(from, to))
+    /// The connector between two holes.
+    pub(crate) fn tie_between(&self, a: usize, b: usize) -> Option<&TieIn> {
+        self.ties.iter().find(|tie| tie.joins(a, b))
     }
 
     /// When each hole fires, in milliseconds from the shot going off, or
@@ -642,9 +665,17 @@ impl DrillHoleDataset {
     /// A hole fires on the *first* signal to arrive, so this is a multi-source
     /// shortest path from the initiation points rather than a walk of the graph: a round
     /// tied in a loop is well defined, and a connector that arrives after its
-    /// hole has already gone simply does nothing.
+    /// hole has already gone simply does nothing. Ties carry the signal
+    /// either way - see [`TieIn`].
     pub(crate) fn firing_times(&self) -> Vec<Option<u32>> {
         let mut times = vec![None; self.holes.len()];
+        let mut adjacent: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.holes.len()];
+        for tie in &self.ties {
+            if tie.a < self.holes.len() && tie.b < self.holes.len() {
+                adjacent[tie.a].push((tie.b, tie.delay_ms));
+                adjacent[tie.b].push((tie.a, tie.delay_ms));
+            }
+        }
         let mut queue = std::collections::BinaryHeap::new();
         for initiation in self.initiations.iter().filter(|initiation| initiation.hole < self.holes.len()) {
             if times[initiation.hole].is_none_or(|existing| initiation.delay_ms < existing) {
@@ -656,18 +687,30 @@ impl DrillHoleDataset {
             if times[hole].is_some_and(|settled| settled < time) {
                 continue;
             }
-            for tie in self.ties.iter().filter(|tie| tie.from == hole) {
-                let Some(arrival) = times.get_mut(tie.to) else {
-                    continue;
-                };
-                let candidate = time.saturating_add(tie.delay_ms);
-                if arrival.is_none_or(|existing| candidate < existing) {
-                    *arrival = Some(candidate);
-                    queue.push(std::cmp::Reverse((candidate, tie.to)));
+            for &(next, delay_ms) in &adjacent[hole] {
+                let candidate = time.saturating_add(delay_ms);
+                if times[next].is_none_or(|existing| candidate < existing) {
+                    times[next] = Some(candidate);
+                    queue.push(std::cmp::Reverse((candidate, next)));
                 }
             }
         }
         times
+    }
+
+    /// Which way the round crossed each tie, given [`Self::firing_times`],
+    /// in the order of [`Self::ties`].
+    pub(crate) fn tie_flows(&self, times: &[Option<u32>]) -> Vec<TieFlow> {
+        let at = |hole: usize| times.get(hole).copied().flatten();
+        self.ties
+            .iter()
+            .map(|tie| match (at(tie.a), at(tie.b)) {
+                (None, None) => TieFlow::Unreached,
+                (Some(a), Some(b)) if a.saturating_add(tie.delay_ms) == b => TieFlow::AToB,
+                (Some(a), Some(b)) if b.saturating_add(tie.delay_ms) == a => TieFlow::BToA,
+                _ => TieFlow::Redundant,
+            })
+            .collect()
     }
 
     /// The ties as a file holds them, keyed by hole name.
@@ -679,8 +722,8 @@ impl DrillHoleDataset {
                 .iter()
                 .filter_map(|tie| {
                     Some(StoredTieIn {
-                        from: name(tie.from)?,
-                        to: name(tie.to)?,
+                        a: name(tie.a)?,
+                        b: name(tie.b)?,
                         delay_ms: tie.delay_ms,
                         product: tie.product.clone(),
                         color: tie.color,
@@ -712,13 +755,13 @@ impl DrillHoleDataset {
             .ties
             .into_iter()
             .filter_map(|tie| {
-                let (Some(from), Some(to)) = (index_of(&tie.from), index_of(&tie.to)) else {
+                let (Some(a), Some(b)) = (index_of(&tie.a), index_of(&tie.b)) else {
                     dropped += 1;
                     return None;
                 };
                 Some(TieIn {
-                    from,
-                    to,
+                    a,
+                    b,
                     delay_ms: tie.delay_ms,
                     product: tie.product,
                     color: tie.color,
@@ -745,6 +788,40 @@ impl DrillHoleDataset {
         let mut seen = std::collections::HashSet::new();
         self.initiations.retain(|initiation| seen.insert(initiation.hole));
         self.initiations.reverse();
+        dropped
+    }
+
+    /// The charges as a file holds them, keyed by hole name.
+    pub(crate) fn stored_charges(&self) -> crate::model::blast::StoredCharges {
+        crate::model::blast::StoredCharges {
+            holes: self
+                .charges
+                .iter()
+                .filter_map(|(index, charge)| {
+                    Some(crate::model::blast::StoredCharge {
+                        hole: self.holes.get(*index)?.dhid.clone(),
+                        charge: charge.clone(),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// Resolve stored charges back onto this dataset's holes, reporting how
+    /// many named a hole that is no longer here.
+    pub(crate) fn apply_stored_charges(&mut self, stored: crate::model::blast::StoredCharges) -> usize {
+        let index: std::collections::HashMap<&str, usize> = self.holes.iter().enumerate().map(|(index, hole)| (hole.dhid.as_str(), index)).collect();
+        let mut dropped = 0;
+        let mut charges = BTreeMap::new();
+        for entry in stored.holes {
+            match index.get(entry.hole.as_str()) {
+                Some(hole) => {
+                    charges.insert(*hole, entry.charge);
+                }
+                None => dropped += 1,
+            }
+        }
+        self.charges = charges;
         dropped
     }
 
@@ -782,6 +859,11 @@ impl DrillHoleDataset {
                 .fold(0usize, usize::saturating_add)
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self
+                .charges
+                .values()
+                .map(|charge| size_of::<usize>() + charge.estimated_bytes())
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {

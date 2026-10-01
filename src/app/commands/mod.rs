@@ -351,6 +351,22 @@ impl<'a> App<'a> {
                 self.set_initiation(target, delay_ms);
                 Ok(())
             }
+            UiCommand::SaveChargeProduct { original, product } => {
+                self.save_charge_product(original, product);
+                Ok(())
+            }
+            UiCommand::SaveChargeRule { original, rule, reload } => {
+                self.save_charge_rule(original, rule, reload);
+                Ok(())
+            }
+            UiCommand::DeleteBlastLibraryItem(item) => {
+                self.delete_blast_library_item(item);
+                Ok(())
+            }
+            UiCommand::ChargeSelectedHoles { rule } => {
+                self.charge_selected_holes(rule);
+                Ok(())
+            }
             UiCommand::RequestDeleteLayer(layer_id) => {
                 self.activate_project_for_layer(layer_id);
                 let layer_name = self
@@ -735,6 +751,7 @@ impl<'a> App<'a> {
                             &self.editor.current_preferences(),
                             order,
                             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                            self.editor.blast_library.clone(),
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
                         );

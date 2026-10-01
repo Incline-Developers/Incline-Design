@@ -1,3 +1,4 @@
+pub(crate) mod blast; // Drill & Blast's charging and pattern reviews
 pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
 pub(crate) mod events; // Handles window events
@@ -689,6 +690,7 @@ impl<'a> App<'a> {
         self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
+        self.editor.blast_library = config.blast_library.clone();
         self.configure_graphics_camera_preferences();
     }
 

@@ -25,7 +25,7 @@ use crate::{
 
 impl App<'_> {
     /// The dataset the workspace is tying in, if it is loaded and drawn.
-    fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
+    pub(crate) fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
         let id = self.editor.active_drill_hole?;
         let entity = crate::model::SceneEntityId::DrillHole(id);
         self.drill_holes
@@ -33,7 +33,7 @@ impl App<'_> {
             .find(|dataset| dataset.id == id && dataset.state.loaded && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity))
     }
 
-    fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
+    pub(crate) fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
         let graphics = self.graphics.as_ref()?;
         let cursor = self.editor.cursor_screen_px?;
         let view_proj = graphics.view_proj();
@@ -143,6 +143,11 @@ impl App<'_> {
                 },
             }
         });
+        // The fuller reading - detonation times, relief, contours - goes
+        // with it, on the same key.
+        self.editor.blast_analysis = dataset.map(|dataset| std::sync::Arc::new(crate::model::blast::BlastAnalysis::compute(&dataset.dataset)));
+        let end = self.editor.blast_analysis.as_ref().and_then(|analysis| analysis.timeline_end_ms()).unwrap_or(0.0);
+        self.editor.blast_review.playhead_ms = self.editor.blast_review.playhead_ms.min(end);
         self.editor.blast_round_key = key;
         self.editor.blast_round = summary;
     }
@@ -191,8 +196,8 @@ impl App<'_> {
             Some(product) => legs
                 .iter()
                 .map(|leg| TieIn {
-                    from: leg.from,
-                    to: leg.to,
+                    a: leg.from,
+                    b: leg.to,
                     delay_ms: product.delay_ms,
                     product: product.name.clone(),
                     color: [f32::from(red) / 255.0, f32::from(green) / 255.0, f32::from(blue) / 255.0],
@@ -303,7 +308,7 @@ impl App<'_> {
                 continue;
             }
             for tie in &dataset.dataset.ties {
-                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
+                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.a), dataset.dataset.holes.get(tie.b)) else {
                     continue;
                 };
                 let (Some(a), Some(b)) = (
@@ -318,7 +323,7 @@ impl App<'_> {
                 // a click aimed at either hole it joins.
                 let clear_of_collars = along * length >= 7.0 && (1.0 - along) * length >= 7.0;
                 if clear_of_collars && distance <= 8.0 && best.is_none_or(|(best_distance, _)| distance < best_distance) {
-                    best = Some((distance, TieInRef::new(dataset.id, tie.from, tie.to)));
+                    best = Some((distance, TieInRef::new(dataset.id, tie.a, tie.b)));
                 }
             }
         }
@@ -363,7 +368,7 @@ impl App<'_> {
                     .dataset
                     .ties
                     .iter()
-                    .filter(|tie| selected.contains(&TieInRef::new(dataset.id, tie.from, tie.to)))
+                    .filter(|tie| selected.contains(&TieInRef::new(dataset.id, tie.a, tie.b)))
                     .cloned()
                     .collect();
                 (!before.is_empty()).then_some(Command::SetTieIns {

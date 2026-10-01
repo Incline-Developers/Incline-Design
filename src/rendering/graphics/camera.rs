@@ -908,7 +908,7 @@ impl<'a> Graphics<'a> {
                 continue;
             }
             for tie in &dataset.dataset.ties {
-                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
+                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.a), dataset.dataset.holes.get(tie.b)) else {
                     continue;
                 };
                 let (start, end) = (from.collar_position(), to.collar_position());
@@ -921,7 +921,7 @@ impl<'a> Graphics<'a> {
                     rect.contains(a) && rect.contains(b)
                 };
                 if taken {
-                    hits.push(TieInRef::new(dataset.id, tie.from, tie.to));
+                    hits.push(TieInRef::new(dataset.id, tie.a, tie.b));
                 }
             }
         }
