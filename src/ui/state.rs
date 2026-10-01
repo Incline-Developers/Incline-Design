@@ -3467,9 +3467,6 @@ pub(crate) enum UiCommand {
         extent: Option<ObjectId>,
     },
     OpenModellingSettings,
-    /// The project's coordinate system, in its stored spelling; empty clears
-    /// it.
-    SetProjectCoordinateSystem(String),
     /// The project's modelling settings, whole; the dialog sends them only
     /// when valid.
     SetModellingSettings(crate::model::project::ModellingSettings),
@@ -4035,10 +4032,6 @@ impl UiCommand {
                 },
             ),
             Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
-            Self::SetProjectCoordinateSystem(stored) => report(
-                tr!("state-set-project-coordinate-system"),
-                if stored.is_empty() { tr!("common-none") } else { stored.clone() },
-            ),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4352,8 +4345,6 @@ pub(crate) struct UiProjectView {
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
-    /// The active project's coordinate system as stored; empty when unset.
-    pub(crate) coordinate_reference_system: String,
     /// The active project's modelling settings; the defaults without one.
     pub(crate) modelling: crate::model::project::ModellingSettings,
     /// Active triangulation id and face colour, used by the context menu.

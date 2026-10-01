@@ -1,13 +1,10 @@
-//! The Modelling branch's settings: the coordinate system the model is built
-//! in, and how Build Surface draws its grid. They are the project's settings,
-//! shown and chosen here because this is where a modeller looks for them.
+//! The Modelling branch's settings: how Build Surface draws its grid. They
+//! are the project's settings, shown and chosen here because this is where a
+//! modeller looks for them.
 
 use crate::{
     i18n::tr,
-    model::{
-        crs,
-        project::{ModellingSettings, SurfaceMethod},
-    },
+    model::project::{ModellingSettings, SurfaceMethod},
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
         widgets::menu::{self, DragableMenu, MenuFieldCombo, MenuFieldF64},
@@ -28,42 +25,6 @@ pub(crate) fn draw_modelling_settings_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 menu::menu_note(ui, tr!("common-no-open-project"));
                 return;
             }
-            let current = project.coordinate_reference_system.trim();
-            // Each named definition's stored spelling, so the one the project
-            // carries can be recognised among them.
-            let definitions: Vec<(String, String)> = editor
-                .survey
-                .definitions
-                .iter()
-                .filter_map(|definition| {
-                    let stored = editor.survey.resolve(&Some(definition.name.clone())).ok()?.to_stored();
-                    Some((definition.name.clone(), stored))
-                })
-                .collect();
-            let mut chosen: Option<String> = definitions.iter().find(|(_, stored)| stored == current).map(|(name, _)| name.clone());
-            let shown = match (&chosen, current.is_empty()) {
-                (Some(name), _) => name.clone(),
-                (None, true) => tr!("modelling-settings-not-set"),
-                // A spelling from another program, or one no definition
-                // matches: shown as the project carries it, never guessed at.
-                (None, false) => match crs::CoordinateSystem::parse_stored(current) {
-                    crs::StoredSystem::Unrecognised(text) => text,
-                    _ => current.to_owned(),
-                },
-            };
-            let options = std::iter::once((None, tr!("common-none").into())).chain(definitions.iter().map(|(name, _)| (Some(name.clone()), name.clone().into())));
-            if MenuFieldCombo::new("modelling_settings_datum", tr!("modelling-settings-survey-datum"), &mut chosen, shown, options)
-                .show(ui)
-                .changed()
-            {
-                let stored = chosen
-                    .as_deref()
-                    .and_then(|name| definitions.iter().find(|(candidate, _)| candidate == name))
-                    .map(|(_, stored)| stored.clone())
-                    .unwrap_or_default();
-                commands.push(UiCommand::SetProjectCoordinateSystem(stored));
-            }
-            ui.small(tr!("modelling-settings-crs-help"));
             surface_settings(ui, project, commands);
         });
     if !open {

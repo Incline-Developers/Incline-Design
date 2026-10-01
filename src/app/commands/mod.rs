@@ -123,7 +123,6 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
                 | UiCommand::OpenModellingSettings
-                | UiCommand::SetProjectCoordinateSystem(_)
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
@@ -642,29 +641,6 @@ impl<'a> App<'a> {
                 if changed {
                     self.touch_active_project_content();
                     userspace_log!("{}", tr!("cmd-commands-modelling-settings-set-settings", settings = settings.summary()));
-                }
-                Ok(())
-            }
-            UiCommand::SetProjectCoordinateSystem(stored) => {
-                let changed = self.workspace.active_project_mut().is_some_and(|project| {
-                    let metadata = &mut project.project.metadata;
-                    if metadata.coordinate_reference_system == stored {
-                        false
-                    } else {
-                        metadata.coordinate_reference_system = stored.clone();
-                        true
-                    }
-                });
-                if changed {
-                    self.touch_active_project_content();
-                    userspace_log!(
-                        "{}",
-                        if stored.is_empty() {
-                            tr!("cmd-commands-project-coordinate-system-cleared")
-                        } else {
-                            tr!("cmd-commands-project-coordinate-system-set-system", system = stored.to_string())
-                        }
-                    );
                 }
                 Ok(())
             }
