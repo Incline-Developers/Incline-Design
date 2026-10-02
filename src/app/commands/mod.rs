@@ -341,6 +341,11 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
+            UiCommand::ExportScheduleReport(export) => {
+                let (file_name, text) = *export;
+                self.choose_export_schedule_report(file_name, text);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
                 Ok(())

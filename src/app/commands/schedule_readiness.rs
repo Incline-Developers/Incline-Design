@@ -444,24 +444,25 @@ impl crate::app::App<'_> {
     /// The dig order itself is not mirrored: it is persistent plan data,
     /// already in the project view.
     pub(crate) fn mirror_schedule_reports(&mut self) {
-        // The Charts page carries the Gantt's Inspector, which names blocks
-        // from these same reports, so it keeps them as the Gantt does.
-        let charts = self.editor.is_schedule_charts();
+        // The Charts page carries the Gantt's Inspector, and the Calendar's
+        // report export names areas, both from these same reports, so those
+        // pages keep them as the Gantt does.
+        let keeps_reports = self.editor.is_schedule_charts() || self.editor.is_schedule_calendar();
         if !self.editor.is_schedule_gantt() {
-            if !charts && !self.editor.schedule_bar_reports.is_empty() {
+            if !keeps_reports && !self.editor.schedule_bar_reports.is_empty() {
                 self.editor.schedule_bar_reports.clear();
                 self.redraw_requested = true;
             }
             // The Calendar and the Charts report off the same held result, so
             // on those pages the result stays mirrored - under the same
             // currentness gate - rather than being taken off the page.
-            if self.editor.is_schedule_calendar() || charts {
+            if keeps_reports {
                 self.mirror_schedule_calculation();
             } else if self.editor.schedule_result.take().is_some() {
                 self.redraw_requested = true;
             }
             if let Some(cache) = self.schedule_report_cache.as_mut() {
-                if !charts {
+                if !keeps_reports {
                     cache.bar_views_key = None;
                 }
                 cache.sequence_key = None;
@@ -476,7 +477,7 @@ impl crate::app::App<'_> {
                 self.editor.sequence_unavailable = None;
                 self.redraw_requested = true;
             }
-            if !charts {
+            if !keeps_reports {
                 return;
             }
         } else {

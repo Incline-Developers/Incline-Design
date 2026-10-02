@@ -156,6 +156,9 @@ pub(crate) enum FileDialogAction {
     ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportTriangulation { id: TriangulationId, path: PathBuf },
+    /// Write a schedule report, built when it was asked for, to `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportScheduleReport { path: PathBuf, text: String },
     #[cfg(not(target_arch = "wasm32"))]
     ExportBlockModelCsv { id: BlockModelId, path: PathBuf },
     /// Save one open project under a new path.
@@ -702,6 +705,19 @@ impl<'a> App<'a> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportBlockModelCsv { id, path } => self.export_block_model_csv_to_path(id, path),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportScheduleReport { mut path, text } => {
+                if path.extension().is_none() {
+                    path.set_extension("csv");
+                }
+                crate::model::atomic_file::write_atomic(&path, |file| {
+                    use std::io::Write;
+                    file.write_all(text.as_bytes())?;
+                    Ok(())
+                })?;
+                userspace_log!("{}", tr!("report-saved", path = path.display().to_string()));
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SaveProjectAs { project_runtime_id, path } => {
                 if self.project_revert_is_pending(project_runtime_id) {
@@ -1500,6 +1516,18 @@ impl<'a> App<'a> {
                 .await?
                 .into_path();
             Some(FileDialogAction::ExportProjectDxf { project_runtime_id, path })
+        });
+    }
+
+    /// Save a schedule report the Calendar built: a save dialog on the
+    /// desktop, a download in the browser.
+    pub(crate) fn choose_export_schedule_report(&mut self, file_name: String, text: String) {
+        #[cfg(target_arch = "wasm32")]
+        Self::trigger_browser_download(file_name, text.into_bytes(), "text/csv", "schedule report");
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let path = AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(&file_name).save_file().await?.into_path();
+            Some(FileDialogAction::ExportScheduleReport { path, text })
         });
     }
 

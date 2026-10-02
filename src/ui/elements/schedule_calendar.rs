@@ -32,6 +32,9 @@ use crate::{
 
 const HIERARCHY_W: f32 = 240.0;
 const DEFAULT_W: f32 = 100.0;
+/// The whole calculated schedule's figure for a calculated row, pinned beside
+/// the Default column so it stays in view while the days scroll.
+const TOTAL_W: f32 = 112.0;
 const PERIOD_W: f32 = 112.0;
 const HEADER_H: f32 = 30.0;
 const TOOLBAR_H: f32 = 34.0;
@@ -128,6 +131,46 @@ impl Figures<'_> {
         Some((value, periods.is_partial(period)))
     }
 
+    /// A calculated row's figure over the whole calculated schedule: flows
+    /// summed, a stock or a deposit at its end, a grade weighted by the
+    /// tonnes behind it. `None` for authored rows and with nothing calculated.
+    fn total(&self, owner: CalendarOwner, row: CalendarRow, kind: Option<DestinationKind>) -> Option<f64> {
+        let result = self.result?;
+        let periods = &result.periods;
+        let covered = periods.covered_periods();
+        if covered == 0 {
+            return None;
+        }
+        let sum = |value: &dyn Fn(u32) -> Option<f64>| (0..covered).map(|period| value(period).unwrap_or(0.0)).sum::<f64>();
+        let owner = CalendarCellAddress {
+            owner,
+            row,
+            cell: CalendarCell::Default,
+        };
+        Some(match row {
+            CalendarRow::DigTonnes => sum(&|period| periods.dig(owner.agent()?, period)),
+            CalendarRow::ReclaimTonnes => sum(&|period| periods.reclaim(owner.agent()?, period)),
+            CalendarRow::TruckHours => sum(&|period| periods.truck_hours(owner.truck()?, period)),
+            CalendarRow::Received => sum(&|period| periods.received(owner.destination()?, period)),
+            CalendarRow::Reclaimed => sum(&|period| periods.reclaimed(owner.destination()?, period)),
+            CalendarRow::Value => sum(&|period| periods.value(period)),
+            CalendarRow::Cumulative => match kind {
+                Some(DestinationKind::Stockpile) => periods.closing(owner.destination()?, covered - 1)?.0,
+                _ => periods.cumulative(owner.destination()?, covered - 1)?,
+            },
+            CalendarRow::GradeActual(field) => {
+                let destination = owner.destination()?;
+                let grade = result.grades.iter().position(|(id, _)| *id == field)?;
+                let tonnes = sum(&|period| periods.received(destination, period));
+                if tonnes <= 1e-6 {
+                    return None;
+                }
+                sum(&|period| Some(periods.received_grade(destination, period, grade)? * periods.received(destination, period)?)) / tonnes
+            }
+            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::PileMode | CalendarRow::GradeInput(..) => return None,
+        })
+    }
+
     /// A stockpile's closing grades for a period, for the hover. Only on
     /// demand: a row per grade would bury the grid.
     fn closing_grades(&self, address: CalendarCellAddress) -> Option<String> {
@@ -219,7 +262,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
             let rect = ui.available_rect_before_wrap();
             let toolbar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TOOLBAR_H.min(rect.height())));
             let grid = egui::Rect::from_min_max(egui::pos2(rect.left(), toolbar.bottom()), rect.max);
-            draw_toolbar(ui, toolbar, editor, commands);
+            draw_toolbar(ui, toolbar, editor, plan, document, commands);
             if plan.agents().is_empty() && destinations.is_empty() && plan.trucks().classes.is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
@@ -239,11 +282,13 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
 /// calculated interval, so a button that added a fortnight of empty columns
 /// and a box that jumped to one were two ways of saying the same thing the
 /// scroll bar says.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("schedule_calendar_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
         super::schedule_gantt::draw_calculation_controls(ui, editor, "calendar", commands);
+        ui.add_space(8.0);
+        draw_report_menu(ui, editor, plan, document, commands);
         // Said once, here: the alternative is repeating it in every
         // calculated row. The same status the Gantt shows, with the same
         // detail behind it.
@@ -251,6 +296,73 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, c
         super::schedule_gantt::draw_run_status(ui, editor);
         if let Some(error) = &editor.schedule_calendar.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+    });
+}
+
+/// The report export: how to group the rows, then copy or save. Built from
+/// the held result when asked, never per frame.
+fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
+    use super::schedule_report::{ReportGrouping, ReportNames, build, to_text};
+    let ready = editor.schedule_result.is_some();
+    let button = ui
+        .add_enabled(
+            ready,
+            egui::Button::new(tr!("report-export")).corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
+        )
+        .on_hover_text(tr!("report-export-help"))
+        .on_disabled_hover_text(tr!("report-export-unavailable"));
+    let text = |editor: &EditorState, separator: char| -> Option<(String, String)> {
+        let schedule = editor.schedule_result.as_deref()?;
+        let destinations = destinations::available(document.solids(), plan.routing())
+            .into_iter()
+            .map(|view| (view.id, view.name, view.kind))
+            .collect();
+        let grades = schedule
+            .grades
+            .iter()
+            .map(|(field, _)| {
+                document
+                    .reserve_fields()
+                    .iter()
+                    .find(|entry| entry.id == *field)
+                    .map_or_else(|| field.0.to_string(), |entry| entry.name.clone())
+            })
+            .collect();
+        let names = ReportNames {
+            destinations,
+            grades,
+            bar_views: &editor.schedule_bar_reports,
+        };
+        let grouping = editor.schedule_report_grouping;
+        let tables = build(schedule, plan, &names, grouping);
+        let heading = tr!(
+            "report-heading",
+            grouping = grouping.label(),
+            end = super::schedule_gantt::instant_label(schedule.requested_end_h * crate::ui::state::GanttView::HOUR)
+        );
+        Some((tr!("report-file-name", grouping = grouping.label()), to_text(&tables, &heading, separator)))
+    };
+    // Stays open while the grouping is chosen; closes on Copy, Save or a
+    // click outside.
+    crate::ui::widgets::context_menu::checklist_popup(&button, tr!("report-export-title"), 240.0, |ui| {
+        ui.label(egui::RichText::new(tr!("report-group-by")).weak());
+        for grouping in ReportGrouping::ALL {
+            ui.radio_value(&mut editor.schedule_report_grouping, grouping, grouping.label());
+        }
+        ui.separator();
+        if ui.button(tr!("report-copy")).on_hover_text(tr!("report-copy-help")).clicked() {
+            if let Some((_, text)) = text(editor, '\t') {
+                ui.ctx().copy_text(text);
+                crate::userspace_log!("{}", tr!("report-copied"));
+            }
+            ui.close();
+        }
+        if ui.button(tr!("report-save")).clicked() {
+            if let Some((file_name, text)) = text(editor, ',') {
+                commands.push(UiCommand::ExportScheduleReport(Box::new((file_name, text))));
+            }
+            ui.close();
         }
     });
 }
@@ -385,7 +497,7 @@ fn draw_grid(
     let row_h = crate::ui::widgets::explorer::row_height(ui);
     let scrollbar_top = (rect.bottom() - SCROLLBAR_H).max(rect.top() + HEADER_H);
     let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + HEADER_H), egui::pos2(rect.right(), scrollbar_top));
-    let period_left = rect.left() + HIERARCHY_W + DEFAULT_W;
+    let period_left = rect.left() + HIERARCHY_W + DEFAULT_W + TOTAL_W;
     let period_view = egui::Rect::from_min_max(egui::pos2(period_left, rect.top()), egui::pos2(rect.right(), scrollbar_top));
     let rows = rows(plan, destinations, editor);
     let max_y = (rows.len() as f32 * row_h - body.height()).max(0.0);
@@ -406,6 +518,8 @@ fn draw_grid(
     let default_head = egui::Rect::from_min_size(egui::pos2(hierarchy_head.right(), rect.top()), egui::vec2(DEFAULT_W, HEADER_H));
     paint_header(ui, hierarchy_head, tr!("schedule-calendar-setting"), None);
     paint_header(ui, default_head, tr!("schedule-calendar-default"), None);
+    let total_head = egui::Rect::from_min_size(egui::pos2(default_head.right(), rect.top()), egui::vec2(TOTAL_W, HEADER_H));
+    paint_header(ui, total_head, tr!("schedule-calendar-total"), Some(tr!("schedule-calendar-total-help")));
 
     let first_period = ((editor.schedule_calendar.scroll_x / PERIOD_W).floor() as i32 - OVERSCAN).max(0) as u32;
     let last_period = (((editor.schedule_calendar.scroll_x + period_view.width()) / PERIOD_W).ceil() as i32 + OVERSCAN)
@@ -452,6 +566,8 @@ fn draw_grid(
         .line_segment([egui::pos2(hierarchy_head.right(), rect.top()), egui::pos2(hierarchy_head.right(), body.bottom())], stroke);
     ui.painter()
         .line_segment([egui::pos2(default_head.right(), rect.top()), egui::pos2(default_head.right(), body.bottom())], stroke);
+    ui.painter()
+        .line_segment([egui::pos2(total_head.right(), rect.top()), egui::pos2(total_head.right(), body.bottom())], stroke);
     ui.painter()
         .line_segment([egui::pos2(rect.left(), body.top()), egui::pos2(rect.right(), body.top())], stroke);
     draw_day_scrollbar(
@@ -677,6 +793,21 @@ fn draw_row(
                 session,
                 commands,
             );
+            // The whole schedule's figure: read-only, outside the selection,
+            // and blank on an authored row.
+            let total_rect = egui::Rect::from_min_max(egui::pos2(default_rect.right(), rect.top()), egui::pos2(default_rect.right() + TOTAL_W, rect.bottom()));
+            if kind.is_calculated() {
+                ui.painter().rect_filled(total_rect, 0.0, ui.visuals().faint_bg_color);
+                if let Some(total) = figures.total(owner, kind, destination_kind) {
+                    ui.painter().with_clip_rect(total_rect).text(
+                        total_rect.right_center() - egui::vec2(6.0, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        format_figure(kind, total),
+                        crate::ui::fonts::bold_font(egui::TextStyle::Body.resolve(ui.style()).size),
+                        ui.visuals().text_color(),
+                    );
+                }
+            }
             for period in periods {
                 let x = period_left + period as f32 * PERIOD_W - editor.schedule_calendar.scroll_x;
                 let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(PERIOD_W, rect.height()))

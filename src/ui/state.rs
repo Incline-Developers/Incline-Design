@@ -2740,6 +2740,8 @@ pub(crate) struct EditorState {
     pub(crate) gantt_inspector_open: bool,
     /// Downward scroll of the Charts page's rows, in points.
     pub(crate) schedule_charts_scroll: f32,
+    /// How the Calendar's report export groups its rows.
+    pub(crate) schedule_report_grouping: crate::ui::elements::schedule_report::ReportGrouping,
     pub(crate) schedule_calendar: ScheduleCalendarView,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
@@ -3831,6 +3833,7 @@ impl EditorState {
             gantt: GanttView::default(),
             gantt_inspector_open: true,
             schedule_charts_scroll: 0.0,
+            schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
             survey: Default::default(),
@@ -4284,6 +4287,9 @@ pub(crate) enum UiCommand {
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    /// Save the schedule report the Calendar built, as CSV, under a suggested
+    /// file name. Boxed: the report text is the payload.
+    ExportScheduleReport(Box<(String, String)>),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -4952,6 +4958,7 @@ impl UiCommand {
             Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
+            Self::ExportScheduleReport(export) => report(tr!("report-export-title"), export.0.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
