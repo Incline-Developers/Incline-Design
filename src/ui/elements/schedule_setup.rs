@@ -369,13 +369,14 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         });
         return;
     };
-    let source = (class.name.clone(), class.default_dig_rate_tph, class.default_reclaim_rate_tph);
+    let source = (class.name.clone(), class.default_dig_rate_tph, class.default_reclaim_rate_tph, class.spot_time_s);
     if editor.schedule_class_draft.as_ref().is_none_or(|draft| draft.id != class.id || draft.source != source) {
         editor.schedule_class_draft = Some(ScheduleClassDraft {
             id: class.id,
             name: source.0.clone(),
             rate: source.1.to_string(),
             reclaim_rate: source.2.to_string(),
+            spot_time: class.spot_time_s.to_string(),
             source,
         });
     }
@@ -417,6 +418,12 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             && value != class.default_reclaim_rate_tph
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassReclaimRate { class: class.id, rate_tph: value }));
+        }
+        if rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, None).lost_focus()
+            && let Ok(seconds) = draft.spot_time.parse::<f64>()
+            && seconds != class.spot_time_s
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassSpotTime { class: class.id, seconds }));
         }
         // Named here rather than only on deletion: a class in use cannot be
         // deleted, and knowing that before trying is the point.

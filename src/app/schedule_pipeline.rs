@@ -514,7 +514,9 @@ impl crate::app::App<'_> {
             .into_iter()
             .map(|entry| (format!("{:?}", entry.id), entry.distance_km.to_bits()))
             .collect();
-        let truck_classes_step = hash_of((agents_step, truck_classes, distances));
+        let mut haul_hash = std::collections::hash_map::DefaultHasher::new();
+        trucks.hash_content(&mut haul_hash);
+        let truck_classes_step = hash_of((agents_step, truck_classes, distances, std::hash::Hasher::finish(&haul_hash)));
 
         // Destinations are fingerprinted in the three groups the pages edit,
         // each chained onto the last, so editing a crusher's budget does not
@@ -1476,6 +1478,26 @@ impl crate::app::App<'_> {
                     blocking: true,
                 }),
                 Err(_) => unmeasured += 1,
+            }
+        }
+        if let Some(document) = self.workspace.active_document() {
+            let network = document.haulage();
+            if !network.roads.is_empty() {
+                let index = crate::model::haulage::network::RoadIndex::new(network);
+                let grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
+                for block in &snapshot.blocks {
+                    let point = glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
+                    if let Some((_, _, join)) = index.candidates(point, network.settings.auto_join_m).first() {
+                        let length = point.distance(*join).max((join.z - point.z).abs() / grade);
+                        if length > network.settings.auto_join_m || (join.z - point.z).abs() / grade > point.distance(*join) + 1e-6 {
+                            diagnostics.push(StageDiagnostic {
+                                entity: Some(format!("{} · {:.0} · {}", block.solid_name, block.flitch.base, block.name)),
+                                message: tr!("haul-unconnected", length = format!("{length:.0}"), rise = format!("{:.0}", join.z - point.z)),
+                                blocking: false,
+                            });
+                        }
+                    }
+                }
             }
         }
         if unmeasured > 0 {

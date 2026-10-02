@@ -8,9 +8,7 @@
 //!
 //! Schedule's Setup is the loader fleet, which lives in
 //! [`super::schedule_setup`]; this module supplies the panes it is arranged
-//! in. Haulage's Setup is still scaffold - its content category list is
-//! wired up, but item rows and property fields render their empty grids and
-//! fill in with the feature. The grids themselves are the reusable
+//! in. Haulage uses its dedicated Layout panel. The grids are the reusable
 //! [`data_grid`](crate::ui::widgets::data_grid) widgets.
 use thousands::Separable;
 
@@ -1711,7 +1709,7 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 });
             }
             central_island(ui, layout, |ui, rect| {
-                let table = super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands);
+                let table = super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands, &project.haulage);
                 if kind == crate::model::schedule::DestinationKind::Stockpile {
                     let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table.bottom() + ui.spacing().item_spacing.y), rect.max);
                     if below.is_positive() {

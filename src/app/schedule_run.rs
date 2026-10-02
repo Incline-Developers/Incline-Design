@@ -260,7 +260,13 @@ impl crate::app::App<'_> {
         }
         // The reclaim half of the fleet, which the Setup chain omits.
         for class in plan.classes() {
-            (class.id.0, class.default_dig_rate_tph.to_bits(), class.default_reclaim_rate_tph.to_bits()).hash(&mut hasher);
+            (
+                class.id.0,
+                class.default_dig_rate_tph.to_bits(),
+                class.default_reclaim_rate_tph.to_bits(),
+                class.spot_time_s.to_bits(),
+            )
+                .hash(&mut hasher);
         }
         for agent in plan.agents() {
             (agent.id.0, agent.class_id.0).hash(&mut hasher);
@@ -278,6 +284,8 @@ impl crate::app::App<'_> {
         // budget and opening inventory - by id, never by name.
         let routing = plan.routing();
         routing.enabled.hash(&mut hasher);
+        document.haulage().hash_content(&mut hasher);
+        plan.trucks().hash_content(&mut hasher);
         for solid in document.solids() {
             if let Some(kind) = crate::model::schedule::DestinationKind::of_solid(solid.kind) {
                 let id = crate::model::schedule::DestinationId::Solid(solid.id);
@@ -295,6 +303,7 @@ impl crate::app::App<'_> {
             entry.kind.hash(&mut hasher);
             entry.capacity_t.map(f64::to_bits).hash(&mut hasher);
             entry.distance_km.to_bits().hash(&mut hasher);
+            entry.dump_time_s.map(f64::to_bits).hash(&mut hasher);
             entry.inventory.hash_content(&mut hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(&mut hasher);
             for (period, value) in &entry.crusher.periods {

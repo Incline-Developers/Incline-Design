@@ -174,6 +174,7 @@ pub(crate) fn draw_destination_properties(
     kind: DestinationKind,
     session: u32,
     commands: &mut Vec<UiCommand>,
+    network: &crate::model::haulage::HaulNetwork,
 ) -> egui::Rect {
     let selected = editor
         .schedule_selected_destination
@@ -199,6 +200,7 @@ pub(crate) fn draw_destination_properties(
         crusher_default,
         entry.distance_km.to_bits(),
         operation.rest_h.to_bits(),
+        plan.routing().dump_time_s(entry.id).map(f64::to_bits),
     );
     if editor
         .schedule_destination_draft
@@ -211,6 +213,7 @@ pub(crate) fn draw_destination_properties(
             capacity: capacity_text(entry.capacity_t),
             crusher_default: capacity_text(crusher_default),
             distance: super::schedule_trucking::number(entry.distance_km),
+            dump_time: plan.routing().dump_time_s(entry.id).map(|v| v.to_string()).unwrap_or_default(),
             rest: super::schedule_trucking::number(operation.rest_h),
             source,
         });
@@ -240,7 +243,7 @@ pub(crate) fn draw_destination_properties(
         0
     };
     let rest_error = parse_rest(&draft.rest).err();
-    let rows_used = 5 + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
+    let rows_used = 8 + usize::from(kind == DestinationKind::Crusher) + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
     let mut chunk_draft = editor.schedule_chunk_draft.take();
@@ -356,9 +359,39 @@ pub(crate) fn draw_destination_properties(
             // the project holds.
             super::schedule_optimisation::stockpile_rows(rows, &mut chunk_draft, plan, entry.id, session, &mut edits);
         }
+        if kind == DestinationKind::Crusher
+            && let DestinationId::Standalone(destination) = entry.id
+        {
+            let response = rows.field(&tr!("haul-dump-override"), &mut draft.dump_time, None);
+            if response.lost_focus() {
+                let seconds = if draft.dump_time.trim().is_empty() {
+                    Some(None)
+                } else {
+                    draft.dump_time.parse::<f64>().ok().map(Some)
+                };
+                if let Some(seconds) = seconds
+                    && seconds != plan.routing().dump_time_s(entry.id)
+                {
+                    edits.push(UiCommand::schedule(session, ScheduleEdit::SetDestinationDumpTime { destination, seconds }));
+                }
+            }
+        }
+        let method = if network.fixed_destinations.contains(&entry.id) {
+            tr!("haul-method-fixed", distance = format!("{:.1}", entry.distance_km))
+        } else if network.role_point(entry.id, false).is_some() {
+            tr!("haul-method-roads")
+        } else if entry.solid.is_some() && !network.roads.is_empty() {
+            tr!("haul-method-nearest")
+        } else {
+            tr!("haul-method-fixed", distance = format!("{:.1}", entry.distance_km))
+        };
+        rows.readonly(&tr!("haul-dump-method"), &method, None, None).on_hover_text(tr!("haul-fixed-help"));
+        if rows.action("", &tr!("haul-open-layout")).clicked() {
+            edits.push(UiCommand::EditHaulProperties);
+        }
         // A haul distance, not a measurement: it is one number for every source
         // that delivers here, and nothing derives it from where the solid sits.
-        let response = rows.field(&tr!("destination-distance"), &mut draft.distance, distance_error.as_deref());
+        let response = rows.field(&tr!("haul-fixed-distance"), &mut draft.distance, distance_error.as_deref());
         if response.lost_focus()
             && let Ok(distance_km) = super::schedule_trucking::parse_positive(&draft.distance, crate::model::schedule::ScheduleError::InvalidDistance)
             && distance_km != entry.distance_km

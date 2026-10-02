@@ -142,6 +142,7 @@ pub(crate) fn publish(
     let mut omitted_tonnes_t = 0.0;
     // (agent, bar, activity, source, interval, segment) -> tonnes
     let mut cells: BTreeMap<(LoaderAgentId, BarId, u8, SourceKey, usize, usize), f64> = BTreeMap::new();
+    let cycles: Vec<_> = input.movements.iter().map(|c| std::sync::Arc::new(c.cycle)).collect();
     let mut deliveries: Vec<Delivery> = Vec::with_capacity(solution.movements.len());
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
@@ -217,6 +218,7 @@ pub(crate) fn publish(
             end_h,
             tonnes: row.tonnes_t,
             truck_hours: row.tonnes_t * candidate.truck_hours_per_tonne,
+            cycle: std::sync::Arc::clone(&cycles[row.candidate]),
             value: row.tonnes_t * per_tonne,
             contained,
         });
@@ -277,6 +279,7 @@ pub(crate) fn publish(
             && last.source == delivery.source
             && last.destination == delivery.destination
             && last.truck == delivery.truck
+            && last.cycle == delivery.cycle
             && (last.end_h - delivery.start_h).abs() <= 1e-9
             && same_rate(last.tonnes, last.end_h - last.start_h, delivery.tonnes, delivery.end_h - delivery.start_h)
             && same_rate(last.value, last.end_h - last.start_h, delivery.value, delivery.end_h - delivery.start_h)

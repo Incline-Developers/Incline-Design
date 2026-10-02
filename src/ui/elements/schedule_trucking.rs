@@ -19,10 +19,7 @@ use crate::{
     i18n::{tr, tr_format},
     model::{
         Document,
-        schedule::{
-            DestinationSelection, LoaderAgentId, LoaderSelection, MovementSourceScope, MovementSourceSelection, RouteContext, RouteSource, SchedulePlan, TruckClassId,
-            destinations, trucking,
-        },
+        schedule::{DestinationSelection, LoaderAgentId, LoaderSelection, MovementSourceScope, MovementSourceSelection, SchedulePlan, TruckClassId, destinations, trucking},
     },
     ui::{
         EditorState,
@@ -108,26 +105,33 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         class.loaded_speed_kph.to_bits(),
         class.unloaded_speed_kph.to_bits(),
     );
+    let haul_source = serde_json::to_string(&class).expect("valid truck class");
     if editor
         .schedule_truck_class_draft
         .as_ref()
-        .is_none_or(|draft| draft.id != class.id || draft.source != source)
+        .is_none_or(|draft| draft.id != class.id || draft.source != source || draft.haul_source != haul_source)
     {
         editor.schedule_truck_class_draft = Some(ScheduleTruckClassDraft {
             id: class.id,
             source,
             name: class.name.clone(),
             payload: number(class.payload_t),
-            loaded: number(class.loaded_speed_kph),
-            unloaded: number(class.unloaded_speed_kph),
+            haul_source,
+            maximum_speed: number(class.maximum_speed_kph),
+            maximum_grade: number(class.maximum_grade * 100.0),
+            dump_time: number(class.dump_time_s),
+            grade_rows: class
+                .grade_speeds
+                .iter()
+                .map(|r| (number(r.from_grade * 100.0), number(r.loaded_kph), number(r.empty_kph)))
+                .collect(),
         });
     }
     let taken: Vec<String> = trucks.classes.iter().filter(|other| other.id != class.id).map(|other| other.name.clone()).collect();
     let draft = editor.schedule_truck_class_draft.as_mut().expect("just ensured");
     let name_error = name_problem(&draft.name, taken.iter().cloned());
     let payload_error = parse_positive(&draft.payload, crate::model::schedule::ScheduleError::InvalidPayload).err();
-    let loaded_error = parse_positive(&draft.loaded, crate::model::schedule::ScheduleError::InvalidSpeed).err();
-    let unloaded_error = parse_positive(&draft.unloaded, crate::model::schedule::ScheduleError::InvalidSpeed).err();
+
     let mut edits = Vec::new();
     PropertyTable::new("schedule_truck_class_properties", rect, &class.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -154,50 +158,69 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
-        // Committed together: the two speeds are two halves of one cycle, and
-        // separate commits would be two undo steps for one thought.
-        let loaded = rows.field(&tr!("truck-loaded-speed"), &mut draft.loaded, loaded_error.as_deref());
-        let unloaded = rows.field(&tr!("truck-unloaded-speed"), &mut draft.unloaded, unloaded_error.as_deref());
-        if (loaded.lost_focus() || unloaded.lost_focus())
-            && let (Ok(loaded_kph), Ok(unloaded_kph)) = (
-                parse_positive(&draft.loaded, crate::model::schedule::ScheduleError::InvalidSpeed),
-                parse_positive(&draft.unloaded, crate::model::schedule::ScheduleError::InvalidSpeed),
-            )
-            && (loaded_kph != class.loaded_speed_kph || unloaded_kph != class.unloaded_speed_kph)
-        {
-            edits.push(UiCommand::schedule(
-                session,
-                ScheduleEdit::SetTruckClassSpeeds {
-                    class: class.id,
-                    loaded_kph,
-                    unloaded_kph,
-                },
-            ));
+        let mut commit = false;
+        for (label, value) in [
+            (tr!("haul-maximum-speed"), &mut draft.maximum_speed),
+            (tr!("haul-maximum-grade"), &mut draft.maximum_grade),
+            (tr!("haul-dump-time"), &mut draft.dump_time),
+        ] {
+            commit |= rows.field(&label, value, None).lost_focus();
         }
-        // Read at the default haul distance, because a cycle needs a distance
-        // and this page has no route in front of it. Travel only - which is
-        // the tooltip's whole job.
-        let route = RouteContext {
-            loader: LoaderAgentId(0),
-            source: RouteSource::Stockpile(crate::model::schedule::DestinationId::Standalone(crate::model::schedule::StandaloneDestinationId(0))),
-            destination: crate::model::schedule::DestinationId::Standalone(crate::model::schedule::StandaloneDestinationId(0)),
-        };
-        let cycle = trucking::coefficients(&class, route, destinations::DEFAULT_DISTANCE_KM);
-        let (cycle_text, per_tonne) = match cycle {
-            Ok(coefficients) => (
-                tr!(
-                    "truck-cycle-at",
-                    hours = format!("{:.3}", coefficients.travel_cycle_h),
-                    distance = number(destinations::DEFAULT_DISTANCE_KM)
-                ),
-                format!("{:.6}", coefficients.truck_hours_per_tonne),
-            ),
-            Err(error) => (error.message(), String::new()),
-        };
-        let note = tr!("truck-travel-cycle-note");
-        rows.readonly(&tr!("truck-travel-cycle"), &cycle_text, None, None).on_hover_text(&note);
-        rows.readonly(&tr!("truck-hours-per-tonne"), &per_tonne, None, None)
-            .on_hover_text(tr!("truck-help-optimised-only"));
+        rows.three_headers([&tr!("haul-grade-from"), &tr!("haul-loaded-speed"), &tr!("haul-empty-speed")]);
+        for (grade, loaded, empty) in &mut draft.grade_rows {
+            commit |= rows.three_fields([grade, loaded, empty]).iter().any(|r| r.lost_focus());
+        }
+        let mut remove = None;
+        let options: Vec<_> = draft.grade_rows.iter().enumerate().map(|(i, r)| (Some(i), format!("{}%", r.0))).collect();
+        if draft.grade_rows.len() > 1
+            && rows
+                .combo("remove_grade_band", &tr!("haul-remove-band"), &mut remove, &tr!("haul-remove-band"), options)
+                .changed()
+            && let Some(i) = remove
+        {
+            draft.grade_rows.remove(i);
+            commit = true;
+        }
+        if rows.action("", &tr!("haul-add-band")).clicked() {
+            let grade = draft.grade_rows.last().and_then(|r| r.0.parse::<f64>().ok()).unwrap_or(6.0) + 2.0;
+            draft.grade_rows.push((number(grade), "10".to_owned(), "20".to_owned()));
+            commit = true;
+        }
+        rows.readonly("", &tr!("haul-speeds-help"), None, None).on_hover_text(tr!("haul-speeds-help"));
+        if commit {
+            let parsed = (|| -> Option<_> {
+                let maximum_speed_kph = draft.maximum_speed.parse::<f64>().ok()?;
+                let maximum_grade = draft.maximum_grade.parse::<f64>().ok()? / 100.0;
+                let dump_time_s = draft.dump_time.parse::<f64>().ok()?;
+                let mut speeds: Vec<trucking::GradeSpeed> = draft
+                    .grade_rows
+                    .iter()
+                    .map(|(g, l, e)| {
+                        Some(trucking::GradeSpeed {
+                            from_grade: g.parse::<f64>().ok()? / 100.0,
+                            loaded_kph: l.parse().ok()?,
+                            empty_kph: e.parse().ok()?,
+                        })
+                    })
+                    .collect::<Option<_>>()?;
+                speeds.sort_by(|a, b| a.from_grade.total_cmp(&b.from_grade));
+                Some((speeds, maximum_speed_kph, maximum_grade, dump_time_s))
+            })();
+            if let Some((speeds, maximum_speed_kph, maximum_grade, dump_time_s)) = parsed
+                && (speeds != class.grade_speeds || maximum_speed_kph != class.maximum_speed_kph || maximum_grade != class.maximum_grade || dump_time_s != class.dump_time_s)
+            {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetTruckClassHaulage {
+                        class: class.id,
+                        speeds,
+                        maximum_speed_kph,
+                        maximum_grade,
+                        dump_time_s,
+                    },
+                ));
+            }
+        }
     });
     commands.append(&mut edits);
 }

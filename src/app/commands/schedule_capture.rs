@@ -221,6 +221,8 @@ pub(crate) struct CaptureSnapshot {
     pub(crate) generation: u64,
     pub(crate) plan_revision: u64,
     plan: SchedulePlan,
+    haulage: crate::model::haulage::HaulNetwork,
+    haul_points: BTreeMap<ProjectDestinationId, glam::DVec3>,
     fields: Vec<ReserveField>,
     tonnage_field: ReserveFieldId,
     destinations: Vec<DestinationView>,
@@ -273,6 +275,7 @@ struct GroundContext {
     values: Vec<f64>,
     /// Which of the block's captured portions this is, for diagnostics.
     portion: usize,
+    position: glam::DVec3,
 }
 
 impl GroundContext {
@@ -324,6 +327,8 @@ impl crate::app::App<'_> {
             generation: inputs.generation,
             plan_revision,
             plan,
+            haulage: document.haulage().clone(),
+            haul_points: self.haul_destination_points(document),
             fields: document.reserve_fields().to_vec(),
             tonnage_field,
             destinations,
@@ -816,6 +821,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     capture: Arc::clone(capture),
                     values: portion.values.clone(),
                     portion: index,
+                    position: glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base),
                 },
             );
         }
@@ -1094,6 +1100,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let cashflow = plan.cashflow();
     let fleet = plan.trucks();
     let fields = &source.fields;
+    let mut haul = HaulCapture::new(&source.haulage, &source.haul_points, plan);
     for task in &tasks {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -1149,6 +1156,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 &mut problems,
                                 ExpandArgs {
                                     activity: Activity::Dig,
+                                    position: Some(held.position),
                                     loader: task.loader,
                                     agent,
                                     loader_name,
@@ -1168,6 +1176,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 |field| held.value(field),
                                 &grade_fields,
                                 fields,
+                                &mut haul,
                             );
                         }
                     }
@@ -1256,6 +1265,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             &mut problems,
                             ExpandArgs {
                                 activity: Activity::Reclaim,
+                                position: None,
                                 loader: task.loader,
                                 agent,
                                 loader_name,
@@ -1277,6 +1287,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             |_| None,
                             &grade_fields,
                             fields,
+                            &mut haul,
                         );
                     }
                 }
@@ -1363,6 +1374,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         grade_targets,
         target_opening: Vec::new(),
     };
+    notes.extend(haul.notes);
     let stats = CaptureStats {
         duration: started.elapsed(),
         candidates: input.movements.len(),
@@ -1380,10 +1392,81 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     })
 }
 
+/// Destination/class searches are shared by every block and material.
+struct HaulCapture<'a> {
+    network: &'a crate::model::haulage::HaulNetwork,
+    points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>,
+    index: crate::model::haulage::network::RoadIndex,
+    plan: &'a SchedulePlan,
+    searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
+    notes: Vec<String>,
+}
+impl<'a> HaulCapture<'a> {
+    fn new(network: &'a crate::model::haulage::HaulNetwork, points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>, plan: &'a SchedulePlan) -> Self {
+        Self {
+            network,
+            points,
+            index: crate::model::haulage::network::RoadIndex::new(network),
+            plan,
+            searches: BTreeMap::new(),
+            notes: Vec::new(),
+        }
+    }
+    fn point(&self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
+        if self.network.fixed_destinations.contains(&id) {
+            return None;
+        }
+        self.network
+            .role_point(id, reclaim)
+            .or_else(|| self.points.get(&id).and_then(|p| self.index.candidates(*p, 0.0).first().map(|c| c.2)))
+    }
+    fn cycle(&mut self, args: &ExpandArgs<'_>, class: &'a trucking::TruckClass, distance: f64) -> trucking::CycleBreakdown {
+        let loader = self.plan.agent(args.agent).and_then(|a| self.plan.class(a.class_id));
+        let rate = loader.map_or(0.0, |c| {
+            if args.activity == Activity::Dig {
+                c.default_dig_rate_tph
+            } else {
+                c.default_reclaim_rate_tph
+            }
+        });
+        let spot = loader.map_or(0.0, |c| c.spot_time_s);
+        let dump = self.plan.routing().dump_time_s(args.destination);
+        let source = match args.route {
+            RouteSource::Ground { .. } => args.position,
+            RouteSource::Stockpile(id) => self.point(id, true),
+        };
+        let target = self.point(args.destination, false);
+        if let (Some(source), Some(target)) = (source, target) {
+            let search = self
+                .searches
+                .entry((args.destination, class.id))
+                .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
+            if let Some(route) = search.as_ref().and_then(|s| s.route(&self.index, source, args.activity == Activity::Dig, rate, spot, dump)) {
+                if args.activity == Activity::Dig && !route.connected {
+                    let area = match args.route {
+                        RouteSource::Ground { bench, .. } => format!("{} · {:.0}–{:.0}", args.subject, bench.0, bench.1),
+                        _ => args.subject.clone(),
+                    };
+                    let note = format!(
+                        "{area}: {}",
+                        crate::i18n::tr!("haul-unconnected", length = format!("{:.0}", route.access_m), rise = format!("{:.0}", route.access_rise_m))
+                    );
+                    if !self.notes.contains(&note) {
+                        self.notes.push(note);
+                    }
+                }
+                return route.cycle;
+            }
+        }
+        trucking::CycleBreakdown::fixed(class, distance, rate, spot, dump, self.network.settings.acceleration_kph_s)
+    }
+}
+
 /// Everything one candidate needs, so the expansion below takes one argument
 /// rather than eleven.
 struct ExpandArgs<'a> {
     activity: Activity,
+    position: Option<glam::DVec3>,
     loader: LoaderId,
     agent: LoaderAgentId,
     loader_name: &'a str,
@@ -1407,18 +1490,19 @@ struct ExpandArgs<'a> {
     clippy::too_many_arguments,
     reason = "the project's four rule configurations and the two id maps are all genuinely needed here"
 )]
-fn expand_candidate(
+fn expand_candidate<'a>(
     movements: &mut Vec<MovementCandidate>,
     conditional_values: &mut Vec<ConditionalValue>,
     problems: &mut Diagnostics,
     args: ExpandArgs<'_>,
     routing: &crate::model::schedule::destinations::RoutingConfig,
-    fleet: &trucking::TruckFleetConfig,
+    fleet: &'a trucking::TruckFleetConfig,
     truck_ids: &BTreeMap<trucking::TruckClassId, TruckClassId>,
     cashflow: &crate::model::schedule::cashflow::CashflowConfig,
     value: impl Fn(ReserveFieldId) -> Option<PortionValue> + Copy,
     grades: &[GradeField],
     fields: &[ReserveField],
+    haul: &mut HaulCapture<'a>,
 ) {
     let context = RouteContext {
         loader: args.agent,
@@ -1481,7 +1565,8 @@ fn expand_candidate(
     };
     for class in classes {
         let Some(definition) = fleet.class(class) else { continue };
-        let coefficients = match trucking::coefficients(definition, context, distance_km) {
+        let cycle = haul.cycle(&args, definition, distance_km);
+        let coefficients = match trucking::coefficients_from_cycle(definition, cycle) {
             Ok(coefficients) => coefficients,
             Err(error) => {
                 problems.push(CaptureDiagnostic::new(definition.name.clone(), error.message()).at(ScheduleStep::TruckClasses));
@@ -1498,6 +1583,7 @@ fn expand_candidate(
             destination: args.dense_destination,
             truck: dense,
             truck_hours_per_tonne: coefficients.truck_hours_per_tonne,
+            cycle,
             routing_rule: RoutingRuleId(args.routing_rule.0 as u32),
             routing_preference: args.routing_preference,
             cashflow: contributions.clone(),
@@ -1647,6 +1733,7 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     source.generation.hash(&mut hasher);
     source.plan_revision.hash(&mut hasher);
     source.tonnage_field.0.hash(&mut hasher);
+    source.haulage.hash_content(&mut hasher);
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
     // fields the solvers read, and every one of them is walked here.
     input.segments_per_interval.hash(&mut hasher);
@@ -1833,6 +1920,8 @@ impl CaptureSnapshot {
             generation: 9,
             plan_revision: 5,
             plan,
+            haulage: Default::default(),
+            haul_points: Default::default(),
             fields,
             tonnage_field,
             destinations,
