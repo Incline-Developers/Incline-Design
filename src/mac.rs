@@ -362,7 +362,7 @@ pub(crate) fn install_menu_bar() {
         (tr!("haul-convert"), MacMenuAction::ConvertHaulSelection),
         (tr!("haul-import"), MacMenuAction::ImportHaulRoads),
         (tr!("haul-export"), MacMenuAction::ExportHaulRoads),
-        (tr!("haul-speed-limit"), MacMenuAction::EditHaulProperties),
+        (tr!("haul-open-layout"), MacMenuAction::EditHaulProperties),
     ] {
         add_action(&haul_menu, &label, "", action, &target, mtm);
     }

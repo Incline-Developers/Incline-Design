@@ -536,20 +536,7 @@ impl TruckFleetConfig {
             payload_t: DEFAULT_PAYLOAD_T,
             loaded_speed_kph: DEFAULT_LOADED_KPH,
             unloaded_speed_kph: DEFAULT_UNLOADED_KPH,
-            grade_speeds: [
-                (-1.0, 15.0, 25.0),
-                (-0.06, 25.0, 35.0),
-                (-0.02, DEFAULT_LOADED_KPH, DEFAULT_UNLOADED_KPH),
-                (0.02, 20.0, 40.0),
-                (0.06, 11.0, 22.0),
-            ]
-            .into_iter()
-            .map(|(from_grade, loaded_kph, empty_kph)| GradeSpeed {
-                from_grade,
-                loaded_kph,
-                empty_kph,
-            })
-            .collect(),
+            grade_speeds: generic_grade_speeds(),
             maximum_speed_kph: 50.0,
             maximum_grade: 0.1,
             dump_time_s: 60.0,
@@ -1038,4 +1025,23 @@ fn checked_units(value: f64) -> ScheduleResult<u32> {
 /// A one-way haul distance in kilometres.
 pub(crate) fn checked_distance(value: f64) -> ScheduleResult<f64> {
     checked_positive(value, ScheduleError::InvalidDistance)
+}
+
+/// Generic grade speed bands for a new class: placeholders a site replaces
+/// with its own figures.
+pub(crate) fn generic_grade_speeds() -> Vec<GradeSpeed> {
+    [
+        (-1.0, 15.0, 25.0),
+        (-0.06, 25.0, 35.0),
+        (-0.02, DEFAULT_LOADED_KPH, DEFAULT_UNLOADED_KPH),
+        (0.02, 20.0, 40.0),
+        (0.06, 11.0, 22.0),
+    ]
+    .into_iter()
+    .map(|(from_grade, loaded_kph, empty_kph)| GradeSpeed {
+        from_grade,
+        loaded_kph,
+        empty_kph,
+    })
+    .collect()
 }

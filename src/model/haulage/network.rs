@@ -160,9 +160,17 @@ impl HaulNetwork {
     pub(crate) fn delete_node(&mut self, id: NodeId) {
         self.roads.retain(|r| r.from != id && r.to != id);
         self.nodes.retain(|n| n.id != id);
+        self.prune_loose_nodes();
     }
     pub(crate) fn delete_road(&mut self, id: RoadId) {
         self.roads.retain(|r| r.id != id);
+        self.prune_loose_nodes();
+    }
+    /// A node left with no road and no destination role marks nothing, so
+    /// deleting the last road at it takes it too.
+    fn prune_loose_nodes(&mut self) {
+        let roads = &self.roads;
+        self.nodes.retain(|n| n.role.is_some() || roads.iter().any(|r| r.from == n.id || r.to == n.id));
     }
     pub(crate) fn set_role(&mut self, id: NodeId, role: Option<NodeRole>) -> anyhow::Result<()> {
         anyhow::ensure!(self.node(id).is_some(), "unknown road node");
@@ -183,6 +191,16 @@ impl HaulNetwork {
             .find(|n| n.role == Some(role))
             .or_else(|| self.nodes.iter().find(|n| n.role == Some(NodeRole::Dump(destination))))
             .map(|n| n.pos)
+    }
+    /// Where trucks meet a destination: its role node, else `centroid` (a
+    /// solid destination's surface), which routing joins to the nearest road.
+    /// `None` when the destination is held to its fixed distance or has no
+    /// point at all.
+    pub(crate) fn destination_point(&self, destination: DestinationId, reclaim: bool, centroid: Option<DVec3>) -> Option<DVec3> {
+        if self.fixed_destinations.contains(&destination) {
+            return None;
+        }
+        self.role_point(destination, reclaim).or(centroid)
     }
     /// Split on a specific segment. The original id remains on the first half.
     pub(crate) fn split(&mut self, id: RoadId, segment: usize, pos: DVec3) -> anyhow::Result<NodeId> {
@@ -511,6 +529,15 @@ impl RoadIndex {
             }
         }
         index
+    }
+    /// The shortest grade-limited straight drive from `p` onto a road: the
+    /// larger of the distance and the height change at `max_grade`. Within
+    /// `reach` the point counts as connected. `None` with no roads at all.
+    pub(crate) fn access_m(&self, p: DVec3, reach: f64, max_grade: f64) -> Option<f64> {
+        self.candidates(p, reach)
+            .iter()
+            .map(|(_, _, q)| p.distance(*q).max((q.z - p.z).abs() / max_grade))
+            .min_by(f64::total_cmp)
     }
     pub(crate) fn candidates(&self, p: DVec3, distance: f64) -> Vec<(RoadId, usize, DVec3)> {
         let mut slots = BTreeSet::new();

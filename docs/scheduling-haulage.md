@@ -7,19 +7,32 @@ nodes and its intermediate vertices only shape the road. Moving a node moves
 all incident roads. Undo preserves the network's allocated IDs. OMF stores the
 network, settings and roles; older projects start with an empty network.
 
-Draw a road by clicking points and finish with Enter, Escape or a double-click.
-Existing ends join within the join tolerance, and points on a road split it.
-Convert selected design polylines, or select **As haul roads** when importing
-DXF. Conversion keeps the original design objects, flattens bulges, joins
+Draw a road by clicking points and finish with Enter, Escape or a
+double-click; Backspace removes the last point. Points land on the surface
+under the cursor, so a road drawn in plan drapes onto the pit, and fall back to
+the previous point's level where there is no surface. A snap mode chosen on the
+viewport toolbar still applies. Clicking an existing road or node joins it.
+Convert selected design polylines, or choose **DXF → Import DXF as roads**.
+Conversion keeps the original design objects, flattens bulges, joins
 T-junctions within the 3D tolerance and keeps elevated crossings separate.
-Export roads writes one DXF polyline per road.
+Export writes one DXF polyline per road.
 
-Select roads or nodes to edit their shape, names, speed limits and roles. A
-node may be a destination's dump or stockpile reclaim point. Its context menu
-can also create a standalone stockpile, dump or crusher and open its setup.
-Deleting a role node requires confirmation and deletes its incident roads.
-Issues identify dead ends, near misses, separate pieces, excessive grades and
-roles with missing destinations. Select an issue to frame its location.
+The Layout panel reads top to bottom: tools; a one-line summary (roads, length,
+blocks connected); the selection; issues; roads; destinations; the route check;
+settings. Drag a node or bend point in the viewport to move it, with its roads
+previewed until release; a still click only selects. Selecting a road shows its
+name, length, steepest grade and speed limit; selecting a node shows its role
+and coordinates. The role list also creates a new stockpile, dump or crusher at
+the node and opens its setup. Delete (key or button) removes selected roads and
+nodes; a node left with no road and no role goes with them, and deleting a
+destination's node asks first. Issues name the road or node concerned, explain
+themselves on hover, and frame and select it on click.
+
+Each destination row has a choice of how trucks reach it: a selected node, the
+nearest road to a solid's surface, a node added at that nearest point, or its
+fixed distance. The route check needs only a click on a dig block: destination,
+truck class and loader start filled in, and the result recalculates whenever
+the question or the project changes.
 
 ## Cycle model
 
@@ -67,13 +80,16 @@ Dig access is capped at the bench speed, initially 15 km/h.
 The query compares projections onto nearby roads plus the nearest junction,
 choosing the least total cycle rather than simply the nearest road. The
 initial auto-join distance is 300 m and join tolerance is 2 m. If no road is
-nearby, the nearest road is considered. A long or grade-lengthened access leg
-still schedules, with a warning in Readiness and capture. Layout indicates
-connection status and Route check draws a lengthened access leg dashed.
+nearby, the nearest road is considered. A block is connected when its
+grade-limited access fits within the auto-join distance; a road 12 m above is
+connected at 120 m, and the route check says the leg was lengthened. Unconnected
+blocks still schedule; Readiness reports how many in one line, and Layout tints
+them red. Route check draws a lengthened access leg dashed.
 
 Explicit dump/reclaim roles take priority. Solid destinations can use the
-nearest road to their surface centroid; standalone destinations need an
-explicit node to use roads. Reclaim uses the reclaim node when present and
+nearest road to their surface centroid; trucks then also drive the straight,
+grade-limited leg from that road to the centroid, both ways. Standalone
+destinations need an explicit node to use roads. Reclaim uses the reclaim node when present and
 otherwise the dump point. A destination can be forced to its fixed distance.
 If a source or destination point is unavailable, or the selected road
 component cannot reach the destination, capture uses the destination's fixed
@@ -95,7 +111,8 @@ Cycle, distance and rise averages are tonne-weighted; tonne-km is summed.
 Truck charts compare simultaneous use with the available fleet.
 
 This changes the previous travel-only coefficient even for projects without
-roads: loading now counts. Old truck classes migrate their two speeds to every
+roads: loading now counts. **Use generic starting speeds** on a truck class
+replaces migrated flat speeds with the grade-dependent defaults. Old truck classes migrate their two speeds to every
 grade band and retain zero dump time; old loader classes retain zero spot time.
 With spot, load and dump zero, fixed-distance coefficients match the previous
 travel-only calculation. New classes receive the generic starting settings
@@ -118,6 +135,13 @@ Native `cargo clippy` and `trunk build` passed. The web build reports native-onl
 trucking code as unused. Browser interaction and macOS/Windows interaction
 have not been exercised; DXF file-dialog round trips remain a manual check.
 
-Screenshots: [network tools](haulage/network-tools.png),
-[route check](haulage/route-check.png), [truck settings](haulage/truck-settings.png),
+The Layout rework was driven on the same unsaved sample: draping drawn roads,
+dragging nodes, assigning a crusher node from the destination list, the
+auto-filled route check, the single Readiness line, the truck band table and
+a schedule calculation. Temporary tests covered the destination access leg, the
+120 m grade-limited access counting as connected, and loose-node pruning, and
+were removed. Native clippy and a wasm `cargo check` passed.
+
+Screenshots: [Layout and route check](haulage/layout.png),
+[truck settings](haulage/truck-settings.png),
 [Calendar](haulage/calendar.png), [Inspector](haulage/inspector.png).

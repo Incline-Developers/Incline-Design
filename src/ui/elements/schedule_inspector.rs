@@ -219,7 +219,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 matching += rate * d.truck_hours / d.tonnes.max(1e-9);
             }
             if tonnes_rate > 0.0 {
-                let line = format!("{}: {:.1}", tr!("haul-match"), nominal * matching / tonnes_rate);
+                let line = tr!("haul-match", trucks = format!("{:.1}", nominal * matching / tonnes_rate));
                 hover = Some(hover.map_or_else(|| line.clone(), |text| format!("{text}\n{line}")));
             }
         }
@@ -504,13 +504,16 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
                 haul.add(delivery, 1.0 / duration);
             }
         }
-        draw_entry(ui, &entry).on_hover_text(format!(
-            "{}\n{}\n{}: {:.2}",
-            tr!("inspector-trucks-help"),
-            tr!("haul-cycle-minutes", minutes = format!("{:.1}", haul.cycle_minutes())),
-            tr!("haul-distance"),
-            haul.distance_km()
-        ));
+        let mut help = tr!("inspector-trucks-help");
+        if haul.tonnes > 0.0 {
+            help = format!(
+                "{help}\n{}\n{}: {:.2}",
+                tr!("haul-cycle-minutes", minutes = format!("{:.1}", haul.cycle_minutes())),
+                tr!("haul-distance"),
+                haul.distance_km()
+            );
+        }
+        draw_entry(ui, &entry).on_hover_text(help);
     }
 }
 

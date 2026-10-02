@@ -490,7 +490,7 @@ impl<'a> App<'a> {
                     let raw = self.graphics.as_ref().and_then(|g| g.cursor_world(z));
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
-                    let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
+                    let snap_eligible = (self.editor.active_tool.snaps_cursor() || self.editor.haul_placing()) && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
                     let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
@@ -507,6 +507,7 @@ impl<'a> App<'a> {
                         self.redraw_requested = true;
                     }
                     self.drag_to_cursor();
+                    self.track_haul_cursor();
                     if self.gizmo_drag.is_some() {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
@@ -916,47 +917,12 @@ impl<'a> App<'a> {
                 return;
             }
             self.editor.canvas_context_menu_open = false;
-            if self.editor.haul_draw || self.editor.haul_move_node.is_some() || self.editor.haul_move_shape.is_some() {
-                let point = self
-                    .graphics
-                    .as_ref()
-                    .and_then(|g| {
-                        g.pick_at_cursor(
-                            crate::app::PICK_THRESHOLD_PX,
-                            &[],
-                            &self.editor.hidden_handles,
-                            &self.editor.frozen_handles,
-                            self.editor.xray_enabled,
-                        )
-                    })
-                    .filter(|(h, _)| matches!(h, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
-                    .map(|(_, p)| p)
-                    .or(self.editor.cursor_world);
-                if let Some(point) = point {
-                    if let Some(node) = self.editor.haul_move_node.take() {
-                        if let Some(project) = self.workspace.active_project() {
-                            let runtime = project.runtime_id;
-                            if let Err(error) = self.edit_haulage(runtime, crate::ui::state::HaulEdit::MoveNode(node, point)) {
-                                userspace_warn!("{error:#}");
-                            }
-                        }
-                        return;
-                    }
-                    if let Some((road, index)) = self.editor.haul_move_shape.take() {
-                        if let Some(project) = self.workspace.active_project() {
-                            let runtime = project.runtime_id;
-                            if let Err(error) = self.edit_haulage(runtime, crate::ui::state::HaulEdit::MoveShape(road, index, point)) {
-                                userspace_warn!("{error:#}");
-                            }
-                        }
-                        return;
-                    }
-                    if self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6) {
-                        self.editor.haul_points.push(point);
-                    }
-                    self.invalidate_overlay();
-                }
+            if self.editor.haul_draw {
+                self.place_haul_point();
                 return;
+            }
+            if self.editor.is_haulage_page() && self.editor.active_tool == ActiveTool::None {
+                self.begin_haul_drag();
             }
             match self.editor.active_tool {
                 ActiveTool::MakePoint => self.place_point_at_cursor(),
@@ -1064,6 +1030,8 @@ impl<'a> App<'a> {
     }
 
     fn finish_left_button_interactions(&mut self) {
+        // Before the box selection: a drag that moved a node is not a click.
+        self.finish_haul_drag();
         self.finish_box_selection();
         self.finish_drag();
         if self.gizmo_drag.is_some() {
@@ -1234,6 +1202,7 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.haul_menu_point = matches!(handle, crate::model::SceneEntityId::HaulRoad(_)).then_some(pick.world);
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1447,9 +1416,8 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
-                if self.editor.haul_move_node.is_some() || self.editor.haul_move_shape.is_some() {
-                    self.editor.haul_move_node = None;
-                    self.editor.haul_move_shape = None;
+                if self.editor.haul_drag.take().is_some() {
+                    self.invalidate_overlay();
                 } else if self.editor.haul_draw {
                     self.finish_haul_road();
                 } else if self.editor.tie_anchor.is_some() {
@@ -1565,7 +1533,14 @@ impl<'a> App<'a> {
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,
             // so without this guard Delete/Backspace raises "delete this object?".
+            KeyCode::Backspace if self.editor.haul_draw => {
+                self.editor.haul_points.pop();
+                self.invalidate_overlay();
+            }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
+                if self.editor.is_haulage_page() && self.delete_selected_haulage() {
+                    return;
+                }
                 if !self.editor.selected_tie_ins.is_empty() {
                     self.delete_selected_tie_ins();
                     return;

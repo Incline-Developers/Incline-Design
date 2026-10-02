@@ -1211,10 +1211,13 @@ fn draw_ui(
                     r.speed_limit_kph.map(|v| format!("{v:.0} km/h")).unwrap_or_else(|| tr!("haul-unlimited"))
                 )
             }),
-            crate::model::SceneEntityId::HaulNode(id) => network.node(id).map(|n| match n.role {
-                Some(crate::model::haulage::NodeRole::Dump(_)) => tr!("haul-dump"),
-                Some(crate::model::haulage::NodeRole::Reclaim(_)) => tr!("haul-reclaim"),
-                None => tr!("haul-node"),
+            crate::model::SceneEntityId::HaulNode(id) => network.node(id).map(|n| {
+                format!(
+                    "{} · {:.1} m RL · {}",
+                    elements::haulage::role_label(&project.haul_destinations, n.role),
+                    n.pos.z,
+                    tr!("haul-drag-hint")
+                )
             }),
             _ => None,
         };

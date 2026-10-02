@@ -1480,23 +1480,30 @@ impl crate::app::App<'_> {
                 Err(_) => unmeasured += 1,
             }
         }
+        // One line for every unconnected block, not one per block: Haulage →
+        // Layout tints them red, which says which far better than a list.
         if let Some(document) = self.workspace.active_document() {
             let network = document.haulage();
             if !network.roads.is_empty() {
                 let index = crate::model::haulage::network::RoadIndex::new(network);
                 let grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
-                for block in &snapshot.blocks {
-                    let point = glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
-                    if let Some((_, _, join)) = index.candidates(point, network.settings.auto_join_m).first() {
-                        let length = point.distance(*join).max((join.z - point.z).abs() / grade);
-                        if length > network.settings.auto_join_m || (join.z - point.z).abs() / grade > point.distance(*join) + 1e-6 {
-                            diagnostics.push(StageDiagnostic {
-                                entity: Some(format!("{} · {:.0} · {}", block.solid_name, block.flitch.base, block.name)),
-                                message: tr!("haul-unconnected", length = format!("{length:.0}"), rise = format!("{:.0}", join.z - point.z)),
-                                blocking: false,
-                            });
-                        }
-                    }
+                let reach = network.settings.auto_join_m;
+                let unconnected: Vec<f64> = snapshot
+                    .blocks
+                    .iter()
+                    .filter_map(|block| index.access_m(glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base), reach, grade))
+                    .filter(|access| *access > reach)
+                    .collect();
+                if !unconnected.is_empty() {
+                    diagnostics.push(StageDiagnostic {
+                        entity: None,
+                        message: tr!(
+                            "haul-unconnected-note",
+                            areas = unconnected.len(),
+                            longest = format!("{:.0}", unconnected.iter().copied().fold(0.0, f64::max))
+                        ),
+                        blocking: false,
+                    });
                 }
             }
         }

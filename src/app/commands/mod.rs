@@ -442,8 +442,8 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
-            UiCommand::FrameHaulPoint(point) => {
-                self.frame_haul_point(point);
+            UiCommand::FrameHaul(min, max) => {
+                self.frame_haul(min, max);
                 Ok(())
             }
             UiCommand::NewHaulDestination { node, kind } => self.new_haul_destination(node, kind),

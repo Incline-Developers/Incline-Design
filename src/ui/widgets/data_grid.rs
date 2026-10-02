@@ -462,24 +462,54 @@ impl PropertyRows<'_> {
         response
     }
 
-    /// Compact three-column input table within the shared property surface.
-    pub(crate) fn three_fields(&mut self, values: [&mut String; 3]) -> [egui::Response; 3] {
-        let (rect, _) = self.begin_row(false);
-        let width = rect.width() / 3.0;
+    /// Three cells of a small table inside the property surface, styled as
+    /// its ordinary fields, with a trailing remove button when `removable`.
+    /// Returns the cells' responses and whether remove was pressed.
+    pub(crate) fn three_fields(&mut self, values: [&mut String; 3], removable: bool) -> ([egui::Response; 3], bool) {
+        let rect = self.begin_table_row(false);
+        let cells = Self::three_cells(self.ui, rect);
         let mut responses = Vec::new();
-        for (i, value) in values.into_iter().enumerate() {
-            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
-            responses.push(self.ui.put(cell.shrink2(egui::vec2(3.0, 0.0)), egui::TextEdit::singleline(value).desired_width(width)));
+        for (cell, value) in cells.into_iter().zip(values) {
+            let cell = cell.shrink2(egui::vec2(4.0, 2.0));
+            responses.push(
+                self.ui.put(
+                    cell,
+                    egui::TextEdit::singleline(value)
+                        .vertical_align(egui::Align::Center)
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
+                        .hint_text(" ")
+                        .desired_width(cell.width()),
+                ),
+            );
         }
-        responses.try_into().expect("three fields")
+        let remove_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(18.0, 18.0));
+        let removed = removable
+            && self
+                .ui
+                .put(remove_rect, egui::Button::new("×").frame(false))
+                .on_hover_text(crate::i18n::tr!("haul-remove-band"))
+                .clicked();
+        (responses.try_into().expect("three fields"), removed)
     }
     pub(crate) fn three_headers(&mut self, labels: [&str; 3]) {
-        let (rect, _) = self.begin_row(true);
-        let width = rect.width() / 3.0;
-        for (i, label) in labels.into_iter().enumerate() {
-            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
-            self.ui.put(cell, egui::Label::new(bold(label)).truncate());
+        let rect = self.begin_table_row(true);
+        for (cell, label) in Self::three_cells(self.ui, rect).into_iter().zip(labels) {
+            self.ui
+                .put(cell.shrink2(egui::vec2(8.0, 0.0)), egui::Label::new(bold(label)).truncate().halign(egui::Align::Min));
         }
+    }
+    /// Three equal columns, leaving room for a remove button, with their
+    /// dividers drawn as the key/value split is.
+    fn three_cells(ui: &egui::Ui, rect: egui::Rect) -> [egui::Rect; 3] {
+        let width = (rect.width() - 24.0) / 3.0;
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        std::array::from_fn(|i| {
+            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
+            if i > 0 {
+                ui.painter().line_segment([cell.left_top(), cell.left_bottom()], stroke);
+            }
+            cell
+        })
     }
     pub(crate) fn action(&mut self, key: &str, label: &str) -> egui::Response {
         let (rect, split) = self.begin_row(false);
@@ -602,6 +632,18 @@ impl PropertyRows<'_> {
         self.ui.painter().line_segment([egui::pos2(split, rect.top()), egui::pos2(split, rect.bottom())], stroke);
         self.ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
         (rect, split)
+    }
+
+    /// A row with no key/value split, for the small tables set inside.
+    fn begin_table_row(&mut self, header: bool) -> egui::Rect {
+        let height = grid_row_height(self.ui);
+        let (rect, _) = self.ui.allocate_exact_size(egui::vec2(self.ui.available_width(), height), egui::Sense::hover());
+        if header {
+            self.ui.painter().rect_filled(rect, 0.0, self.ui.visuals().widgets.noninteractive.bg_fill);
+        }
+        let stroke = self.ui.visuals().widgets.noninteractive.bg_stroke;
+        self.ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+        rect
     }
 
     fn key_rect(&self, rect: egui::Rect, split: f32, has_error: bool) -> egui::Rect {

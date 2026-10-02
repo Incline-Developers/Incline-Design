@@ -186,6 +186,8 @@ pub(crate) struct DestinationSearch<'a> {
     network: &'a HaulNetwork,
     class: &'a TruckClass,
     target: (RoadId, usize, DVec3),
+    /// The destination itself, when it sits off the road it joins.
+    destination: DVec3,
     loaded: Search,
     empty: Search,
 }
@@ -203,6 +205,7 @@ impl<'a> DestinationSearch<'a> {
             network,
             class,
             target,
+            destination,
             loaded: Search::new(network, class, target, false),
             empty: Search::new(network, class, target, true),
         })
@@ -245,6 +248,11 @@ impl<'a> DestinationSearch<'a> {
         }
         best
     }
+    /// Length and rise of the leg from the joined road to the destination.
+    fn destination_access(&self) -> (f64, f64) {
+        let rise = self.destination.z - self.target.2.z;
+        (self.destination.distance(self.target.2).max(rise.abs() / self.class.maximum_grade), rise)
+    }
     /// Both searches are reused for all blocks/materials for this class and
     /// destination. Only the short access candidates are evaluated per block.
     pub(crate) fn route(&self, index: &RoadIndex, source: DVec3, bench_access: bool, loader_rate: f64, spot_s: f64, dump_s: Option<f64>) -> Option<RouteCheck> {
@@ -268,6 +276,24 @@ impl<'a> DestinationSearch<'a> {
             profile.extend(loaded.samples.iter().map(|s| [access_m + s[0], s[1], s[2]]));
             loaded.points.insert(0, source);
             empty.points.push(source);
+            // A destination off its road (a dump's surface centre) is reached
+            // by the same grade-limited straight leg as a block.
+            let (off_m, off_rise) = self.destination_access();
+            if off_m > 1e-9 {
+                let off_grade = off_rise / off_m;
+                let in_speed = self.class.speed(off_grade, true, None);
+                let out_speed = self.class.speed(-off_grade, false, None);
+                loaded.hours += off_m / 1000.0 / in_speed;
+                empty.hours += off_m / 1000.0 / out_speed;
+                loaded.km += off_m / 1000.0;
+                empty.km += off_m / 1000.0;
+                loaded.rise += off_rise.max(0.0);
+                let travelled = profile.last().map_or(0.0, |p| p[0]);
+                profile.push([travelled, self.target.2.z, in_speed]);
+                profile.push([travelled + off_m, self.destination.z, in_speed]);
+                loaded.points.push(self.destination);
+                empty.points.insert(0, self.destination);
+            }
             let cycle = CycleBreakdown {
                 spot_h: spot_s / 3600.0,
                 load_h: if loader_rate > 0.0 { self.class.payload_t / loader_rate } else { 0.0 },
@@ -283,7 +309,9 @@ impl<'a> DestinationSearch<'a> {
                 cycle,
                 loaded_path: loaded.points,
                 empty_path: empty.points,
-                connected: access_m <= self.network.settings.auto_join_m && !lengthened,
+                // Connected means a road within reach; a grade-lengthened leg
+                // still costs its full length but is not a missing road.
+                connected: access_m <= self.network.settings.auto_join_m,
                 access_m,
                 access_rise_m: rise,
                 grade_lengthened: lengthened,

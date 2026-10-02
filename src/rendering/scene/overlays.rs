@@ -145,13 +145,40 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     for pair in editor.haul_points.windows(2) {
         draw_line(&mut overlay, pair[0], pair[1], 3.0, PREVIEW_COLOR);
     }
+    for &point in &editor.haul_points {
+        draw_screen_cross(&mut overlay, point, 7.0, 2.0, PREVIEW_COLOR);
+    }
     if editor.haul_draw
-        && let (Some(&last), Some(cursor)) = (editor.haul_points.last(), editor.cursor_world)
+        && let Some(cursor) = editor.haul_cursor
     {
-        draw_line(&mut overlay, last, cursor, 3.0, PREVIEW_COLOR);
+        if let Some(&last) = editor.haul_points.last() {
+            draw_line(&mut overlay, last, cursor, 3.0, PREVIEW_COLOR);
+        }
+        draw_screen_cross(&mut overlay, cursor, 7.0, 2.0, PREVIEW_COLOR);
+    }
+    // A dragged node or bend point: its roads, redrawn through where it
+    // would land.
+    if let Some(crate::ui::state::HaulDrag { target, pos: Some(pos), .. }) = editor.haul_drag {
+        let network = input.document.haulage();
+        for road in &network.roads {
+            let mut points = network.points(road);
+            let moved = match target {
+                crate::ui::state::HaulDragTarget::Node(id) if road.from == id => points.first_mut(),
+                crate::ui::state::HaulDragTarget::Node(id) if road.to == id => points.last_mut(),
+                crate::ui::state::HaulDragTarget::Shape(id, index) if road.id == id => points.get_mut(index + 1),
+                _ => None,
+            };
+            let Some(point) = moved else { continue };
+            *point = pos;
+            for pair in points.windows(2) {
+                draw_line(&mut overlay, pair[0], pair[1], 3.0, PREVIEW_COLOR);
+            }
+        }
+        draw_screen_cross(&mut overlay, pos, 9.0, 2.0, PREVIEW_COLOR);
     }
     if let Some(route) = &editor.haul_route {
-        for (points, color, loaded) in [(&route.loaded_path, [1.0, 0.2, 0.2, 1.0], true), (&route.empty_path, [1.0, 0.85, 0.1, 1.0], false)] {
+        // The return first, so the loaded haul draws over it where they share road.
+        for (points, color, loaded) in [(&route.empty_path, [1.0, 0.85, 0.1, 1.0], false), (&route.loaded_path, [1.0, 0.2, 0.2, 1.0], true)] {
             for (i, pair) in points.windows(2).enumerate() {
                 if route.grade_lengthened && ((loaded && i == 0) || (!loaded && i + 2 == points.len())) {
                     for step in (0..20).step_by(2) {

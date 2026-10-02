@@ -107,7 +107,7 @@ pub(crate) fn draw_right_click_context(
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
     let title = canvas_context_menu_title(editor, document);
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
-        crate::ui::elements::haulage::canvas_menu(ui, editor, project, document, commands);
+        crate::ui::elements::haulage::canvas_menu(ui, editor, project, commands);
         crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
         let selected_drill_hole = editor.selected_handles.iter().find_map(|&h| match h {
             crate::model::SceneEntityId::DrillHole(id) => Some(id),

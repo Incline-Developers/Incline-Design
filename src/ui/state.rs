@@ -1891,13 +1891,18 @@ pub(crate) struct EditorState {
     pub(crate) haul_delete_node: Option<crate::model::haulage::NodeId>,
     pub(crate) import_as_haul_roads: bool,
     pub(crate) haul_points: Vec<DVec3>,
-    pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>)>,
+    pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>, u64)>,
     pub(crate) haul_view_revision: u64,
     pub(crate) haul_issues: Vec<crate::model::haulage::network::NetworkIssue>,
     pub(crate) haul_blocks: Vec<(BlastOutline, bool)>,
     pub(crate) haul_source_point: Option<DVec3>,
-    pub(crate) haul_move_node: Option<crate::model::haulage::NodeId>,
-    pub(crate) haul_move_shape: Option<(crate::model::haulage::RoadId, usize)>,
+    /// Where the next road point would land: on a road or node to join it,
+    /// on the surface under the cursor, or level with the previous point.
+    pub(crate) haul_cursor: Option<DVec3>,
+    pub(crate) haul_drag: Option<HaulDrag>,
+    /// The road point right-clicked to open the canvas menu, where Split
+    /// cuts. The live cursor has moved onto the menu by then.
+    pub(crate) haul_menu_point: Option<DVec3>,
     pub(crate) haul_pins: Vec<((f32, f32), crate::model::schedule::DestinationId, bool)>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -2922,6 +2927,16 @@ impl EditorState {
     /// Whether a snap mode is up. The section snaps as the plan does: its
     /// targets are the ones inside the slab, and off them the cursor falls
     /// back to the section plane like any unsnapped pick.
+    pub(crate) fn is_haulage_page(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage
+    }
+
+    /// Placing a road point or dragging one: the cursor snaps as a drawing
+    /// tool's does.
+    pub(crate) fn haul_placing(&self) -> bool {
+        self.haul_draw || self.haul_drag.is_some_and(|drag| drag.pos.is_some())
+    }
+
     pub(crate) fn snapping_active(&self) -> bool {
         self.cursor_mode.snaps()
     }
@@ -3129,8 +3144,9 @@ impl EditorState {
         self.haul_block_cache_key = None;
         self.haul_issues.clear();
         self.haul_blocks.clear();
-        self.haul_move_node = None;
-        self.haul_move_shape = None;
+        self.haul_cursor = None;
+        self.haul_drag = None;
+        self.haul_menu_point = None;
         self.haul_delete_node = None;
         self.haul_source_point = None;
         self.haul_pins.clear();
@@ -3443,8 +3459,9 @@ impl EditorState {
             haul_issues: Vec::new(),
             haul_blocks: Vec::new(),
             haul_source_point: None,
-            haul_move_node: None,
-            haul_move_shape: None,
+            haul_cursor: None,
+            haul_drag: None,
+            haul_menu_point: None,
             haul_pins: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
@@ -4251,8 +4268,26 @@ impl ViewToggle {
 /// Each variant represents an action the user triggered through the UI
 /// (button clicks, menu selections, dialog confirmations).  The app layer
 /// matches on these in its event loop.
+/// What a press on a road node or shape point grabbed. It becomes a move
+/// only once the pointer travels; a still press stays an ordinary selection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HaulDragTarget {
+    Node(crate::model::haulage::NodeId),
+    Shape(crate::model::haulage::RoadId, usize),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HaulDrag {
+    pub(crate) target: HaulDragTarget,
+    pub(crate) origin: DVec3,
+    pub(crate) start_px: (f32, f32),
+    /// `None` until the pointer has moved far enough to count as a drag.
+    pub(crate) pos: Option<DVec3>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HaulEdit {
+    /// Several edits as one undo step.
+    Many(Vec<HaulEdit>),
     Draw(Vec<DVec3>),
     ConvertSelection,
     MoveNode(crate::model::haulage::NodeId, DVec3),
@@ -4280,7 +4315,8 @@ pub(crate) enum UiCommand {
     EditHaulProperties,
     FinishHaulRoad,
     ConvertHaulSelection,
-    FrameHaulPoint(DVec3),
+    /// Frame a haul feature: the box from `min` to `max`, padded.
+    FrameHaul(DVec3, DVec3),
     NewHaulDestination {
         node: crate::model::haulage::NodeId,
         kind: crate::model::schedule::DestinationKind,
@@ -4971,7 +5007,7 @@ impl UiCommand {
             | Self::EditHaulProperties
             | Self::FinishHaulRoad
             | Self::ConvertHaulSelection
-            | Self::FrameHaulPoint(_)
+            | Self::FrameHaul(..)
             | Self::NewHaulDestination { .. }
             | Self::ExportHaulRoads
             | Self::ResetSolidPreviewView

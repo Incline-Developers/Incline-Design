@@ -1374,7 +1374,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         grade_targets,
         target_opening: Vec::new(),
     };
-    notes.extend(haul.notes);
     let stats = CaptureStats {
         duration: started.elapsed(),
         candidates: input.movements.len(),
@@ -1398,8 +1397,8 @@ struct HaulCapture<'a> {
     points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>,
     index: crate::model::haulage::network::RoadIndex,
     plan: &'a SchedulePlan,
+    /// Unconnected blocks are reported once by the Readiness step, not here.
     searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
-    notes: Vec<String>,
 }
 impl<'a> HaulCapture<'a> {
     fn new(network: &'a crate::model::haulage::HaulNetwork, points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>, plan: &'a SchedulePlan) -> Self {
@@ -1409,16 +1408,10 @@ impl<'a> HaulCapture<'a> {
             index: crate::model::haulage::network::RoadIndex::new(network),
             plan,
             searches: BTreeMap::new(),
-            notes: Vec::new(),
         }
     }
     fn point(&self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
-        if self.network.fixed_destinations.contains(&id) {
-            return None;
-        }
-        self.network
-            .role_point(id, reclaim)
-            .or_else(|| self.points.get(&id).and_then(|p| self.index.candidates(*p, 0.0).first().map(|c| c.2)))
+        self.network.destination_point(id, reclaim, self.points.get(&id).copied())
     }
     fn cycle(&mut self, args: &ExpandArgs<'_>, class: &'a trucking::TruckClass, distance: f64) -> trucking::CycleBreakdown {
         let loader = self.plan.agent(args.agent).and_then(|a| self.plan.class(a.class_id));
@@ -1442,19 +1435,6 @@ impl<'a> HaulCapture<'a> {
                 .entry((args.destination, class.id))
                 .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
             if let Some(route) = search.as_ref().and_then(|s| s.route(&self.index, source, args.activity == Activity::Dig, rate, spot, dump)) {
-                if args.activity == Activity::Dig && !route.connected {
-                    let area = match args.route {
-                        RouteSource::Ground { bench, .. } => format!("{} · {:.0}–{:.0}", args.subject, bench.0, bench.1),
-                        _ => args.subject.clone(),
-                    };
-                    let note = format!(
-                        "{area}: {}",
-                        crate::i18n::tr!("haul-unconnected", length = format!("{:.0}", route.access_m), rise = format!("{:.0}", route.access_rise_m))
-                    );
-                    if !self.notes.contains(&note) {
-                        self.notes.push(note);
-                    }
-                }
                 return route.cycle;
             }
         }

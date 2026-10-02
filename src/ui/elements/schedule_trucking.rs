@@ -159,31 +159,59 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             ));
         }
         let mut commit = false;
-        for (label, value) in [
-            (tr!("haul-maximum-speed"), &mut draft.maximum_speed),
-            (tr!("haul-maximum-grade"), &mut draft.maximum_grade),
-            (tr!("haul-dump-time"), &mut draft.dump_time),
+        let positive = |text: &str| text.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        let speed_error = positive(&draft.maximum_speed).is_none().then(|| tr!("truck-error-invalid-speed"));
+        let grade_error = positive(&draft.maximum_grade).filter(|v| *v <= 100.0).is_none().then(|| tr!("haul-error-grade"));
+        let dump_error = draft
+            .dump_time
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .is_none()
+            .then(|| tr!("haul-error-seconds"));
+        for (label, value, error) in [
+            (tr!("haul-maximum-speed"), &mut draft.maximum_speed, speed_error),
+            (tr!("haul-maximum-grade"), &mut draft.maximum_grade, grade_error),
+            (tr!("haul-dump-time"), &mut draft.dump_time, dump_error),
         ] {
-            commit |= rows.field(&label, value, None).lost_focus();
+            commit |= rows.field(&label, value, error.as_deref()).lost_focus();
         }
         rows.three_headers([&tr!("haul-grade-from"), &tr!("haul-loaded-speed"), &tr!("haul-empty-speed")]);
-        for (grade, loaded, empty) in &mut draft.grade_rows {
-            commit |= rows.three_fields([grade, loaded, empty]).iter().any(|r| r.lost_focus());
-        }
+        let removable = draft.grade_rows.len() > 1;
         let mut remove = None;
-        let options: Vec<_> = draft.grade_rows.iter().enumerate().map(|(i, r)| (Some(i), format!("{}%", r.0))).collect();
-        if draft.grade_rows.len() > 1
-            && rows
-                .combo("remove_grade_band", &tr!("haul-remove-band"), &mut remove, &tr!("haul-remove-band"), options)
-                .changed()
-            && let Some(i) = remove
-        {
-            draft.grade_rows.remove(i);
+        for (index, (grade, loaded, empty)) in draft.grade_rows.iter_mut().enumerate() {
+            let (responses, removed) = rows.three_fields([grade, loaded, empty], removable);
+            commit |= responses.iter().any(|r| r.lost_focus());
+            if removed {
+                remove = Some(index);
+            }
+        }
+        if let Some(index) = remove {
+            draft.grade_rows.remove(index);
             commit = true;
         }
+        let mut grades: Vec<_> = draft.grade_rows.iter().filter_map(|r| r.0.trim().parse::<f64>().ok()).collect();
+        grades.sort_by(f64::total_cmp);
+        let bands_valid = grades.len() == draft.grade_rows.len()
+            && grades.windows(2).all(|g| g[0] < g[1])
+            && draft.grade_rows.iter().all(|r| positive(&r.1).is_some() && positive(&r.2).is_some());
+        if !bands_valid {
+            rows.readonly("", &tr!("haul-error-bands"), None, Some(&tr!("haul-error-bands")));
+        }
         if rows.action("", &tr!("haul-add-band")).clicked() {
-            let grade = draft.grade_rows.last().and_then(|r| r.0.parse::<f64>().ok()).unwrap_or(6.0) + 2.0;
-            draft.grade_rows.push((number(grade), "10".to_owned(), "20".to_owned()));
+            let grade = grades.last().copied().unwrap_or(6.0) + 2.0;
+            let (loaded, empty) = draft.grade_rows.last().map_or(("10".to_owned(), "20".to_owned()), |r| (r.1.clone(), r.2.clone()));
+            draft.grade_rows.push((number(grade), loaded, empty));
+            commit = true;
+        }
+        // A class migrated from the old two-speed model holds one speed at
+        // every grade; this is the quick way onto grade-dependent speeds.
+        if rows.action("", &tr!("haul-generic-speeds")).on_hover_text(tr!("haul-speeds-help")).clicked() {
+            draft.grade_rows = trucking::generic_grade_speeds()
+                .iter()
+                .map(|r| (number(r.from_grade * 100.0), number(r.loaded_kph), number(r.empty_kph)))
+                .collect();
             commit = true;
         }
         rows.readonly("", &tr!("haul-speeds-help"), None, None).on_hover_text(tr!("haul-speeds-help"));

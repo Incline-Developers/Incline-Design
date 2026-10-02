@@ -1,13 +1,14 @@
 use glam::DVec3;
 
 use crate::{
+    app::PICK_THRESHOLD_PX,
     i18n::tr,
     model::{
         Command, Object, SceneEntityId,
         haulage::{NodeId, NodeRole},
         schedule::{DestinationId, DestinationKind},
     },
-    ui::state::HaulEdit,
+    ui::state::{HaulDrag, HaulDragTarget, HaulEdit},
 };
 
 impl crate::app::App<'_> {
@@ -84,10 +85,9 @@ impl crate::app::App<'_> {
         let max_grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
         for block in snapshot.blocks {
             let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
-            let connected = index.candidates(point, network.settings.auto_join_m).iter().any(|(_, _, p)| {
-                let direct = point.distance(*p);
-                direct <= network.settings.auto_join_m && (p.z - point.z).abs() / max_grade <= direct + 1e-6
-            });
+            let connected = index
+                .access_m(point, network.settings.auto_join_m, max_grade)
+                .is_some_and(|a| a <= network.settings.auto_join_m);
             self.editor.haul_blocks.push((
                 crate::ui::state::BlastOutline {
                     solid: block.solid,
@@ -113,9 +113,29 @@ impl crate::app::App<'_> {
         anyhow::ensure!(active.runtime_id == project, "{}", tr!("schedule-stale-edit"));
         let before = active.project.document.haulage().clone();
         let mut after = before.clone();
+        self.apply_haul_edit(&mut after, edit)?;
+        after.validate()?;
+        if before != after {
+            self.execute_edit(Command::SetHaulNetwork {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+            self.editor.haul_route = None;
+            self.refresh_haulage_view();
+        }
+        Ok(())
+    }
+    fn apply_haul_edit(&self, after: &mut crate::model::haulage::HaulNetwork, edit: HaulEdit) -> anyhow::Result<()> {
+        let Some(active) = self.workspace.active_project() else { return Ok(()) };
         match edit {
+            HaulEdit::Many(edits) => {
+                for edit in edits {
+                    self.apply_haul_edit(after, edit)?;
+                }
+            }
             HaulEdit::Draw(points) => {
-                after.convert(&[(tr!("haul-road"), points)])?;
+                let name = crate::model::schedule::suggested_name(&tr!("haul-road"), after.roads.iter().map(|r| r.name.clone()));
+                after.convert(&[(name, points)])?;
             }
             HaulEdit::ConvertSelection => {
                 let strings: Vec<_> = active
@@ -130,9 +150,18 @@ impl crate::app::App<'_> {
                             if *closed && let Some(&first) = points.first() {
                                 points.push(first);
                             }
-                            Some((tr!("haul-road"), points))
+                            Some(points)
                         }
                         _ => None,
+                    })
+                    .collect();
+                let mut names: Vec<String> = after.roads.iter().map(|r| r.name.clone()).collect();
+                let strings: Vec<_> = strings
+                    .into_iter()
+                    .map(|points| {
+                        let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
+                        names.push(name.clone());
+                        (name, points)
                     })
                     .collect();
                 after.convert(&strings)?;
@@ -185,15 +214,6 @@ impl crate::app::App<'_> {
                 after.fixed_destinations.retain(|id| *id != destination);
             }
         }
-        after.validate()?;
-        if before != after {
-            self.execute_edit(Command::SetHaulNetwork {
-                before: Box::new(before),
-                after: Box::new(after),
-            });
-            self.editor.haul_route = None;
-            self.refresh_haulage_view();
-        }
         Ok(())
     }
     pub(crate) fn start_haul_road(&mut self) {
@@ -202,13 +222,19 @@ impl crate::app::App<'_> {
         self.refresh_haulage_view();
         self.editor.haul_draw = true;
         self.editor.haul_points.clear();
+        self.editor.haul_cursor = None;
         self.editor.active_tool = crate::ui::state::ActiveTool::None;
         self.editor.canvas_context_menu_open = false;
         self.invalidate_overlay();
     }
     pub(crate) fn finish_haul_road(&mut self) {
         self.editor.haul_draw = false;
+        self.editor.haul_cursor = None;
         let points = std::mem::take(&mut self.editor.haul_points);
+        if points.len() < 2 {
+            self.invalidate_overlay();
+            return;
+        }
         if let Some(project) = self.workspace.active_project() {
             let runtime = project.runtime_id;
             if let Err(error) = self.edit_haulage(runtime, HaulEdit::Draw(points)) {
@@ -217,11 +243,139 @@ impl crate::app::App<'_> {
         }
         self.invalidate_overlay();
     }
-    pub(crate) fn frame_haul_point(&mut self, point: DVec3) {
+    /// Where a road point under the cursor lands. A road or node within pick
+    /// reach wins when `join` is set, so drawn roads connect; then a snap the
+    /// user turned on; then the surface under the cursor, so roads drape on
+    /// the pit; and otherwise the level of `fallback_z`.
+    fn haul_cursor_point(&self, fallback_z: f64, join: bool) -> Option<DVec3> {
+        let graphics = self.graphics.as_ref()?;
+        if join
+            && let Some((_, point)) = graphics
+                .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
+                .filter(|(h, _)| matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
+        {
+            return Some(point);
+        }
+        if self.editor.cursor_snapped {
+            return self.editor.cursor_world;
+        }
+        graphics
+            .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles)
+            .map(|(_, point)| point)
+            .or_else(|| graphics.cursor_world(fallback_z))
+    }
+    pub(crate) fn place_haul_point(&mut self) {
+        let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
+        if let Some(point) = self.haul_cursor_point(z, true)
+            && self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6)
+        {
+            self.editor.haul_points.push(point);
+        }
+        self.invalidate_overlay();
+    }
+    /// A press on a node or shape point may become a drag. Selection still
+    /// runs, so a press that never moves selects as before.
+    pub(crate) fn begin_haul_drag(&mut self) {
+        self.editor.haul_drag = None;
+        let Some(graphics) = self.graphics.as_ref() else { return };
+        let Some(cursor) = self.editor.cursor_screen_px else { return };
+        let Some(document) = self.workspace.active_document() else { return };
+        let network = document.haulage();
+        let hit = graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled);
+        let target = match hit {
+            Some((SceneEntityId::HaulNode(id), _)) => network.node(id).map(|n| (HaulDragTarget::Node(id), n.pos)),
+            Some((SceneEntityId::HaulRoad(id), _)) => {
+                let view_proj = graphics.view_proj();
+                let reach = self.points_to_px(8.0);
+                network.road(id).and_then(|road| {
+                    road.verts
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| graphics.world_to_window_px(&view_proj, *p).map(|s| (i, *p, (s.0 - cursor.0).hypot(s.1 - cursor.1))))
+                        .filter(|(_, _, d)| *d <= reach)
+                        .min_by(|a, b| a.2.total_cmp(&b.2))
+                        .map(|(i, p, _)| (HaulDragTarget::Shape(id, i), p))
+                })
+            }
+            _ => None,
+        };
+        if let Some((target, origin)) = target {
+            self.editor.haul_drag = Some(HaulDrag {
+                target,
+                origin,
+                start_px: cursor,
+                pos: None,
+            });
+        }
+    }
+    pub(crate) fn track_haul_cursor(&mut self) {
+        if let Some(drag) = self.editor.haul_drag {
+            if drag.pos.is_none() {
+                let Some(now) = self.editor.cursor_screen_px else { return };
+                if (now.0 - drag.start_px.0).hypot(now.1 - drag.start_px.1) < self.points_to_px(4.0) {
+                    return;
+                }
+                // Moving: the press was a drag, not a click or a box.
+                self.editor.selection_box_start_px = None;
+                self.editor.selection_box_current_px = None;
+                self.pending_selection_click = None;
+            }
+            let pos = self.haul_cursor_point(drag.origin.z, false).or(drag.pos).or(Some(drag.origin));
+            if let Some(drag) = self.editor.haul_drag.as_mut() {
+                drag.pos = pos;
+            }
+            self.invalidate_overlay();
+        } else if self.editor.haul_draw {
+            let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
+            self.editor.haul_cursor = self.haul_cursor_point(z, true);
+            self.invalidate_overlay();
+        }
+    }
+    pub(crate) fn finish_haul_drag(&mut self) {
+        let Some(HaulDrag { target, pos: Some(pos), .. }) = self.editor.haul_drag.take() else {
+            return;
+        };
+        let Some(project) = self.workspace.active_project() else { return };
+        let runtime = project.runtime_id;
+        let edit = match target {
+            HaulDragTarget::Node(id) => HaulEdit::MoveNode(id, pos),
+            HaulDragTarget::Shape(id, index) => HaulEdit::MoveShape(id, index, pos),
+        };
+        if let Err(error) = self.edit_haulage(runtime, edit) {
+            crate::userspace_warn!("{error:#}");
+        }
+        self.invalidate_overlay();
+    }
+    /// Delete key on the Haulage page. Roads go at once; a destination's node
+    /// asks first, because it carries a role. Returns whether it acted.
+    pub(crate) fn delete_selected_haulage(&mut self) -> bool {
+        let Some(project) = self.workspace.active_project() else { return false };
+        let runtime = project.runtime_id;
+        let network = project.project.document.haulage();
+        let mut edits = Vec::new();
+        for handle in &self.editor.selected_handles {
+            match *handle {
+                SceneEntityId::HaulRoad(id) => edits.push(HaulEdit::DeleteRoad(id)),
+                SceneEntityId::HaulNode(id) if network.node(id).is_some_and(|n| n.role.is_some()) => self.editor.haul_delete_node = Some(id),
+                SceneEntityId::HaulNode(id) => edits.push(HaulEdit::DeleteNode(id)),
+                _ => {}
+            }
+        }
+        if edits.is_empty() {
+            return self.editor.haul_delete_node.is_some();
+        }
+        if let Err(error) = self.edit_haulage(runtime, HaulEdit::Many(edits)) {
+            crate::userspace_warn!("{error:#}");
+        }
+        true
+    }
+    pub(crate) fn frame_haul(&mut self, min: DVec3, max: DVec3) {
+        // Padded so a lone node or short road shows its surroundings.
+        let pad = DVec3::splat(30.0).max((max - min) * 0.15);
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.frame_bounds(
-                point - DVec3::splat(30.0),
-                point + DVec3::splat(30.0),
+                min - pad,
+                max + pad,
                 &self.scene_document,
                 &self.triangulations,
                 &self.block_models,

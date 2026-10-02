@@ -595,7 +595,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     (tr!("haul-convert"), UiCommand::ConvertHaulSelection),
                     (tr!("haul-import"), UiCommand::OpenHaulImport),
                     (tr!("haul-export"), UiCommand::ExportHaulRoads),
-                    (tr!("haul-speed-limit"), UiCommand::EditHaulProperties),
+                    (tr!("haul-open-layout"), UiCommand::EditHaulProperties),
                 ] {
                     if ContextMenuAction::new(label).show(ui).clicked() {
                         commands.push(command);

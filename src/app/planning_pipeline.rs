@@ -420,7 +420,11 @@ impl crate::app::App<'_> {
         self.advance_planning_run();
         if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
-            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed);
+            // The document revision covers road, truck-class and destination
+            // edits, undo included, so the connection tint and issue list
+            // never lag the network they describe.
+            let revision = self.workspace.active_document().map_or(0, |d| d.revision());
+            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed, revision);
             if self.editor.haul_block_cache_key != Some(key) {
                 self.editor.haul_block_cache_key = Some(key);
                 self.refresh_haulage_view();
