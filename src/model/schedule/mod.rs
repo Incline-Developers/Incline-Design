@@ -1667,6 +1667,10 @@ impl SchedulePlan {
         self.drill_blast.set_settings(settings).map_err(ScheduleError::DrillBlast)
     }
 
+    pub(crate) fn set_blast_windows(&mut self, windows: Vec<drill_blast::BlastWindow>) -> ScheduleResult {
+        self.drill_blast.set_windows(windows).map_err(ScheduleError::DrillBlast)
+    }
+
     pub(crate) fn set_blast_status(&mut self, blasts: &[BlastRef], stage: BlastStage) -> ScheduleResult {
         self.drill_blast.set_status(blasts, stage).map_err(ScheduleError::DrillBlast)
     }

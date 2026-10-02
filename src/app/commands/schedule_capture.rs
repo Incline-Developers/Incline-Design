@@ -542,6 +542,7 @@ fn capture_drill_blast(
         agents,
         tasks,
         window_end_h: config.window_end_h,
+        windows: config.windows.clone(),
         fixed: None,
     })
 }
@@ -1229,14 +1230,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 rate_changes.extend([start, end]);
             }
         }
-        let mut day = 0.0;
-        while day < horizon_h {
-            rate_changes.extend(
-                [day + plan.drill_blast().window_start_h, day + plan.drill_blast().window_end_h]
-                    .into_iter()
-                    .filter(|at| *at < horizon_h),
-            );
-            day += 24.0;
+        for (_, start, end) in plan.drill_blast().window_spans(0.0, horizon_h) {
+            rate_changes.extend([start, end].into_iter().filter(|at| *at < horizon_h));
         }
     }
     windows.retain(|(start, end)| end > start);

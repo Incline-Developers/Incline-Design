@@ -22,7 +22,7 @@ For each blast of the Solids run (Planning → Blasts):
    the bench height plus subdrill deep, in metres drilled.
 4. **Charge.** An MPU loads the product: per hole, the hole's cross-section
    × (depth − stemming) × product density, in tonnes.
-5. **Fire.** A charged blast fires in the first daily blast window that ends
+5. **Fire.** A charged blast fires in the first available blast window that ends
    after charging finished, and its ground can be dug from that window's end.
    With a 12:00-15:00 window, a blast charged by 14:59 is dug from 15:00 that
    day; one charged later waits for the next day's.
@@ -41,19 +41,37 @@ utilisation, rate overrides, delay lists, rosters and delay bars apply to
 them exactly as to loaders.
 
 Each is a row on the Gantt. Drag the **Blasts** chip onto a dozer, drill or
-MPU row (or right-click the row → Add blast bar) and pick the blasts it works,
-in order; Edit blasts… on the bar changes them. A machine works the first
+MPU row (or right-click the row → Add blast bar). In the interactive sequence
+window, choose a bench and click its blasts in the 3D preview to add them to
+the order. Selected blasts are highlighted; the list on the right allows
+reordering and removal. Apply saves the sequence, and Cancel discards it.
+Edit blasts… on the bar reopens the same window. A machine works the first
 blast in its highest-priority open bar that still needs it, and waits there
 if that blast is not ready. Machines with the same blast in their bars work
 it together, their rates adding. A dig or reclaim bar cannot be put on a
 drill and blast machine, nor a blast bar on a loader.
+
+## Blasting windows
+
+The **Blasting** row on the Gantt shows windows and firing diamonds with each
+blast's name. Double-click empty space, or right-click → Add blasting window,
+to create a window. Windows can repeat daily or occur once. Daily window
+hours are hours of the day; one-off hours are elapsed from Day 1 00:00
+(for example, Day 3 12:00 is hour 60). Double-click a window to edit it;
+its context menu also offers Delete. Editing or deleting a daily window
+changes all its occurrences.
+
+Existing projects retain their daily window until windows are edited on the
+Gantt. Removing every window leaves charged blasts waiting indefinitely.
+A blast already marked Fired at the start remains available immediately.
 
 ## Setup → Drill & Blast
 
 - **Sequence drill & blast:** off by default, so a project's schedule is
   unchanged until it is switched on. When on, every blast starts Not started.
 - The default pattern (burden, spacing, subdrill, staggered rows), hole
-  diameter, stemming, product density, clearance buffer and blast window.
+  diameter, stemming, product density and clearance buffer. The legacy daily
+  window is editable here until windows are managed on the Gantt.
 - The run's blasts by bench. Right-click a blast, or a whole bench, to set the
   stage it starts the schedule at (Not started, Prepped, Drilled, Charged,
   Fired). Select one to give it its own pattern.
@@ -61,8 +79,9 @@ drill and blast machine, nor a blast bar on a loader.
 ## What you see
 
 - **Gantt:** each blast bar's band shows its machine's work, coloured prep,
-  drill or charge, with a diamond where each blast fired; hovering says what
-  and how far. A loader waiting on a blast has the amber idle strip, and its
+  drill or charge; hovering says what and how far. The remainder of a machine
+  bar greys out when all its blasts finish that machine's step. Firing diamonds
+  and blast names appear on the separate Blasting row. A loader waiting on a blast has the amber idle strip, and its
   hover names the blast.
 - **Inspector:** at the slider's hour, what each dozer, drill and MPU is on and
   how far, and the blasts under way with when each can be dug.
@@ -112,3 +131,12 @@ frame).
 
 Screenshots: [Setup](drill-blast/setup.png), [Gantt](drill-blast/gantt.png),
 [Animate](drill-blast/animate.png).
+
+The subsequent Gantt window and sequence-editor changes passed temporary
+behaviour tests for mixed daily/one-off windows, exact window-end boundaries,
+no remaining windows, legacy persistence, machine-specific completion shading,
+simultaneous firing label layout and stale preview clicks. Those tests were
+removed under the repository policy. Native Clippy, the WebAssembly compile
+check and the desktop build passed; desktop startup and GPU initialization
+were smoke-checked. Full interaction with the new controls remains unverified
+in desktop and browser GUIs; the earlier screenshots show the previous layout.

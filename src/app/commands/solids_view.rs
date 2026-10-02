@@ -841,7 +841,7 @@ fn next_view_id() -> TriangulationId {
 /// [`crate::app::App::sync_solids_view`] is the pipeline's own demand, and
 /// only a running stage sets that.
 pub(crate) fn displaying_solid_artifacts(editor: &crate::ui::state::EditorState) -> bool {
-    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active() || editor.is_schedule_animation()
+    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active() || editor.blast_sequence_active() || editor.is_schedule_animation()
 }
 
 fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::planning_pipeline::GeometryDemand {
@@ -883,7 +883,11 @@ pub(crate) enum PickRouting {
     /// run the *click* was made against - confirmed still current, and
     /// carried through rather than re-read, so the pick is answered as the
     /// click it was.
-    SequenceEditor { block: Option<crate::model::DigBlockId>, generation: u64 },
+    SequenceEditor {
+        block: Option<crate::model::DigBlockId>,
+        generation: u64,
+    },
+    BlastSequence,
 }
 
 /// Decide one completed pick result against the state it must still match.
@@ -909,6 +913,20 @@ pub(crate) fn route_pick_result(
                 PickRouting::SelectSolidsView
             } else {
                 PickRouting::Drop
+            }
+        }
+        SolidPreviewPickOwner::BlastSequence { edition } => {
+            let Some(draft) = editor
+                .blast_bar_dialog
+                .as_ref()
+                .filter(|draft| editor.blast_sequence_active() && draft.session == session && result.request.session == session && draft.edition == edition)
+            else {
+                return PickRouting::Drop;
+            };
+            if draft.generation.is_some() && draft.generation == generation_now && result.request.generation == generation_now {
+                PickRouting::BlastSequence
+            } else {
+                PickRouting::Superseded
             }
         }
         SolidPreviewPickOwner::SequenceEditor { .. } => {
@@ -940,6 +958,14 @@ impl crate::app::App<'_> {
             return;
         };
         let runtime = project.runtime_id;
+        if self.editor.blast_sequence_active() {
+            self.editor.blast_sequence_generation = self.planning_snapshot().ok().map(|snapshot| snapshot.generation);
+            if let Some(draft) = self.editor.blast_bar_dialog.as_mut()
+                && draft.generation.is_none()
+            {
+                draft.generation = self.editor.blast_sequence_generation;
+            }
+        }
         let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
         self.solid_view_cache
             .retain(|id, cache| cache.runtime == runtime && solids.iter().any(|solid| solid.id == *id));
@@ -1369,9 +1395,12 @@ impl crate::app::App<'_> {
         let block = hit.map(|(id, _)| id);
         // Only a sequence-editor click is answered against a run: the Solids
         // View page picks displayed geometry and has no scheduling gate.
-        let generation_now = matches!(result.request.owner, crate::ui::state::SolidPreviewPickOwner::SequenceEditor { .. })
-            .then(|| self.planning_snapshot().ok().map(|snapshot| snapshot.generation))
-            .flatten();
+        let generation_now = matches!(
+            result.request.owner,
+            crate::ui::state::SolidPreviewPickOwner::SequenceEditor { .. } | crate::ui::state::SolidPreviewPickOwner::BlastSequence { .. }
+        )
+        .then(|| self.planning_snapshot().ok().map(|snapshot| snapshot.generation))
+        .flatten();
         match route_pick_result(&self.editor, session, generation_now, &result, block) {
             PickRouting::Drop => {}
             PickRouting::Superseded => {
@@ -1382,6 +1411,21 @@ impl crate::app::App<'_> {
             }
             PickRouting::SequenceEditor { block, generation } => {
                 self.pick_into_sequence_draft(block, generation);
+            }
+            PickRouting::BlastSequence => {
+                if let Some((_, key)) = hit {
+                    let reference = crate::model::schedule::BlastRef {
+                        solid: key.solid,
+                        bench: key.bench_base(),
+                        anchor: key.anchor(),
+                    };
+                    if let Some(blast) = self.editor.schedule_blasts.iter().find(|blast| blast.holds(&reference)).map(|blast| blast.reference)
+                        && let Some(draft) = self.editor.blast_bar_dialog.as_mut()
+                        && !draft.members.iter().any(|member| member.same(&blast))
+                    {
+                        draft.members.push(blast);
+                    }
+                }
             }
         }
     }
@@ -1414,8 +1458,11 @@ impl crate::app::App<'_> {
         // hide ground a dig order is entitled to be built from, and that
         // selection is not even on screen to be seen or changed.
         let sequencing = self.editor.sequence_editor_active();
-        let selected_block = (!sequencing).then_some(self.editor.selected_dig_block).flatten();
-        let selected_blast = self.editor.selected_blast;
+        let blast_sequencing = self.editor.blast_sequence_active();
+        let blast_draft = self.editor.blast_bar_dialog.as_ref().filter(|_| blast_sequencing).cloned();
+        let editing = sequencing || blast_sequencing;
+        let selected_block = (!editing).then_some(self.editor.selected_dig_block).flatten();
+        let selected_blast = (!editing).then_some(self.editor.selected_blast).flatten();
         let view_selection: Vec<SolidsViewRow> = self.editor.solids_view_selection.clone();
         // Which draft position each block sits at, and how far the order
         // preview has been walked. Taken from the mirror rather than resolved
@@ -1441,6 +1488,13 @@ impl crate::app::App<'_> {
         blasting.hash(&mut hasher);
         demand.hash(&mut hasher);
         sequencing.hash(&mut hasher);
+        blast_sequencing.hash(&mut hasher);
+        if let Some(draft) = &blast_draft {
+            draft.bench.hash(&mut hasher);
+            for member in &draft.members {
+                member.hash_content(&mut hasher);
+            }
+        }
         dug_through.hash(&mut hasher);
         // Sorted before hashing: a hash map's iteration order is not stable,
         // and an unstable key would rebuild the display list every frame.
@@ -1505,7 +1559,11 @@ impl crate::app::App<'_> {
         let mut errors = Vec::new();
         let has_fields = self.workspace.active_document().is_some_and(|doc| !doc.reserve_fields().is_empty());
         for solid in solids {
-            let wanted = selected_solid(&view_selection, solid.id);
+            let wanted = if blast_sequencing {
+                blast_draft.as_ref().and_then(|draft| draft.bench).is_none_or(|(id, _)| id == solid.id)
+            } else {
+                selected_solid(&view_selection, solid.id)
+            };
             let Some(cache) = self.solid_view_cache.get(&solid.id) else {
                 // Nothing has been built for this solid. Opening a page is not
                 // a calculation, so this says so rather than starting one.
@@ -1561,7 +1619,15 @@ impl crate::app::App<'_> {
                 .then(|| cache.reserves.product().map(|product| &product.totals))
                 .flatten();
             for (index, part) in parts.iter().enumerate() {
-                if !selected(&view_selection, solid.id, Some(part.band.selection)) {
+                if blast_sequencing {
+                    if blast_draft
+                        .as_ref()
+                        .and_then(|draft| draft.bench)
+                        .is_some_and(|(_, base)| part.bench.base.to_bits() != base)
+                    {
+                        continue;
+                    }
+                } else if !selected(&view_selection, solid.id, Some(part.band.selection)) {
                     continue;
                 }
                 // Selecting a blast narrows what is shown, not what is built.
@@ -1622,6 +1688,26 @@ impl crate::app::App<'_> {
                     mesh.flitch_style = None;
                     mesh.line_color = crate::ui::SELECTION_COLOR_F32;
                     mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                }
+                if let Some(draft) = &blast_draft
+                    && let Some(blast) = part.blast
+                {
+                    let reference = crate::model::schedule::BlastRef {
+                        solid: solid.id,
+                        bench: blast.bench_base(),
+                        anchor: blast.anchor(),
+                    };
+                    if self
+                        .editor
+                        .schedule_blasts
+                        .iter()
+                        .find(|entry| entry.holds(&reference))
+                        .is_some_and(|entry| draft.members.iter().any(|member| entry.holds(member)))
+                    {
+                        mesh.flitch_style = None;
+                        mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                        mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                    }
                 }
                 if counted {
                     // Reserves are measured over the flitch-level partition,

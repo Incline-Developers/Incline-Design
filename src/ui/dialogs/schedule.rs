@@ -430,10 +430,19 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
         editor.blast_bar_dialog = None;
         return;
     }
+    editor.close_sequence_editor();
     let blasts = editor.schedule_blasts.clone();
     let mut open = true;
     let mut close = false;
-    let draft = editor.blast_bar_dialog.as_mut().expect("checked above");
+    let mut draft = editor.blast_bar_dialog.take().expect("checked above");
+    if draft.session != session {
+        return;
+    }
+    let target_changed = target
+        .and_then(|id| plan.bar(id))
+        .and_then(|bar| bar.blast_order())
+        .is_some_and(|order| order.members != draft.opened_from);
+    let run_changed = draft.generation.is_some() && draft.generation != editor.blast_sequence_generation;
     let title = if target.is_some() { tr!("blast-edit-title") } else { tr!("blast-add-bar") };
     // Benches, highest first, as the Drill & Blast page lists them.
     let mut benches: Vec<(crate::model::SolidId, u64, String)> = Vec::new();
@@ -455,115 +464,267 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             .map(|entry| (entry.reference.solid, entry.bench_base.to_bits()))
             .or_else(|| benches.first().map(|(solid, base, _)| (*solid, *base)));
     }
-    DragableMenu::new("blast_bar_dialog", title).open(&mut open).min_width(520.0).show(ui.ctx(), |ui| {
-        if target.is_none() {
-            let agent_label = draft
-                .agent
-                .and_then(|id| plan.agent(id))
-                .map(|agent| agent.name.clone())
-                .unwrap_or_else(|| tr!("blast-machine-choose"));
-            MenuFieldCombo::new(
-                "blast_bar_machine",
-                tr!("blast-machine"),
-                &mut draft.agent,
-                agent_label,
-                plan.agents()
-                    .iter()
-                    .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
-                    .map(|agent| (Some(agent.id), agent.name.clone().into())),
-            )
-            .show(ui);
-        }
-        if blasts.is_empty() {
-            ui.label(egui::RichText::new(tr!("drill-blast-no-blasts")).weak());
-        }
-        ui.columns(2, |columns| {
-            let left = &mut columns[0];
-            let bench_label = draft
-                .bench
-                .and_then(|key| benches.iter().find(|(solid, base, _)| (*solid, *base) == key))
-                .map_or_else(String::new, |(_, _, label)| label.clone());
-            egui::ComboBox::from_id_salt("blast_bar_bench")
-                .selected_text(bench_label)
-                .width(left.available_width())
-                .show_ui(left, |ui| {
-                    for (solid, base, label) in &benches {
-                        ui.selectable_value(&mut draft.bench, Some((*solid, *base)), label);
-                    }
-                });
-            left.label(egui::RichText::new(tr!("blast-bar-click-to-add")).weak());
-            egui::ScrollArea::vertical().id_salt("blast_bar_available").max_height(220.0).show(left, |ui| {
-                for entry in blasts.iter().filter(|entry| draft.bench == Some((entry.reference.solid, entry.bench_base.to_bits()))) {
-                    let taken = draft.members.iter().any(|member| entry.holds(member));
-                    if ui.add_enabled(!taken, egui::Button::new(entry.name.clone()).frame(false)).clicked() {
-                        draft.members.push(entry.reference);
-                    }
-                }
-            });
-            if left.button(tr!("blast-bar-add-bench")).clicked() {
-                for entry in blasts.iter().filter(|entry| draft.bench == Some((entry.reference.solid, entry.bench_base.to_bits()))) {
-                    if !draft.members.iter().any(|member| entry.holds(member)) {
-                        draft.members.push(entry.reference);
-                    }
-                }
+    let screen = ui.ctx().content_rect();
+    DragableMenu::new("blast_bar_dialog", title)
+        .open(&mut open)
+        .min_width(820.0_f32.min(screen.width()))
+        .fixed_size(screen.size())
+        .pinned(screen.min)
+        .show(ui.ctx(), |ui| {
+            if target_changed || run_changed {
+                ui.colored_label(ui.visuals().error_fg_color, tr!("blast-sequence-changed"));
             }
-            let right = &mut columns[1];
-            right.label(crate::ui::fonts::bold(&tr!("blast-bar-order")));
-            let mut remove = None;
-            let mut raise = None;
-            egui::ScrollArea::vertical().id_salt("blast_bar_order").max_height(250.0).show(right, |ui| {
-                for (index, member) in draft.members.iter().enumerate() {
-                    let label = blasts
+            let body_height = (ui.available_height() - 170.0).max(160.0);
+            if target.is_none() {
+                let agent_label = draft
+                    .agent
+                    .and_then(|id| plan.agent(id))
+                    .map(|agent| agent.name.clone())
+                    .unwrap_or_else(|| tr!("blast-machine-choose"));
+                MenuFieldCombo::new(
+                    "blast_bar_machine",
+                    tr!("blast-machine"),
+                    &mut draft.agent,
+                    agent_label,
+                    plan.agents()
                         .iter()
-                        .find(|entry| entry.holds(member))
-                        .map_or_else(|| tr!("blast-bar-missing"), crate::ui::state::BlastListEntry::label);
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}. {label}", index + 1));
-                        if ui.small_button("↑").clicked() && index > 0 {
-                            raise = Some(index);
-                        }
-                        if ui.small_button("✕").clicked() {
-                            remove = Some(index);
+                        .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+                        .map(|agent| (Some(agent.id), agent.name.clone().into())),
+                )
+                .show(ui);
+            }
+            if blasts.is_empty() {
+                ui.label(egui::RichText::new(tr!("drill-blast-no-blasts")).weak());
+            }
+            ui.columns(2, |columns| {
+                let left = &mut columns[0];
+                let bench_label = draft
+                    .bench
+                    .and_then(|key| benches.iter().find(|(solid, base, _)| (*solid, *base) == key))
+                    .map_or_else(String::new, |(_, _, label)| label.clone());
+                egui::ComboBox::from_id_salt("blast_bar_bench")
+                    .selected_text(bench_label)
+                    .width(left.available_width())
+                    .show_ui(left, |ui| {
+                        for (solid, base, label) in &benches {
+                            if ui.selectable_value(&mut draft.bench, Some((*solid, *base)), label).changed() {
+                                draft.view = crate::ui::state::SolidPreviewView::default();
+                                editor.solid_preview_pick = None;
+                                ui.ctx().request_repaint();
+                            }
                         }
                     });
+                left.label(egui::RichText::new(tr!("blast-sequence-pick-help")).weak());
+                draw_blast_sequence_preview(left, editor, &mut draft, session, body_height);
+                let right = &mut columns[1];
+                right.label(crate::ui::fonts::bold(&tr!("blast-bar-order")));
+                let mut remove = None;
+                let mut raise = None;
+                let mut lower = None;
+                egui::ScrollArea::vertical().id_salt("blast_bar_order").max_height(body_height).show(right, |ui| {
+                    for (index, member) in draft.members.iter().enumerate() {
+                        let label = blasts
+                            .iter()
+                            .find(|entry| entry.holds(member))
+                            .map_or_else(|| tr!("blast-bar-missing"), crate::ui::state::BlastListEntry::label);
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}. {label}", index + 1));
+                            if ui.small_button("↑").clicked() && index > 0 {
+                                raise = Some(index);
+                            }
+                            if ui.small_button("↓").clicked() && index + 1 < draft.members.len() {
+                                lower = Some(index);
+                            }
+                            if ui.small_button("✕").clicked() {
+                                remove = Some(index);
+                            }
+                        });
+                    }
+                });
+                if let Some(index) = raise {
+                    draft.members.swap(index - 1, index);
+                }
+                if let Some(index) = lower {
+                    draft.members.swap(index, index + 1);
+                }
+                if let Some(index) = remove {
+                    draft.members.remove(index);
                 }
             });
-            if let Some(index) = raise {
-                draft.members.swap(index - 1, index);
-            }
-            if let Some(index) = remove {
-                draft.members.remove(index);
-            }
-        });
-        let valid = target.is_some() || draft.agent.is_some();
-        menu::menu_actions(ui, |ui| {
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked()) && valid {
-                let members = draft.members.clone();
-                match target {
-                    Some(bar) => commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastMembers { bar, members })),
-                    None => commands.push(UiCommand::schedule(
-                        session,
-                        ScheduleEdit::AddBlastBar {
-                            agent: draft.agent,
-                            priority: draft.priority,
-                            window: WorkWindow {
-                                start_h: draft.start_h,
-                                end_h: Some(draft.end_h),
+            let valid = (target.is_some() || draft.agent.is_some()) && !target_changed && !run_changed && !draft.members.is_empty();
+            menu::menu_actions(ui, |ui| {
+                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked()) && valid {
+                    let members = draft.members.clone();
+                    match target {
+                        Some(bar) => commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastMembers { bar, members })),
+                        None => commands.push(UiCommand::schedule(
+                            session,
+                            ScheduleEdit::AddBlastBar {
+                                agent: draft.agent,
+                                priority: draft.priority,
+                                window: WorkWindow {
+                                    start_h: draft.start_h,
+                                    end_h: Some(draft.end_h),
+                                },
+                                insert_lane: draft.insert_lane,
+                                members,
                             },
-                            insert_lane: draft.insert_lane,
-                            members,
-                        },
-                    )),
+                        )),
+                    }
+                    close = true;
                 }
-                close = true;
-            }
-            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                close = true;
-            }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
         });
-    });
     if close || !open {
         editor.blast_bar_dialog = None;
+        if matches!(
+            editor.solid_preview_pick.map(|pick| pick.owner),
+            Some(crate::ui::state::SolidPreviewPickOwner::BlastSequence { .. })
+        ) {
+            editor.solid_preview_pick = None;
+        }
+    } else {
+        editor.blast_bar_dialog = Some(draft);
+    }
+}
+
+pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    use crate::model::schedule::drill_blast::BlastWindow;
+    let Some(draft) = editor.blast_window_dialog.as_mut() else { return };
+    if draft.session != session {
+        editor.blast_window_dialog = None;
+        return;
+    }
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("blast_window_editor", tr!("blast-window-edit"))
+        .open(&mut open)
+        .min_width(360.0)
+        .show(ui.ctx(), |ui| {
+            if ui.checkbox(&mut draft.daily, tr!("blast-window-daily")).changed() && draft.daily {
+                for value in [&mut draft.start, &mut draft.end] {
+                    if let Ok(hour) = value.parse::<f64>() {
+                        *value = format!("{}", if hour > 0.0 && hour.rem_euclid(24.0) == 0.0 { 24.0 } else { hour.rem_euclid(24.0) });
+                    }
+                }
+            }
+            ui.label(egui::RichText::new(if draft.daily { tr!("blast-window-hour-note") } else { tr!("blast-window-elapsed-note") }).weak());
+            MenuFieldText::new(tr!("schedule-window-start"), &mut draft.start).show(ui);
+            MenuFieldText::new(tr!("schedule-window-end"), &mut draft.end).show(ui);
+            let window = draft
+                .start
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .zip(draft.end.trim().parse::<f64>().ok())
+                .map(|(start_h, end_h)| BlastWindow {
+                    id: draft.id.unwrap_or_else(|| draft.opened.iter().map(|window| window.id).max().unwrap_or(0).saturating_add(1)),
+                    start_h,
+                    end_h,
+                    daily: draft.daily,
+                })
+                .filter(BlastWindow::valid);
+            let current = plan.drill_blast().effective_windows() == draft.opened;
+            if !current {
+                ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-changed"));
+            }
+            if window.is_none() {
+                ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-invalid"));
+            }
+            menu::menu_actions(ui, |ui| {
+                let apply = ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
+                if apply
+                    && current
+                    && let Some(window) = window
+                {
+                    let mut windows = draft.opened.clone();
+                    if let Some(existing) = windows.iter_mut().find(|entry| entry.id == window.id) {
+                        *existing = window;
+                    } else {
+                        windows.push(window);
+                    }
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.blast_window_dialog = None;
+    }
+}
+
+fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut crate::ui::state::BlastBarDialog, session: u32, height: f32) {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click_and_drag());
+    let ready = draft.generation.is_some() && draft.generation == editor.blast_sequence_generation;
+    if let Some(texture) = editor.solid_preview_texture.filter(|_| ready) {
+        ui.painter()
+            .image(texture, rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    } else {
+        ui.painter()
+            .rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, crate::ui::widgets::tree_row_colors(ui).1);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            tr!("drill-blast-no-blasts"),
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().weak_text_color(),
+        );
+    }
+    let scale = ui.ctx().pixels_per_point();
+    let size = [(rect.width() * scale).round().max(1.0) as u32, (rect.height() * scale).round().max(1.0) as u32];
+    if editor.solid_preview_size_px != size {
+        editor.solid_preview_size_px = size;
+        ui.ctx().request_repaint();
+    }
+    let delta = response.drag_delta() * scale;
+    if delta != egui::Vec2::ZERO {
+        if response.dragged_by(egui::PointerButton::Middle) {
+            draft.view.pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], f64::from(size[1]));
+        }
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            draft.view.orbit_by_pixels([f64::from(delta.x), f64::from(delta.y)], f64::from(size[1]));
+        }
+        ui.ctx().request_repaint();
+    }
+    if response.hovered() {
+        let scroll = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
+                        egui::MouseWheelUnit::Point => f64::from(delta.y * scale),
+                        egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
+                        egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(size[1]),
+                    }),
+                    _ => None,
+                })
+                .sum::<f64>()
+        });
+        if scroll != 0.0 {
+            draft.view.zoom_by_scroll(scroll);
+            ui.ctx().request_repaint();
+        }
+    }
+    if ready
+        && response.clicked()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let local = pointer - rect.min;
+        editor.solid_preview_pick = Some(crate::ui::state::SolidPreviewPickRequest {
+            session,
+            owner: crate::ui::state::SolidPreviewPickOwner::BlastSequence { edition: draft.edition },
+            generation: draft.generation,
+            image: editor.solid_preview_image_revision,
+            uv: [local.x / rect.width().max(1.0), local.y / rect.height().max(1.0)],
+        });
+        ui.ctx().request_repaint();
     }
 }

@@ -138,6 +138,7 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetCashflowRuleValue { rule, value_per_tonne } => self.edit_cashflow(|cashflow| cashflow.set_rule_value(rule, value_per_tonne)),
             ScheduleEdit::SetClassReclaimRate { class, rate_tph } => self.edit_schedule(|plan| plan.set_class_reclaim_rate(class, rate_tph)),
             ScheduleEdit::SetClassKind { class, kind } => self.edit_schedule(|plan| plan.set_class_kind(class, kind)),
+            ScheduleEdit::SetBlastWindows(windows) => self.edit_schedule(|plan| plan.set_blast_windows(windows)),
             ScheduleEdit::SetDrillBlast(settings) => self.edit_schedule(|plan| plan.set_drill_blast_settings(settings)),
             ScheduleEdit::SetBlastStatus { blasts, stage } => self.edit_schedule(|plan| plan.set_blast_status(&blasts, stage)),
             ScheduleEdit::SetBlastPattern { blast, pattern } => self.edit_schedule(|plan| plan.set_blast_pattern(blast, pattern)),

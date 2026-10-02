@@ -167,7 +167,7 @@ impl BlastRef {
         self.solid == other.solid && self.bench.to_bits() == other.bench.to_bits() && self.anchor.map(f64::to_bits) == other.anchor.map(f64::to_bits)
     }
 
-    fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
+    pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use std::hash::Hash;
         self.solid.hash(hasher);
         self.bench.to_bits().hash(hasher);
@@ -247,6 +247,9 @@ pub(crate) struct DrillBlastConfig {
     /// the end of the window a blast fires in.
     pub(crate) window_start_h: f64,
     pub(crate) window_end_h: f64,
+    /// None preserves the legacy daily window; an empty list means no windows.
+    #[serde(default)]
+    pub(crate) windows: Option<Vec<BlastWindow>>,
     pub(crate) statuses: Vec<BlastStatus>,
     pub(crate) patterns: Vec<BlastPattern>,
 }
@@ -262,6 +265,7 @@ impl Default for DrillBlastConfig {
             buffer_m: 0.0,
             window_start_h: 12.0,
             window_end_h: 15.0,
+            windows: None,
             statuses: Vec::new(),
             patterns: Vec::new(),
         }
@@ -270,6 +274,30 @@ impl Default for DrillBlastConfig {
 
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0
+}
+
+/// One recurring daily window or one window at elapsed project hours.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BlastWindow {
+    pub(crate) id: u64,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    pub(crate) daily: bool,
+}
+
+impl BlastWindow {
+    pub(crate) fn valid(&self) -> bool {
+        self.start_h.is_finite() && self.end_h.is_finite() && self.start_h >= 0.0 && self.end_h > self.start_h && (!self.daily || self.end_h <= 24.0)
+    }
+
+    pub(crate) fn next_end(&self, charged_h: f64) -> Option<f64> {
+        if self.daily {
+            let end = (charged_h / 24.0).floor() * 24.0 + self.end_h;
+            Some(if end > charged_h { end } else { end + 24.0 })
+        } else {
+            (self.end_h > charged_h).then_some(self.end_h)
+        }
+    }
 }
 
 /// The settings a Setup form edits, without the per-blast lists.
@@ -286,6 +314,44 @@ pub(crate) struct DrillBlastSettings {
 }
 
 impl DrillBlastConfig {
+    pub(crate) fn effective_windows(&self) -> Vec<BlastWindow> {
+        self.windows.clone().unwrap_or_else(|| {
+            vec![BlastWindow {
+                id: 0,
+                start_h: self.window_start_h,
+                end_h: self.window_end_h,
+                daily: true,
+            }]
+        })
+    }
+
+    /// Expand recurring windows only across the requested timeline range.
+    pub(crate) fn window_spans(&self, from_h: f64, to_h: f64) -> Vec<(BlastWindow, f64, f64)> {
+        let mut spans = Vec::new();
+        for window in self.effective_windows() {
+            if window.daily {
+                let mut day = (from_h.max(0.0) / 24.0).floor() * 24.0;
+                while day < to_h {
+                    if day + window.end_h > from_h {
+                        spans.push((window, day + window.start_h, day + window.end_h));
+                    }
+                    day += 24.0;
+                }
+            } else if window.start_h < to_h && window.end_h > from_h {
+                spans.push((window, window.start_h, window.end_h));
+            }
+        }
+        spans
+    }
+
+    pub(crate) fn set_windows(&mut self, windows: Vec<BlastWindow>) -> Result<(), DrillBlastError> {
+        let mut candidate = self.clone();
+        candidate.windows = Some(windows);
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
     pub(crate) fn is_pristine(&self) -> bool {
         *self == Self::default()
     }
@@ -314,6 +380,7 @@ impl DrillBlastConfig {
             buffer_m: settings.buffer_m,
             window_start_h: settings.window_start_h,
             window_end_h: settings.window_end_h,
+            windows: self.windows.clone(),
             statuses: self.statuses.clone(),
             patterns: self.patterns.clone(),
         };
@@ -335,6 +402,12 @@ impl DrillBlastConfig {
         if !(self.window_start_h.is_finite() && self.window_end_h.is_finite() && 0.0 <= self.window_start_h && self.window_start_h < self.window_end_h && self.window_end_h <= 24.0)
         {
             return Err(DrillBlastError::Window);
+        }
+        if let Some(windows) = &self.windows {
+            let mut ids = std::collections::BTreeSet::new();
+            if windows.iter().any(|window| !window.valid() || !ids.insert(window.id)) {
+                return Err(DrillBlastError::Window);
+            }
         }
         if self.statuses.iter().any(|entry| !entry.blast.is_valid()) || self.patterns.iter().any(|entry| !entry.blast.is_valid()) {
             return Err(DrillBlastError::Reference);
@@ -388,6 +461,13 @@ impl DrillBlastConfig {
             self.window_end_h,
         ] {
             value.to_bits().hash(hasher);
+        }
+        self.windows.is_some().hash(hasher);
+        for window in self.windows.iter().flatten() {
+            window.id.hash(hasher);
+            window.start_h.to_bits().hash(hasher);
+            window.end_h.to_bits().hash(hasher);
+            window.daily.hash(hasher);
         }
         self.pattern.staggered.hash(hasher);
         for entry in &self.statuses {

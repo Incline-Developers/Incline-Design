@@ -259,7 +259,7 @@ impl<'a> App<'a> {
                     // The floating sequence editor draws the same dig-block
                     // display list the Solids View page does, through the same
                     // offscreen preview - one renderer, not two.
-                    let showing_solids_view = self.editor.is_solids_view() || self.editor.sequence_editor_active();
+                    let showing_solids_view = self.editor.is_solids_view() || self.editor.sequence_editor_active() || self.editor.blast_sequence_active();
                     let showing_schedule_animation = self.editor.is_schedule_animation();
                     // Blasting draws into the real viewport, so its bench
                     // slabs are the scene rather than an offscreen preview.

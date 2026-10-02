@@ -161,6 +161,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
     crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_blast_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
     rect
 }
@@ -198,6 +199,7 @@ struct Row {
     /// A dozer, drill or MPU: its work is drill and blast's, and it has no
     /// loader idle strip.
     drill_blast: bool,
+    blasting: bool,
     title: String,
     subtitle: String,
     /// The priority lanes present in this row, ascending - lower is higher
@@ -278,7 +280,15 @@ impl Layout {
     fn build(ui: &egui::Ui, editor: &EditorState, plan: &SchedulePlan, body: egui::Rect) -> Self {
         let markers = layout_markers(ui, editor, plan, body);
         let extents: Vec<BarExtent> = markers.iter().map(|marker| marker.extent).collect();
-        let rows = layout_rows(plan, &extents);
+        let mut rows = layout_rows(plan, &extents);
+        if let Some(row) = rows.iter_mut().find(|row| row.blasting) {
+            let lanes = firing_markers(ui, editor.schedule_result.as_deref(), editor.gantt, body)
+                .iter()
+                .map(|marker| marker.lane + 1)
+                .max()
+                .unwrap_or(1);
+            row.height = row.height.max(30.0 + lanes as f32 * 20.0);
+        }
         Self { markers, rows }
     }
 
@@ -355,6 +365,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
         rows.push(Row {
             agent: None,
             drill_blast: false,
+            blasting: false,
             title: tr!("schedule-bar-unassigned"),
             subtitle: tr!("schedule-bar-unassigned-note"),
             lanes: Vec::new(),
@@ -379,6 +390,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
         rows.push(Row {
             agent: Some(agent.id),
             drill_blast: plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast),
+            blasting: false,
             title: agent.name.clone(),
             subtitle,
             lanes: Vec::new(),
@@ -386,11 +398,21 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
             height: 0.0,
         });
     }
+    rows.push(Row {
+        agent: None,
+        drill_blast: true,
+        blasting: true,
+        title: tr!("gantt-blasting-row"),
+        subtitle: tr!("gantt-blasting-row-note"),
+        lanes: Vec::new(),
+        top: 0.0,
+        height: 0.0,
+    });
     // Filled with one sub-row holding everything the lane has; packed into
     // non-overlapping sub-rows once the lane is complete.
     for (index, bar) in plan.bars().iter().enumerate() {
         let agent = placed(bar);
-        let row = rows.iter_mut().find(|row| row.agent == agent).expect("every bar's row was made above");
+        let row = rows.iter_mut().find(|row| !row.blasting && row.agent == agent).expect("every bar's row was made above");
         let lane = match row.lanes.binary_search_by_key(&bar.priority, |lane| lane.priority) {
             Ok(lane) => lane,
             Err(lane) => {
@@ -814,6 +836,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // right-click on empty lane space is that lane's own menu.
     draw_row_menus(ui, body, editor, plan, &layout.rows, session, commands);
     draw_bars(ui, body, editor, plan, destinations, &layout, session, commands, schedule.as_deref());
+    draw_blasting_row(ui, body, editor, plan, &layout.rows, session, commands, schedule.as_deref());
     // Idle is a row-level indicator, under every lane of the machine.
     draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
     draw_palette_drop(ui, body, editor, plan, &layout.rows, session, commands);
@@ -1677,6 +1700,9 @@ fn placement_at(pointer_y: f32, body: egui::Rect, scroll: f32, rows: &[Row]) -> 
         };
         distance(left).total_cmp(&distance(right))
     })?;
+    if row.blasting {
+        return None;
+    }
     let row_top = body.top() + row.top - scroll;
     let local = (pointer_y - row_top).clamp(0.0, row.height);
     let insert = |priority: u32| {
@@ -1904,8 +1930,12 @@ fn draw_bars(
                     // not *this loader idled* - the machine may well be
                     // working something else there, which its other bars show.
                     let finished_early = schedule.filter(|_| bar.reclaim().is_none()).and_then(|schedule| {
-                        let completed = schedule.bar_completion_h(bar.id)?;
-                        window.end_h.filter(|close| completed < *close).map(|_| completed)
+                        let completed = if bar.blast_order().is_some() {
+                            blast_bar_completion_h(plan, bar, schedule)?
+                        } else {
+                            schedule.bar_completion_h(bar.id)?
+                        };
+                        (completed < window.end_h.unwrap_or(schedule.requested_end_h)).then_some(completed)
                     });
                     if let Some(end) = finished_early {
                         let from = view.x_of(end * GanttView::HOUR, body.left(), body.width()).max(rect.left());
@@ -2062,6 +2092,11 @@ fn draw_bars(
                             && ContextMenuAction::new(tr!("blast-edit-bar")).show(ui).clicked()
                         {
                             open_blast = Some(BlastBarDialog {
+                                session,
+                                edition: crate::ui::state::SequenceDraft::next_edition(),
+                                generation: None,
+                                opened_from: order.members.clone(),
+                                view: crate::ui::state::SolidPreviewView::default(),
                                 target: Some(bar.id),
                                 members: order.members.clone(),
                                 agent: bar.agent,
@@ -2224,9 +2259,8 @@ fn draw_bars(
     }
 }
 
-/// A blast bar's calculated work in the band above it: each step its machine
-/// worked on the bar's blasts, coloured by step, with a mark where each of
-/// them fired. One hover for the band, answering for the instant under it.
+/// A blast bar's calculated machine work, coloured by activity. Firing
+/// events belong to the dedicated blasting row.
 fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: GanttView, bar: &ScheduleBar, schedule: &CalculatedSchedule) {
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let blasts = bar_blasts(bar, schedule);
@@ -2243,25 +2277,6 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
             ui.painter_at(clip).rect_filled(span, 0.0, blast_activity_color(row.activity));
         }
     }
-    // Each blast's firing: a small diamond at the end of its window.
-    for &index in &blasts {
-        let Some(fired) = result.blasts[index].fired_h.filter(|fired| *fired > 0.0) else {
-            continue;
-        };
-        let x = view.x_of(fired * GanttView::HOUR, body.left(), body.width());
-        let centre = egui::pos2(x, band.center().y);
-        if clip.expand(4.0).contains(centre) {
-            let r = 4.0;
-            let points = vec![
-                centre + egui::vec2(0.0, -r),
-                centre + egui::vec2(r, 0.0),
-                centre + egui::vec2(0.0, r),
-                centre + egui::vec2(-r, 0.0),
-            ];
-            ui.painter_at(body)
-                .add(egui::Shape::convex_polygon(points, BLAST_COLOR, egui::Stroke::new(1.0, ui.visuals().strong_text_color())));
-        }
-    }
     let target = band.expand2(egui::vec2(0.0, 3.0)).intersect(body);
     if !target.is_positive() {
         return;
@@ -2269,17 +2284,8 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
     let hover = ui.interact(target, ui.id().with(("gantt_blast_work", bar.id)), egui::Sense::hover());
     let Some(pos) = hover.hover_pos() else { return };
     let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
-    let fired: Vec<usize> = blasts
-        .iter()
-        .copied()
-        .filter(|index| {
-            result.blasts[*index]
-                .fired_h
-                .is_some_and(|fired| (view.x_of(fired * GanttView::HOUR, body.left(), body.width()) - pos.x).abs() < 5.0)
-        })
-        .collect();
     let working: Vec<_> = rows.iter().filter(|row| row.start_h <= at_h && at_h < row.end_h).collect();
-    if working.is_empty() && fired.is_empty() {
+    if working.is_empty() {
         return;
     }
     hover.on_hover_ui_at_pointer(|ui| {
@@ -2295,11 +2301,6 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
                 total = format!("{:.0}", blast.quantity[step]),
                 unit = row.activity.unit()
             ));
-        }
-        for index in fired {
-            let blast = &result.blasts[index];
-            ui.label(bold(&tr!("blast-fired-heading", blast = blast_title(blast))));
-            ui.label(tr!("blast-fired-at", at = instant_label(blast.fired_h.unwrap_or(0.0) * GanttView::HOUR)));
         }
     });
 }
@@ -2329,7 +2330,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
     }
     let scroll = editor.gantt.row_scroll;
     let view = editor.gantt;
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate().filter(|(_, row)| !row.blasting) {
         let top = body.top() + row.top - scroll;
         if top + row.height < body.top() || top > body.bottom() {
             continue;
@@ -2373,6 +2374,11 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                 if drill_blast && ContextMenuAction::new(tr!("blast-add-bar")).show(ui).clicked() {
                     let start_h = (ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR).round();
                     editor.blast_bar_dialog = Some(BlastBarDialog {
+                        session,
+                        edition: crate::ui::state::SequenceDraft::next_edition(),
+                        generation: None,
+                        opened_from: Vec::new(),
+                        view: crate::ui::state::SolidPreviewView::default(),
                         target: None,
                         members: Vec::new(),
                         agent: row.agent,
@@ -2637,6 +2643,11 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
         }
         GanttPaletteItem::Blast => {
             editor.blast_bar_dialog = Some(BlastBarDialog {
+                session,
+                edition: crate::ui::state::SequenceDraft::next_edition(),
+                generation: None,
+                opened_from: Vec::new(),
+                view: crate::ui::state::SolidPreviewView::default(),
                 target: None,
                 members: Vec::new(),
                 agent: placement.agent,
@@ -2768,4 +2779,158 @@ fn calendar_delay_tooltip(plan: &SchedulePlan, agent: LoaderAgentId, at_h: f64) 
             hours = format!("{:.1}", span.end_h - span.start_h)
         ),
     ))
+}
+
+fn blast_bar_completion_h(plan: &SchedulePlan, bar: &ScheduleBar, schedule: &CalculatedSchedule) -> Option<f64> {
+    let activity = plan.agent_kind(bar.agent?)?.activity()?;
+    let blasts = bar_blasts(bar, schedule);
+    if blasts.is_empty() || blasts.len() != bar.blast_order()?.members.len() {
+        return None;
+    }
+    let result = schedule.drill_blast.as_ref()?;
+    let mut completed = bar.window.start_h;
+    for blast in blasts {
+        completed = completed.max(result.blasts[blast].done_h[activity as usize]?);
+    }
+    Some(completed)
+}
+
+struct FiringMarker {
+    blast: usize,
+    x: f32,
+    lane: usize,
+    label: std::sync::Arc<egui::Galley>,
+}
+
+fn firing_markers(ui: &egui::Ui, schedule: Option<&CalculatedSchedule>, view: GanttView, body: egui::Rect) -> Vec<FiringMarker> {
+    let Some(result) = schedule.and_then(|schedule| schedule.drill_blast.as_ref()) else {
+        return Vec::new();
+    };
+    let mut events: Vec<_> = result
+        .blasts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, blast)| blast.fired_h.filter(|at| at.is_finite() && *at > 0.0 && *at < f64::MAX).map(|at| (index, at)))
+        .collect();
+    events.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    let mut ends: Vec<f32> = Vec::new();
+    let mut markers = Vec::new();
+    for (blast, at) in events {
+        let x = view.x_of(at * GanttView::HOUR, body.left(), body.width());
+        if x < body.left() - 250.0 || x > body.right() {
+            continue;
+        }
+        let label = ui
+            .painter()
+            .layout_no_wrap(blast_title(&result.blasts[blast]), egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
+        let lane = ends.iter().position(|end| *end < x - 8.0).unwrap_or(ends.len());
+        if lane == ends.len() {
+            ends.push(0.0);
+        }
+        ends[lane] = x + 10.0 + label.size().x;
+        markers.push(FiringMarker { blast, x, lane, label });
+    }
+    markers
+}
+
+fn open_blast_window(editor: &mut EditorState, plan: &SchedulePlan, session: u32, window: Option<crate::model::schedule::drill_blast::BlastWindow>, at_h: f64) {
+    editor.blast_window_dialog = Some(crate::ui::state::BlastWindowDialog {
+        session,
+        opened: plan.drill_blast().effective_windows(),
+        id: window.map(|window| window.id),
+        start: format!("{}", window.map_or(at_h.max(0.0).floor(), |window| window.start_h)),
+        end: format!("{}", window.map_or(at_h.max(0.0).floor() + 3.0, |window| window.end_h)),
+        daily: window.is_some_and(|window| window.daily),
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_blasting_row(
+    ui: &mut egui::Ui,
+    body: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    rows: &[Row],
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+    schedule: Option<&CalculatedSchedule>,
+) {
+    let Some(row) = rows.iter().find(|row| row.blasting) else { return };
+    let top = body.top() + row.top - editor.gantt.row_scroll;
+    let rect = egui::Rect::from_min_max(egui::pos2(body.left(), top), egui::pos2(body.right(), top + row.height)).intersect(body);
+    if !rect.is_positive() {
+        return;
+    }
+    let view = editor.gantt;
+    let response = ui.interact(rect, ui.id().with("blasting_row"), egui::Sense::click());
+    let at = response
+        .interact_pointer_pos()
+        .or_else(|| response.hover_pos())
+        .map_or(0.0, |pos| view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR);
+    response.context_menu(|ui| {
+        if ContextMenuAction::new(tr!("blast-window-add")).show(ui).clicked() {
+            open_blast_window(editor, plan, session, None, at);
+            ui.close();
+        }
+    });
+    let windows = plan.drill_blast().window_spans(view.start_seconds / GanttView::HOUR, view.end_seconds() / GanttView::HOUR);
+    let mut on_window = false;
+    for (window, start, end) in windows {
+        let span = span_rect(view, body, start, end, top + 4.0, 20.0).intersect(rect);
+        if !span.is_positive() {
+            continue;
+        }
+        ui.painter_at(rect).rect_filled(span, GROUP_CORNER_RADIUS, BLAST_COLOR.gamma_multiply(0.25));
+        ui.painter_at(rect)
+            .rect_stroke(span, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, BLAST_COLOR), egui::StrokeKind::Inside);
+        let hit = ui.interact(span, ui.id().with(("blast_window", window.id, start.to_bits())), egui::Sense::click());
+        on_window |= hit.hovered();
+        hit.clone().on_hover_text(format!(
+            "{} — {}\n{}",
+            instant_label(start * GanttView::HOUR),
+            instant_label(end * GanttView::HOUR),
+            if window.daily { tr!("blast-window-daily") } else { tr!("blast-window-once") }
+        ));
+        if hit.double_clicked() {
+            open_blast_window(editor, plan, session, Some(window), start);
+        }
+        hit.context_menu(|ui| {
+            if ContextMenuAction::new(tr!("blast-window-edit")).show(ui).clicked() {
+                open_blast_window(editor, plan, session, Some(window), start);
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!(literal = "Delete")).show(ui).clicked() {
+                let mut windows = plan.drill_blast().effective_windows();
+                windows.retain(|entry| entry.id != window.id);
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
+                ui.close();
+            }
+        });
+    }
+    if response.double_clicked() && !on_window {
+        open_blast_window(editor, plan, session, None, at);
+    }
+    for marker in firing_markers(ui, schedule, view, body) {
+        let centre = egui::pos2(marker.x, top + 36.0 + marker.lane as f32 * 20.0);
+        let target = egui::Rect::from_min_size(centre - egui::vec2(6.0, 9.0), egui::vec2(marker.label.size().x + 18.0, 18.0)).intersect(rect);
+        if !target.is_positive() {
+            continue;
+        }
+        let points = vec![
+            centre + egui::vec2(0.0, -5.0),
+            centre + egui::vec2(5.0, 0.0),
+            centre + egui::vec2(0.0, 5.0),
+            centre + egui::vec2(-5.0, 0.0),
+        ];
+        let painter = ui.painter_at(rect);
+        painter.add(egui::Shape::convex_polygon(points, BLAST_COLOR, egui::Stroke::new(1.0, ui.visuals().strong_text_color())));
+        painter.galley(centre + egui::vec2(10.0, -marker.label.size().y * 0.5), marker.label, ui.visuals().text_color());
+        if let Some(blast) = schedule
+            .and_then(|schedule| schedule.drill_blast.as_ref())
+            .and_then(|result| result.blasts.get(marker.blast))
+        {
+            ui.interact(target, ui.id().with(("blast_firing", marker.blast)), egui::Sense::hover())
+                .on_hover_text(tr!("blast-fired-at", at = instant_label(blast.fired_h.unwrap_or(0.0) * GanttView::HOUR)));
+        }
+    }
 }

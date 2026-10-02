@@ -236,6 +236,10 @@ impl EditorState {
     /// is the page being drawn. Navigating away leaves the draft alone and
     /// hands the Solids pages their preview back untouched; coming back shows
     /// the same draft again.
+    pub(crate) fn blast_sequence_active(&self) -> bool {
+        self.blast_bar_dialog.is_some() && self.is_schedule_gantt()
+    }
+
     pub(crate) fn sequence_editor_active(&self) -> bool {
         self.sequence_editor.is_some() && self.is_schedule_gantt()
     }
@@ -253,6 +257,12 @@ impl EditorState {
     /// theirs: there the display list *is* the tree selection, and following
     /// it is the whole point.
     pub(crate) fn preview_framing_hold(&self) -> Option<PreviewFramingHold> {
+        if let Some(draft) = self.blast_bar_dialog.as_ref().filter(|_| self.is_schedule_gantt()) {
+            return Some(PreviewFramingHold {
+                edition: draft.edition ^ draft.bench.map_or(0, |(solid, base)| base ^ solid.0.rotate_left(13)),
+                generation: self.blast_sequence_generation,
+            });
+        }
         self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()).map(|draft| PreviewFramingHold {
             edition: draft.edition,
             generation: self.sequence_generation,
@@ -265,6 +275,9 @@ impl EditorState {
     /// sequence editor keeps its own, so opening it moves nothing on the
     /// Solids pages and closing it hands them back exactly the view they had.
     pub(crate) fn preview_camera(&self) -> SolidPreviewView {
+        if let Some(draft) = self.blast_bar_dialog.as_ref().filter(|_| self.is_schedule_gantt()) {
+            return draft.view;
+        }
         match self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()) {
             Some(draft) => draft.view,
             None => self.solid_preview_view,
@@ -307,7 +320,7 @@ impl EditorState {
         }
         match request.owner {
             SolidPreviewPickOwner::SequenceEditor { bar, edition } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
-            SolidPreviewPickOwner::SolidsView => None,
+            SolidPreviewPickOwner::SolidsView | SolidPreviewPickOwner::BlastSequence { .. } => None,
         }
     }
 
@@ -560,6 +573,9 @@ pub(crate) enum SolidPick {
 pub(crate) enum SolidPreviewPickOwner {
     /// The Solids View page's inspector pane, selecting a dig block.
     SolidsView,
+    BlastSequence {
+        edition: u64,
+    },
     /// The floating sequence editor, building one bar's dig order.
     SequenceEditor {
         bar: crate::model::schedule::BarId,
@@ -2741,6 +2757,8 @@ pub(crate) struct EditorState {
     pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
     /// The Add / Edit blast bar dialog, while open.
     pub(crate) blast_bar_dialog: Option<BlastBarDialog>,
+    pub(crate) blast_window_dialog: Option<BlastWindowDialog>,
+    pub(crate) blast_sequence_generation: Option<u64>,
     /// Every blast of the Solids run, for the Drill & Blast page and the
     /// blast bar dialog; refreshed by the app when the run or project moves.
     pub(crate) schedule_blasts: Vec<BlastListEntry>,
@@ -3326,6 +3344,8 @@ impl EditorState {
         self.bar_name_dialog = None;
         self.reclaim_bar_dialog = None;
         self.bar_window_dialog = None;
+        self.blast_window_dialog = None;
+        self.blast_bar_dialog = None;
         self.gantt_drag = None;
         self.schedule_bar_reports.clear();
         self.schedule_result = None;
@@ -3975,6 +3995,8 @@ impl EditorState {
             bar_name_dialog: None,
             reclaim_bar_dialog: None,
             blast_bar_dialog: None,
+            blast_window_dialog: None,
+            blast_sequence_generation: None,
             schedule_blasts: Vec::new(),
             schedule_blasts_key: None,
             schedule_selected_blast: None,
@@ -5279,6 +5301,7 @@ impl UiCommand {
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetDrillBlast(_)
+                | ScheduleEdit::SetBlastWindows(_)
                 | ScheduleEdit::SetBlastStatus { .. }
                 | ScheduleEdit::SetBlastPattern { .. }
                 | ScheduleEdit::SetBlastMembers { .. } => None,
@@ -6752,6 +6775,7 @@ pub(crate) enum ScheduleEdit {
     },
     /// Replace the drill and blast settings, as one edit.
     SetDrillBlast(crate::model::schedule::DrillBlastSettings),
+    SetBlastWindows(Vec<crate::model::schedule::drill_blast::BlastWindow>),
     /// Set the stage blasts start the schedule at.
     SetBlastStatus {
         blasts: Vec<crate::model::schedule::BlastRef>,
@@ -6887,10 +6911,24 @@ pub(crate) struct BarNameDialog {
     pub(crate) name: String,
 }
 
-/// Draft for creating a reclaim bar or changing the source and cumulative cap
-/// of one that already exists.
+#[derive(Clone, Debug)]
+pub(crate) struct BlastWindowDialog {
+    pub(crate) session: u32,
+    pub(crate) opened: Vec<crate::model::schedule::drill_blast::BlastWindow>,
+    pub(crate) id: Option<u64>,
+    pub(crate) start: String,
+    pub(crate) end: String,
+    pub(crate) daily: bool,
+}
+
+/// An interactive blast sequence draft, applied as one schedule edit.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlastBarDialog {
+    pub(crate) session: u32,
+    pub(crate) edition: u64,
+    pub(crate) generation: Option<u64>,
+    pub(crate) opened_from: Vec<crate::model::schedule::BlastRef>,
+    pub(crate) view: SolidPreviewView,
     pub(crate) target: Option<crate::model::schedule::BarId>,
     pub(crate) members: Vec<crate::model::schedule::BlastRef>,
     pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
@@ -6898,7 +6936,7 @@ pub(crate) struct BlastBarDialog {
     pub(crate) insert_lane: bool,
     pub(crate) start_h: f64,
     pub(crate) end_h: f64,
-    /// Which bench the list on the left shows, by base RL bits.
+    /// Which bench the interactive preview shows, by base RL bits.
     pub(crate) bench: Option<(crate::model::SolidId, u64)>,
 }
 
@@ -7204,7 +7242,7 @@ impl SequenceDraft {
     /// Source of the instance numbers above. Global rather than per-editor
     /// state so every construction site - including a Reload inside the window
     /// - shares one sequence, with nothing to reset or keep in step.
-    fn next_edition() -> u64 {
+    pub(crate) fn next_edition() -> u64 {
         static EDITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         EDITION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }

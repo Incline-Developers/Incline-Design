@@ -123,7 +123,13 @@ pub(crate) fn draw_settings(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
             tr!("drill-blast-window-start"),
             tr!("drill-blast-window-end"),
         ];
+        if let Some(windows) = &config.windows {
+            rows.readonly(&tr!("blast-windows-label"), &tr!("blast-windows-summary", count = windows.len().to_string()), None, None);
+        }
         for (index, label) in labels.iter().enumerate() {
+            if index >= 7 && config.windows.is_some() {
+                continue;
+            }
             let value = number(&draft.fields[index]);
             let error = value.is_none().then(|| tr!("drill-blast-number"));
             let response = rows.field(label, &mut draft.fields[index], error.as_deref());

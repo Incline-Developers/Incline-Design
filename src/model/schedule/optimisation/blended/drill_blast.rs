@@ -39,6 +39,8 @@ pub(crate) struct DrillBlastInput {
     pub(crate) tasks: Vec<BlastTask>,
     /// End of the daily blast window, in hours of the day.
     pub(crate) window_end_h: f64,
+    #[serde(default)]
+    pub(crate) windows: Option<Vec<crate::model::schedule::drill_blast::BlastWindow>>,
     /// The timeline later solves keep, once the dispatch has found it.
     /// Also holds the clearance deadlines for overlying ground.
     #[serde(default)]
@@ -112,8 +114,16 @@ pub(crate) struct BlastEvents {
 impl DrillBlastInput {
     /// The end of the first window ending after `charged_h`.
     pub(crate) fn fires_at(&self, charged_h: f64) -> f64 {
+        if let Some(windows) = &self.windows {
+            return windows.iter().filter_map(|window| window.next_end(charged_h)).min_by(f64::total_cmp).unwrap_or(NEVER);
+        }
         let today = (charged_h / 24.0).floor() * 24.0 + self.window_end_h;
         if today > charged_h { today } else { today + 24.0 }
+    }
+
+    fn firing(&self, charged_h: f64) -> Option<f64> {
+        let at = self.fires_at(charged_h);
+        (at < NEVER).then_some(at)
     }
 
     /// When each blast's ground is available: what the dispatch found, or
@@ -195,7 +205,7 @@ impl<'a> Chain<'a> {
             }
             milestones.fired_h = match blast.stage {
                 BlastStage::Fired => Some(0.0),
-                BlastStage::Charged => Some(input.fires_at(0.0)),
+                BlastStage::Charged => input.firing(0.0),
                 _ => None,
             };
             left.push(remaining);
@@ -310,7 +320,7 @@ impl<'a> Chain<'a> {
                     self.left[blast][step] = 0.0;
                     self.events[blast].done_h[step] = Some(until);
                     if step == BlastActivity::Charge as usize {
-                        self.events[blast].fired_h = Some(input.fires_at(until));
+                        self.events[blast].fired_h = input.firing(until);
                     }
                 }
             }
@@ -328,7 +338,7 @@ impl<'a> Chain<'a> {
                 if self.left[blast][step] <= DONE && self.events[blast].done_h[step].is_none() && before.is_some_and(|done| done <= at + 1e-9) {
                     self.events[blast].done_h[step] = Some(at);
                     if activity == BlastActivity::Charge {
-                        self.events[blast].fired_h = Some(self.input.fires_at(at));
+                        self.events[blast].fired_h = self.input.firing(at);
                     }
                 }
             }
