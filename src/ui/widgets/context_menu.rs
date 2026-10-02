@@ -81,10 +81,22 @@ pub(crate) fn context_menu_popup<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<egui::InnerResponse<R>> {
     let title = title.into();
-    egui::Popup::context_menu(response)
+    on_top(egui::Popup::context_menu(response))
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
         .width(MENU_WIDTH)
         .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// Raise an open popup over everything else on its layer.
+///
+/// egui raises an area only the first time it is shown, and a popup keeps its
+/// id between openings. Opened again from a dialog that was clicked in the
+/// meantime - which raises the dialog - it would open underneath it.
+fn on_top(popup: egui::Popup<'_>) -> egui::Popup<'_> {
+    if popup.is_open() {
+        popup.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, popup.get_id()));
+    }
+    popup
 }
 
 /// Paint the header and run `add_contents` inside the menu's content margins.
@@ -347,7 +359,7 @@ pub(crate) fn dropdown_menu<R>(
 
     let config = MenuConfig::new();
     let title = title.into();
-    egui::Popup::menu(response)
+    on_top(egui::Popup::menu(response))
         .close_behavior(config.close_behavior)
         .style(config.style.clone())
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
@@ -530,7 +542,7 @@ impl<'a> ChecklistRow<'a> {
 /// point is choosing several - and closes on a click outside it.
 pub(crate) fn checklist_popup<R>(response: &egui::Response, title: impl Into<egui::WidgetText>, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let title = title.into();
-    egui::Popup::menu(response)
+    on_top(egui::Popup::menu(response))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
         .width(width)
