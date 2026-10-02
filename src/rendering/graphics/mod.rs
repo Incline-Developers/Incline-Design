@@ -464,6 +464,7 @@ pub(crate) struct Graphics<'a> {
     /// Each stream object's ranges, restaged by `restyle_document_scene`.
     pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
+    pub(super) cached_bounds_surface_key: Option<u64>,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
     /// `cached_scene_bounds`. Depth-range fitting needs them individually so a
@@ -812,6 +813,7 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn invalidate_scene_bounds(&mut self) {
         self.cached_bounds_document_revision = u64::MAX;
+        self.cached_bounds_surface_key = None;
         self.cached_scene_bounds = None;
         self.cached_object_aabbs.clear();
     }

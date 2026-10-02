@@ -26,6 +26,21 @@ fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
     aabbs.iter().copied().reduce(|(acc_min, acc_max), (min, max)| (acc_min.min(min), acc_max.max(max)))
 }
 
+/// Generated planning and Animate meshes can change without a document edit.
+/// Track their identities and visibility before reusing camera depth bounds.
+fn bounds_surface_key(triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    triangulations.len().hash(&mut hasher);
+    for surface in triangulations {
+        surface.id.hash(&mut hasher);
+        (std::sync::Arc::as_ptr(&surface.mesh) as usize).hash(&mut hasher);
+        surface.state.loaded.hash(&mut hasher);
+        hidden.contains(&surface.entity_id()).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// What a scene pick landed on.
 ///
 /// `entity` is the scene entity the selection sets are keyed by; `hole` is
@@ -1511,7 +1526,9 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) {
-        if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() {
+        let surface_key = bounds_surface_key(triangulations, hidden);
+        if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() || self.cached_bounds_surface_key != Some(surface_key) {
+            self.cached_bounds_surface_key = Some(surface_key);
             self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden);
             self.cached_scene_bounds = merge_aabbs(&self.cached_object_aabbs);
             self.cached_bounds_document_revision = document.revision();
