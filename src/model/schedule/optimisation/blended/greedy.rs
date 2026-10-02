@@ -52,16 +52,17 @@
 //! and a pile not reclaiming gives a reclaim bar no work, so its loader moves
 //! on to its next bar as it would from an empty pile.
 //!
-//! A chunked pile follows the formulation's chunk lifecycle with one rule of
-//! its own: a chunk closes when it is full, and only then. Receipts go to the
+//! A chunked pile follows the formulation's chunk lifecycle: a chunk closes
+//! when it is full, or at the start of an interval its pile's mode keeps from
+//! building, and at no other time. Receipts go to the
 //! first chunk still open, up to its room. A chunk is open or closed for a
 //! whole interval, so one that fills during an interval closes at the start of
 //! the next, and the next chunk starts receiving then. Reclaim draws one
 //! chunk, the one the authored order releases - FIFO the oldest holding
 //! material, if it is closed; LIFO the newest closed one holding material -
-//! at that chunk's own blend. The formulation may also close a partly filled
-//! chunk; the dispatcher never does, which is what kept it out of the dead end
-//! where every chunk closed early and the diggers had nowhere to deliver.
+//! at that chunk's own blend. Closing a partly filled chunk only on the
+//! planner's say-so is what keeps out of the dead end where every chunk
+//! closed early and the diggers had nowhere to deliver.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -247,6 +248,17 @@ impl<'a> State<'a> {
         let duration = interval.duration_h();
         for segment in 0..input.segments_per_interval.max(1) {
             self.durations.insert((k, segment), if segment == 0 { duration } else { 0.0 });
+        }
+        // A chunk closes when it is full, or when its pile stops building:
+        // at the start of an interval the pile's mode keeps from taking
+        // deliveries, the chunk receiving closes if it holds anything.
+        for pile in input.piles.iter().filter(|pile| !pile.builds(interval)) {
+            if let Some(chunk) = self.chunks.get_mut(&pile.id).and_then(|chunks| chunks.iter_mut().find(|chunk| !chunk.closed))
+                && chunk.held_t > FINISHED_T
+            {
+                chunk.closed = true;
+                chunk.closed_h = Some(interval.start_h);
+            }
         }
         // Readiness is judged on the state the interval opened with, as the
         // replay judges it.

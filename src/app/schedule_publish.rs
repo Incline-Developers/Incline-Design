@@ -464,7 +464,7 @@ pub(crate) fn publish(
             .collect(),
         report,
     });
-    explain_idle(&mut schedule, input, &lookup);
+    explain_idle(&mut schedule, input, solution, &lookup);
     Ok(schedule)
 }
 
@@ -485,7 +485,7 @@ fn share_within(start_h: f64, end_h: f64, from_h: f64, to_h: f64) -> f64 {
 /// Say why each idle span happened (see [`IdleReason`] for the order the
 /// reasons are checked in), from the published schedule and the captured
 /// input alone - so the same answer is given whichever optimiser made it.
-fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &Lookup<'_>) {
+fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution: &BlendSolution, lookup: &Lookup<'_>) {
     use crate::model::schedule::{
         optimisation::{DestinationKind, TaskKind},
         result::IdleReason,
@@ -516,6 +516,30 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
         })
     };
 
+    // Which chunked piles release something in each interval: a chunk closed,
+    // rested and holding material.
+    let mut closed_from: BTreeMap<(StockpileId, usize), usize> = BTreeMap::new();
+    for row in solution.chunks.iter().filter(|row| row.closed) {
+        let first = closed_from.entry((row.pile, row.chunk)).or_insert(row.interval);
+        *first = (*first).min(row.interval);
+    }
+    let mut released: std::collections::BTreeSet<(StockpileId, usize)> = std::collections::BTreeSet::new();
+    for row in solution.chunks.iter().filter(|row| row.closed && row.open_t > IDLE_NEGLIGIBLE_T) {
+        let (Some(pile), Some(interval)) = (input.piles.iter().find(|pile| pile.id == row.pile), input.intervals.get(row.interval)) else {
+            continue;
+        };
+        let rested = if pile.chunk_starts_closed(row.chunk) {
+            pile.opening_chunk_rested(row.chunk, *interval)
+        } else {
+            closed_from
+                .get(&(row.pile, row.chunk))
+                .and_then(|first| input.intervals.get(*first))
+                .is_some_and(|first| pile.rested(first.start_h, *interval))
+        };
+        if rested {
+            released.insert((row.pile, row.interval));
+        }
+    }
     schedule.classify_idle(&intervals, |schedule, agent, position| {
         let Some(&loader) = loaders.get(&agent) else {
             return (IdleReason::NoWork, Vec::new());
@@ -568,7 +592,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
                     && !entry.rested(delivery.end_h.min(start_h), interval)
             })
         };
-        let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval)) && !resting(pile);
+        // A chunked pile releases nothing while its chunks are filling or
+        // resting.
+        let unreleased = |pile: StockpileId| pile_entry(pile).is_some_and(|entry| !entry.chunks.is_empty()) && !released.contains(&(pile, position));
+        let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval)) && !resting(pile) && !unreleased(pile);
         // A pile that may not build and reclaim at once, reclaimed here.
         let reclaimed_here = |pile: StockpileId| {
             let project = project_pile(pile);

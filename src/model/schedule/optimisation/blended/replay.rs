@@ -1465,6 +1465,25 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                     }
                 }
 
+                // A chunk closes only when full or where its pile is not
+                // building.
+                let closes = state.closed
+                    && if interval == 0 {
+                        !pile.chunk_starts_closed(chunk)
+                    } else {
+                        solution
+                            .chunks
+                            .iter()
+                            .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval - 1)
+                            .is_some_and(|entry| !entry.closed)
+                    };
+                if closes && pile.builds(at) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
+                    checker.report.issues.push(format!(
+                        "pile {} chunk {chunk} closed in interval {interval} holding {:.6} t of {:.6} t while its pile was building",
+                        pile.id.0, state.open_t, pile.chunks[chunk]
+                    ));
+                }
+
                 // No slot reuse: a chunk closed in one interval stays closed.
                 if interval + 1 < checker.input.intervals.len() {
                     let next = solution

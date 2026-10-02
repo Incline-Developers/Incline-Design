@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
-    BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T, REST_TOLERANCE_H,
-    authored_tasks, delivers_to_pile, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    BlendInput, BlendPile, CHUNK_FULL_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
+    REST_TOLERANCE_H, authored_tasks, delivers_to_pile, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -1820,8 +1820,9 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 /// - **Fill order** is sequential: chunk `c + 1` receives nothing until `c`
 ///   is closed.
 /// - A chunk **becomes reclaimable** when it is closed to further receipts.
-/// - A **partially filled** chunk may be closed at a calendar boundary; that
-///   is what `closed` being a free binary per interval expresses.
+/// - A chunk **closes** when it is full, or at the start of an interval its
+///   pile's mode keeps from building - the planner closing it early on
+///   purpose. Never otherwise, as the hourly dispatch does.
 /// - A chunk **may not receive while being reclaimed**: receipts require
 ///   `not closed`, reclaim requires `closed`.
 /// - **FIFO/LIFO** applies among released, non-empty chunks.
@@ -1978,6 +1979,19 @@ fn chunked_pile<R: Rows>(
             if c > 0 {
                 let previous = take(&closed[c - 1][k]);
                 rows.leq(vec![(close.clone(), 1.0), (previous, -1.0)], 0.0, &format!("cCloseSeq_{}_{c}_{k}", pile.id.0));
+            }
+
+            // A chunk closes only when full - its open tonnes, which for an
+            // open chunk are everything it has received, within
+            // `CHUNK_FULL_T` of its capacity - or where its pile is not
+            // building:
+            //   closed[k] - closed[k-1] <= open_t[k] / (cap - CHUNK_FULL_T)
+            if !pile.chunk_starts_closed(c) && pile.builds(input.intervals[k]) && cap > CHUNK_FULL_T {
+                let mut terms = vec![(close.clone(), 1.0), (open.clone(), -1.0 / (cap - CHUNK_FULL_T))];
+                if k > 0 {
+                    terms.push((take(&closed[c][k - 1]), -1.0));
+                }
+                rows.leq(terms, 0.0, &format!("cCloseFull_{}_{c}_{k}", pile.id.0));
             }
 
             // Closing is monotone: a closed chunk never reopens, so a slot is

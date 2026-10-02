@@ -41,6 +41,25 @@ it is not reclaiming, are never created, and a reclaim bar's readiness counts
 only piles reclaiming that interval. The replay rejects receipts or reclaim
 on a forbidden day.
 
+## Closing chunks
+
+A chunk of an ordered chunked pile closes - stops receiving and becomes
+reclaimable - in two cases only, the same in the hourly dispatch, the model
+and the replay:
+
+- when it is **full** (within 1e-3 t of its capacity); it closes at the
+  start of the next hour and the next chunk starts receiving;
+- at the start of an hour its pile's **Mode** keeps from building (Reclaim
+  only or Off); the chunk receiving closes if it holds anything. This is how
+  a planner closes a chunk early on purpose: set the pile to Reclaim only for
+  the day it should start being reclaimed.
+
+Before this the model could close a partly filled chunk at any hour while the
+dispatch never did, so Improve could release material the first schedule
+could not. Now neither does: a chunk left partly filled when deliveries stop
+stays unreclaimable until its pile's Mode stops building. A Reclaim bar
+standing beside such a pile is explained as **stockpile settings**.
+
 ## Per-pile settings
 
 Two settings sit with the pile in **Setup → Stockpiles** and hold every day:

@@ -92,6 +92,11 @@ pub(crate) use crate::model::schedule::stockpile_operation::PileMode;
 /// agrees.
 pub(crate) const REST_TOLERANCE_H: f64 = 1e-6;
 
+/// Tonnes short of its capacity at which a chunk counts as full and may
+/// close. Looser than the dispatcher's own snap, so a chunk it fills is full
+/// to the model as SCIP checks it.
+pub(crate) const CHUNK_FULL_T: f64 = 1e-3;
+
 /// The least an interval's deliveries to a pile may total and still restart
 /// its rest. The model counts no less as building, and the replay and the
 /// dispatcher count no less as a delivery that rests.

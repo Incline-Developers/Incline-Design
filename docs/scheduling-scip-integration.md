@@ -758,11 +758,14 @@ hourly dispatch schedule first. SCIP's day-by-day windows only run when the
 dispatcher fails: HiGHS failing on an interval, or the replay refusing its
 schedule.
 
-The chunk rules are the formulation's, with one rule of the dispatcher's own:
-- **Closing:** a chunk closes when it is full, and only then. The formulation
-  may close a partly filled chunk; the dispatcher never does. Closing early
-  is what led the days-alone LIFO run into its dead end, where every chunk
-  was closed and the diggers had nowhere to deliver.
+The chunk rules are the formulation's:
+- **Closing:** a chunk closes when it is full, or at the start of an hour
+  its pile's Mode keeps from building, and at no other time - in the
+  dispatcher, the formulation and the replay alike (see
+  `docs/scheduling-stockpile-modes.md`). The formulation used to be free to
+  close a partly filled chunk at any hour; closing early is what led the
+  days-alone LIFO run into its dead end, where every chunk was closed and the
+  diggers had nowhere to deliver.
 - **Filling:** receipts go to the first chunk still open, up to its room and
   the pile's. A chunk is open or closed for a whole interval, so a chunk that
   fills during an interval closes at the start of the next, and the next
