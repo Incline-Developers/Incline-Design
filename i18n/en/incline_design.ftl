@@ -2220,6 +2220,7 @@ sequence-target-changed = This bar's dig order changed while the sequence editor
 ## Schedule → Gantt
 
 planning-subpage-gantt = Gantt
+planning-subpage-charts = Charts
 gantt-empty-fleet = No agent rows yet. Add loader classes and loader agents in Setup → Site Data
 gantt-no-bars = No bars yet. Right-click a loader row to add one
 schedule-add-work = Add work
@@ -2260,10 +2261,28 @@ inspector-crusher-at-limit = Daily limit reached
 inspector-not-receiving = Not receiving
 inspector-crusher-today = Today { $tonnes } t
 inspector-crusher-today-of = Today { $tonnes } of { $limit } t
-inspector-crusher-outside = { $grade } outside band today
+inspector-crusher-outside = { $grade } today, outside its band
 inspector-crusher-feed-grade = This hour: { $grades }
 inspector-crusher-day-grade = Day: { $grade } (band { $lower } – { $upper }, target { $target })
 inspector-dump-to-date = { $tonnes } t received so far
+charts-no-schedule = Charts appear once the schedule is calculated.
+charts-no-destinations = There are no stockpiles, crushers or dumps to chart. Add destinations in Setup.
+charts-inventory = Inventory
+charts-feed = Feed
+charts-grade = { $grade } grade
+charts-received = Received to date
+charts-nothing-received = Nothing received in this schedule
+charts-grade-day = { $grade } for the day
+charts-inventory-help = What the stockpile holds, against its capacity (dashed). Days its Mode stops building or reclaiming are tinted: blue build only, green reclaim only, grey off. The figure is at the time slider.
+charts-feed-help = Tonnes fed to the crusher, hour by hour. Gaps are hours it was not fed - often because the day's limit was reached. The figure is at the time slider.
+charts-grade-help = The feed's grade hour by hour (line), the day's target band (green) and the day's blend (bar) - white inside the band, orange outside. The band prices the day's blend, so single hours may stray. The figure is the day's blend at the time slider.
+charts-received-help = Everything the dump has received from the start of the schedule. The figure is at the time slider.
+charts-capacity = Capacity { $tonnes } t
+charts-mode = Mode: { $mode }
+charts-feed-hour = This hour: { $rate } t
+charts-feed-day = Day: { $tonnes } t
+charts-feed-day-of = Day: { $tonnes } of { $limit } t
+charts-grade-hour = This hour: { $grade }
 inspector-trucks-in-use = { $busy } of { $fleet } in use
 inspector-trucks-help = Trucks hauling at this instant, of the fleet available today after availability and utilisation.
 

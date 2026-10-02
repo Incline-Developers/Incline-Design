@@ -180,7 +180,7 @@ impl EditorState {
         self.active_workspace == Workspace::Planning
             && (!matches!(
                 self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
             ) || self.is_planning_cut_step())
     }
 
@@ -191,7 +191,7 @@ impl EditorState {
         self.active_workspace == Workspace::Planning
             && matches!(
                 self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
             )
             && !self.is_planning_cut_step()
     }
@@ -199,6 +199,17 @@ impl EditorState {
     /// Whether the Schedule page is showing its Gantt subpage.
     pub(crate) fn is_schedule_gantt(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
+    }
+
+    /// Whether the Schedule page is showing its Charts subpage.
+    pub(crate) fn is_schedule_charts(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Charts
+    }
+
+    /// Whether a Schedule page that lays out its own whole pane - the
+    /// Calendar, the Gantt or the Charts - is showing.
+    pub(crate) fn is_schedule_pane(&self) -> bool {
+        self.is_schedule_gantt() || self.is_schedule_calendar() || self.is_schedule_charts()
     }
 
     pub(crate) fn is_schedule_calendar(&self) -> bool {
@@ -2725,8 +2736,10 @@ pub(crate) struct EditorState {
     pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
-    /// Whether the Inspector is open beside the Gantt.
+    /// Whether the Inspector is open beside the Gantt and the Charts.
     pub(crate) gantt_inspector_open: bool,
+    /// Downward scroll of the Charts page's rows, in points.
+    pub(crate) schedule_charts_scroll: f32,
     pub(crate) schedule_calendar: ScheduleCalendarView,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
@@ -3817,6 +3830,7 @@ impl EditorState {
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
             gantt_inspector_open: true,
+            schedule_charts_scroll: 0.0,
             schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
             survey: Default::default(),
@@ -5617,7 +5631,13 @@ impl PlanningPage {
         match self {
             Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
             Self::Haulage => &[PlanningSubpage::Layout],
-            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Calendar, PlanningSubpage::Gantt, PlanningSubpage::Animate],
+            Self::Schedule => &[
+                PlanningSubpage::Setup,
+                PlanningSubpage::Calendar,
+                PlanningSubpage::Gantt,
+                PlanningSubpage::Charts,
+                PlanningSubpage::Animate,
+            ],
         }
     }
 }
@@ -5634,6 +5654,8 @@ pub(crate) enum PlanningSubpage {
     /// Schedule: one timeline row per loader agent, along elapsed project
     /// time. Stage 1 draws the rows and the ruler; the bars follow.
     Gantt,
+    /// Schedule: a chart per destination along the Gantt's own timeline.
+    Charts,
     Animate,
 }
 
@@ -5645,6 +5667,7 @@ impl PlanningSubpage {
             Self::Layout => tr!("planning-subpage-layout"),
             Self::Calendar => tr!("planning-subpage-calendar"),
             Self::Gantt => tr!("planning-subpage-gantt"),
+            Self::Charts => tr!("planning-subpage-charts"),
             Self::Animate => tr!("planning-subpage-animate"),
         }
     }

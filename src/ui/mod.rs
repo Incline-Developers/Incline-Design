@@ -605,7 +605,7 @@ fn draw_ui(
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     if editor.is_planning_setup() {
-        let explorer = if editor.is_schedule_gantt() || editor.is_schedule_calendar() {
+        let explorer = if editor.is_schedule_pane() {
             elements::explorer::ExplorerLayout::empty()
         } else {
             elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
@@ -629,6 +629,8 @@ fn draw_ui(
             // it, so - like the Solids View - it hands its own rect back to be
             // rounded off as one region.
             elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
+        } else if editor.is_schedule_charts() {
+            elements::schedule_charts::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_calendar() {
             elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
         } else {
@@ -655,7 +657,7 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        let details_region = if editor.is_solids_view() || editor.is_schedule_gantt() || editor.is_schedule_calendar() {
+        let details_region = if editor.is_solids_view() || editor.is_schedule_pane() {
             details
         } else {
             egui::Rect::NOTHING

@@ -444,21 +444,26 @@ impl crate::app::App<'_> {
     /// The dig order itself is not mirrored: it is persistent plan data,
     /// already in the project view.
     pub(crate) fn mirror_schedule_reports(&mut self) {
+        // The Charts page carries the Gantt's Inspector, which names blocks
+        // from these same reports, so it keeps them as the Gantt does.
+        let charts = self.editor.is_schedule_charts();
         if !self.editor.is_schedule_gantt() {
-            if !self.editor.schedule_bar_reports.is_empty() {
+            if !charts && !self.editor.schedule_bar_reports.is_empty() {
                 self.editor.schedule_bar_reports.clear();
                 self.redraw_requested = true;
             }
-            // The Calendar reports per-period tonnes off the same held result,
-            // so on that page the result stays mirrored - under the same
+            // The Calendar and the Charts report off the same held result, so
+            // on those pages the result stays mirrored - under the same
             // currentness gate - rather than being taken off the page.
-            if self.editor.is_schedule_calendar() {
+            if self.editor.is_schedule_calendar() || charts {
                 self.mirror_schedule_calculation();
             } else if self.editor.schedule_result.take().is_some() {
                 self.redraw_requested = true;
             }
             if let Some(cache) = self.schedule_report_cache.as_mut() {
-                cache.bar_views_key = None;
+                if !charts {
+                    cache.bar_views_key = None;
+                }
                 cache.sequence_key = None;
             }
             // The draft itself is kept: leaving the page puts the Solids
@@ -471,9 +476,12 @@ impl crate::app::App<'_> {
                 self.editor.sequence_unavailable = None;
                 self.redraw_requested = true;
             }
-            return;
+            if !charts {
+                return;
+            }
+        } else {
+            self.mirror_sequence_editor();
         }
-        self.mirror_sequence_editor();
         let reports = self.schedule_reports();
         // Nothing is calculated here. Inspection is unconditional and the
         // readiness of each bar is a read; the timed schedule comes only from

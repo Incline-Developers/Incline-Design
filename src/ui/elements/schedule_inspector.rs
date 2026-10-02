@@ -55,7 +55,8 @@ struct Entry {
     value: String,
     value_weak: bool,
     detail: Option<String>,
-    detail_warn: bool,
+    /// A second line under the detail, in the warning colour.
+    warning: Option<String>,
     /// How full, `0..=1`, drawn as a thin bar under the name.
     meter: Option<f32>,
 }
@@ -240,7 +241,7 @@ fn rate(delivery: &crate::model::schedule::result::Delivery) -> f64 {
     if duration > 0.0 { delivery.tonnes / duration } else { 0.0 }
 }
 
-fn grades_text(names: &[String], tonnes: f64, contained: &[f64]) -> Option<String> {
+pub(super) fn grades_text(names: &[String], tonnes: f64, contained: &[f64]) -> Option<String> {
     if tonnes <= 1e-6 || contained.is_empty() {
         return None;
     }
@@ -252,7 +253,7 @@ fn grades_text(names: &[String], tonnes: f64, contained: &[f64]) -> Option<Strin
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-fn grade_number(value: f64) -> String {
+pub(super) fn grade_number(value: f64) -> String {
     let mut text = format!("{value:.2}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();
@@ -404,8 +405,7 @@ fn crushers(ui: &mut egui::Ui, plan: &SchedulePlan, destinations: &[DestinationV
             }
         }
         if !outside.is_empty() {
-            entry.detail = Some(format!("{} · {}", entry.detail.unwrap_or_default(), outside.join(" · ")));
-            entry.detail_warn = true;
+            entry.warning = Some(outside.join(" · "));
         }
         let response = draw_entry(ui, &entry);
         if !lines.is_empty() {
@@ -475,7 +475,8 @@ fn fitted(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32,
 }
 
 fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
-    let height = NAME_ROW_H + entry.detail.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
+    let height =
+        NAME_ROW_H + entry.detail.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.warning.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
     let visuals = ui.visuals();
     if response.hovered() {
@@ -508,10 +509,12 @@ fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
             .rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(track.width() * fill, METER_H)), 1.5, color);
         y += METER_H + 3.0;
     }
-    if let Some(detail) = &entry.detail {
-        let color = if entry.detail_warn { visuals.warn_fg_color } else { visuals.weak_text_color() };
-        let galley = fitted(ui, detail.clone(), small, color, rect.right() - left);
-        ui.painter().galley(egui::pos2(left, y + (DETAIL_ROW_H - galley.size().y) / 2.0), galley, color);
+    for (line, color) in [(&entry.detail, visuals.weak_text_color()), (&entry.warning, visuals.warn_fg_color)] {
+        if let Some(line) = line {
+            let galley = fitted(ui, line.clone(), small.clone(), color, rect.right() - left);
+            ui.painter().galley(egui::pos2(left, y + (DETAIL_ROW_H - galley.size().y) / 2.0), galley, color);
+            y += DETAIL_ROW_H;
+        }
     }
     response
 }

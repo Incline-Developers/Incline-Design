@@ -588,6 +588,45 @@ impl PeriodTotals {
     }
 }
 
+/// What one destination received in each whole hour from hour zero, built
+/// once per calculation for the charts. Each delivery is spread over the
+/// hours it overlaps, in proportion to the overlap.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HourlyReceipts {
+    pub(crate) tonnes: Vec<f64>,
+    /// Contained quantity per tracked grade, `[grade][hour]`.
+    pub(crate) contained: Vec<Vec<f64>>,
+}
+
+fn hourly_receipts(requested_end_h: f64, grades: usize, deliveries: &[Delivery]) -> HashMap<DestinationId, HourlyReceipts> {
+    let hours = if requested_end_h.is_finite() { requested_end_h.max(0.0).ceil() as usize } else { 0 };
+    let mut receipts: HashMap<DestinationId, HourlyReceipts> = HashMap::new();
+    for delivery in deliveries {
+        let duration = delivery.end_h - delivery.start_h;
+        if duration <= 0.0 || hours == 0 {
+            continue;
+        }
+        let entry = receipts.entry(delivery.destination).or_insert_with(|| HourlyReceipts {
+            tonnes: vec![0.0; hours],
+            contained: vec![vec![0.0; hours]; grades],
+        });
+        let first = delivery.start_h.max(0.0).floor() as usize;
+        let last = (delivery.end_h.ceil().max(0.0) as usize).min(hours);
+        for hour in first..last {
+            let overlap = delivery.end_h.min(hour as f64 + 1.0) - delivery.start_h.max(hour as f64);
+            if overlap <= 0.0 {
+                continue;
+            }
+            let share = overlap / duration;
+            entry.tonnes[hour] += delivery.tonnes * share;
+            for (series, quantity) in entry.contained.iter_mut().zip(&delivery.contained) {
+                series[hour] += quantity * share;
+            }
+        }
+    }
+    receipts
+}
+
 /// One target day, recomputed from actual deliveries by independent replay.
 #[derive(Clone, Debug)]
 pub(crate) struct GradeTargetResult {
@@ -632,6 +671,7 @@ pub(crate) struct CalculatedSchedule {
     by_bar: HashMap<BarId, Vec<usize>>,
     by_block: HashMap<DigBlockId, usize>,
     inventory: HashMap<DestinationId, Vec<InventoryKnot>>,
+    hourly: HashMap<DestinationId, HourlyReceipts>,
 }
 
 /// Everything [`CalculatedSchedule::new`] indexes.
@@ -689,6 +729,7 @@ impl CalculatedSchedule {
         let by_block = parts.ground.iter().enumerate().map(|(index, balance)| (balance.block, index)).collect();
         let periods = PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles);
         let inventory = inventory_curves(&parts.piles, &parts.deliveries);
+        let hourly = hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries);
         Self {
             run: parts.run,
             semantic: parts.semantic,
@@ -709,6 +750,7 @@ impl CalculatedSchedule {
             by_bar,
             by_block,
             inventory,
+            hourly,
         }
     }
 
@@ -840,6 +882,29 @@ impl CalculatedSchedule {
                 .map(|(quantity, rate)| (quantity + elapsed * rate).max(0.0))
                 .collect(),
         ))
+    }
+
+    /// The most a stockpile held at any instant of the calculation. Exact:
+    /// the balance is linear between knots.
+    pub(crate) fn inventory_peak(&self, pile: DestinationId) -> f64 {
+        self.inventory
+            .get(&pile)
+            .into_iter()
+            .flatten()
+            .map(|knot| knot.tonnes)
+            .chain(
+                self.inventory
+                    .get(&pile)
+                    .and_then(|curve| curve.last())
+                    .map(|knot| knot.tonnes + (self.requested_end_h - knot.hour).max(0.0) * knot.rate),
+            )
+            .fold(0.0, f64::max)
+    }
+
+    /// What a destination received hour by hour, or `None` when it received
+    /// nothing at all.
+    pub(crate) fn hourly_receipts(&self, destination: DestinationId) -> Option<&HourlyReceipts> {
+        self.hourly.get(&destination)
     }
 
     /// Which chunks of an ordered chunked pile were drawn during the calendar

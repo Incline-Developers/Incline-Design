@@ -154,36 +154,9 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     // to its successor.
     let plan = project.schedule.clone();
     let session = project.active_session;
-    let rect = egui::CentralPanel::default()
-        .frame(chrome::region_frame(ui))
-        .show(ui, |ui| {
-            let available = ui.available_rect_before_wrap();
-            let toolbar_height = ui.spacing().interact_size.y + 8.0;
-            let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
-            let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, &plan, commands);
-            if canvas.is_positive() {
-                // Names are resolved here, at draw time, by stable id: a
-                // rename relabels a calculated span without recalculating it.
-                let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-                let inspector_width = super::schedule_inspector::INSPECTOR_WIDTH;
-                let inspect = editor.gantt_inspector_open && canvas.width() >= inspector_width + super::schedule_inspector::MIN_TIMELINE_WIDTH;
-                let timeline = if inspect {
-                    egui::Rect::from_min_max(canvas.min, egui::pos2(canvas.right() - inspector_width, canvas.bottom()))
-                } else {
-                    canvas
-                };
-                draw_canvas(ui, timeline, editor, &plan, &destinations, session, commands);
-                if inspect {
-                    let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
-                    let panel = egui::Rect::from_min_max(egui::pos2(timeline.right(), canvas.top()), canvas.max);
-                    super::schedule_inspector::draw_inspector(ui, panel, editor, &plan, &destinations, &fields);
-                }
-            }
-            ui.allocate_rect(available, egui::Sense::hover());
-        })
-        .response
-        .rect;
+    let rect = draw_timeline_page(ui, editor, &plan, document, commands, |ui, timeline, editor, destinations, commands| {
+        draw_canvas(ui, timeline, editor, &plan, destinations, session, commands);
+    });
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
@@ -610,7 +583,7 @@ fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::Schedul
     (end > 0.0).then_some(end)
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &crate::model::schedule::SchedulePlan, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
@@ -672,29 +645,97 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
     });
 }
 
-/// The header column, the ruler, the rows and the bars, plus the navigation
-/// over them.
-fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationView], session: u32, commands: &mut Vec<UiCommand>) {
-    let header_width = HEADER_WIDTH.min(rect.width() * 0.5);
-    let bands = if editor.gantt.minor_interval(rect.width() - header_width, MIN_TICK_SPACING) < GanttView::DAY {
-        2.0
-    } else {
-        1.0
-    };
-    let ruler_height = (RULER_BAND * bands).min(rect.height());
-    let header = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + ruler_height), egui::pos2(rect.left() + header_width, rect.bottom()));
-    let ruler = egui::Rect::from_min_max(egui::pos2(rect.left() + header_width, rect.top()), egui::pos2(rect.right(), rect.top() + ruler_height));
-    let body = egui::Rect::from_min_max(ruler.left_bottom(), rect.max);
-    let corner = egui::Rect::from_min_max(rect.min, header.right_top());
+/// A page laid out like the Gantt: the toolbar across the top, a timeline
+/// canvas drawn by `draw`, and the Inspector beside it while it is open.
+/// Returns the rect it claimed, for the caller to round off as one region.
+pub(super) fn draw_timeline_page(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+    draw: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &[DestinationView], &mut Vec<UiCommand>),
+) -> egui::Rect {
+    egui::CentralPanel::default()
+        .frame(chrome::region_frame(ui))
+        .show(ui, |ui| {
+            let available = ui.available_rect_before_wrap();
+            let toolbar_height = ui.spacing().interact_size.y + 8.0;
+            let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
+            let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
+            draw_toolbar(ui, toolbar, editor, plan, commands);
+            if canvas.is_positive() {
+                // Names are resolved here, at draw time, by stable id: a
+                // rename relabels a calculated span without recalculating it.
+                let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
+                let inspector_width = super::schedule_inspector::INSPECTOR_WIDTH;
+                let inspect = editor.gantt_inspector_open && canvas.width() >= inspector_width + super::schedule_inspector::MIN_TIMELINE_WIDTH;
+                let timeline = if inspect {
+                    egui::Rect::from_min_max(canvas.min, egui::pos2(canvas.right() - inspector_width, canvas.bottom()))
+                } else {
+                    canvas
+                };
+                draw(ui, timeline, editor, &destinations, commands);
+                if inspect {
+                    let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
+                    let panel = egui::Rect::from_min_max(egui::pos2(timeline.right(), canvas.top()), canvas.max);
+                    super::schedule_inspector::draw_inspector(ui, panel, editor, plan, &destinations, &fields);
+                }
+            }
+            ui.allocate_rect(available, egui::Sense::hover());
+        })
+        .response
+        .rect
+}
 
+/// The parts of a timeline canvas: the name column, the ruler over the body,
+/// the body, and the corner the column and ruler leave.
+pub(super) struct TimelineFrame {
+    pub(super) header: egui::Rect,
+    pub(super) ruler: egui::Rect,
+    pub(super) body: egui::Rect,
+    pub(super) corner: egui::Rect,
+    /// Whether the ruler carries a band of days above finer ticks.
+    pub(super) day_band: bool,
+}
+
+impl TimelineFrame {
+    pub(super) fn new(view: GanttView, rect: egui::Rect) -> Self {
+        let header_width = HEADER_WIDTH.min(rect.width() * 0.5);
+        let day_band = view.minor_interval(rect.width() - header_width, MIN_TICK_SPACING) < GanttView::DAY;
+        let ruler_height = (RULER_BAND * if day_band { 2.0 } else { 1.0 }).min(rect.height());
+        let header = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + ruler_height), egui::pos2(rect.left() + header_width, rect.bottom()));
+        let ruler = egui::Rect::from_min_max(egui::pos2(rect.left() + header_width, rect.top()), egui::pos2(rect.right(), rect.top() + ruler_height));
+        let body = egui::Rect::from_min_max(ruler.left_bottom(), rect.max);
+        let corner = egui::Rect::from_min_max(rect.min, header.right_top());
+        Self {
+            header,
+            ruler,
+            body,
+            corner,
+            day_band,
+        }
+    }
+
+    /// The minor tick interval the ruler and grid use at this zoom.
+    pub(super) fn interval(&self, view: GanttView) -> f64 {
+        view.minor_interval(self.body.width(), MIN_TICK_SPACING)
+    }
+}
+
+/// The wheel, pinch and middle-drag over a timeline canvas: zoom and pan the
+/// shared view. Returns whether the pointer is over the canvas and how far
+/// the wheel asks the rows to scroll down.
+pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, editor: &mut EditorState, salt: &str) -> (bool, f32) {
     // Input is read only while the pointer is over this canvas, so the wheel
     // still scrolls whatever else is on screen and the keyboard is untouched.
-    let response = ui.interact(rect, ui.id().with("gantt_canvas"), egui::Sense::click_and_drag());
-    // Read from the pointer rather than the canvas response, because the bars
-    // drawn on top of it take the hover for themselves: the wheel has to keep
-    // zooming and panning while the pointer is over one.
+    let response = ui.interact(rect, ui.id().with(salt), egui::Sense::click_and_drag());
+    // Read from the pointer rather than the canvas response, because what is
+    // drawn on top of it takes the hover for itself: the wheel has to keep
+    // zooming and panning while the pointer is over a bar or a chart.
     let pointer = ui.input(|input| input.pointer.hover_pos());
     let over_canvas = pointer.is_some_and(|pos| rect.contains(pos));
+    let mut rows = 0.0;
     if over_canvas && body.width() > 0.0 {
         let (scroll, zoom) = ui.input(|input| (input.smooth_scroll_delta, f64::from(input.zoom_delta())));
         if (zoom - 1.0).abs() > f64::EPSILON {
@@ -707,11 +748,26 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
         if scroll.x != 0.0 {
             editor.gantt.pan(-f64::from(scroll.x) / f64::from(body.width()) * editor.gantt.span_seconds);
         }
-        editor.gantt.row_scroll -= scroll.y;
+        rows = -scroll.y;
     }
     if response.dragged_by(egui::PointerButton::Middle) && body.width() > 0.0 {
         editor.gantt.pan(-f64::from(response.drag_delta().x) / f64::from(body.width()) * editor.gantt.span_seconds);
     }
+    (over_canvas, rows)
+}
+
+/// The header column, the ruler, the rows and the bars, plus the navigation
+/// over them.
+fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationView], session: u32, commands: &mut Vec<UiCommand>) {
+    let TimelineFrame {
+        header,
+        ruler,
+        body,
+        corner,
+        day_band,
+    } = TimelineFrame::new(editor.gantt, rect);
+    let (over_canvas, rows_scroll) = navigate(ui, rect, body, editor, "gantt_canvas");
+    editor.gantt.row_scroll += rows_scroll;
     // Laid out after the navigation, so the arrangement drawn this frame is
     // the one this frame's zoom and pan produced. How deep a lane stacks
     // depends on which markers overlap, which depends on the zoom.
@@ -730,7 +786,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     ui.painter().rect_filled(corner, 0.0, visuals.widgets.noninteractive.bg_fill);
 
     let interval = editor.gantt.minor_interval(body.width(), MIN_TICK_SPACING);
-    draw_ruler(ui, ruler, editor.gantt, interval, bands > 1.0);
+    draw_ruler(ui, ruler, editor.gantt, interval, day_band);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
     draw_grid(ui, body, editor.gantt, interval);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
@@ -798,7 +854,7 @@ const SLIDER_LABEL_H: f32 = 16.0;
 
 /// Where a dragged slider lands: whole hours once the ruler counts in hours
 /// or coarser steps, quarter hours when zoomed in to single hours.
-fn snap_slider(seconds: f64, interval: f64) -> f64 {
+pub(super) fn snap_slider(seconds: f64, interval: f64) -> f64 {
     let step = if interval > GanttView::HOUR { GanttView::HOUR } else { GanttView::HOUR / 4.0 };
     ((seconds / step).round() * step).max(0.0)
 }
@@ -812,7 +868,7 @@ fn snap_slider(seconds: f64, interval: f64) -> f64 {
 /// step it an hour (a day with Shift) while the pointer is over the Gantt.
 /// Scrolled out of view, a label pinned to that edge of the ruler says where
 /// it is, and pressing it brings it back.
-fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, editor: &mut EditorState, interval: f64, over_canvas: bool) {
+pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, editor: &mut EditorState, interval: f64, over_canvas: bool) {
     if !body.is_positive() || !ruler.is_positive() {
         return;
     }
@@ -934,7 +990,7 @@ fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, edit
 
 /// The time ruler: minor ticks with their labels, and - while the minor ticks
 /// are finer than a day - a band of days above grouping them.
-fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64, day_band: bool) {
+pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64, day_band: bool) {
     if !rect.is_positive() {
         return;
     }
@@ -2193,7 +2249,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
 }
 
 /// Vertical grid lines under the rows, on the same ticks the ruler labels.
-fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64) {
+pub(super) fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64) {
     if !rect.is_positive() {
         return;
     }
@@ -2206,7 +2262,7 @@ fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64) {
 }
 
 /// A single line of guidance across the middle of the timeline.
-fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
+pub(super) fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
     ui.painter_at(rect).text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
