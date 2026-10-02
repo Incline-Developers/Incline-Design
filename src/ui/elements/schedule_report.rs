@@ -151,7 +151,30 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
     let grade_headers: Vec<String> = names.grades.iter().map(|name| tr!("report-grade", grade = name.clone())).collect();
 
     let mut tables = Vec::new();
-    tables.push(movements(schedule, names, &groups, &grade_headers, &currency, &destination_name, &loader_name));
+    let mut movements = movements(schedule, names, &groups, &grade_headers, &currency, &destination_name, &loader_name);
+    let first = 7 + grade_headers.len();
+    let mut header = movements.header[..6].to_vec();
+    header.extend(movements.header[first..first + 9].iter().cloned());
+    let rows = movements
+        .rows
+        .iter()
+        .map(|row| {
+            let mut cells = row[..6].to_vec();
+            cells.extend(row[first..first + 9].iter().cloned());
+            cells
+        })
+        .collect();
+    let haulage = ReportTable {
+        title: tr!("haul-table"),
+        header,
+        rows,
+    };
+    movements.header.drain(first..first + 9);
+    for row in &mut movements.rows {
+        row.drain(first..first + 9);
+    }
+    tables.push(movements);
+    tables.push(haulage);
     tables.push(loaders(schedule, plan, &groups, &loader_name));
     let of_kind = |kind: DestinationKind| {
         names
@@ -272,7 +295,20 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
                         class.calendar.values_at(CalendarPeriod(day)).effective_units() * (to - from).max(0.0)
                     })
                     .sum();
-                rows.push(vec![group.label.clone(), class.name.clone(), hours(used), hours(available)]);
+                let mut haul = crate::model::schedule::result::HaulSummary::default();
+                for d in schedule.deliveries.iter().filter(|d| d.truck == class.id && d.end_h > d.start_h) {
+                    haul.add(d, overlap(d.start_h, d.end_h, group) / (d.end_h - d.start_h));
+                }
+                rows.push(vec![
+                    group.label.clone(),
+                    class.name.clone(),
+                    hours(used),
+                    hours(available),
+                    hours(haul.cycle_minutes()),
+                    hours(haul.distance_km()),
+                    hours(haul.average(haul.rise_t_m)),
+                    hours(haul.loaded_t_km),
+                ]);
             }
         }
         tables.push(ReportTable {
@@ -282,6 +318,10 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
                 tr!("report-truck-class"),
                 tr!("report-truck-hours-used"),
                 tr!("report-truck-hours-available"),
+                tr!("haul-cycle"),
+                tr!("haul-distance"),
+                tr!("haul-rise"),
+                tr!("haul-tonne-km"),
             ],
             rows,
         });
@@ -307,6 +347,7 @@ fn movements(
         contained: Vec<f64>,
         truck_hours: f64,
         value: f64,
+        haul: crate::model::schedule::result::HaulSummary,
     }
     let source_name = |delivery: &crate::model::schedule::result::Delivery| match delivery.source {
         WorkSource::Stockpile(pile) => destination_name(pile),
@@ -349,6 +390,7 @@ fn movements(
                 *total += quantity * share;
             }
             entry.truck_hours += delivery.truck_hours * share;
+            entry.haul.add(delivery, share);
             entry.value += delivery.value * share;
         }
     }
@@ -362,6 +404,17 @@ fn movements(
     ];
     header.extend(grade_headers.iter().cloned());
     header.push(tr!("report-truck-hours-used"));
+    header.extend([
+        tr!("haul-spot-min"),
+        tr!("haul-load-min"),
+        tr!("haul-loaded-min"),
+        tr!("haul-dump-min"),
+        tr!("haul-return-min"),
+        tr!("haul-cycle"),
+        tr!("haul-distance"),
+        tr!("haul-rise"),
+        tr!("haul-tonne-km"),
+    ]);
     header.push(tr!("report-value", currency = currency.to_owned()));
     let rows = moved
         .into_iter()
@@ -376,6 +429,22 @@ fn movements(
             ];
             row.extend((0..grade_headers.len()).map(|grade_index| grade(entry.contained.get(grade_index).copied().unwrap_or(0.0), entry.tonnes)));
             row.push(hours(entry.truck_hours));
+            let h = entry.haul;
+            row.extend(
+                [
+                    h.average(h.spot_t_h) * 60.0,
+                    h.average(h.load_t_h) * 60.0,
+                    h.average(h.loaded_t_h) * 60.0,
+                    h.average(h.dump_t_h) * 60.0,
+                    h.average(h.empty_t_h) * 60.0,
+                    h.cycle_minutes(),
+                    h.distance_km(),
+                    h.average(h.rise_t_m),
+                    h.loaded_t_km,
+                ]
+                .into_iter()
+                .map(hours),
+            );
             row.push(money(entry.value));
             row
         })

@@ -64,6 +64,7 @@ enum ChartKind {
     /// The index into the result's tracked grades.
     Grade(usize, ReserveFieldId),
     Received,
+    Trucks(crate::model::schedule::TruckClassId),
 }
 
 struct Chart {
@@ -111,6 +112,15 @@ fn charts(plan: &SchedulePlan, destinations: &[DestinationView], schedule: &Calc
     }
     for view in destinations.iter().filter(|view| view.kind == DestinationKind::Dump) {
         charts.push(chart(view, ChartKind::Received, CHART_H));
+    }
+    for class in &plan.trucks().classes {
+        charts.push(Chart {
+            destination: DestinationId::Standalone(crate::model::schedule::StandaloneDestinationId(0)),
+            name: class.name.clone(),
+            kind: ChartKind::Trucks(class.id),
+            capacity: None,
+            height: CHART_H,
+        });
     }
     charts
 }
@@ -242,6 +252,10 @@ fn draw_chart(
         .iter()
         .map(|(field, _)| fields.iter().find(|(id, _)| id == field).map_or_else(|| field.0.to_string(), |(_, name)| name.clone()))
         .collect();
+    if let ChartKind::Trucks(id) = chart.kind {
+        draw_trucks(ui, header, plot, view, plan, schedule, id, slider_h);
+        return;
+    }
     let receipts = schedule.hourly_receipts(chart.destination);
     let empty = HourlyReceipts::default();
     let receipts = receipts.unwrap_or(&empty);
@@ -249,6 +263,7 @@ fn draw_chart(
 
     // What the chart says at the slider, for the header.
     let (kind_label, at_slider) = match chart.kind {
+        ChartKind::Trucks(_) => unreachable!("truck chart drawn above"),
         ChartKind::Inventory => (
             tr!("charts-inventory"),
             schedule
@@ -309,6 +324,7 @@ fn draw_chart(
     }
     // How to read the chart, on the header rather than drawn as a legend.
     let help = match chart.kind {
+        ChartKind::Trucks(_) => unreachable!("truck chart drawn above"),
         ChartKind::Inventory => tr!("charts-inventory-help"),
         ChartKind::Feed => tr!("charts-feed-help"),
         ChartKind::Grade(..) => tr!("charts-grade-help"),
@@ -325,6 +341,7 @@ fn draw_chart(
     let pointer_h = pointer.map(|pos| view.seconds_at(pos.x, plot.left(), plot.width()) / GanttView::HOUR);
 
     match chart.kind {
+        ChartKind::Trucks(_) => unreachable!("truck chart drawn above"),
         ChartKind::Inventory => {
             let peak = schedule.inventory_peak(chart.destination);
             let high = chart.capacity.unwrap_or(0.0).max(peak).max(1.0) * 1.08;
@@ -655,4 +672,90 @@ fn draw_chart(
 
 fn bold_line(name: &str, hour: f64) -> String {
     format!("{name} · {}", instant_label(hour * GanttView::HOUR))
+}
+
+#[allow(clippy::too_many_arguments, reason = "chart geometry and shared timeline inputs")]
+fn draw_trucks(
+    ui: &mut egui::Ui,
+    header: egui::Rect,
+    plot: egui::Rect,
+    view: GanttView,
+    plan: &SchedulePlan,
+    schedule: &CalculatedSchedule,
+    id: crate::model::schedule::TruckClassId,
+    slider: f64,
+) {
+    let Some(class) = plan.trucks().class(id) else { return };
+    let painter = ui.painter().with_clip_rect(plot);
+    ui.painter().text(
+        header.left_top() + egui::vec2(8.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        &class.name,
+        egui::FontId::proportional(14.0),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        header.left_top() + egui::vec2(8.0, 28.0),
+        egui::Align2::LEFT_TOP,
+        tr!("inspector-trucks"),
+        egui::FontId::proportional(12.0),
+        ui.visuals().weak_text_color(),
+    );
+    let fleet = class
+        .calendar
+        .values_at(CalendarPeriod((slider / SCHEDULE_PERIOD_H).floor().max(0.0) as u32))
+        .effective_units();
+    ui.painter().text(
+        header.left_top() + egui::vec2(8.0, 46.0),
+        egui::Align2::LEFT_TOP,
+        tr!(
+            "inspector-trucks-in-use",
+            busy = format!("{:.1}", schedule.trucks_in_use(id, slider)),
+            fleet = format!("{fleet:.1}")
+        ),
+        egui::FontId::proportional(13.0),
+        ui.visuals().text_color(),
+    );
+    let from = (view.start_seconds / GanttView::HOUR).max(0.0);
+    let to = (view.end_seconds() / GanttView::HOUR).min(schedule.requested_end_h);
+    let knots = schedule.truck_use_knots(id);
+    let mut times = vec![from, to];
+    times.extend(knots.iter().map(|(h, _)| *h).filter(|h| *h > from && *h < to));
+    let first_day = (from / SCHEDULE_PERIOD_H).floor().max(0.0) as u32;
+    let last_day = (to / SCHEDULE_PERIOD_H).ceil().max(0.0) as u32;
+    times.extend((first_day..=last_day).map(|d| f64::from(d) * SCHEDULE_PERIOD_H).filter(|h| *h > from && *h < to));
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    let samples: Vec<_> = times
+        .iter()
+        .map(|&at| {
+            (
+                view.x_of(at * GanttView::HOUR, plot.left(), plot.width()),
+                schedule.trucks_in_use(id, at),
+                class.calendar.values_at(CalendarPeriod((at / SCHEDULE_PERIOD_H).floor() as u32)).effective_units(),
+            )
+        })
+        .collect();
+    let high = samples.iter().map(|(_, busy, fleet)| busy.max(*fleet)).fold(1.0, f64::max) * 1.1;
+    for pair in samples.windows(2) {
+        let [(x0, b0, f0), (x1, b1, f1)] = [pair[0], pair[1]];
+        for (before, after, color, width) in [(b0, b1, INVENTORY_COLOR, 2.0), (f0, f1, ui.visuals().weak_text_color(), 1.0)] {
+            let y0 = y_of(plot, before, 0.0, high);
+            let y1 = y_of(plot, after, 0.0, high);
+            painter.line_segment([egui::pos2(x0, y0), egui::pos2(x1, y0)], egui::Stroke::new(width, color));
+            painter.line_segment([egui::pos2(x1, y0), egui::pos2(x1, y1)], egui::Stroke::new(width, color));
+        }
+    }
+    if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()).filter(|p| plot.contains(*p)) {
+        let hour = view.seconds_at(pointer.x, plot.left(), plot.width()) / GanttView::HOUR;
+        let fleet = class
+            .calendar
+            .values_at(CalendarPeriod((hour / SCHEDULE_PERIOD_H).floor().max(0.0) as u32))
+            .effective_units();
+        ui.interact(plot, ui.id().with("haul_truck_hover"), egui::Sense::hover()).on_hover_text(tr!(
+            "inspector-trucks-in-use",
+            busy = format!("{:.1}", schedule.trucks_in_use(id, hour)),
+            fleet = format!("{fleet:.1}")
+        ));
+    }
 }

@@ -203,6 +203,42 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
             entry.dot = Some(IDLE_COLOR);
             entry.value = sentence_case(&name);
         }
+        if let Some(execution) = schedule.executions_at(hour).find(|e| e.agent == agent.id) {
+            let mut matching = 0.0;
+            let nominal = plan.agent(agent.id).and_then(|a| plan.class(a.class_id)).map_or(0.0, |c| {
+                if execution.activity == Activity::Dig {
+                    c.default_dig_rate_tph
+                } else {
+                    c.default_reclaim_rate_tph
+                }
+            });
+            let mut tonnes_rate = 0.0;
+            for d in schedule.deliveries_at(hour).filter(|d| d.agent == agent.id) {
+                let rate = d.tonnes / (d.end_h - d.start_h).max(1e-9);
+                tonnes_rate += rate;
+                matching += rate * d.truck_hours / d.tonnes.max(1e-9);
+            }
+            if tonnes_rate > 0.0 {
+                let line = format!("{}: {:.1}", tr!("haul-match"), nominal * matching / tonnes_rate);
+                hover = Some(hover.map_or_else(|| line.clone(), |text| format!("{text}\n{line}")));
+            }
+        }
+        if schedule.idle_at(agent.id, hour).is_some_and(|s| s.reason == Some(IdleReason::NoTrucks)) {
+            let day = (hour / crate::model::schedule::SCHEDULE_PERIOD_H).floor().max(0.0) as u32;
+            let lines: Vec<_> = plan
+                .trucks()
+                .classes
+                .iter()
+                .filter_map(|c| {
+                    let h = schedule.periods.truck_haul(c.id, day)?;
+                    (h.tonnes > 0.0).then(|| format!("{} · {}", c.name, tr!("haul-cycle-minutes", minutes = format!("{:.1}", h.cycle_minutes()))))
+                })
+                .collect();
+            if !lines.is_empty() {
+                let detail = lines.join("\n");
+                hover = Some(hover.map_or_else(|| detail.clone(), |text| format!("{text}\n{detail}")));
+            }
+        }
         let response = draw_entry(ui, &entry);
         if let Some(text) = hover {
             response.on_hover_text(text);
@@ -461,7 +497,20 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
             meter: (fleet > 0.0).then(|| (busy / fleet).clamp(0.0, 1.0) as f32),
             ..Entry::default()
         };
-        draw_entry(ui, &entry).on_hover_text(tr!("inspector-trucks-help"));
+        let mut haul = crate::model::schedule::result::HaulSummary::default();
+        for delivery in schedule.deliveries_at(hour).filter(|d| d.truck == class.id) {
+            let duration = delivery.end_h - delivery.start_h;
+            if duration > 0.0 {
+                haul.add(delivery, 1.0 / duration);
+            }
+        }
+        draw_entry(ui, &entry).on_hover_text(format!(
+            "{}\n{}\n{}: {:.2}",
+            tr!("inspector-trucks-help"),
+            tr!("haul-cycle-minutes", minutes = format!("{:.1}", haul.cycle_minutes())),
+            tr!("haul-distance"),
+            haul.distance_km()
+        ));
     }
 }
 

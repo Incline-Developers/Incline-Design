@@ -114,6 +114,8 @@ impl Figures<'_> {
             CalendarRow::DigTonnes => periods.dig(address.agent()?, period)?,
             CalendarRow::ReclaimTonnes => periods.reclaim(address.agent()?, period)?,
             CalendarRow::TruckHours => periods.truck_hours(address.truck()?, period)?,
+            CalendarRow::TruckCycle => periods.truck_haul(address.truck()?, period)?.cycle_minutes(),
+            CalendarRow::TruckTonneKm => periods.truck_haul(address.truck()?, period)?.loaded_t_km,
             CalendarRow::Received => periods.received(address.destination()?, period)?,
             CalendarRow::Reclaimed => periods.reclaimed(address.destination()?, period)?,
             CalendarRow::Cumulative => match kind {
@@ -151,6 +153,16 @@ impl Figures<'_> {
             CalendarRow::DigTonnes => sum(&|period| periods.dig(owner.agent()?, period)),
             CalendarRow::ReclaimTonnes => sum(&|period| periods.reclaim(owner.agent()?, period)),
             CalendarRow::TruckHours => sum(&|period| periods.truck_hours(owner.truck()?, period)),
+            CalendarRow::TruckCycle => {
+                let truck = owner.truck()?;
+                let tonnes = sum(&|p| periods.truck_haul(truck, p).map(|h| h.tonnes));
+                if tonnes > 0.0 {
+                    sum(&|p| periods.truck_haul(truck, p).map(|h| h.cycle_t_h)) * 60.0 / tonnes
+                } else {
+                    0.0
+                }
+            }
+            CalendarRow::TruckTonneKm => sum(&|p| periods.truck_haul(owner.truck()?, p).map(|h| h.loaded_t_km)),
             CalendarRow::Received => sum(&|period| periods.received(owner.destination()?, period)),
             CalendarRow::Reclaimed => sum(&|period| periods.reclaimed(owner.destination()?, period)),
             CalendarRow::Value => sum(&|period| periods.value(period)),
@@ -459,11 +471,13 @@ fn destination_grade_rows(plan: &SchedulePlan, destination: &DestinationRow, edi
 
 /// The rows one truck class shows, in drawn order: three authored, and the
 /// truck-hours a calculated schedule used beneath them.
-const TRUCK_ROWS: [CalendarRow; 4] = [
+const TRUCK_ROWS: [CalendarRow; 6] = [
     CalendarRow::Truck(TruckField::Units),
     CalendarRow::Truck(TruckField::Availability),
     CalendarRow::Truck(TruckField::Utilisation),
     CalendarRow::TruckHours,
+    CalendarRow::TruckCycle,
+    CalendarRow::TruckTonneKm,
 ];
 
 /// The rows one loader group shows, in drawn order.
@@ -845,6 +859,8 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::Truck(TruckField::Availability) => tr!("truck-calendar-availability"),
         CalendarRow::Truck(TruckField::Utilisation) => tr!("truck-calendar-utilisation"),
         CalendarRow::TruckHours => tr!("truck-calendar-hours-used"),
+        CalendarRow::TruckCycle => tr!("haul-cycle"),
+        CalendarRow::TruckTonneKm => tr!("haul-tonne-km"),
         CalendarRow::DigTonnes => tr!("schedule-calendar-dig-tonnes"),
         CalendarRow::ReclaimTonnes => tr!("schedule-calendar-reclaim-tonnes"),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
@@ -1105,7 +1121,8 @@ fn destination_kind(destinations: &[DestinationRow], address: CalendarCellAddres
 /// separators, hours with one decimal.
 fn format_figure(row: CalendarRow, value: f64) -> String {
     match row {
-        CalendarRow::TruckHours => format_hours(value),
+        CalendarRow::TruckHours | CalendarRow::TruckCycle => format_hours(value),
+        CalendarRow::TruckTonneKm => format_tonnes(value),
         CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format_money(value),
         _ => format_tonnes(value),
@@ -1373,6 +1390,8 @@ fn editable(address: CalendarCellAddress) -> bool {
         CalendarRow::DigTonnes
         | CalendarRow::ReclaimTonnes
         | CalendarRow::TruckHours
+        | CalendarRow::TruckCycle
+        | CalendarRow::TruckTonneKm
         | CalendarRow::Received
         | CalendarRow::Reclaimed
         | CalendarRow::Cumulative

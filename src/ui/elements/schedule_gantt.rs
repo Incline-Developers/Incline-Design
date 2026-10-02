@@ -1482,6 +1482,19 @@ pub(super) fn execution_tooltip(
             }
         }
     }
+    let mut haul = crate::model::schedule::result::HaulSummary::default();
+    for delivery in schedule.deliveries_of(execution) {
+        let duration = delivery.end_h - delivery.start_h;
+        if duration > 0.0 {
+            haul.add(
+                delivery,
+                (delivery.end_h.min(execution.end_h) - delivery.start_h.max(execution.start_h)).max(0.0) / duration,
+            );
+        }
+    }
+    if haul.tonnes > 0.0 {
+        lines.push(tr!("haul-cycle-minutes", minutes = format!("{:.1}", haul.cycle_minutes())));
+    }
     // Where it went, by destination.
     let mut delivered: Vec<(DestinationId, f64)> = Vec::new();
     for delivery in schedule.deliveries_of(execution) {
