@@ -176,6 +176,46 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
     tables.push(movements);
     tables.push(haulage);
     tables.push(loaders(schedule, plan, &groups, &loader_name));
+    if let Some(result) = &schedule.drill_blast {
+        let mut rows = Vec::new();
+        for group in &groups {
+            for agent in plan
+                .agents()
+                .iter()
+                .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+            {
+                let kind = plan.agent_kind(agent.id).expect("filtered above");
+                let activity = kind.activity().expect("drill and blast machine");
+                let worked = result.worked(agent.id, group.start_h, group.end_h).unwrap_or(0.0);
+                let working_h: f64 = result
+                    .work
+                    .iter()
+                    .filter(|work| work.agent == agent.id)
+                    .map(|work| overlap(work.start_h, work.end_h, group))
+                    .sum();
+                rows.push(vec![
+                    group.label.clone(),
+                    agent.name.clone(),
+                    activity.label(),
+                    activity.unit().to_owned(),
+                    plain(worked, 2),
+                    hours(working_h),
+                ]);
+            }
+        }
+        tables.push(ReportTable {
+            title: tr!("drill-blast-step"),
+            header: vec![
+                tr!("report-period"),
+                tr!("blast-machine"),
+                tr!("report-blast-activity"),
+                tr!("report-blast-unit"),
+                tr!("report-blast-quantity"),
+                tr!("report-blast-hours"),
+            ],
+            rows,
+        });
+    }
     let of_kind = |kind: DestinationKind| {
         names
             .destinations
@@ -460,7 +500,7 @@ fn movements(
 /// reclaiming, delayed, and idle by the reason the schedule gives. A machine
 /// the calculation never reached had no work for the whole period.
 fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group], loader_name: &dyn Fn(LoaderAgentId) -> String) -> ReportTable {
-    const REASONS: [IdleReason; 8] = [
+    const REASONS: [IdleReason; 9] = [
         IdleReason::Unavailable,
         IdleReason::NoWork,
         IdleReason::WorkFinished,
@@ -469,6 +509,7 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
         IdleReason::PileMode,
         IdleReason::NoTrucks,
         IdleReason::NotWorthIt,
+        IdleReason::WaitingOnBlast,
     ];
     struct Time {
         dug: f64,
@@ -481,7 +522,11 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
     let mut table: Vec<(String, String, Time)> = Vec::new();
     let mut used = [false; REASONS.len()];
     for group in groups {
-        for agent in plan.agents() {
+        for agent in plan
+            .agents()
+            .iter()
+            .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+        {
             let mut time = Time {
                 dug: 0.0,
                 reclaimed: 0.0,

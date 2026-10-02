@@ -1637,6 +1637,14 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             });
             central_island(ui, layout, |ui, rect| super::schedule_delays::draw_delay_editor(ui, rect, editor, &plan, session, commands));
         }
+        ScheduleStep::DrillBlast => {
+            island(ui, layout, "schedule_blast_list_island", 320.0, |ui, rect| {
+                super::schedule_drill_blast::draw_blast_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_drill_blast::draw_settings(ui, rect, editor, &plan, session, commands)
+            });
+        }
         // The three destination pages share one shape: the list of that kind on
         // the left, the selected row's cells in the middle. They are separate
         // steps rather than one page with a filter because each is a thing that

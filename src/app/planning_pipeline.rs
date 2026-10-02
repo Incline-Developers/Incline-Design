@@ -418,6 +418,17 @@ impl crate::app::App<'_> {
             }
         }
         self.advance_planning_run();
+        if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
+            // The blasts drill and blast lists, refreshed as the run or the
+            // project (blast names included) moves.
+            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
+            let revision = self.workspace.active_document().map_or(0, |d| d.revision());
+            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed, revision);
+            if self.editor.schedule_blasts_key != Some(key) {
+                self.editor.schedule_blasts_key = Some(key);
+                self.refresh_schedule_blasts();
+            }
+        }
         if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
             // The document revision covers road, truck-class and destination

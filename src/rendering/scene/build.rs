@@ -667,6 +667,8 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
 
 pub(crate) struct FlowSceneBuildInput<'a> {
     pub(crate) flows: &'a [crate::ui::state::HaulFlowSegment],
+    /// Drill and blast at the hour Animate shows.
+    pub(crate) blasts: Option<(&'a crate::model::schedule::result::DrillBlastResult, f64)>,
     pub(crate) flow_strokes: &'a mut Vec<StrokeInstance>,
     pub(crate) view_proj: glam::DMat4,
     pub(crate) scene_origin: DVec3,
@@ -692,6 +694,7 @@ pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
     const WARM: [f32; 3] = [250.0 / 255.0, 165.0 / 255.0, 45.0 / 255.0];
     let FlowSceneBuildInput {
         flows,
+        blasts,
         flow_strokes,
         view_proj,
         scene_origin,
@@ -699,12 +702,15 @@ pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
         time_s,
     } = input;
     flow_strokes.clear();
-    if flows.is_empty() {
-        return 0;
-    }
     let mut unused_fill_vertices: Vec<Vertex> = Vec::new();
     let mut unused_fill_indices: Vec<u32> = Vec::new();
     let mut ctx = DrawContext::unstyled(flow_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
+    if flows.is_empty() {
+        if let Some((result, at_h)) = blasts {
+            draw_blasts(&mut ctx, result, at_h);
+        }
+        return 0;
+    }
     let busiest = flows.iter().map(|flow| flow.tph).fold(0.0, f64::max).max(1e-9);
     let mix = |a: [f32; 3], b: [f32; 3], t: f32, alpha: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, alpha];
     let pieces: Vec<_> = flows
@@ -763,5 +769,55 @@ pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
             k += 1.0;
         }
     }
+    if let Some((result, at_h)) = blasts {
+        draw_blasts(&mut ctx, result, at_h);
+    }
     underlay
+}
+
+/// Each blast under way at `at_h`, on its bench top: its outline in the
+/// colour of its stage, and its holes - those drilled so far, in light
+/// grey, and those charged, in red. A blast not yet clear, or fired and
+/// gone, draws nothing; one fired and still standing keeps a thin outline.
+fn draw_blasts(ctx: &mut DrawContext<'_>, result: &crate::model::schedule::result::DrillBlastResult, at_h: f64) {
+    use crate::model::schedule::{BlastActivity, BlastStage};
+    const CLEAR: [f32; 4] = [0.80, 0.74, 0.60, 0.9];
+    const PREPPED: [f32; 4] = [0.85, 0.66, 0.40, 1.0];
+    const DRILLED: [f32; 4] = [0.95, 0.55, 0.20, 1.0];
+    const CHARGED: [f32; 4] = [0.85, 0.25, 0.25, 1.0];
+    const FIRED: [f32; 4] = [1.0, 0.82, 0.30, 0.8];
+    const HOLE: [f32; 4] = [0.92, 0.92, 0.88, 1.0];
+    for (index, blast) in result.blasts.iter().enumerate() {
+        let stage = result.stage_at(index, at_h);
+        let cleared = blast.cleared_h.is_some_and(|cleared| cleared <= at_h);
+        if stage == BlastStage::NotStarted && !cleared {
+            continue;
+        }
+        // Held just above the bench top, so the solid's own face does not
+        // fight it for depth.
+        let z = blast.bench_top + 0.3;
+        let (color, width) = match stage {
+            BlastStage::NotStarted => (CLEAR, 1.5),
+            BlastStage::Prepped => (PREPPED, 2.5),
+            BlastStage::Drilled => (DRILLED, 2.5),
+            BlastStage::Charged => (CHARGED, 3.0),
+            BlastStage::Fired => (FIRED, 1.5),
+        };
+        for ring in blast.face.iter() {
+            for (i, point) in ring.iter().enumerate() {
+                let next = ring[(i + 1) % ring.len()];
+                draw_line(ctx, point.extend(z), next.extend(z), width, color);
+            }
+        }
+        if stage == BlastStage::Fired {
+            continue;
+        }
+        let holes = blast.collars.len();
+        let drilled = (result.done_share(index, BlastActivity::Drill, at_h) * holes as f64).round() as usize;
+        let charged = (result.done_share(index, BlastActivity::Charge, at_h) * holes as f64).round() as usize;
+        for (position, collar) in blast.collars.iter().enumerate().take(drilled) {
+            let color = if position < charged { CHARGED } else { HOLE };
+            draw_round_join(ctx, collar.extend(z), 5.0, color);
+        }
+    }
 }

@@ -2395,6 +2395,65 @@ impl crate::app::App<'_> {
         Ok(records)
     }
 
+    /// Every blast of every solid whose blasting has been built, named as the
+    /// Blasts step names them.
+    pub(crate) fn planning_blasts(&self) -> Vec<BlastRecord> {
+        let Some(document) = self.workspace.active_document() else {
+            return Vec::new();
+        };
+        let mut records = Vec::new();
+        for solid in document.solids() {
+            let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(ViewSolid::blast_faces) else {
+                continue;
+            };
+            for face in faces {
+                let stored = solid.blasting.bench(face.bench.base);
+                let name = stored
+                    .and_then(|entry| entry.blasts.iter().find(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor))))
+                    .map_or_else(String::new, |blast| blast.name.clone());
+                records.push(BlastRecord {
+                    solid: solid.id,
+                    bench: face.bench,
+                    face: Arc::new(face.face.clone()),
+                    anchor: face.anchor,
+                    area: face.area,
+                    name,
+                });
+            }
+        }
+        records
+    }
+
+    /// List the run's blasts for the Schedule pages, by solid and bench,
+    /// highest bench first.
+    pub(crate) fn refresh_schedule_blasts(&mut self) {
+        let names: HashMap<SolidId, String> = self
+            .workspace
+            .active_document()
+            .map(|document| document.solids().iter().map(|solid| (solid.id, solid.name.clone())).collect())
+            .unwrap_or_default();
+        let mut entries: Vec<crate::ui::state::BlastListEntry> = self
+            .planning_blasts()
+            .into_iter()
+            .map(|record| crate::ui::state::BlastListEntry {
+                reference: record.reference(),
+                name: record.name.clone(),
+                solid_name: names.get(&record.solid).cloned().unwrap_or_default(),
+                bench_base: record.bench.base,
+                bench_top: record.bench.top,
+                area: record.area,
+                face: record.face,
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.solid_name
+                .cmp(&b.solid_name)
+                .then(b.bench_base.total_cmp(&a.bench_base))
+                .then(natural_key(&a.name).cmp(&natural_key(&b.name)))
+        });
+        self.editor.schedule_blasts = entries;
+    }
+
     /// The completed, validated scheduling snapshot, or why there is not one.
     ///
     /// The public contract, and deliberately not the collector above. That one
@@ -2435,6 +2494,7 @@ impl crate::app::App<'_> {
             runtime: project.runtime_id,
             generation,
             blocks,
+            blasts: self.planning_blasts(),
         })
     }
 }
@@ -2448,6 +2508,42 @@ pub(crate) struct PlanningSnapshot {
     /// The run that produced it, for provenance.
     pub(crate) generation: u64,
     pub(crate) blocks: Vec<DigBlockRecord>,
+    /// Every blast of every solid, for drill and blast.
+    pub(crate) blasts: Vec<BlastRecord>,
+}
+
+/// A name's number first when it is one, so 2 sorts before 10.
+fn natural_key(name: &str) -> (u64, String) {
+    (name.trim().parse::<u64>().unwrap_or(u64::MAX), name.to_owned())
+}
+
+/// One blast as a scheduler consumes it: the bench it divides, its ground
+/// in plan, the point its name is held against and the name.
+#[derive(Clone, Debug)]
+pub(crate) struct BlastRecord {
+    pub(crate) solid: SolidId,
+    pub(crate) bench: BenchSelection,
+    pub(crate) face: Arc<Face>,
+    pub(crate) anchor: [f64; 2],
+    pub(crate) area: f64,
+    pub(crate) name: String,
+}
+
+impl BlastRecord {
+    /// Whether a stored reference names this blast: the same solid and
+    /// bench, and its point inside this ground.
+    pub(crate) fn holds(&self, blast: &crate::model::schedule::BlastRef) -> bool {
+        blast.solid == self.solid && (blast.bench - self.bench.base).abs() < 1e-6 && arrangement::point_in_face(&self.face, DVec2::from(blast.anchor))
+    }
+
+    /// The reference a bar or setting stores for this blast.
+    pub(crate) fn reference(&self) -> crate::model::schedule::BlastRef {
+        crate::model::schedule::BlastRef {
+            solid: self.solid,
+            bench: self.bench.base,
+            anchor: self.anchor,
+        }
+    }
 }
 
 /// Group the flitch-level parts into the ordered bands the reserve scan needs.

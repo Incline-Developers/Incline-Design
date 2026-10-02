@@ -187,6 +187,13 @@ impl crate::app::App<'_> {
             } else if bar.delay().is_some() {
                 // Its type is presentation; that it is a delay is not.
                 2u8.hash(&mut hasher);
+            } else if let Some(order) = bar.blast_order() {
+                3u8.hash(&mut hasher);
+                for member in &order.members {
+                    member.solid.hash(&mut hasher);
+                    member.bench.to_bits().hash(&mut hasher);
+                    member.anchor.map(f64::to_bits).hash(&mut hasher);
+                }
             } else {
                 0u8.hash(&mut hasher);
             }
@@ -200,6 +207,12 @@ impl crate::app::App<'_> {
                 member.footprint.hash(&mut hasher);
                 member.volume.map(f64::to_bits).hash(&mut hasher);
             }
+        }
+        // Drill and blast: its settings and starting stages, and what each
+        // class's machines do.
+        document.schedule().drill_blast().hash_content(&mut hasher);
+        for class in document.schedule().classes() {
+            class.kind.hash(&mut hasher);
         }
         let key = hasher.finish();
         self.schedule_plan_revision_cache.set(Some((project.runtime_id, document_revision, key)));

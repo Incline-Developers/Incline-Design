@@ -339,6 +339,12 @@ impl Carry {
             grade_limits: full.grade_limits.clone(),
             grade_targets: full.grade_targets.clone(),
             target_opening: self.target_totals.iter().map(|(&(i, p), &(t, q))| (i, p, t, q)).collect(),
+            drill_blast: full.drill_blast.clone().map(|mut chain| {
+                for agent in &mut chain.agents {
+                    agent.rates = agent.rates[range.clone()].to_vec();
+                }
+                chain
+            }),
         }
     }
 
@@ -452,6 +458,7 @@ impl Stitched {
                 chunks: Vec::new(),
                 reported_objective: 0.0,
                 adjustments: ExtractionAdjustments::default(),
+                drill_blast: None,
             },
         }
     }

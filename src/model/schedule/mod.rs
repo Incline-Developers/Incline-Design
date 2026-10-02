@@ -17,6 +17,7 @@ pub(crate) mod calendar;
 pub(crate) mod cashflow;
 pub(crate) mod delays;
 pub(crate) mod destinations;
+pub(crate) mod drill_blast;
 pub(crate) mod experiment;
 pub(crate) mod grade_targets;
 pub(crate) mod inventory;
@@ -33,6 +34,7 @@ pub(crate) use destinations::{
     Bound, ConditionTest, CrusherCalendar, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, DestinationSelection, FieldCondition, LoaderSelection,
     MovementSourceScope, MovementSourceSelection, PortionValue, RoutingConfig, RuleId, SourceScope, StandaloneDestinationId,
 };
+pub(crate) use drill_blast::{BlastActivity, BlastOrder, BlastRef, BlastStage, DrillBlastConfig, DrillBlastSettings, DrillPattern, MachineKind};
 pub(crate) use inventory::{OpeningLotId, OpeningPortionId, OpeningValue, ReclaimOrder};
 pub(crate) use sequence::{DigBlockRef, DigOrder, Footprint};
 pub(crate) use trucking::{RouteContext, RouteSource, TruckCellEdit, TruckClassId, TruckField, TruckFleetConfig, TruckingRuleId};
@@ -121,6 +123,9 @@ pub(crate) enum BarWork {
     /// Time the machine stands: while this is its highest-priority open bar
     /// it does nothing. See [`delays`].
     Delay(DelayWork),
+    /// Blasts a dozer, drill or MPU works, in order: what it does to each is
+    /// its class's [`MachineKind`]. See [`drill_blast`].
+    Blast(BlastOrder),
 }
 
 /// A delay bar's own settings: only what kind of delay it is.
@@ -318,28 +323,36 @@ impl ScheduleBar {
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         match &self.work {
             BarWork::Dig(order) => order.members(),
-            BarWork::Reclaim(_) | BarWork::Delay(_) => &[],
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) => &[],
         }
     }
 
     pub(crate) fn dig_order(&self) -> Option<&DigOrder> {
         match &self.work {
             BarWork::Dig(order) => Some(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) => None,
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) => None,
+        }
+    }
+
+    /// The blasts a drill and blast bar works, in order.
+    pub(crate) fn blast_order(&self) -> Option<&BlastOrder> {
+        match &self.work {
+            BarWork::Blast(order) => Some(order),
+            _ => None,
         }
     }
 
     pub(crate) fn reclaim(&self) -> Option<&ReclaimWork> {
         match &self.work {
             BarWork::Reclaim(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Delay(_) => None,
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) => None,
         }
     }
 
     pub(crate) fn delay(&self) -> Option<&DelayWork> {
         match &self.work {
             BarWork::Delay(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Reclaim(_) => None,
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) => None,
         }
     }
 
@@ -366,6 +379,11 @@ pub(crate) struct LoaderClass {
     /// Tonnes per productive hour reclaiming. Strictly positive and finite.
     pub(crate) default_reclaim_rate_tph: f64,
     pub(crate) spot_time_s: f64,
+    /// What machines of this class do. A dozer's, drill's or MPU's rate is
+    /// [`Self::default_dig_rate_tph`] read in that kind's unit (see
+    /// [`MachineKind::rate_unit`]), so its calendar works exactly as a
+    /// loader's does.
+    pub(crate) kind: MachineKind,
 }
 
 /// What a saved class is read through: a project written before reclaim existed
@@ -381,6 +399,8 @@ struct ClassRepr {
     default_reclaim_rate_tph: Option<f64>,
     #[serde(default)]
     spot_time_s: f64,
+    #[serde(default)]
+    kind: MachineKind,
 }
 
 impl From<ClassRepr> for LoaderClass {
@@ -391,6 +411,7 @@ impl From<ClassRepr> for LoaderClass {
             default_dig_rate_tph: repr.default_dig_rate_tph,
             default_reclaim_rate_tph: repr.default_reclaim_rate_tph.unwrap_or(repr.default_dig_rate_tph),
             spot_time_s: repr.spot_time_s,
+            kind: repr.kind,
         }
     }
 }
@@ -567,6 +588,14 @@ pub(crate) enum ScheduleError {
     /// non-positive horizon, interval, time limit or chunk capacity, or a
     /// relative gap outside `0..=1`.
     InvalidExperimentSetting,
+    /// Drill and blast settings refused; see [`drill_blast::DrillBlastError`].
+    DrillBlast(drill_blast::DrillBlastError),
+    /// Work the bar's machine cannot do: a dig or reclaim bar on a drill, or
+    /// a blast bar on a loader.
+    WrongMachine,
+    /// A class whose kind cannot change while machines of it hold bars of
+    /// the old kind's work.
+    KindInUse(Vec<String>),
 }
 
 impl ScheduleError {
@@ -636,6 +665,9 @@ impl ScheduleError {
             Self::DelayTypeInUse(users) => tr!("delay-error-type-in-use", users = users.join(", ")),
             Self::CategoryConditionUnsupported => tr!("destination-error-category-unsupported"),
             Self::InvalidExperimentSetting => tr!("experiment-error-invalid-setting"),
+            Self::DrillBlast(error) => error.message(),
+            Self::WrongMachine => tr!("schedule-error-wrong-machine"),
+            Self::KindInUse(bars) => tr!("schedule-error-kind-in-use", bars = bars.join(", ")),
         }
     }
 }
@@ -724,6 +756,9 @@ pub(crate) struct SchedulePlan {
     /// bars, held with the others.
     #[serde(default)]
     delays: DelayConfig,
+    /// Drill and blast settings; see [`drill_blast`]. Off by default.
+    #[serde(default)]
+    drill_blast: DrillBlastConfig,
 }
 
 fn default_currency() -> String {
@@ -751,6 +786,7 @@ impl Default for SchedulePlan {
             currency: default_currency(),
             experiment: experiment::ExperimentConfig::default(),
             delays: DelayConfig::default(),
+            drill_blast: DrillBlastConfig::default(),
         }
     }
 }
@@ -798,6 +834,7 @@ impl SchedulePlan {
             && self.currency == cashflow::DEFAULT_CURRENCY
             && self.experiment.is_pristine()
             && self.delays.is_empty()
+            && self.drill_blast.is_pristine()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -1061,6 +1098,7 @@ impl SchedulePlan {
             default_dig_rate_tph: rate,
             default_reclaim_rate_tph: rate,
             spot_time_s: 45.0,
+            kind: MachineKind::Loader,
         });
         Ok(id)
     }
@@ -1151,6 +1189,10 @@ impl SchedulePlan {
     pub(crate) fn set_agent_class(&mut self, id: LoaderAgentId, class_id: LoaderClassId) -> ScheduleResult {
         if !self.classes.iter().any(|class| class.id == class_id) {
             return Err(ScheduleError::UnknownClass);
+        }
+        let kind = self.class(class_id).expect("checked above").kind;
+        if self.bars.iter().any(|bar| bar.agent == Some(id) && !work_fits(&bar.work, kind)) {
+            return Err(ScheduleError::WrongMachine);
         }
         let agent = self.agents.iter_mut().find(|agent| agent.id == id).ok_or(ScheduleError::UnknownAgent)?;
         agent.class_id = class_id;
@@ -1259,6 +1301,9 @@ impl SchedulePlan {
         if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
             return Err(ScheduleError::UnknownAgent);
         }
+        if agent.and_then(|agent| self.agent_kind(agent)).is_some_and(MachineKind::is_drill_blast) {
+            return Err(ScheduleError::WrongMachine);
+        }
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
         }
@@ -1297,6 +1342,9 @@ impl SchedulePlan {
         }
         if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
             return Err(ScheduleError::UnknownAgent);
+        }
+        if agent.and_then(|agent| self.agent_kind(agent)).is_some_and(MachineKind::is_drill_blast) {
+            return Err(ScheduleError::WrongMachine);
         }
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
@@ -1349,7 +1397,7 @@ impl SchedulePlan {
         }
         match &mut self.bar_mut(id)?.work {
             BarWork::Delay(work) => work.kind = kind,
-            BarWork::Dig(_) | BarWork::Reclaim(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1404,7 +1452,7 @@ impl SchedulePlan {
                 work.sources = sources;
                 Ok(true)
             }
-            BarWork::Dig(_) | BarWork::Delay(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1416,7 +1464,7 @@ impl SchedulePlan {
         let bar = self.bar_mut(id)?;
         match &mut bar.work {
             BarWork::Reclaim(work) => work.maximum_t = maximum_t,
-            BarWork::Dig(_) | BarWork::Delay(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1475,6 +1523,7 @@ impl SchedulePlan {
         if agent.is_some_and(|agent| !self.agents.iter().any(|existing| existing.id == agent)) {
             return Err(ScheduleError::UnknownAgent);
         }
+        self.check_fits(id, agent)?;
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
         bar.agent = agent;
         Ok(())
@@ -1505,6 +1554,7 @@ impl SchedulePlan {
         if !self.bars.iter().any(|bar| bar.id == id) {
             return Err(ScheduleError::UnknownBar);
         }
+        self.check_fits(id, agent)?;
         if insert_lane {
             // Saturating rather than wrapping: at the very last lane number
             // there is nowhere further out to go, and the two bars share a
@@ -1518,6 +1568,16 @@ impl SchedulePlan {
         bar.priority = priority;
         bar.window = window;
         Ok(())
+    }
+
+    /// Refuse to put a bar on a machine that cannot work it.
+    fn check_fits(&self, id: BarId, agent: Option<LoaderAgentId>) -> ScheduleResult {
+        let Some(agent) = agent else { return Ok(()) };
+        let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
+        match self.agent_kind(agent) {
+            Some(kind) if !work_fits(&bar.work, kind) => Err(ScheduleError::WrongMachine),
+            _ => Ok(()),
+        }
     }
 
     /// Make room for a new bar in a lane of its own at `priority`: that
@@ -1555,7 +1615,7 @@ impl SchedulePlan {
     fn dig_order_mut(&mut self, id: BarId) -> ScheduleResult<&mut DigOrder> {
         match &mut self.bar_mut(id)?.work {
             BarWork::Dig(order) => Ok(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1597,6 +1657,83 @@ impl SchedulePlan {
         }
         self.dig_order_mut(id)?.members = order.members;
         Ok(())
+    }
+
+    pub(crate) fn drill_blast(&self) -> &DrillBlastConfig {
+        &self.drill_blast
+    }
+
+    pub(crate) fn set_drill_blast_settings(&mut self, settings: DrillBlastSettings) -> ScheduleResult {
+        self.drill_blast.set_settings(settings).map_err(ScheduleError::DrillBlast)
+    }
+
+    pub(crate) fn set_blast_status(&mut self, blasts: &[BlastRef], stage: BlastStage) -> ScheduleResult {
+        self.drill_blast.set_status(blasts, stage).map_err(ScheduleError::DrillBlast)
+    }
+
+    pub(crate) fn set_blast_pattern(&mut self, blast: BlastRef, pattern: Option<DrillPattern>) -> ScheduleResult {
+        self.drill_blast.set_pattern(blast, pattern).map_err(ScheduleError::DrillBlast)
+    }
+
+    /// What machines of `agent`'s class do.
+    pub(crate) fn agent_kind(&self, agent: LoaderAgentId) -> Option<MachineKind> {
+        self.class(self.agent(agent)?.class_id).map(|class| class.kind)
+    }
+
+    /// Change what a class's machines do. Refused while any of them holds a
+    /// bar the new kind cannot work, naming the bars.
+    pub(crate) fn set_class_kind(&mut self, id: LoaderClassId, kind: MachineKind) -> ScheduleResult {
+        if !self.classes.iter().any(|class| class.id == id) {
+            return Err(ScheduleError::UnknownClass);
+        }
+        let blocking: Vec<String> = self
+            .bars
+            .iter()
+            .filter(|bar| bar.agent.is_some_and(|agent| self.agent(agent).is_some_and(|agent| agent.class_id == id)))
+            .filter(|bar| !work_fits(&bar.work, kind))
+            .map(|bar| bar.name().to_owned())
+            .collect();
+        if !blocking.is_empty() {
+            return Err(ScheduleError::KindInUse(blocking));
+        }
+        self.classes.iter_mut().find(|class| class.id == id).expect("checked above").kind = kind;
+        Ok(())
+    }
+
+    /// Add a drill and blast bar listing `members` in order.
+    pub(crate) fn add_blast_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow, members: Vec<BlastRef>) -> ScheduleResult<BarId> {
+        if let Some(agent) = agent {
+            let kind = self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?;
+            if !kind.is_drill_blast() {
+                return Err(ScheduleError::WrongMachine);
+            }
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        let order = checked_blasts(members)?;
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            name: String::new(),
+            work: BarWork::Blast(order),
+            agent,
+            priority,
+            window,
+        });
+        Ok(id)
+    }
+
+    /// Replace a drill and blast bar's blasts.
+    pub(crate) fn set_blast_members(&mut self, id: BarId, members: Vec<BlastRef>) -> ScheduleResult {
+        let order = checked_blasts(members)?;
+        match &mut self.bar_mut(id)?.work {
+            BarWork::Blast(existing) => {
+                *existing = order;
+                Ok(())
+            }
+            _ => Err(ScheduleError::WrongActivity),
+        }
     }
 
     /// Check a plan read back from a file, and bring its id counters up to
@@ -1653,6 +1790,7 @@ impl SchedulePlan {
             if !bar.window.is_valid() {
                 return Err(ScheduleError::InvalidWindow);
             }
+            self.check_fits(bar.id, bar.agent)?;
             match &bar.work {
                 BarWork::Dig(order) => order.check_loaded()?,
                 // The sources are deliberately *not* required to resolve: a
@@ -1663,6 +1801,8 @@ impl SchedulePlan {
                 BarWork::Reclaim(_) => return Err(ScheduleError::InvalidReclaimLimit),
                 BarWork::Delay(work) if work.kind.is_none_or(|kind| self.delays.delay_type(kind).is_some()) => {}
                 BarWork::Delay(_) => return Err(ScheduleError::UnknownDelay),
+                BarWork::Blast(order) if order.members.iter().all(BlastRef::is_valid) => {}
+                BarWork::Blast(_) => return Err(ScheduleError::MalformedReference),
             }
         }
         let agents = self.agent_ids();
@@ -1682,6 +1822,7 @@ impl SchedulePlan {
                 return Err(ScheduleError::DuplicateCalendarCell);
             }
         }
+        self.drill_blast.validate().map_err(ScheduleError::DrillBlast)?;
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
@@ -1719,6 +1860,7 @@ impl SchedulePlan {
             class.default_dig_rate_tph.to_bits().hash(hasher);
             class.default_reclaim_rate_tph.to_bits().hash(hasher);
             class.spot_time_s.to_bits().hash(hasher);
+            class.kind.hash(hasher);
         }
         for agent in &self.agents {
             agent.id.hash(hasher);
@@ -1753,6 +1895,7 @@ impl SchedulePlan {
         self.currency.hash(hasher);
         self.experiment.hash_content(hasher);
         self.delays.hash_content(hasher);
+        self.drill_blast.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.name.hash(hasher);
@@ -1766,6 +1909,14 @@ impl SchedulePlan {
                 BarWork::Delay(work) => {
                     2u8.hash(hasher);
                     work.kind.hash(hasher);
+                }
+                BarWork::Blast(order) => {
+                    3u8.hash(hasher);
+                    for member in &order.members {
+                        member.solid.hash(hasher);
+                        member.bench.to_bits().hash(hasher);
+                        member.anchor.map(f64::to_bits).hash(hasher);
+                    }
                 }
             }
             bar.agent.hash(hasher);
@@ -1829,6 +1980,31 @@ impl SchedulePlan {
             + self.experiment.estimated_bytes()
             + self.delays.estimated_bytes()
     }
+}
+
+/// Whether a machine of `kind` can work `work`: loaders dig and reclaim,
+/// dozers, drills and MPUs work blasts, and any machine can stand.
+pub(crate) fn work_fits(work: &BarWork, kind: MachineKind) -> bool {
+    match work {
+        BarWork::Delay(_) => true,
+        BarWork::Blast(_) => kind.is_drill_blast(),
+        BarWork::Dig(_) | BarWork::Reclaim(_) => !kind.is_drill_blast(),
+    }
+}
+
+/// A blast order with every reference well formed and no blast twice.
+fn checked_blasts(members: Vec<BlastRef>) -> ScheduleResult<BlastOrder> {
+    if members.iter().any(|member| !member.is_valid()) {
+        return Err(ScheduleError::MalformedReference);
+    }
+    if members
+        .iter()
+        .enumerate()
+        .any(|(index, member)| members[..index].iter().any(|earlier| earlier.same(member)))
+    {
+        return Err(ScheduleError::DuplicateMember);
+    }
+    Ok(BlastOrder { members })
 }
 
 /// A name that no class or agent in `existing` already has, by appending a

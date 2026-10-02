@@ -635,7 +635,7 @@ pub(crate) fn execute_scip_blend(
         out.stop(ScipTermination::Cancelled, "cancelled during extraction");
         return out;
     }
-    let Some(solution) = extracted.expect("checked extraction result") else {
+    let Some(mut solution) = extracted.expect("checked extraction result") else {
         if let Some(found) = seed {
             // A dual bound needs no incumbent, so it still bounds the seed.
             let (bound, proved) = (out.primary_bound, relaxation.as_mut().and_then(RelaxationJob::ready));
@@ -651,6 +651,9 @@ pub(crate) fn execute_scip_blend(
 
     activity.set(5);
     let started = Instant::now();
+    if let Some(chain) = out.input.drill_blast.as_ref() {
+        solution.drill_blast.clone_from(&chain.fixed);
+    }
     let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
     out.timings.replay += started.elapsed();
     if cancel.is_cancelled() || checked.is_none() {
@@ -707,6 +710,8 @@ pub(crate) fn execute_scip_blend(
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
+        // Drill and blast happened as the dispatch simulated it.
+        solution.drill_blast.clone_from(&found.solution.drill_blast);
         out.day_by_day = Some(found.summary);
     }
     out.termination = termination;
@@ -888,6 +893,16 @@ fn hourly_dispatch(out: &mut ScipCompletion, cancel: &CancelFlag) -> DayByDay {
         checked.replayed_objective,
         started.elapsed()
     );
+    // Drill and blast: every later solve keeps the release times the
+    // dispatch found (`blended::drill_blast`).
+    if let (Some(_), Some(timeline)) = (out.input.drill_blast.as_ref(), solution.drill_blast.as_ref()) {
+        let fixed = timeline.clone();
+        let mut input = (*out.input).clone();
+        if let Some(chain) = input.drill_blast.as_mut() {
+            chain.fixed = Some(fixed);
+        }
+        out.input = Arc::new(input);
+    }
     DayByDay::Seed(Box::new(Seed {
         solution,
         replay: checked,
@@ -1617,6 +1632,27 @@ fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: Sci
         {
             return Err(format!("invalid interval at position {position}"));
         }
+    }
+    if let Some(chain) = &input.drill_blast
+        && (!chain.window_end_h.is_finite()
+            || chain.window_end_h <= 0.0
+            || chain.window_end_h > 24.0
+            || chain.blasts.iter().any(|blast| blast.quantity.iter().any(|amount| !amount.is_finite() || *amount < 0.0))
+            || chain
+                .agents
+                .iter()
+                .any(|agent| agent.rates.len() != input.intervals.len() || agent.rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0))
+            || chain.tasks.iter().any(|task| {
+                task.agent >= chain.agents.len()
+                    || !task.start_h.is_finite()
+                    || !task.end_h.is_finite()
+                    || task.start_h < 0.0
+                    || task.end_h <= task.start_h
+                    || task.sequence.iter().any(|blast| *blast >= chain.blasts.len())
+            })
+            || chain.fixed.as_ref().is_some_and(|timeline| timeline.blasts.len() != chain.blasts.len()))
+    {
+        return Err("invalid drill and blast input".to_owned());
     }
     let grades = input.grades.count();
     let mut pile_ids = BTreeSet::new();

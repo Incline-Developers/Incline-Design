@@ -128,6 +128,13 @@ impl Figures<'_> {
                 periods.received_grade(address.destination()?, period, grade)?
             }
             CalendarRow::Value => periods.value(period)?,
+            CalendarRow::BlastWork => {
+                let day = f64::from(period) * crate::model::schedule::SCHEDULE_PERIOD_H;
+                self.result?
+                    .drill_blast
+                    .as_ref()?
+                    .worked(address.agent()?, day, day + crate::model::schedule::SCHEDULE_PERIOD_H)?
+            }
             CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::PileMode | CalendarRow::GradeInput(..) => return None,
         };
         Some((value, periods.is_partial(period)))
@@ -152,6 +159,7 @@ impl Figures<'_> {
         Some(match row {
             CalendarRow::DigTonnes => sum(&|period| periods.dig(owner.agent()?, period)),
             CalendarRow::ReclaimTonnes => sum(&|period| periods.reclaim(owner.agent()?, period)),
+            CalendarRow::BlastWork => result.drill_blast.as_ref()?.worked(owner.agent()?, 0.0, f64::INFINITY)?,
             CalendarRow::TruckHours => sum(&|period| periods.truck_hours(owner.truck()?, period)),
             CalendarRow::TruckCycle => {
                 let truck = owner.truck()?;
@@ -425,7 +433,7 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
         let owner = CalendarOwner::Loader(agent.id);
         rows.push(Row::Group(owner));
         if !editor.schedule_calendar.collapsed.contains(&owner) {
-            rows.extend(LOADER_ROWS.iter().map(|row| Row::Field(owner, *row)));
+            rows.extend(machine_rows(plan, agent.id).iter().map(|row| Row::Field(owner, *row)));
         }
     }
     if !plan.trucks().classes.is_empty() {
@@ -496,6 +504,24 @@ const LOADER_ROWS: [CalendarRow; 6] = [
     CalendarRow::DigTonnes,
     CalendarRow::ReclaimTonnes,
 ];
+
+/// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
+/// done each day. It neither digs nor reclaims.
+const DRILL_BLAST_ROWS: [CalendarRow; 4] = [
+    CalendarRow::Input(CalendarField::Availability),
+    CalendarRow::Input(CalendarField::Utilisation),
+    CalendarRow::Input(CalendarField::Rate),
+    CalendarRow::BlastWork,
+];
+
+/// The rows one machine's group shows.
+fn machine_rows(plan: &SchedulePlan, agent: crate::model::schedule::LoaderAgentId) -> &'static [CalendarRow] {
+    if plan.agent_kind(agent).is_some_and(crate::model::schedule::MachineKind::is_drill_blast) {
+        &DRILL_BLAST_ROWS
+    } else {
+        &LOADER_ROWS
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn draw_grid(
@@ -757,7 +783,15 @@ fn draw_row(
                 CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
             };
             let text_left = label_start + 18.0;
-            let label = row_label(kind, destination_kind, &figures.currency, figures);
+            let machine = match owner {
+                CalendarOwner::Loader(agent) => plan.agent_kind(agent).filter(|kind| kind.is_drill_blast()),
+                _ => None,
+            };
+            let label = match (kind, machine) {
+                (CalendarRow::Input(CalendarField::Rate), Some(machine)) => tr!("machine-work-rate", unit = machine.rate_unit()),
+                (CalendarRow::BlastWork, Some(machine)) => tr!("schedule-calendar-blast-work", unit = machine.activity().map_or("", |activity| activity.unit())),
+                _ => row_label(kind, destination_kind, &figures.currency, figures),
+            };
             if let (CalendarRow::GradeActual(field), CalendarOwner::Destination(destination)) = (kind, owner) {
                 // The received grade heads its target's inputs, which fold
                 // away beneath it: the grade is the summary, the band detail.
@@ -863,6 +897,7 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::TruckTonneKm => tr!("haul-tonne-km"),
         CalendarRow::DigTonnes => tr!("schedule-calendar-dig-tonnes"),
         CalendarRow::ReclaimTonnes => tr!("schedule-calendar-reclaim-tonnes"),
+        CalendarRow::BlastWork => tr!("schedule-calendar-blast-work", unit = ""),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
         CalendarRow::PileMode => tr!("pile-mode-row"),
         CalendarRow::Received => match destination {
@@ -1388,6 +1423,7 @@ fn editable(address: CalendarCellAddress) -> bool {
         CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate)),
         // Calculated: selectable so it can be copied, and nothing more.
         CalendarRow::DigTonnes
+        | CalendarRow::BlastWork
         | CalendarRow::ReclaimTonnes
         | CalendarRow::TruckHours
         | CalendarRow::TruckCycle
@@ -1883,7 +1919,7 @@ fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &Edit
         if editor.schedule_calendar.collapsed.contains(&owner) {
             continue;
         }
-        rows.extend(LOADER_ROWS.iter().map(|row| (owner, *row)));
+        rows.extend(machine_rows(plan, agent.id).iter().map(|row| (owner, *row)));
     }
     for class in &plan.trucks().classes {
         let owner = CalendarOwner::Truck(class.id);

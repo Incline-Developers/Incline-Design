@@ -65,6 +65,10 @@ pub(crate) struct BlendSolution {
     /// Tiny solver columns omitted when extracting the published schedule.
     /// These are reported in aggregate so numerical changes remain visible.
     pub(crate) adjustments: ExtractionAdjustments,
+    /// What drill and blast did, from the hourly dispatch that simulated it;
+    /// a later solve keeps the dispatch's.
+    #[serde(default)]
+    pub(crate) drill_blast: Option<super::drill_blast::DrillBlastTimeline>,
 }
 
 /// A map as a list of pairs, for keys JSON cannot hold as object keys.
@@ -624,6 +628,122 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                 .report
                 .issues
                 .push(format!("movement {} in interval {} is outside every authored bar window", row.candidate, row.interval));
+        }
+    }
+
+    // ---- drill and blast releases ------------------------------------------
+    // Ground is dug only once its blast has released it: by the dispatch's
+    // own timeline when the schedule carries one, otherwise by the release
+    // times the input fixes.
+    if let Some(chain) = input.drill_blast.as_ref() {
+        let releases: BTreeMap<GroundId, f64> = match solution.drill_blast.as_ref() {
+            Some(timeline) if timeline.blasts.len() == chain.blasts.len() => timeline.releases(chain).into_iter().collect(),
+            _ => chain.releases(),
+        };
+        if let Some(timeline) = solution.drill_blast.as_ref().or(chain.fixed.as_ref()) {
+            if timeline.blasts.len() != chain.blasts.len() {
+                checker.report.issues.push("drill and blast timeline has the wrong number of blasts".to_owned());
+            }
+            for (ground, deadline) in chain.clearance_deadlines(timeline) {
+                let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+                    continue;
+                };
+                let dug: f64 = solution
+                    .movements
+                    .iter()
+                    .filter(|row| {
+                        input.intervals.get(row.interval).is_some_and(|interval| interval.end_h <= deadline + 1e-9)
+                            && input
+                                .movements
+                                .get(row.candidate)
+                                .is_some_and(|candidate| candidate.activity == Activity::Dig && candidate.source == SourceId::Ground(ground))
+                    })
+                    .map(|row| row.tonnes_t)
+                    .sum();
+                if source.tonnes_t - dug > indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T) {
+                    checker.report.issues.push(format!("block {} still standing at blast clearance hour {deadline}", ground.0));
+                }
+            }
+            // Check the machine work independently of the solver's release data.
+            // Window solves carry full-horizon work; only audit machine rates in
+            // the intervals this input holds.
+            for (position, work) in timeline.work.iter().enumerate() {
+                let (Some(agent), Some(blast), Some(events)) = (chain.agents.get(work.agent), chain.blasts.get(work.blast), timeline.blasts.get(work.blast)) else {
+                    checker.report.issues.push("drill and blast work names an unknown machine or blast".to_owned());
+                    continue;
+                };
+                let step = work.activity as usize;
+                let before = if step == 0 { events.cleared_h } else { events.done_h[step - 1] };
+                let duration = work.end_h - work.start_h;
+                if !work.quantity.is_finite()
+                    || work.quantity < 0.0
+                    || !duration.is_finite()
+                    || duration <= 0.0
+                    || agent.activity != work.activity
+                    || !before.is_some_and(|at| at <= work.start_h + 1e-9)
+                    || blast.stage.has_done(work.activity)
+                    || events.done_h[step].is_some_and(|done| work.end_h > done + 1e-9)
+                {
+                    checker.report.issues.push(format!("invalid drill and blast work span {position}"));
+                    continue;
+                }
+                if timeline.work[..position]
+                    .iter()
+                    .any(|prior| prior.agent == work.agent && prior.start_h < work.end_h - 1e-9 && work.start_h < prior.end_h - 1e-9)
+                {
+                    checker.report.issues.push(format!("drill and blast machine {} works overlapping spans", work.agent));
+                }
+                for interval in &input.intervals {
+                    if work.end_h <= interval.start_h || work.start_h >= interval.end_h {
+                        continue;
+                    }
+                    if work.quantity / duration > agent.rates.get(interval.index).copied().unwrap_or(0.0) + 1e-6 {
+                        checker
+                            .report
+                            .issues
+                            .push(format!("drill and blast machine {} exceeds its rate in interval {}", work.agent, interval.index));
+                    }
+                }
+            }
+            for (blast_index, (blast, events)) in chain.blasts.iter().zip(&timeline.blasts).enumerate() {
+                if blast.stage == crate::model::schedule::BlastStage::NotStarted && blast.never_clear && events.cleared_h.is_some() {
+                    checker.report.issues.push(format!("blast {blast_index} clears unmineable ground"));
+                }
+                for activity in crate::model::schedule::BlastActivity::ALL {
+                    let step = activity as usize;
+                    let worked: f64 = timeline
+                        .work
+                        .iter()
+                        .filter(|work| work.blast == blast_index && work.activity == activity)
+                        .map(|work| work.quantity)
+                        .sum();
+                    if worked > blast.quantity[step] + 1e-6 || (events.done_h[step].is_some() && !blast.stage.has_done(activity) && (worked - blast.quantity[step]).abs() > 1e-6) {
+                        checker.report.issues.push(format!("blast {blast_index} has inconsistent {activity:?} work"));
+                    }
+                }
+                if blast.stage != crate::model::schedule::BlastStage::Fired
+                    && events
+                        .fired_h
+                        .is_some_and(|fired| !events.done_h[2].is_some_and(|charged| (chain.fires_at(charged) - fired).abs() < 1e-9))
+                {
+                    checker.report.issues.push(format!("blast {blast_index} fires outside its window"));
+                }
+            }
+        }
+        for row in &solution.movements {
+            if row.tonnes_t <= REPLAY_TOLERANCE_T {
+                continue;
+            }
+            let Some(candidate) = input.movements.get(row.candidate) else { continue };
+            let Some(interval) = input.intervals.get(row.interval) else { continue };
+            if let SourceId::Ground(ground) = candidate.source
+                && releases.get(&ground).is_some_and(|released| *released > interval.start_h + 1e-9)
+            {
+                checker
+                    .report
+                    .issues
+                    .push(format!("block {} dug in interval {} before its blast released it", ground.0, row.interval));
+            }
         }
     }
 

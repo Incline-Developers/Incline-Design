@@ -219,6 +219,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // already decided; only the tonnage is a decision here.
     let reach = DigReach::new(input);
     let held: BTreeSet<GroundId> = input.ground.iter().map(|source| source.id).collect();
+    // Drill and blast: a block is dug only from its blast's release, which
+    // the hourly dispatch found and every later solve keeps.
+    let releases = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
     for (index, candidate) in input.movements.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
@@ -249,6 +252,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
             // Likewise columns that authored block order forces to zero.
             if !reach.allows(candidate, *interval) {
+                continue;
+            }
+            if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
+                && releases.get(&ground).is_some_and(|released| *released > interval.start_h + 1e-9)
+            {
                 continue;
             }
             // And movements a pile's authored mode forbids this day: no
@@ -500,6 +508,33 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 }
                 previous = Some(remaining.clone());
             }
+        }
+    }
+
+    // Improve holds the drill and blast timeline. It must also remove the
+    // overlying ground before that timeline's clearance, rather than moving
+    // it later and leaving preparation underneath standing material.
+    if let Some(chain) = input.drill_blast.as_ref()
+        && let Some(timeline) = &chain.fixed
+    {
+        for (ground, deadline) in chain.clearance_deadlines(timeline) {
+            let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+                continue;
+            };
+            let mut terms = Vec::new();
+            for (candidate_index, candidate) in input.movements.iter().enumerate() {
+                if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(ground) {
+                    continue;
+                }
+                for interval in input.intervals.iter().filter(|interval| interval.end_h <= deadline + 1e-9) {
+                    for segment in 0..segments {
+                        if let Some(column) = rows.columns().movement.get(&(candidate_index, interval.index, segment)) {
+                            terms.push((column.clone(), 1.0));
+                        }
+                    }
+                }
+            }
+            rows.geq(terms, source.tonnes_t, &format!("blastclear_{}", ground.0));
         }
     }
 

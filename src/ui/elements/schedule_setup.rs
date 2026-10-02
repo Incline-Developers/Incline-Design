@@ -323,7 +323,12 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
             for class in plan.classes() {
-                let label = tr_format!(literal = "%name% · %rate%", name = class.name.clone(), rate = rate_with_unit(class.default_dig_rate_tph));
+                let rate = if class.kind.is_drill_blast() {
+                    format!("{} {}", rate_text(class.default_dig_rate_tph), class.kind.rate_unit())
+                } else {
+                    rate_with_unit(class.default_dig_rate_tph)
+                };
+                let label = tr_format!(literal = "%name% · %rate%", name = class.name.clone(), rate = rate);
                 let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
                 if response.clicked() {
                     selected = Some(class.id);
@@ -403,7 +408,26 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
-        let rate = rows.field(&tr!("schedule-dig-rate"), &mut draft.rate, rate_error.as_deref());
+        let mut kind = class.kind;
+        let kind_label = kind.label();
+        if rows
+            .combo(
+                ("schedule_class_kind", class.id),
+                &tr!("machine-kind"),
+                &mut kind,
+                &kind_label,
+                crate::model::schedule::MachineKind::ALL.map(|kind| (kind, kind.label())),
+            )
+            .changed()
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassKind { class: class.id, kind }));
+        }
+        let rate_label = if class.kind.is_drill_blast() {
+            tr!("machine-work-rate", unit = class.kind.rate_unit())
+        } else {
+            tr!("schedule-dig-rate")
+        };
+        let rate = rows.field(&rate_label, &mut draft.rate, rate_error.as_deref());
         if rate.lost_focus()
             && let Ok(value) = parse_rate(&draft.rate)
             && value != class.default_dig_rate_tph
@@ -413,15 +437,20 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         // Its own row and its own commit: loading a stockpile back into a truck
         // is a different job from digging a face, and nothing here knows the
         // ratio between them.
-        let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
-        reclaim.clone().on_hover_text(tr!("inventory-help"));
-        if reclaim.lost_focus()
-            && let Ok(value) = parse_rate(&draft.reclaim_rate)
-            && value != class.default_reclaim_rate_tph
-        {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassReclaimRate { class: class.id, rate_tph: value }));
+        // Dozers, drills and MPUs neither reclaim nor load trucks.
+        let loader = !class.kind.is_drill_blast();
+        if loader {
+            let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
+            reclaim.clone().on_hover_text(tr!("inventory-help"));
+            if reclaim.lost_focus()
+                && let Ok(value) = parse_rate(&draft.reclaim_rate)
+                && value != class.default_reclaim_rate_tph
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassReclaimRate { class: class.id, rate_tph: value }));
+            }
         }
-        if rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, None).lost_focus()
+        if loader
+            && rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, None).lost_focus()
             && let Ok(seconds) = draft.spot_time.parse::<f64>()
             && seconds != class.spot_time_s
         {
@@ -545,7 +574,11 @@ pub(crate) fn draw_agent_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
-        rows.readonly(&tr!("schedule-effective-rate"), &rate, Some(&tr!("schedule-tph")), None);
+        let unit = match plan.agent_kind(agent.id) {
+            Some(kind) if kind.is_drill_blast() => kind.rate_unit().to_owned(),
+            _ => tr!("schedule-tph"),
+        };
+        rows.readonly(&tr!("schedule-effective-rate"), &rate, Some(&unit), None);
     });
     commands.append(&mut edits);
 }

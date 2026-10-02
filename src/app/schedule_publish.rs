@@ -466,6 +466,7 @@ pub(crate) fn publish(
             })
             .collect(),
         report,
+        drill_blast: published_drill_blast(input, solution, identities),
     });
     explain_idle(&mut schedule, input, solution, &lookup);
     Ok(schedule)
@@ -543,7 +544,50 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             released.insert((row.pile, row.interval));
         }
     }
-    schedule.classify_idle(&intervals, |schedule, agent, position| {
+    // Drill and blast: when each block's ground was released, and by which
+    // blast, as the dispatch simulated it.
+    let releases: BTreeMap<crate::model::schedule::optimisation::GroundId, (f64, usize)> = match (input.drill_blast.as_ref(), solution.drill_blast.as_ref()) {
+        (Some(chain), Some(timeline)) => chain
+            .blasts
+            .iter()
+            .zip(&timeline.blasts)
+            .enumerate()
+            .flat_map(|(index, (blast, events))| blast.releases.iter().map(move |ground| (*ground, (events.fired_h.unwrap_or(f64::MAX), index))))
+            .collect(),
+        _ => BTreeMap::new(),
+    };
+    // A loader waits on a blast when its highest-priority open bar is a dig
+    // whose next block has not been released.
+    let waiting = |agent: LoaderAgentId, position: usize| -> Option<usize> {
+        if releases.is_empty() {
+            return None;
+        }
+        let loader = *loaders.get(&agent)?;
+        let start_h = input.intervals[position].start_h;
+        let mut open: Vec<_> = input
+            .tasks
+            .iter()
+            .filter(|task| task.loader == loader && task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
+            .collect();
+        open.sort_by(|left, right| {
+            (left.priority, left.window_start_h, left.id)
+                .partial_cmp(&(right.priority, right.window_start_h, right.id))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for task in open {
+            let TaskKind::Dig { sequence } = &task.kind else { return None };
+            let next = sequence.iter().find(|ground| {
+                let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
+                let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
+                total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
+            });
+            if let Some(ground) = next {
+                return releases.get(ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+            }
+        }
+        None
+    };
+    let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
         let Some(&loader) = loaders.get(&agent) else {
             return (IdleReason::NoWork, Vec::new());
         };
@@ -798,7 +842,65 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             return (IdleReason::NoTrucks, Vec::new());
         }
         (IdleReason::NotWorthIt, Vec::new())
+    };
+    schedule.classify_idle(&intervals, |schedule, agent, position| {
+        if let Some(blast) = waiting(agent, position) {
+            return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
+        }
+        let (reason, full) = explain(schedule, agent, position);
+        (reason, full, None)
     });
+}
+
+/// Drill and blast in project terms: the captured blasts with the
+/// milestones the dispatch simulated, and each machine's work.
+fn published_drill_blast(
+    input: &BlendInput,
+    solution: &BlendSolution,
+    identities: &crate::app::commands::schedule_capture::CaptureIdentities,
+) -> Option<crate::model::schedule::result::DrillBlastResult> {
+    use crate::model::schedule::result::{DrillBlastResult, PublishedBlast, PublishedBlastWork};
+    input.drill_blast.as_ref()?;
+    let timeline = solution.drill_blast.as_ref();
+    let blasts = identities
+        .blasts
+        .iter()
+        .enumerate()
+        .map(|(index, blast)| {
+            let events = timeline.and_then(|timeline| timeline.blasts.get(index)).copied().unwrap_or_default();
+            PublishedBlast {
+                reference: blast.reference,
+                name: blast.name.clone(),
+                bench_base: blast.bench.base,
+                bench_top: blast.bench.top,
+                face: std::sync::Arc::clone(&blast.face),
+                collars: blast.collars.clone(),
+                quantity: blast.quantity,
+                cleared_h: events.cleared_h,
+                done_h: events.done_h,
+                fired_h: events.fired_h.filter(|at| *at < f64::MAX),
+            }
+        })
+        .collect();
+    let work = timeline
+        .map(|timeline| {
+            timeline
+                .work
+                .iter()
+                .filter_map(|row| {
+                    Some(PublishedBlastWork {
+                        agent: *identities.blast_agents.get(row.agent)?,
+                        blast: row.blast,
+                        activity: row.activity,
+                        start_h: row.start_h,
+                        end_h: row.end_h,
+                        quantity: row.quantity,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(DrillBlastResult { blasts, work })
 }
 
 /// An orderable stand-in for [`WorkSource`], for grouping.

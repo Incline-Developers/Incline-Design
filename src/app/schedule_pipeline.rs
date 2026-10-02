@@ -443,7 +443,7 @@ impl crate::app::App<'_> {
         });
         let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field, plan.routing().enabled));
 
-        let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits())).collect();
+        let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits(), class.kind)).collect();
         let classes_step = hash_of((configuration, classes));
 
         let agents: Vec<_> = plan
@@ -651,12 +651,19 @@ impl crate::app::App<'_> {
             Err(reason) => (1, 0, reason.describe()),
         };
         let readiness_step = hash_of((destinations_step, solids));
+        let drill_blast_step = {
+            let mut hasher = DefaultHasher::new();
+            delays_step.hash(&mut hasher);
+            plan.drill_blast().hash_content(&mut hasher);
+            hasher.finish()
+        };
 
         [
             configuration,
             classes_step,
             agents_step,
             delays_step,
+            drill_blast_step,
             truck_classes_step,
             stockpiles_step,
             dumps_step,
@@ -887,6 +894,7 @@ impl crate::app::App<'_> {
             ScheduleStep::LoaderClasses => self.evaluate_loader_classes(),
             ScheduleStep::LoaderAgents => self.evaluate_loader_agents(),
             ScheduleStep::Delays => self.evaluate_delays(),
+            ScheduleStep::DrillBlast => self.evaluate_drill_blast(),
             ScheduleStep::Stockpiles => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Stockpile),
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
@@ -974,6 +982,24 @@ impl crate::app::App<'_> {
         let entities = self.workspace.active_document().map_or(0, |document| {
             let delays = document.schedule().delays();
             delays.types.len() + delays.lists.len() + delays.rosters.len()
+        });
+        StageOutcome::Settled {
+            diagnostics: Vec::new(),
+            entities,
+        }
+    }
+
+    /// Drill and blast is optional: off, or on with the blasts it sequences.
+    /// A blast bar on a machine whose class is not a dozer, drill or MPU is
+    /// refused when it is made, so nothing here can block a run.
+    fn evaluate_drill_blast(&self) -> StageOutcome {
+        let entities = self.workspace.active_document().map_or(0, |document| {
+            let plan = document.schedule();
+            if plan.drill_blast().enabled {
+                plan.bars().iter().filter(|bar| bar.blast_order().is_some()).count()
+            } else {
+                0
+            }
         });
         StageOutcome::Settled {
             diagnostics: Vec::new(),

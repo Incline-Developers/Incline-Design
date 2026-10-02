@@ -41,7 +41,7 @@ impl crate::app::App<'_> {
         }
         match edit {
             ScheduleEdit::SetName(name) => self.set_schedule_name(name),
-            ScheduleEdit::AddClass { name, rate_tph } => self.add_loader_class(name, rate_tph),
+            ScheduleEdit::AddClass { name, rate_tph, kind } => self.add_loader_class(name, rate_tph, kind),
             ScheduleEdit::RenameClass { class, name } => self.rename_loader_class(class, name),
             ScheduleEdit::SetClassRate { class, rate_tph } => self.set_loader_class_rate(class, rate_tph),
             ScheduleEdit::DeleteClass(class) => self.delete_loader_class(class),
@@ -137,6 +137,18 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetCashflowRuleConditions { rule, conditions } => self.edit_cashflow(|cashflow| cashflow.set_rule_conditions(rule, conditions)),
             ScheduleEdit::SetCashflowRuleValue { rule, value_per_tonne } => self.edit_cashflow(|cashflow| cashflow.set_rule_value(rule, value_per_tonne)),
             ScheduleEdit::SetClassReclaimRate { class, rate_tph } => self.edit_schedule(|plan| plan.set_class_reclaim_rate(class, rate_tph)),
+            ScheduleEdit::SetClassKind { class, kind } => self.edit_schedule(|plan| plan.set_class_kind(class, kind)),
+            ScheduleEdit::SetDrillBlast(settings) => self.edit_schedule(|plan| plan.set_drill_blast_settings(settings)),
+            ScheduleEdit::SetBlastStatus { blasts, stage } => self.edit_schedule(|plan| plan.set_blast_status(&blasts, stage)),
+            ScheduleEdit::SetBlastPattern { blast, pattern } => self.edit_schedule(|plan| plan.set_blast_pattern(blast, pattern)),
+            ScheduleEdit::SetBlastMembers { bar, members } => self.edit_schedule(|plan| plan.set_blast_members(bar, members)),
+            ScheduleEdit::AddBlastBar {
+                agent,
+                priority,
+                window,
+                insert_lane,
+                members,
+            } => self.add_blast_bar(agent, priority, window, insert_lane, members),
             ScheduleEdit::SetReclaimOrder { destination, order } => self.edit_stockpile_routing(destination, |routing| routing.set_reclaim_order(destination, order)),
             ScheduleEdit::AddOpeningLot { destination, name, tonnes_t } => self.add_opening_lot(destination, name, tonnes_t),
             ScheduleEdit::DuplicateOpeningLot { destination, lot } => self.duplicate_opening_lot(destination, lot),
@@ -507,10 +519,12 @@ impl crate::app::App<'_> {
         });
     }
 
-    fn add_loader_class(&mut self, name: String, rate_tph: f64) {
+    fn add_loader_class(&mut self, name: String, rate_tph: f64, kind: crate::model::schedule::MachineKind) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            added = Some(plan.add_class(&name, rate_tph)?);
+            let id = plan.add_class(&name, rate_tph)?;
+            plan.set_class_kind(id, kind)?;
+            added = Some(id);
             Ok(())
         });
         // Selecting what was just added is editor state, not project state,
@@ -589,6 +603,31 @@ impl crate::app::App<'_> {
         let mut added = None;
         self.edit_schedule(|plan| {
             let id = plan.add_bar(&name, agent, priority, window)?;
+            if insert_lane {
+                plan.open_lane(agent, priority);
+                plan.set_bar_priority(id, priority)?;
+            }
+            added = Some(id);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Add a dozer, drill or MPU bar and select it.
+    fn add_blast_bar(
+        &mut self,
+        agent: Option<LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        insert_lane: bool,
+        members: Vec<crate::model::schedule::BlastRef>,
+    ) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            let id = plan.add_blast_bar(agent, priority, window, members)?;
             if insert_lane {
                 plan.open_lane(agent, priority);
                 plan.set_bar_priority(id, priority)?;

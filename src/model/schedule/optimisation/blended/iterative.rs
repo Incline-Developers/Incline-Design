@@ -507,6 +507,7 @@ fn solve_fixed_grade(input: &BlendInput, estimates: &Estimates, limit: Duration)
             chunks,
             reported_objective: raw_objective,
             adjustments,
+            drill_blast: None,
         }),
         sizes,
         formulation_time,

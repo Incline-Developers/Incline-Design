@@ -2739,6 +2739,18 @@ pub(crate) struct EditorState {
     /// Add or edit a reclaim bar. The draft stays outside the project until
     /// Apply, so a half-typed limit or cancelled dialog changes nothing.
     pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
+    /// The Add / Edit blast bar dialog, while open.
+    pub(crate) blast_bar_dialog: Option<BlastBarDialog>,
+    /// Every blast of the Solids run, for the Drill & Blast page and the
+    /// blast bar dialog; refreshed by the app when the run or project moves.
+    pub(crate) schedule_blasts: Vec<BlastListEntry>,
+    pub(crate) schedule_blasts_key: Option<(u32, u64, Option<u64>, u64)>,
+    /// The blast selected on the Drill & Blast page.
+    pub(crate) schedule_selected_blast: Option<crate::model::schedule::BlastRef>,
+    /// The Drill & Blast settings as typed.
+    pub(crate) drill_blast_draft: Option<DrillBlastDraft>,
+    /// The selected blast's own pattern as typed.
+    pub(crate) blast_pattern_draft: Option<BlastPatternDraft>,
     /// The numeric work-window dialog, while one is open. Dragging an edge is
     /// quick and imprecise; this is the same edit said exactly.
     pub(crate) bar_window_dialog: Option<BarWindowDialog>,
@@ -2832,6 +2844,7 @@ pub(crate) struct EditorState {
     pub(crate) new_loader_class_open: bool,
     pub(crate) new_loader_class_name: String,
     pub(crate) new_loader_class_rate: String,
+    pub(crate) new_loader_class_kind: crate::model::schedule::MachineKind,
     pub(crate) new_loader_agent_open: bool,
     pub(crate) new_loader_agent_name: String,
     pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
@@ -3961,6 +3974,12 @@ impl EditorState {
             schedule_selected_member: None,
             bar_name_dialog: None,
             reclaim_bar_dialog: None,
+            blast_bar_dialog: None,
+            schedule_blasts: Vec::new(),
+            schedule_blasts_key: None,
+            schedule_selected_blast: None,
+            drill_blast_draft: None,
+            blast_pattern_draft: None,
             bar_window_dialog: None,
             gantt_drag: None,
             gantt_palette_drag: None,
@@ -3993,6 +4012,7 @@ impl EditorState {
             new_loader_class_open: false,
             new_loader_class_name: String::new(),
             new_loader_class_rate: String::new(),
+            new_loader_class_kind: crate::model::schedule::MachineKind::Loader,
             new_loader_agent_open: false,
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
@@ -5216,7 +5236,7 @@ impl UiCommand {
             // structural, but not renames or rate edits: those are cell edits
             // and a console line per keystroke-commit would bury the log.
             Self::Schedule { edit, .. } => match edit {
-                ScheduleEdit::AddClass { name, rate_tph } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} tph")),
+                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", if kind.is_drill_blast() { kind.rate_unit() } else { "tph" })),
                 ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
@@ -5256,6 +5276,12 @@ impl UiCommand {
                 ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
+                ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
+                ScheduleEdit::SetClassKind { .. }
+                | ScheduleEdit::SetDrillBlast(_)
+                | ScheduleEdit::SetBlastStatus { .. }
+                | ScheduleEdit::SetBlastPattern { .. }
+                | ScheduleEdit::SetBlastMembers { .. } => None,
                 ScheduleEdit::AddDelayType { name, .. } => report(tr!("delay-new-type"), name.clone()),
                 ScheduleEdit::DeleteDelayType(id) => report(tr!("delay-delete-type"), format!("{id:?}")),
                 ScheduleEdit::AddDelayList { title } => report(tr!("delay-new-list"), title.clone()),
@@ -5994,6 +6020,8 @@ pub(crate) enum GanttPaletteItem {
     Dig,
     Reclaim,
     Delay,
+    /// A dozer, drill or MPU bar listing blasts.
+    Blast,
 }
 
 /// Where a delay bar was dropped, held while its type is chosen.
@@ -6023,6 +6051,8 @@ pub(crate) enum ScheduleStep {
     LoaderAgents,
     /// Delay types, delay lists and rosters.
     Delays,
+    /// Drill and blast settings and each blast's starting stage.
+    DrillBlast,
     TruckClasses,
     Stockpiles,
     Dumps,
@@ -6042,11 +6072,12 @@ impl ScheduleStep {
     /// name is only known once Readiness has the Solids run.
     /// Truck Classes sits with the loader fleet because it is fleet, and
     /// Trucking Rules after Destinations because a trucking rule names them.
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Configuration,
         Self::LoaderClasses,
         Self::LoaderAgents,
         Self::Delays,
+        Self::DrillBlast,
         Self::TruckClasses,
         Self::Stockpiles,
         Self::Dumps,
@@ -6067,6 +6098,7 @@ impl ScheduleStep {
             Self::LoaderClasses => tr!("schedule-loader-classes"),
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
+            Self::DrillBlast => tr!("drill-blast-step"),
             Self::TruckClasses => tr!("truck-classes"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
@@ -6084,6 +6116,7 @@ impl ScheduleStep {
             Self::LoaderClasses => "schedule_loader_classes",
             Self::LoaderAgents => "schedule_loader_agents",
             Self::Delays => "schedule_delays",
+            Self::DrillBlast => "schedule_drill_blast",
             Self::TruckClasses => "schedule_truck_classes",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
@@ -6286,10 +6319,12 @@ pub(crate) struct ScheduleExperimentDraft {
 pub(crate) enum ScheduleEdit {
     /// Rename the project's schedule.
     SetName(String),
-    /// Add a loader class - a machine type and the rate it digs at.
+    /// Add a machine class - what it does, and the rate it works at in that
+    /// kind's unit.
     AddClass {
         name: String,
         rate_tph: f64,
+        kind: crate::model::schedule::MachineKind,
     },
     RenameClass {
         class: crate::model::schedule::LoaderClassId,
@@ -6710,6 +6745,36 @@ pub(crate) enum ScheduleEdit {
         bar: crate::model::schedule::BarId,
         maximum_t: Option<f64>,
     },
+    /// Set what a machine class does: load, doze, drill or charge.
+    SetClassKind {
+        class: crate::model::schedule::LoaderClassId,
+        kind: crate::model::schedule::MachineKind,
+    },
+    /// Replace the drill and blast settings, as one edit.
+    SetDrillBlast(crate::model::schedule::DrillBlastSettings),
+    /// Set the stage blasts start the schedule at.
+    SetBlastStatus {
+        blasts: Vec<crate::model::schedule::BlastRef>,
+        stage: crate::model::schedule::BlastStage,
+    },
+    /// Give a blast its own pattern, or `None` to use the default.
+    SetBlastPattern {
+        blast: crate::model::schedule::BlastRef,
+        pattern: Option<crate::model::schedule::DrillPattern>,
+    },
+    /// Add a dozer, drill or MPU bar listing blasts in order.
+    AddBlastBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        insert_lane: bool,
+        members: Vec<crate::model::schedule::BlastRef>,
+    },
+    /// Replace a blast bar's blasts, as one edit.
+    SetBlastMembers {
+        bar: crate::model::schedule::BarId,
+        members: Vec<crate::model::schedule::BlastRef>,
+    },
     /// Optimisation settings. Persisted and undoable like every other plan
     /// setting, and edited in every build.
     SetExperimentHorizon {
@@ -6825,6 +6890,60 @@ pub(crate) struct BarNameDialog {
 /// Draft for creating a reclaim bar or changing the source and cumulative cap
 /// of one that already exists.
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastBarDialog {
+    pub(crate) target: Option<crate::model::schedule::BarId>,
+    pub(crate) members: Vec<crate::model::schedule::BlastRef>,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) insert_lane: bool,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    /// Which bench the list on the left shows, by base RL bits.
+    pub(crate) bench: Option<(crate::model::SolidId, u64)>,
+}
+
+/// One blast of the Solids run, as the Drill & Blast page lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastListEntry {
+    pub(crate) reference: crate::model::schedule::BlastRef,
+    pub(crate) name: String,
+    pub(crate) solid_name: String,
+    pub(crate) bench_base: f64,
+    pub(crate) bench_top: f64,
+    pub(crate) area: f64,
+    /// The faces, to tell whether a stored reference is this blast.
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+}
+
+impl BlastListEntry {
+    pub(crate) fn holds(&self, blast: &crate::model::schedule::BlastRef) -> bool {
+        blast.solid == self.reference.solid && (blast.bench - self.bench_base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&self.face, glam::DVec2::from(blast.anchor))
+    }
+
+    /// Bench and name, the way lists show a blast.
+    pub(crate) fn label(&self) -> String {
+        tr!("blast-label", bench = format!("{:.0}", self.bench_top), name = self.name.clone())
+    }
+}
+
+/// The Drill & Blast settings as typed: each number a string until it parses.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DrillBlastDraft {
+    pub(crate) source: crate::model::schedule::DrillBlastSettings,
+    /// Burden, spacing, subdrill, hole diameter, stemming, density, buffer,
+    /// window start, window end.
+    pub(crate) fields: [String; 9],
+}
+
+/// One blast's own pattern as typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastPatternDraft {
+    pub(crate) blast: crate::model::schedule::BlastRef,
+    pub(crate) source: crate::model::schedule::DrillPattern,
+    /// Burden, spacing, subdrill.
+    pub(crate) fields: [String; 3],
+}
+
 pub(crate) struct ReclaimBarDialog {
     pub(crate) target: Option<crate::model::schedule::BarId>,
     /// The permitted stockpiles, as the draft holds them. Entries that no
@@ -7202,6 +7321,8 @@ pub(crate) enum CalendarRow {
     GradeActual(crate::model::ReserveFieldId),
     /// The schedule's movement value for the period, in the plan's currency.
     Value,
+    /// What a dozer, drill or MPU did in the period, in its own unit.
+    BlastWork,
 }
 
 impl CalendarRow {

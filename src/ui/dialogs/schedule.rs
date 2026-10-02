@@ -138,9 +138,22 @@ pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut Edito
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_loader_class_name)
                 .hint_text(tr!(literal = "Required"))
                 .show(ui);
-            MenuFieldText::new(tr!("schedule-dig-rate"), &mut editor.new_loader_class_rate)
-                .hint_text(tr!("schedule-tph"))
-                .show(ui);
+            let kind_label = editor.new_loader_class_kind.label();
+            MenuFieldCombo::new(
+                "new_loader_class_kind",
+                tr!("machine-kind"),
+                &mut editor.new_loader_class_kind,
+                kind_label,
+                crate::model::schedule::MachineKind::ALL.map(|kind| (kind, kind.label().into())),
+            )
+            .show(ui);
+            let kind = editor.new_loader_class_kind;
+            let (rate_label, unit) = if kind.is_drill_blast() {
+                (tr!("machine-work-rate", unit = kind.rate_unit()), kind.rate_unit().to_owned())
+            } else {
+                (tr!("schedule-dig-rate"), tr!("schedule-tph"))
+            };
+            MenuFieldText::new(rate_label, &mut editor.new_loader_class_rate).hint_text(unit).show(ui);
             let name = editor.new_loader_class_name.trim().to_owned();
             let rate = editor.new_loader_class_rate.trim().parse::<f64>().ok().filter(|rate| rate.is_finite() && *rate > 0.0);
             // Rejected before it is offered rather than after it is pressed:
@@ -155,7 +168,7 @@ pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 if (submitted || ui.add(MenuButton::new(tr!("schedule-add-class")).primary().enabled(can_add)).clicked())
                     && let Some(rate_tph) = rate.filter(|_| can_add)
                 {
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::AddClass { name, rate_tph }));
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::AddClass { name, rate_tph, kind }));
                     close = true;
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -206,9 +219,14 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 plan.classes().iter().map(|class| (Some(class.id), class.name.clone().into())),
             )
             .show(ui);
-            if let Some(rate) = editor.new_loader_agent_class.and_then(|id| plan.class(id)).map(|class| class.default_dig_rate_tph) {
+            if let Some(class) = editor.new_loader_agent_class.and_then(|id| plan.class(id)) {
+                let unit = if class.kind.is_drill_blast() {
+                    class.kind.rate_unit().to_owned()
+                } else {
+                    tr!("schedule-tph")
+                };
                 ui.label(egui::RichText::new(tr!("schedule-effective-rate")).weak());
-                ui.label(format!("{rate} {}", tr!("schedule-tph")));
+                ui.label(format!("{} {unit}", class.default_dig_rate_tph));
             }
             let name = editor.new_loader_agent_name.trim().to_owned();
             let taken = plan.agents().iter().any(|agent| agent.name.trim().eq_ignore_ascii_case(&name));
@@ -399,5 +417,153 @@ fn toggle_source(chosen: &mut Vec<DestinationId>, id: DestinationId, picked: boo
         }
     } else {
         chosen.push(id);
+    }
+}
+
+/// Add a dozer, drill or MPU bar, or change the blasts of one: the run's
+/// blasts by bench on the left, the bar's order on the right.
+pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(target) = editor.blast_bar_dialog.as_ref().map(|dialog| dialog.target) else {
+        return;
+    };
+    if target.is_some_and(|id| plan.bar(id).is_none_or(|bar| bar.blast_order().is_none())) {
+        editor.blast_bar_dialog = None;
+        return;
+    }
+    let blasts = editor.schedule_blasts.clone();
+    let mut open = true;
+    let mut close = false;
+    let draft = editor.blast_bar_dialog.as_mut().expect("checked above");
+    let title = if target.is_some() { tr!("blast-edit-title") } else { tr!("blast-add-bar") };
+    // Benches, highest first, as the Drill & Blast page lists them.
+    let mut benches: Vec<(crate::model::SolidId, u64, String)> = Vec::new();
+    for entry in &blasts {
+        let key = (entry.reference.solid, entry.bench_base.to_bits());
+        if !benches.iter().any(|(solid, base, _)| (*solid, *base) == key) {
+            benches.push((
+                key.0,
+                key.1,
+                tr!("drill-blast-bench", solid = entry.solid_name.clone(), bench = format!("{:.0}", entry.bench_top)),
+            ));
+        }
+    }
+    if draft.bench.is_none() {
+        draft.bench = draft
+            .members
+            .first()
+            .and_then(|member| blasts.iter().find(|entry| entry.holds(member)))
+            .map(|entry| (entry.reference.solid, entry.bench_base.to_bits()))
+            .or_else(|| benches.first().map(|(solid, base, _)| (*solid, *base)));
+    }
+    DragableMenu::new("blast_bar_dialog", title).open(&mut open).min_width(520.0).show(ui.ctx(), |ui| {
+        if target.is_none() {
+            let agent_label = draft
+                .agent
+                .and_then(|id| plan.agent(id))
+                .map(|agent| agent.name.clone())
+                .unwrap_or_else(|| tr!("blast-machine-choose"));
+            MenuFieldCombo::new(
+                "blast_bar_machine",
+                tr!("blast-machine"),
+                &mut draft.agent,
+                agent_label,
+                plan.agents()
+                    .iter()
+                    .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+                    .map(|agent| (Some(agent.id), agent.name.clone().into())),
+            )
+            .show(ui);
+        }
+        if blasts.is_empty() {
+            ui.label(egui::RichText::new(tr!("drill-blast-no-blasts")).weak());
+        }
+        ui.columns(2, |columns| {
+            let left = &mut columns[0];
+            let bench_label = draft
+                .bench
+                .and_then(|key| benches.iter().find(|(solid, base, _)| (*solid, *base) == key))
+                .map_or_else(String::new, |(_, _, label)| label.clone());
+            egui::ComboBox::from_id_salt("blast_bar_bench")
+                .selected_text(bench_label)
+                .width(left.available_width())
+                .show_ui(left, |ui| {
+                    for (solid, base, label) in &benches {
+                        ui.selectable_value(&mut draft.bench, Some((*solid, *base)), label);
+                    }
+                });
+            left.label(egui::RichText::new(tr!("blast-bar-click-to-add")).weak());
+            egui::ScrollArea::vertical().id_salt("blast_bar_available").max_height(220.0).show(left, |ui| {
+                for entry in blasts.iter().filter(|entry| draft.bench == Some((entry.reference.solid, entry.bench_base.to_bits()))) {
+                    let taken = draft.members.iter().any(|member| entry.holds(member));
+                    if ui.add_enabled(!taken, egui::Button::new(entry.name.clone()).frame(false)).clicked() {
+                        draft.members.push(entry.reference);
+                    }
+                }
+            });
+            if left.button(tr!("blast-bar-add-bench")).clicked() {
+                for entry in blasts.iter().filter(|entry| draft.bench == Some((entry.reference.solid, entry.bench_base.to_bits()))) {
+                    if !draft.members.iter().any(|member| entry.holds(member)) {
+                        draft.members.push(entry.reference);
+                    }
+                }
+            }
+            let right = &mut columns[1];
+            right.label(crate::ui::fonts::bold(&tr!("blast-bar-order")));
+            let mut remove = None;
+            let mut raise = None;
+            egui::ScrollArea::vertical().id_salt("blast_bar_order").max_height(250.0).show(right, |ui| {
+                for (index, member) in draft.members.iter().enumerate() {
+                    let label = blasts
+                        .iter()
+                        .find(|entry| entry.holds(member))
+                        .map_or_else(|| tr!("blast-bar-missing"), crate::ui::state::BlastListEntry::label);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}. {label}", index + 1));
+                        if ui.small_button("↑").clicked() && index > 0 {
+                            raise = Some(index);
+                        }
+                        if ui.small_button("✕").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+            });
+            if let Some(index) = raise {
+                draft.members.swap(index - 1, index);
+            }
+            if let Some(index) = remove {
+                draft.members.remove(index);
+            }
+        });
+        let valid = target.is_some() || draft.agent.is_some();
+        menu::menu_actions(ui, |ui| {
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked()) && valid {
+                let members = draft.members.clone();
+                match target {
+                    Some(bar) => commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastMembers { bar, members })),
+                    None => commands.push(UiCommand::schedule(
+                        session,
+                        ScheduleEdit::AddBlastBar {
+                            agent: draft.agent,
+                            priority: draft.priority,
+                            window: WorkWindow {
+                                start_h: draft.start_h,
+                                end_h: Some(draft.end_h),
+                            },
+                            insert_lane: draft.insert_lane,
+                            members,
+                        },
+                    )),
+                }
+                close = true;
+            }
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                close = true;
+            }
+        });
+    });
+    if close || !open {
+        editor.blast_bar_dialog = None;
     }
 }

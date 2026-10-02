@@ -145,6 +145,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         chunks,
         reported_objective: solved.obj_val(),
         adjustments,
+        drill_blast: None,
     }))
 }
 

@@ -233,10 +233,10 @@ pub(crate) struct BarReport {
 }
 
 impl BarReport {
-    /// A dig bar is ready when every member measured; a reclaim bar has no
-    /// members to measure, so what makes it ready is that its pile resolves.
+    /// Dig bars need measured tonnes. Other activities have no ground
+    /// members; their activity-specific checks populate `problems`.
     pub(crate) fn is_ready(&self) -> bool {
-        self.problems.is_empty() && (self.tonnes.is_some() || self.reclaim.is_some())
+        self.problems.is_empty() && (self.tonnes.is_some() || self.reclaim.is_some() || self.members.is_empty())
     }
 
     pub(crate) fn unresolved_count(&self) -> usize {
@@ -501,11 +501,29 @@ impl crate::app::App<'_> {
             .iter()
             .map(|report| {
                 let problems = report.problems.iter().map(|problem| problem.message()).collect::<Vec<_>>();
-                let default_name = match &report.reclaim {
+                let blasts = self
+                    .workspace
+                    .active_document()
+                    .and_then(|document| document.schedule().bar(report.bar))
+                    .and_then(|bar| bar.blast_order().cloned());
+                let default_name = match (&report.reclaim, blasts) {
                     // A reclaim bar is named by its pile, which is what the user
                     // chose when they created it.
-                    Some(reclaim) => reclaim_default_name(reclaim),
-                    None => default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref())),
+                    (Some(reclaim), _) => reclaim_default_name(reclaim),
+                    // A blast bar by its first blast, and how many follow.
+                    (None, Some(order)) => {
+                        let first = order
+                            .members
+                            .first()
+                            .and_then(|member| self.editor.schedule_blasts.iter().find(|entry| entry.holds(member)))
+                            .map(crate::ui::state::BlastListEntry::label);
+                        match (first, order.members.len()) {
+                            (None, _) => tr!("blast-bar-default-empty"),
+                            (Some(first), 1) => first,
+                            (Some(first), count) => tr!("blast-bar-default-name", first = first, more = (count - 1).to_string()),
+                        }
+                    }
+                    (None, None) => default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref())),
                 };
                 ScheduleBarView {
                     bar: report.bar,
@@ -850,6 +868,14 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     }
     // A delay has no ground and no pile: nothing to resolve, nothing wrong.
     if bar.delay().is_some() {
+        return report;
+    }
+    // A drill and blast bar names blasts, not ground: it is ready once it
+    // names any, and a blast that has left the run is the capture's to note.
+    if let Some(order) = bar.blast_order() {
+        if order.members.is_empty() {
+            report.problems.push(ReadinessProblem::Empty);
+        }
         return report;
     }
     if bar.members().is_empty() {

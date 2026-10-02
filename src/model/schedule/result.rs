@@ -103,6 +103,114 @@ pub(crate) enum IdleReason {
     /// Work, room and trucks were all there: moving the material was worth
     /// less than leaving it.
     NotWorthIt,
+    /// Its bar's next block has not been blasted yet; the span names the
+    /// blast. See [`super::drill_blast`].
+    WaitingOnBlast,
+}
+
+/// What drill and blast did in a calculated schedule: every blast with its
+/// milestones, and each dozer, drill and MPU's work.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DrillBlastResult {
+    pub(crate) blasts: Vec<PublishedBlast>,
+    pub(crate) work: Vec<PublishedBlastWork>,
+}
+
+/// One blast, where it is and when it got there.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PublishedBlast {
+    pub(crate) reference: super::BlastRef,
+    pub(crate) name: String,
+    pub(crate) bench_base: f64,
+    pub(crate) bench_top: f64,
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+    /// Hole collars in plan, in the order they are drilled.
+    pub(crate) collars: Vec<glam::DVec2>,
+    /// Square metres to prep, metres to drill and tonnes to charge.
+    pub(crate) quantity: [f64; 3],
+    pub(crate) cleared_h: Option<f64>,
+    /// Prep, drill and charge finished.
+    pub(crate) done_h: [Option<f64>; 3],
+    /// Its ground available: the end of the window it fired in.
+    pub(crate) fired_h: Option<f64>,
+}
+
+/// A stretch of one machine on one step of one blast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PublishedBlastWork {
+    pub(crate) agent: LoaderAgentId,
+    /// Position in [`DrillBlastResult::blasts`].
+    pub(crate) blast: usize,
+    pub(crate) activity: super::BlastActivity,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    pub(crate) quantity: f64,
+}
+
+impl DrillBlastResult {
+    /// How much of `activity` a blast has had done by `at_h`, as a share of
+    /// what it needs.
+    pub(crate) fn done_share(&self, blast: usize, activity: super::BlastActivity, at_h: f64) -> f64 {
+        let Some(entry) = self.blasts.get(blast) else { return 0.0 };
+        if entry.done_h[activity as usize].is_some_and(|done| done <= at_h) {
+            return 1.0;
+        }
+        let needed = entry.quantity[activity as usize];
+        if needed <= 0.0 {
+            return 0.0;
+        }
+        let worked: f64 = self
+            .work
+            .iter()
+            .filter(|row| row.blast == blast && row.activity == activity && row.start_h < at_h)
+            .map(|row| {
+                let span = row.end_h - row.start_h;
+                if span > 0.0 {
+                    row.quantity * ((at_h.min(row.end_h) - row.start_h) / span)
+                } else {
+                    row.quantity
+                }
+            })
+            .sum();
+        // A blast that started part way along has the rest done already.
+        let started_done = entry.done_h[activity as usize] == Some(0.0);
+        if started_done { 1.0 } else { (worked / needed).clamp(0.0, 1.0) }
+    }
+
+    /// What one machine got done between `from_h` and `to_h`, in its unit.
+    pub(crate) fn worked(&self, agent: LoaderAgentId, from_h: f64, to_h: f64) -> Option<f64> {
+        let rows: Vec<_> = self.work.iter().filter(|row| row.agent == agent).collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            rows.iter()
+                .map(|row| {
+                    let span = row.end_h - row.start_h;
+                    let overlap = (row.end_h.min(to_h) - row.start_h.max(from_h)).max(0.0);
+                    if span > 0.0 { row.quantity * overlap / span } else { 0.0 }
+                })
+                .sum(),
+        )
+    }
+
+    /// The stage a blast has reached by `at_h`.
+    pub(crate) fn stage_at(&self, blast: usize, at_h: f64) -> super::BlastStage {
+        use super::BlastStage;
+        let Some(entry) = self.blasts.get(blast) else { return BlastStage::NotStarted };
+        let reached = |time: Option<f64>| time.is_some_and(|time| time <= at_h + 1e-9);
+        if reached(entry.fired_h) {
+            BlastStage::Fired
+        } else if reached(entry.done_h[2]) {
+            BlastStage::Charged
+        } else if reached(entry.done_h[1]) {
+            BlastStage::Drilled
+        } else if reached(entry.done_h[0]) {
+            BlastStage::Prepped
+        } else {
+            BlastStage::NotStarted
+        }
+    }
 }
 
 /// Loader time with no execution inside the requested horizon.
@@ -117,6 +225,9 @@ pub(crate) struct IdleSpan {
     /// room, and for [`IdleReason::PileMode`] the stockpiles its mode
     /// closed, so the reason can name them. Empty otherwise.
     pub(crate) full: Vec<DestinationId>,
+    /// For [`IdleReason::WaitingOnBlast`], the blast waited for, by position
+    /// in [`CalculatedSchedule::drill_blast`].
+    pub(crate) blast: Option<usize>,
 }
 
 /// One movement of material to one destination.
@@ -713,6 +824,8 @@ pub(crate) struct CalculatedSchedule {
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
     pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
+    /// Drill and blast, when the project sequences it.
+    pub(crate) drill_blast: Option<DrillBlastResult>,
     pub(crate) periods: PeriodTotals,
     by_bar: HashMap<BarId, Vec<usize>>,
     by_block: HashMap<DigBlockId, usize>,
@@ -738,6 +851,7 @@ pub(crate) struct ScheduleParts {
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
     pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
+    pub(crate) drill_blast: Option<DrillBlastResult>,
 }
 
 impl CalculatedSchedule {
@@ -755,6 +869,7 @@ impl CalculatedSchedule {
                         end_h: execution.start_h,
                         reason: None,
                         full: Vec::new(),
+                        blast: None,
                     });
                 }
                 at = at.max(execution.end_h);
@@ -766,6 +881,7 @@ impl CalculatedSchedule {
                     end_h: parts.requested_end_h,
                     reason: None,
                     full: Vec::new(),
+                    blast: None,
                 });
             }
         }
@@ -819,6 +935,7 @@ impl CalculatedSchedule {
             grades: parts.grades,
             grade_targets: parts.grade_targets,
             report: parts.report,
+            drill_blast: parts.drill_blast,
             periods,
             by_bar,
             by_block,
@@ -833,7 +950,7 @@ impl CalculatedSchedule {
     /// at the calendar intervals (`(start_h, end_h)`, in order) it crosses,
     /// `reason` is asked about each piece, and neighbouring pieces with the
     /// same reason are joined again.
-    pub(crate) fn classify_idle(&mut self, intervals: &[(f64, f64)], reason: impl Fn(&Self, LoaderAgentId, usize) -> (IdleReason, Vec<DestinationId>)) {
+    pub(crate) fn classify_idle(&mut self, intervals: &[(f64, f64)], reason: impl Fn(&Self, LoaderAgentId, usize) -> (IdleReason, Vec<DestinationId>, Option<usize>)) {
         let mut classified: Vec<IdleSpan> = Vec::with_capacity(self.idle.len());
         for span in &self.idle {
             let first = intervals.partition_point(|&(_, end_h)| end_h <= span.start_h + 1e-9);
@@ -841,16 +958,23 @@ impl CalculatedSchedule {
                 if start_h >= span.end_h - 1e-9 {
                     break;
                 }
-                let (found, full) = reason(self, span.agent, position);
+                let (found, full, blast) = reason(self, span.agent, position);
                 let piece = IdleSpan {
                     agent: span.agent,
                     start_h: start_h.max(span.start_h),
                     end_h: end_h.min(span.end_h),
                     reason: Some(found),
                     full,
+                    blast,
                 };
                 match classified.last_mut() {
-                    Some(last) if last.agent == piece.agent && last.reason == piece.reason && last.full == piece.full && (last.end_h - piece.start_h).abs() < 1e-9 => {
+                    Some(last)
+                        if last.agent == piece.agent
+                            && last.reason == piece.reason
+                            && last.full == piece.full
+                            && last.blast == piece.blast
+                            && (last.end_h - piece.start_h).abs() < 1e-9 =>
+                    {
                         last.end_h = piece.end_h;
                     }
                     _ => classified.push(piece),

@@ -69,6 +69,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use highs::{Col, HighsModelStatus, RowProblem, Sense};
 
 use super::{
+    drill_blast::Chain,
     input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, authored_tasks, interval_rate, task_active, task_authorises},
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow},
 };
@@ -131,6 +132,11 @@ struct State<'a> {
     weight: Vec<f64>,
     rows: BTreeMap<(usize, usize), f64>,
     durations: BTreeMap<(usize, usize), f64>,
+    /// The drill and blast chain, walked beside the loaders; see
+    /// [`super::drill_blast`]. A block it has not released is not dug.
+    chain: Option<Chain<'a>>,
+    /// Start of the interval being worked, for the chain's releases.
+    now_h: f64,
 }
 
 /// One chunk of a chunked pile, as it opens an interval.
@@ -239,6 +245,8 @@ impl<'a> State<'a> {
             weight,
             rows: BTreeMap::new(),
             durations: BTreeMap::new(),
+            chain: input.drill_blast.as_ref().map(Chain::new),
+            now_h: 0.0,
         }
     }
 
@@ -263,6 +271,12 @@ impl<'a> State<'a> {
         // Readiness is judged on the state the interval opened with, as the
         // replay judges it.
         let opening_ground = self.ground.clone();
+        // Drill and blast works the hour first, on the ground standing as it
+        // opens; what fires is dug from the end of its window.
+        self.now_h = interval.start_h;
+        if let Some(chain) = self.chain.as_mut() {
+            chain.advance(interval, |ground| opening_ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
+        }
         let mut bars: Vec<Bar> = (0..input.loaders.len())
             .filter_map(|loader| {
                 let rate = interval_rate(&input.loaders[loader], k)?;
@@ -380,6 +394,11 @@ impl<'a> State<'a> {
             }
             previous = Some(block);
             if left > FINISHED_T {
+                // A block not yet blasted holds the bar: the loader waits for
+                // it rather than skipping ahead.
+                if self.chain.as_ref().is_some_and(|chain| !chain.available(block, self.now_h)) {
+                    return None;
+                }
                 return Some(block);
             }
         }
@@ -886,6 +905,7 @@ impl<'a> State<'a> {
             chunks: self.chunk_rows,
             reported_objective: reported_objective - super::replay::target_penalty(input, &self.target_totals),
             adjustments: ExtractionAdjustments::default(),
+            drill_blast: self.chain.map(Chain::finish),
         }
     }
 }

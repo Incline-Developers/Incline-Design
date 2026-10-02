@@ -13,6 +13,7 @@
 //! | [`rolling`] | windows, carried state and stitching for day-by-day solving, the fallback when the dispatcher fails |
 //! | [`iterative`] | the iterative fixed-grade HiGHS method |
 //! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
+//! | [`drill_blast`] | the drill and blast chain the dispatch simulates, and the release times later solves keep |
 //!
 //! The nonlinear SCIP formulation lives next door in
 //! [`super::scip::blend`], because it is the one piece that genuinely needs
@@ -41,6 +42,7 @@
 //! because a suboptimal schedule is perfectly feasible. The two claims are
 //! kept apart everywhere in this module and in the benchmark document.
 
+pub(crate) mod drill_blast;
 pub(crate) mod formulation;
 pub(crate) mod grade;
 pub(crate) mod greedy;

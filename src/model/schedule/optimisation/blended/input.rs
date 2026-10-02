@@ -516,6 +516,10 @@ pub(crate) struct BlendInput {
     /// keeps the solver-process JSON contract independent of map key encoding.
     #[serde(default)]
     pub(crate) target_opening: Vec<(usize, u32, f64, f64)>,
+    /// The drill and blast chain, when the project sequences it. Its ground
+    /// is dug only once released; see [`super::drill_blast`].
+    #[serde(default)]
+    pub(crate) drill_blast: Option<super::drill_blast::DrillBlastInput>,
 }
 
 /// Numerical convention for a grade boundary in the captured numeric scale.

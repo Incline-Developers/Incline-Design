@@ -111,11 +111,68 @@ pub(crate) fn draw_inspector(
 
     egui::ScrollArea::vertical().id_salt("gantt_inspector_scroll").auto_shrink([false, false]).show(ui, |ui| {
         loaders(ui, editor, plan, destinations, &schedule, hour);
+        drill_blast(ui, plan, &schedule, hour);
         stockpiles(ui, plan, destinations, &schedule, &grade_names, hour, day);
         crushers(ui, plan, destinations, &schedule, &grade_names, hour, day);
         dumps(ui, destinations, &schedule, hour);
         trucks(ui, plan, &schedule, hour, day);
     });
+}
+
+/// Each dozer, drill and MPU at the hour - the blast it is on and how far
+/// that step has come - and the blasts under way.
+fn drill_blast(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule, hour: f64) {
+    use crate::model::schedule::BlastStage;
+    let Some(result) = schedule.drill_blast.as_ref() else { return };
+    let machines: Vec<_> = plan
+        .agents()
+        .iter()
+        .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+        .collect();
+    section(ui, tr!("inspector-drill-blast"));
+    for agent in machines {
+        let mut entry = Entry {
+            name: agent.name.clone(),
+            ..Entry::default()
+        };
+        match result.work.iter().find(|row| row.agent == agent.id && row.start_h <= hour && hour < row.end_h) {
+            Some(row) => {
+                let blast = &result.blasts[row.blast];
+                let step = row.activity as usize;
+                entry.dot = Some(super::schedule_gantt::blast_activity_color(row.activity));
+                entry.value = tr!("blast-work-heading", activity = row.activity.label(), blast = super::schedule_gantt::blast_title(blast));
+                entry.detail = Some(tr!(
+                    "blast-work-progress",
+                    done = format!("{:.0}", (result.done_share(row.blast, row.activity, hour) * blast.quantity[step]).max(0.0)),
+                    total = format!("{:.0}", blast.quantity[step]),
+                    unit = row.activity.unit()
+                ));
+            }
+            None => {
+                entry.value = tr!("inspector-drill-blast-idle");
+                entry.value_weak = true;
+            }
+        }
+        draw_entry(ui, &entry);
+    }
+    // Blasts under way: cleared or started, and not yet dug from.
+    for (index, blast) in result.blasts.iter().enumerate() {
+        let stage = result.stage_at(index, hour);
+        let cleared = blast.cleared_h.is_some_and(|cleared| cleared <= hour);
+        if stage == BlastStage::Fired || (stage == BlastStage::NotStarted && !cleared) {
+            continue;
+        }
+        let entry = Entry {
+            name: super::schedule_gantt::blast_title(blast),
+            value: if stage == BlastStage::NotStarted { tr!("inspector-blast-clear") } else { stage.label() },
+            value_weak: stage == BlastStage::NotStarted,
+            detail: blast.fired_h.map(|fired| tr!("blast-fired-at", at = instant_label(fired * GanttView::HOUR))),
+            ..Entry::default()
+        };
+        draw_entry(ui, &entry);
+    }
+    let fired = (0..result.blasts.len()).filter(|index| result.stage_at(*index, hour) == BlastStage::Fired).count();
+    note(ui, tr!("inspector-blasts-fired", fired = fired.to_string(), total = result.blasts.len().to_string()));
 }
 
 fn note(ui: &mut egui::Ui, text: String) {
@@ -134,7 +191,11 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
         return;
     }
     section(ui, tr!("inspector-loaders"));
-    for agent in plan.agents() {
+    for agent in plan
+        .agents()
+        .iter()
+        .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+    {
         let mut entry = Entry {
             name: agent.name.clone(),
             ..Entry::default()
@@ -178,6 +239,9 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 let (name, note) = idle_reason_text(span.reason);
                 entry.dot = Some(IDLE_COLOR);
                 entry.value = sentence_case(&name);
+                if let Some(blast) = span.blast.and_then(|index| schedule.drill_blast.as_ref()?.blasts.get(index)) {
+                    entry.detail = Some(super::schedule_gantt::blast_title(blast));
+                }
                 if !span.full.is_empty() {
                     let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
                     entry.detail = Some(if span.reason == Some(IdleReason::PileMode) {

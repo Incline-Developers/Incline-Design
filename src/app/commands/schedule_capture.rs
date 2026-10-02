@@ -180,6 +180,23 @@ pub(crate) struct CaptureIdentities {
     /// How many of a chunked pile's chunks hold opening lots; the rest
     /// receive.
     pub(crate) opening_chunks: BTreeMap<StockpileId, usize>,
+    /// Drill and blast, by position in the input's chain: each blast, and
+    /// the machine each chain agent is.
+    pub(crate) blasts: Vec<CapturedBlast>,
+    pub(crate) blast_agents: Vec<LoaderAgentId>,
+}
+
+/// One blast the run sequences, as the results draw it.
+#[derive(Clone, Debug)]
+pub(crate) struct CapturedBlast {
+    pub(crate) reference: crate::model::schedule::BlastRef,
+    pub(crate) name: String,
+    pub(crate) bench: crate::ui::state::BenchSelection,
+    pub(crate) face: Arc<crate::model::arrangement::Face>,
+    /// Its holes' collars, in plan, in drilling order.
+    pub(crate) collars: Vec<glam::DVec2>,
+    /// Square metres to prep, metres to drill and tonnes to charge.
+    pub(crate) quantity: [f64; 3],
 }
 
 /// Measured facts about the capture itself, for the completion report.
@@ -346,6 +363,229 @@ impl crate::app::App<'_> {
     }
 }
 
+/// The drill and blast chain: every blast of the run, how much of each step
+/// it needs and what must be dug before it is clear, and the dozers, drills
+/// and MPUs working the blast bars.
+fn capture_drill_blast(
+    source: &CaptureSnapshot,
+    horizon_h: f64,
+    intervals: &[Interval],
+    block_ground: &BTreeMap<usize, GroundId>,
+    identities: &mut CaptureIdentities,
+    notes: &mut Vec<String>,
+    problems: &mut Diagnostics,
+) -> Option<crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput> {
+    use crate::model::{
+        drill_hole::{DrillPatternLayout, generate_pattern_collars},
+        schedule::{
+            MachineKind,
+            optimisation::blended::drill_blast::{BlastAgent, BlastJob, BlastTask, DrillBlastInput},
+        },
+    };
+    let plan = &source.plan;
+    let config = plan.drill_blast();
+    let snapshot = &source.snapshot;
+    let mut blasts = Vec::with_capacity(snapshot.blasts.len());
+    let mut unclearable: Vec<String> = Vec::new();
+    for record in &snapshot.blasts {
+        let reference = record.reference();
+        let pattern = config
+            .patterns
+            .iter()
+            .find(|entry| record.holds(&entry.blast))
+            .map_or(config.pattern, |entry| entry.pattern);
+        let depth = (record.bench.top - record.bench.base) + pattern.subdrill_m;
+        let outer: Vec<glam::DVec3> = record
+            .face
+            .first()
+            .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
+        let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
+        let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout)
+            .map(|collars| {
+                collars
+                    .into_iter()
+                    .map(|collar| collar.truncate())
+                    .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
+                    .collect()
+            })
+            .unwrap_or_else(|error| {
+                problems.push(CaptureDiagnostic::new(record.name.clone(), error).at(ScheduleStep::DrillBlast));
+                Vec::new()
+            });
+        let holes = collars.len() as f64;
+        let quantity = [record.area, holes * depth, holes * config.charge_per_hole_t(depth)];
+        // Configured statuses name a blast by a point inside it.
+        let stage = config
+            .statuses
+            .iter()
+            .find(|entry| record.holds(&entry.blast))
+            .map_or(crate::model::schedule::BlastStage::NotStarted, |entry| entry.stage);
+        let mut releases = Vec::new();
+        let mut above = Vec::new();
+        let mut blocked = false;
+        for (position, block) in snapshot.blocks.iter().enumerate() {
+            let in_blast = block.solid == record.solid
+                && block.blast.is_some_and(|blast| {
+                    (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
+                });
+            if in_blast {
+                if let Some(ground) = block_ground.get(&position) {
+                    releases.push(*ground);
+                }
+                continue;
+            }
+            // Ground in a higher bench, within the buffer in plan.
+            if block.flitch.base < record.bench.top - 1e-6 {
+                continue;
+            }
+            if plan_gap(&block.ground, &record.face) > config.buffer_m + 1e-9 {
+                continue;
+            }
+            match block_ground.get(&position) {
+                Some(ground) => above.push(*ground),
+                // Standing ground no bar digs never goes.
+                None => blocked = true,
+            }
+        }
+        if blocked && stage == crate::model::schedule::BlastStage::NotStarted {
+            unclearable.push(record.name.clone());
+        }
+        blasts.push(BlastJob {
+            quantity,
+            stage,
+            releases,
+            above,
+            never_clear: blocked,
+        });
+        identities.blasts.push(CapturedBlast {
+            reference,
+            name: record.name.clone(),
+            bench: record.bench,
+            face: Arc::clone(&record.face),
+            collars,
+            quantity,
+        });
+    }
+    if !unclearable.is_empty() {
+        notes.push(crate::i18n::tr!("drill-blast-unclearable", blasts = unclearable.join(", ")));
+    }
+
+    // Machines and their bars.
+    let mut agents: Vec<BlastAgent> = Vec::new();
+    let mut tasks: Vec<BlastTask> = Vec::new();
+    for bar in plan.bars() {
+        if bar.blast_order().is_none() && bar.delay().is_none() {
+            continue;
+        }
+        let members = bar.blast_order().map_or(&[][..], |order| order.members.as_slice());
+        let Some(agent_id) = bar.agent else { continue };
+        let (Some(agent), Some(kind)) = (plan.agent(agent_id), plan.agent_kind(agent_id)) else {
+            continue;
+        };
+        let Some(activity) = kind.activity() else { continue };
+        let start_h = bar.window.start_h;
+        let end_h = bar.window.end_h.unwrap_or(horizon_h).min(horizon_h);
+        if end_h <= start_h {
+            continue;
+        }
+        let agent_index = match identities.blast_agents.iter().position(|id| *id == agent_id) {
+            Some(index) => index,
+            None => {
+                let Some(class) = plan.class(agent.class_id) else { continue };
+                let calendar = match agent.calendar.compile_rate(RateKind::Dig, class.default_dig_rate_tph) {
+                    Ok(calendar) => calendar,
+                    Err(error) => {
+                        problems.push(CaptureDiagnostic::new(agent.name.clone(), error.message()));
+                        continue;
+                    }
+                };
+                // Calendar delays and the machine's own delay bars stand it.
+                let stood = plan.delays().merged_for(agent_id, horizon_h);
+                let rates = intervals
+                    .iter()
+                    .map(|interval| {
+                        if stood.iter().any(|(start, end)| *start <= interval.start_h + 1e-9 && interval.start_h < *end - 1e-9) {
+                            0.0
+                        } else {
+                            MachineKind::hourly(kind, calendar.rate_at(interval.start_h))
+                        }
+                    })
+                    .collect();
+                identities.blast_agents.push(agent_id);
+                agents.push(BlastAgent { activity, rates });
+                agents.len() - 1
+            }
+        };
+        let mut sequence = Vec::new();
+        let mut missing = 0usize;
+        for member in members {
+            match snapshot.blasts.iter().position(|record| record.holds(member)) {
+                Some(index) if !sequence.contains(&index) => sequence.push(index),
+                Some(_) => {}
+                None => missing += 1,
+            }
+        }
+        if missing > 0 {
+            notes.push(crate::i18n::tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
+        }
+        tasks.push(BlastTask {
+            agent: agent_index,
+            priority: bar.priority,
+            start_h,
+            end_h,
+            sequence,
+            delay: bar.delay().is_some(),
+        });
+    }
+    Some(DrillBlastInput {
+        blasts,
+        agents,
+        tasks,
+        window_end_h: config.window_end_h,
+        fixed: None,
+    })
+}
+
+/// The gap between two pieces of ground in plan: zero where they touch or
+/// overlap, otherwise the shortest distance between their outlines.
+fn plan_gap(a: &crate::model::arrangement::Face, b: &crate::model::arrangement::Face) -> f64 {
+    use crate::model::arrangement::point_in_face;
+    let (Some(outer_a), Some(outer_b)) = (a.first(), b.first()) else {
+        return f64::INFINITY;
+    };
+    if outer_a.iter().any(|point| point_in_face(b, *point)) || outer_b.iter().any(|point| point_in_face(a, *point)) {
+        return 0.0;
+    }
+    let edges = |ring: &Vec<glam::DVec2>| (0..ring.len()).map(|i| (ring[i], ring[(i + 1) % ring.len()])).collect::<Vec<_>>();
+    let point_segment = |p: glam::DVec2, (s, e): (glam::DVec2, glam::DVec2)| {
+        let d = e - s;
+        let t = if d.length_squared() > 0.0 {
+            ((p - s).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (s + d * t).distance(p)
+    };
+    let crosses = |(a0, a1): (glam::DVec2, glam::DVec2), (b0, b1): (glam::DVec2, glam::DVec2)| {
+        let side = |p: glam::DVec2, q: glam::DVec2, r: glam::DVec2| (q - p).perp_dot(r - p);
+        side(a0, a1, b0) * side(a0, a1, b1) < 0.0 && side(b0, b1, a0) * side(b0, b1, a1) < 0.0
+    };
+    let mut gap = f64::INFINITY;
+    for edge_a in a.iter().flat_map(edges) {
+        for edge_b in b.iter().flat_map(edges) {
+            if crosses(edge_a, edge_b) {
+                return 0.0;
+            }
+            gap = gap
+                .min(point_segment(edge_a.0, edge_b))
+                .min(point_segment(edge_a.1, edge_b))
+                .min(point_segment(edge_b.0, edge_a))
+                .min(point_segment(edge_b.1, edge_a));
+        }
+    }
+    gap
+}
+
 /// Whether a dig block is ground the planner has taken out of mining.
 fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusions: &[(crate::model::SolidId, crate::model::MiningExclusions)]) -> bool {
     exclusions.iter().any(|(solid, exclusions)| {
@@ -420,6 +660,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
             continue;
         };
+        // Dozers, drills and MPUs are not loaders: their bars, delays
+        // included, are drill and blast's (see `capture_drill_blast`).
+        if plan.agent_kind(agent).is_some_and(crate::model::schedule::MachineKind::is_drill_blast) {
+            continue;
+        }
         // Open-ended bars are truncated by the explicit horizon; finite ones
         // are intersected with it. A bar entirely beyond the horizon is not a
         // fault - it simply has no work in this run.
@@ -482,7 +727,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             work,
         });
     }
-    if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && problems.is_empty() {
+    let has_blast_work = plan.drill_blast().enabled
+        && plan
+            .bars()
+            .iter()
+            .any(|bar| bar.agent.is_some() && bar.blast_order().is_some_and(|order| !order.members.is_empty()));
+    if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && !has_blast_work && problems.is_empty() {
         problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-work")));
     }
 
@@ -947,6 +1197,48 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // Regular step, day boundaries, exact authored window edges and every
     // relevant input-setting change, which is what `build_intervals` does.
     let mut windows: Vec<(f64, f64)> = scoped.iter().map(|bar| (bar.start_h, bar.end_h)).collect();
+    if plan.drill_blast().enabled {
+        // Drill and blast shares this grid: preserve its authored windows,
+        // machine calendar changes, delays and exact firing-window ends.
+        for bar in plan.bars().iter().filter(|bar| {
+            bar.agent
+                .is_some_and(|agent| plan.agent_kind(agent).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+        }) {
+            windows.push((bar.window.start_h, bar.window.end_h.unwrap_or(horizon_h).min(horizon_h)));
+        }
+        for agent in plan
+            .agents()
+            .iter()
+            .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+        {
+            let Some(class) = plan.class(agent.class_id) else { continue };
+            match agent.calendar.compile_rate(RateKind::Dig, class.default_dig_rate_tph) {
+                Ok(calendar) => {
+                    let mut at = 0.0;
+                    while let Some(next) = calendar.next_change_after(at) {
+                        if next >= horizon_h {
+                            break;
+                        }
+                        rate_changes.push(next);
+                        at = next;
+                    }
+                }
+                Err(error) => problems.push(CaptureDiagnostic::new(agent.name.clone(), error.message())),
+            }
+            for (start, end) in plan.delays().merged_for(agent.id, horizon_h) {
+                rate_changes.extend([start, end]);
+            }
+        }
+        let mut day = 0.0;
+        while day < horizon_h {
+            rate_changes.extend(
+                [day + plan.drill_blast().window_start_h, day + plan.drill_blast().window_end_h]
+                    .into_iter()
+                    .filter(|at| *at < horizon_h),
+            );
+            day += 24.0;
+        }
+    }
     windows.retain(|(start, end)| end > start);
     for class in &plan.trucks().classes {
         let mut period = CalendarPeriod(0);
@@ -972,7 +1264,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     }
     let spec = HorizonSpec {
         end_h: horizon_h,
-        regular_step_h: experiment.interval_h,
+        regular_step_h: if plan.drill_blast().enabled {
+            experiment.interval_h.min(1.0)
+        } else {
+            experiment.interval_h
+        },
         // Not read by the blended model, which has no parcels; a positive
         // value is required only so the shared interval builder validates.
         parcel_target_t: 1.0,
@@ -1355,7 +1651,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             "this horizon and resolution would build about {estimated_columns} movement columns, beyond the {COLUMN_CEILING} a run allows; shorten the horizon or widen the interval"
         )).at(ScheduleStep::Configuration));
     }
-    if movements.is_empty() && problems.is_empty() {
+    // ---- drill and blast ----------------------------------------------------
+    let drill_blast = if plan.drill_blast().enabled {
+        capture_drill_blast(source, horizon_h, &intervals, &block_ground, &mut identities, &mut notes, &mut problems)
+    } else {
+        None
+    };
+
+    if movements.is_empty() && !has_blast_work && problems.is_empty() {
         problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
     }
     if !problems.is_empty() {
@@ -1378,6 +1681,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         grade_limits: Vec::new(),
         grade_targets,
         target_opening: Vec::new(),
+        drill_blast,
     };
     let stats = CaptureStats {
         duration: started.elapsed(),
@@ -1726,6 +2030,7 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
     // fields the solvers read, and every one of them is walked here.
     input.segments_per_interval.hash(&mut hasher);
+    serde_json::to_string(&input.drill_blast).unwrap_or_default().hash(&mut hasher);
     for interval in &input.intervals {
         interval.index.hash(&mut hasher);
         interval.start_h.to_bits().hash(&mut hasher);
@@ -1918,6 +2223,7 @@ impl CaptureSnapshot {
                 runtime: 1,
                 generation: 9,
                 blocks,
+                blasts: Vec::new(),
             }),
             reports: Arc::new(reports),
             exclusions: Vec::new(),

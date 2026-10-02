@@ -395,9 +395,16 @@ impl<'a> Graphics<'a> {
 
         // Animate's haul flows move every frame while shown, and clear once
         // when they stop.
-        if !editor.animation_flows.is_empty() || !self.flow_strokes.is_empty() {
+        // Drill and blast's blasts are drawn with them, at the shown hour.
+        let blasts = editor
+            .is_schedule_animation()
+            .then(|| editor.schedule_result.as_ref().and_then(|schedule| schedule.drill_blast.as_ref()))
+            .flatten()
+            .map(|result| (result, editor.schedule_animation_shown_h));
+        if !editor.animation_flows.is_empty() || blasts.is_some() || !self.flow_strokes.is_empty() {
             let view_proj = self.view_proj();
             self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {
+                blasts,
                 flows: &editor.animation_flows,
                 flow_strokes: &mut self.flow_strokes,
                 view_proj,
