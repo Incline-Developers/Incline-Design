@@ -431,6 +431,7 @@ fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
 
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     ui.heading(tr!(literal = "Import DXF"));
+    ui.checkbox(&mut editor.import_as_haul_roads, tr!("haul-import"));
     draw_import_source_picker(ui, editor, commands, tr!(literal = "Source file"), tr!(literal = "No .dxf chosen"));
 }
 

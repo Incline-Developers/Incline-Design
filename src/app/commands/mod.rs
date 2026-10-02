@@ -5,6 +5,7 @@ pub(crate) mod drawing; // Handles finishing polylines, creating points, etc com
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for all six sections
+pub(crate) mod haulage;
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
@@ -149,6 +150,12 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllSchedulePeriods
                 | UiCommand::ImproveSchedule
                 | UiCommand::FocusScheduleAnimationSolid(_)
+                | UiCommand::Haulage { .. }
+                | UiCommand::StartHaulRoad
+                | UiCommand::FinishHaulRoad
+                | UiCommand::ConvertHaulSelection
+                | UiCommand::NewHaulDestination { .. }
+                | UiCommand::ExportHaulRoads
                 | UiCommand::Schedule { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -400,6 +407,48 @@ impl<'a> App<'a> {
                 block_model,
             } => {
                 self.add_solid(name, kind, surface, topography, block_model);
+                Ok(())
+            }
+            UiCommand::Haulage { project, edit } => self.edit_haulage(project, edit),
+            UiCommand::OpenHaulImport => {
+                self.editor.show_import = true;
+                self.editor.data_menu = crate::ui::state::DataMenu::Dxf;
+                self.editor.import_as_haul_roads = true;
+                Ok(())
+            }
+            UiCommand::EditHaulProperties => {
+                self.editor.canvas_context_menu_open = false;
+                self.editor.active_workspace = crate::ui::state::Workspace::Planning;
+                self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+                self.refresh_haulage_view();
+                Ok(())
+            }
+            UiCommand::RefreshHaulOverlay => {
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::StartHaulRoad => {
+                self.start_haul_road();
+                Ok(())
+            }
+            UiCommand::FinishHaulRoad => {
+                self.finish_haul_road();
+                Ok(())
+            }
+            UiCommand::ConvertHaulSelection => {
+                if let Some(project) = self.workspace.active_project() {
+                    let runtime = project.runtime_id;
+                    self.edit_haulage(runtime, crate::ui::state::HaulEdit::ConvertSelection)?;
+                }
+                Ok(())
+            }
+            UiCommand::FrameHaulPoint(point) => {
+                self.frame_haul_point(point);
+                Ok(())
+            }
+            UiCommand::NewHaulDestination { node, kind } => self.new_haul_destination(node, kind),
+            UiCommand::ExportHaulRoads => {
+                self.choose_export_haul_roads();
                 Ok(())
             }
             UiCommand::Schedule { project, edit } => {
@@ -859,7 +908,9 @@ impl<'a> App<'a> {
                             self.editor.schedule_subpage = subpage;
                         }
                         crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
-                        crate::ui::state::PlanningPage::Haulage => {}
+                        crate::ui::state::PlanningPage::Haulage => {
+                            self.editor.haul_route = None;
+                        }
                     }
                     if self.editor.is_planning_viewport() {
                         self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
@@ -881,6 +932,10 @@ impl<'a> App<'a> {
                     self.editor.schedule_calendar.error = None;
                 }
                 self.editor.planning_page = page;
+                self.editor.haul_draw = false;
+                self.editor.haul_points.clear();
+                self.editor.haul_route = None;
+                self.refresh_haulage_view();
                 if self.editor.is_planning_viewport() {
                     self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
                 }

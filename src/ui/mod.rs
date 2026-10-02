@@ -719,6 +719,8 @@ fn draw_ui(
         } else {
             elements::blasting::draw_panel(root_ui, editor, commands)
         })
+    } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
+        Some(elements::haulage::draw_panel(root_ui, editor, document, project, commands))
     } else if editor.is_planning_viewport() {
         Some(elements::planning_reserves::draw_data_panel(root_ui))
     } else {
@@ -1186,6 +1188,60 @@ fn draw_ui(
         dialogs::editing::draw_finish_polyline_dialog(root_ui, commands, editor, canvas_rect);
     }
 
+    if editor.haul_draw && root_ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary) && i.pointer.hover_pos().is_some_and(|p| canvas_rect.contains(p))) {
+        commands.push(UiCommand::FinishHaulRoad);
+    }
+    if let Some(handle) = editor
+        .tri_hover_handles
+        .iter()
+        .find(|id| matches!(id, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
+        && let Some(pos) = root_ui.ctx().pointer_hover_pos().filter(|p| canvas_rect.contains(*p))
+    {
+        let network = document.haulage();
+        let text = match *handle {
+            crate::model::SceneEntityId::HaulRoad(id) => network.road(id).map(|r| {
+                let points = network.points(r);
+                let length: f64 = points.windows(2).map(|p| p[0].distance(p[1])).sum();
+                let grade = points.windows(2).map(|p| crate::model::haulage::network::grade(p[0], p[1]).abs()).fold(0.0, f64::max);
+                format!(
+                    "{} · {:.0} m · {:.1}% · {}",
+                    r.name,
+                    length,
+                    grade * 100.0,
+                    r.speed_limit_kph.map(|v| format!("{v:.0} km/h")).unwrap_or_else(|| tr!("haul-unlimited"))
+                )
+            }),
+            crate::model::SceneEntityId::HaulNode(id) => network.node(id).map(|n| match n.role {
+                Some(crate::model::haulage::NodeRole::Dump(_)) => tr!("haul-dump"),
+                Some(crate::model::haulage::NodeRole::Reclaim(_)) => tr!("haul-reclaim"),
+                None => tr!("haul-node"),
+            }),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let painter = root_ui.painter().with_clip_rect(canvas_rect);
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), root_ui.visuals().text_color());
+            let rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 18.0), galley.size() + egui::vec2(12.0, 8.0));
+            painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, root_ui.visuals().window_fill());
+            painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, root_ui.visuals().text_color());
+        }
+    }
+    let scale = root_ui.ctx().pixels_per_point();
+    for ((x, y), id, reclaim) in &editor.haul_pins {
+        let name = match id {
+            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(*id).map(|d| d.name.clone()),
+            crate::model::schedule::DestinationId::Solid(id) => document.solid(*id).map(|d| d.name.clone()),
+        }
+        .unwrap_or_else(|| tr!("destination-unresolved"));
+        let label = format!("{} · {}", name, if *reclaim { tr!("haul-reclaim") } else { tr!("haul-dump") });
+        root_ui.painter().with_clip_rect(canvas_rect).text(
+            egui::pos2(x / scale + 8.0, y / scale - 8.0),
+            egui::Align2::LEFT_BOTTOM,
+            label,
+            egui::FontId::proportional(12.0),
+            egui::Color32::WHITE,
+        );
+    }
     // --- Canvas overlays ---
 
     // Orbit marker (clipped to the 3D viewport)

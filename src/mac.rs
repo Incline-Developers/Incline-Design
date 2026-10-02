@@ -72,6 +72,11 @@ pub(crate) enum MacMenuAction {
     OpenProject,
     OpenImport,
     OpenExport,
+    DrawHaulRoad,
+    ConvertHaulSelection,
+    ImportHaulRoads,
+    ExportHaulRoads,
+    EditHaulProperties,
     ExportViewportImage,
     OpenPlotDialog,
     RequestExit,
@@ -107,7 +112,7 @@ pub(crate) enum MacMenuAction {
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
 /// the same two - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::HaulRoads];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.
@@ -140,6 +145,11 @@ impl MacMenuAction {
         Self::OpenProject,
         Self::OpenImport,
         Self::OpenExport,
+        Self::DrawHaulRoad,
+        Self::ConvertHaulSelection,
+        Self::ImportHaulRoads,
+        Self::ExportHaulRoads,
+        Self::EditHaulProperties,
         Self::ExportViewportImage,
         Self::OpenPlotDialog,
         Self::RequestExit,
@@ -345,6 +355,18 @@ pub(crate) fn install_menu_bar() {
     }
     add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
+    let haul_menu = menu(&tr!("haul-roads"), mtm);
+    haul_menu.setAutoenablesItems(false);
+    for (label, action) in [
+        (tr!("haul-draw"), MacMenuAction::DrawHaulRoad),
+        (tr!("haul-convert"), MacMenuAction::ConvertHaulSelection),
+        (tr!("haul-import"), MacMenuAction::ImportHaulRoads),
+        (tr!("haul-export"), MacMenuAction::ExportHaulRoads),
+        (tr!("haul-speed-limit"), MacMenuAction::EditHaulProperties),
+    ] {
+        add_action(&haul_menu, &label, "", action, &target, mtm);
+    }
+    add_submenu(&root, &tr!("haul-roads"), &haul_menu, mtm);
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
     let insert_point_menu = menu(&tr!("ws-menubar-design-insert-point"), mtm);
@@ -674,6 +696,15 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     }
     // Inserting at intersections additionally needs two polylines that cross.
     set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
+    for action in [
+        MacMenuAction::DrawHaulRoad,
+        MacMenuAction::ImportHaulRoads,
+        MacMenuAction::ExportHaulRoads,
+        MacMenuAction::EditHaulProperties,
+    ] {
+        set_enabled(&root, action, project.has_active_project);
+    }
+    set_enabled(&root, MacMenuAction::ConvertHaulSelection, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);

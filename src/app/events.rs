@@ -916,6 +916,48 @@ impl<'a> App<'a> {
                 return;
             }
             self.editor.canvas_context_menu_open = false;
+            if self.editor.haul_draw || self.editor.haul_move_node.is_some() || self.editor.haul_move_shape.is_some() {
+                let point = self
+                    .graphics
+                    .as_ref()
+                    .and_then(|g| {
+                        g.pick_at_cursor(
+                            crate::app::PICK_THRESHOLD_PX,
+                            &[],
+                            &self.editor.hidden_handles,
+                            &self.editor.frozen_handles,
+                            self.editor.xray_enabled,
+                        )
+                    })
+                    .filter(|(h, _)| matches!(h, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
+                    .map(|(_, p)| p)
+                    .or(self.editor.cursor_world);
+                if let Some(point) = point {
+                    if let Some(node) = self.editor.haul_move_node.take() {
+                        if let Some(project) = self.workspace.active_project() {
+                            let runtime = project.runtime_id;
+                            if let Err(error) = self.edit_haulage(runtime, crate::ui::state::HaulEdit::MoveNode(node, point)) {
+                                userspace_warn!("{error:#}");
+                            }
+                        }
+                        return;
+                    }
+                    if let Some((road, index)) = self.editor.haul_move_shape.take() {
+                        if let Some(project) = self.workspace.active_project() {
+                            let runtime = project.runtime_id;
+                            if let Err(error) = self.edit_haulage(runtime, crate::ui::state::HaulEdit::MoveShape(road, index, point)) {
+                                userspace_warn!("{error:#}");
+                            }
+                        }
+                        return;
+                    }
+                    if self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6) {
+                        self.editor.haul_points.push(point);
+                    }
+                    self.invalidate_overlay();
+                }
+                return;
+            }
             match self.editor.active_tool {
                 ActiveTool::MakePoint => self.place_point_at_cursor(),
                 ActiveTool::MakeText if !self.editor.text_editing_enabled => self.text_tool_click(),
@@ -1405,7 +1447,12 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
-                if self.editor.tie_anchor.is_some() {
+                if self.editor.haul_move_node.is_some() || self.editor.haul_move_shape.is_some() {
+                    self.editor.haul_move_node = None;
+                    self.editor.haul_move_shape = None;
+                } else if self.editor.haul_draw {
+                    self.finish_haul_road();
+                } else if self.editor.tie_anchor.is_some() {
                     self.end_tie_chain();
                     self.redraw_requested = true;
                 } else if self.editor.canvas_context_menu_open {
@@ -1496,7 +1543,9 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
-                if self.editor.active_tool.translates() {
+                if self.editor.haul_draw {
+                    self.finish_haul_road();
+                } else if self.editor.active_tool.translates() {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));
                     self.editor.active_tool = ActiveTool::None;

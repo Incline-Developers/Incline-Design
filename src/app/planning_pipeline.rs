@@ -418,6 +418,15 @@ impl crate::app::App<'_> {
             }
         }
         self.advance_planning_run();
+        if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
+            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed);
+            if self.editor.haul_block_cache_key != Some(key) {
+                self.editor.haul_block_cache_key = Some(key);
+                self.refresh_haulage_view();
+                self.invalidate_geometry();
+            }
+        }
         self.mirror_planning_stages();
         // After this pipeline, never beside it: the Schedule Setup readiness
         // step's inputs include where this run stands, so refreshing the two

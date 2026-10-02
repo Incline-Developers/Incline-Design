@@ -330,6 +330,22 @@ impl<'a> App<'a> {
         }
 
         if !dragged
+            && self.editor.active_workspace == crate::ui::state::Workspace::Planning
+            && self.editor.planning_page == crate::ui::state::PlanningPage::Haulage
+            && self.editor.active_tool == ActiveTool::None
+            && !self.editor.haul_draw
+            && !pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
+            && let Some(point) = self.editor.haul_blocks.iter().find_map(|(block, _)| {
+                let world = self.graphics.as_ref()?.cursor_world(block.plane)?;
+                let face: Vec<Vec<glam::DVec2>> = block.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
+                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| glam::DVec3::new(block.anchor[0], block.anchor[1], block.plane))
+            })
+        {
+            self.editor.haul_source_point = Some(point);
+            self.invalidate_overlay();
+            return;
+        }
+        if !dragged
             && self.editor.is_dig_strips_step()
             && self.editor.active_tool == ActiveTool::None
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
@@ -369,8 +385,21 @@ impl<'a> App<'a> {
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
-                if let SceneEntityId::Object(object_id) = handle {
-                    self.activate_project_for_object(object_id);
+                match handle {
+                    SceneEntityId::Object(object_id) => {
+                        self.activate_project_for_object(object_id);
+                    }
+                    SceneEntityId::HaulRoad(id) => {
+                        if let Some(index) = self.workspace.projects.iter().position(|p| p.project.document.haulage().road(id).is_some()) {
+                            self.activate_project_index(index);
+                        }
+                    }
+                    SceneEntityId::HaulNode(id) => {
+                        if let Some(index) = self.workspace.projects.iter().position(|p| p.project.document.haulage().node(id).is_some()) {
+                            self.activate_project_index(index);
+                        }
+                    }
+                    _ => {}
                 }
                 // Clicking what is already selected takes it back out of the
                 // selection, so any scene entity can be dropped without
@@ -467,6 +496,8 @@ impl<'a> App<'a> {
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
+            SceneEntityId::HaulRoad(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
+            SceneEntityId::HaulNode(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {

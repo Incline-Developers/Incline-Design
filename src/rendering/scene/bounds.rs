@@ -61,6 +61,18 @@ fn for_each_visible_object_aabb(
     hidden: &std::collections::HashSet<SceneEntityId>,
     emit: &mut impl FnMut(DVec3, DVec3),
 ) {
+    for road in &document.haulage().roads {
+        if hidden.contains(&SceneEntityId::HaulRoad(road.id)) {
+            continue;
+        }
+        let points = document.haulage().points(road);
+        if !points.is_empty() {
+            emit(
+                points.iter().copied().fold(DVec3::splat(f64::MAX), DVec3::min),
+                points.iter().copied().fold(DVec3::splat(f64::MIN), DVec3::max),
+            );
+        }
+    }
     let hidden_layers: std::collections::HashSet<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
     for object in document.objects() {
         if hidden_layers.contains(&object.layer()) || hidden.contains(&SceneEntityId::Object(object.id())) {

@@ -13,6 +13,7 @@ pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod dig_strips;
 pub(crate) mod explorer;
+pub(crate) mod haulage;
 pub(crate) mod main_menu;
 pub(crate) mod planning_setup;
 pub(crate) mod products;

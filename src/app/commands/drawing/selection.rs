@@ -197,6 +197,26 @@ impl<'a> App<'a> {
             return;
         }
         let handles: Vec<SceneEntityId> = self.editor.selected_handles.iter().copied().collect();
+        let before = self.active_document().haulage().clone();
+        let mut after = before.clone();
+        for handle in &handles {
+            match *handle {
+                SceneEntityId::HaulRoad(id) => after.delete_road(id),
+                SceneEntityId::HaulNode(id) if after.node(id).is_some_and(|n| n.role.is_some()) => {
+                    self.editor.haul_delete_node = Some(id);
+                }
+                SceneEntityId::HaulNode(id) => after.delete_node(id),
+                _ => {}
+            }
+        }
+        if before != after {
+            self.execute_edit(Command::SetHaulNetwork {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+            self.refresh_haulage_view();
+            self.invalidate_geometry();
+        }
         let batch: Vec<Command> = handles
             .iter()
             .filter_map(|&handle| {

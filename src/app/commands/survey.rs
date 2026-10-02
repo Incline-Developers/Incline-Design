@@ -181,6 +181,7 @@ impl App<'_> {
         let mut items = Vec::new();
         for handle in &self.editor.selected_handles {
             match *handle {
+                SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => anyhow::bail!("{}", tr!("haul-survey-selection")),
                 SceneEntityId::Object(id) => {
                     let object = project.project.document.get_object(id).ok_or_else(|| anyhow!("{}", tr!("survey-wrong-project")))?;
                     let layer = project.project.document.layer(object.layer()).ok_or_else(|| anyhow!("{}", tr!("survey-unavailable")))?;

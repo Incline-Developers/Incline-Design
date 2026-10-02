@@ -656,6 +656,11 @@ impl<'a> App<'a> {
                 self.editor.show_export = true;
                 None
             }
+            MacMenuAction::DrawHaulRoad => Some(UiCommand::StartHaulRoad),
+            MacMenuAction::ConvertHaulSelection => Some(UiCommand::ConvertHaulSelection),
+            MacMenuAction::ImportHaulRoads => Some(UiCommand::OpenHaulImport),
+            MacMenuAction::ExportHaulRoads => Some(UiCommand::ExportHaulRoads),
+            MacMenuAction::EditHaulProperties => Some(UiCommand::EditHaulProperties),
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
             MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
@@ -1102,6 +1107,8 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         let exists = |entity: &SceneEntityId| match entity {
+            SceneEntityId::HaulRoad(id) => self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
+            SceneEntityId::HaulNode(id) => self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
             SceneEntityId::Object(id) => self.workspace.active_document().is_some_and(|document| {
                 document
                     .get_object(*id)
@@ -2089,6 +2096,13 @@ impl<'a> App<'a> {
             active_path,
             active_triangulation_for_menu,
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
+            haulage: self.workspace.active_document().map(|document| document.haulage().clone()).unwrap_or_default(),
+            haul_points: self.workspace.active_document().map(|document| self.haul_destination_points(document)).unwrap_or_default(),
+            haul_destinations: self
+                .workspace
+                .active_document()
+                .map(|d| crate::model::schedule::destinations::available(d.solids(), d.schedule().routing()))
+                .unwrap_or_default(),
             active_session: self.workspace.active_project().map_or(0, |project| project.runtime_id),
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });

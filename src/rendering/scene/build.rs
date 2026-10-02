@@ -12,7 +12,7 @@ use crate::{
     },
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
         scene::{
@@ -58,6 +58,18 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     document.objects().len().hash(&mut hasher);
     document.revision().hash(&mut hasher);
     static_key.hash(&mut hasher);
+    editor.active_workspace.hash(&mut hasher);
+    editor.planning_page.hash(&mut hasher);
+    editor.show_haul_roads.hash(&mut hasher);
+    editor.haul_view_revision.hash(&mut hasher);
+    for id in editor
+        .selected_handles
+        .iter()
+        .chain(editor.tri_hover_handles.iter())
+        .filter(|id| matches!(id, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
+    {
+        id.hash(&mut hasher);
+    }
     scene_origin.to_array().map(f64::to_bits).hash(&mut hasher);
     scale_factor.to_bits().hash(&mut hasher);
     let hidden = editor.hidden_handles.iter().fold(editor.hidden_handles.len() as u64, |acc, handle| {
@@ -348,6 +360,120 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 fill_range: (fill_start, fill_end),
                 fill_index_range: (fill_index_start, fill_index_end),
                 fill_opaque,
+            });
+        }
+    }
+    if editor.active_workspace == crate::ui::state::Workspace::Planning && editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+        for (block, connected) in &editor.haul_blocks {
+            let mut points = Vec::new();
+            let mut holes = Vec::new();
+            for (i, ring) in block.rings.iter().enumerate() {
+                if i > 0 {
+                    holes.push(points.len());
+                }
+                points.extend(ring.iter().copied());
+            }
+            let mut indices = Vec::new();
+            let origin = points.first().copied().unwrap_or_default();
+            earcut::Earcut::new().earcut(points.iter().map(|p| [p.x - origin.x, p.y - origin.y]), &holes, &mut indices);
+            let mesh = PolylineFillMesh {
+                vertices: points,
+                indices: indices.into_iter().filter_map(|i| u32::try_from(i).ok()).collect(),
+            };
+            let start = draw_ctx.fill_index_buf.len() as u32;
+            fill_polyline_solid(
+                draw_ctx.fill_vertex_buf,
+                draw_ctx.fill_index_buf,
+                &mesh,
+                if *connected { [0.25, 0.85, 0.4, 0.04] } else { [0.95, 0.25, 0.25, 0.04] },
+                scene_origin,
+                STYLE_SLOT_NONE,
+            );
+            object_ranges.push(DocumentObjectRanges {
+                entity: SceneEntityId::HaulNode(crate::model::haulage::NodeId(u64::MAX)),
+                stroke_range: (0, 0),
+                fill_index_range: (start, draw_ctx.fill_index_buf.len() as u32),
+                center: origin,
+            });
+        }
+    }
+    if editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads {
+        draw_ctx.style = STYLE_SLOT_NONE;
+        let network = document.haulage();
+        for road in &network.roads {
+            let entity = SceneEntityId::HaulRoad(road.id);
+            if editor.hidden_handles.contains(&entity) {
+                continue;
+            }
+            let points = network.points(road);
+            let start = draw_ctx.strokes.len() as u32;
+            for pair in points.windows(2) {
+                let slope = crate::model::haulage::network::grade(pair[0], pair[1]).abs();
+                let color = if editor.selected_handles.contains(&entity) {
+                    crate::ui::SELECTION_COLOR_F32
+                } else if editor.tri_hover_handles.contains(&entity) {
+                    [1.0, 0.8, 0.1, 1.0]
+                } else if slope > 0.1 {
+                    [0.95, 0.25, 0.25, 1.0]
+                } else if slope > 0.02 {
+                    [0.9, 0.6, 0.3, 1.0]
+                } else {
+                    [0.65, 0.75, 0.85, 1.0]
+                };
+                draw_line(&mut draw_ctx, pair[0], pair[1], 3.0, color);
+            }
+            let end = draw_ctx.strokes.len() as u32;
+            if let Some(bounds) = world_bounds_from_local_positions(
+                draw_ctx.strokes[start as usize..end as usize].iter().flat_map(|s| {
+                    let (a, b) = s.world_ends();
+                    [a, b]
+                }),
+                scene_origin,
+            ) {
+                pick_records.push(PickRecord {
+                    entity,
+                    world_bounds: bounds,
+                    stroke_range: (start, end),
+                    fill_range: (0, 0),
+                    fill_index_range: (0, 0),
+                    fill_opaque: false,
+                });
+                object_ranges.push(DocumentObjectRanges {
+                    entity,
+                    stroke_range: (start, end),
+                    fill_index_range: (0, 0),
+                    center: average_positions(points.into_iter()),
+                });
+            }
+        }
+        for node in &network.nodes {
+            let entity = SceneEntityId::HaulNode(node.id);
+            if editor.hidden_handles.contains(&entity) {
+                continue;
+            }
+            let start = draw_ctx.strokes.len() as u32;
+            let color = if editor.selected_handles.contains(&entity) {
+                crate::ui::SELECTION_COLOR_F32
+            } else if node.role.is_some() {
+                [0.3, 0.9, 0.5, 1.0]
+            } else {
+                [0.85, 0.9, 1.0, 1.0]
+            };
+            draw_screen_point_marker_sized(&mut draw_ctx, node.pos, if node.role.is_some() { 12.0 } else { 8.0 }, color);
+            let end = draw_ctx.strokes.len() as u32;
+            pick_records.push(PickRecord {
+                entity,
+                world_bounds: (node.pos, node.pos),
+                stroke_range: (start, end),
+                fill_range: (0, 0),
+                fill_index_range: (0, 0),
+                fill_opaque: false,
+            });
+            object_ranges.push(DocumentObjectRanges {
+                entity,
+                stroke_range: (start, end),
+                fill_index_range: (0, 0),
+                center: node.pos,
             });
         }
     }

@@ -470,6 +470,23 @@ impl<'a> Graphics<'a> {
     }
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
+        editor.haul_pins = if editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads {
+            document
+                .haulage()
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let role = node.role?;
+                    let (id, reclaim) = match role {
+                        crate::model::haulage::NodeRole::Dump(id) => (id, false),
+                        crate::model::haulage::NodeRole::Reclaim(id) => (id, true),
+                    };
+                    self.world_to_window_px(&self.view_proj(), node.pos).map(|point| (point, id, reclaim))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         editor.blast_labels = (if editor.is_dig_strips_step() { &editor.dig_outlines } else { &editor.blasting_outlines })
             .iter()
             .filter_map(|outline| {

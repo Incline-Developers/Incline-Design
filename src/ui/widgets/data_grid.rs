@@ -462,6 +462,34 @@ impl PropertyRows<'_> {
         response
     }
 
+    /// Compact three-column input table within the shared property surface.
+    pub(crate) fn three_fields(&mut self, values: [&mut String; 3]) -> [egui::Response; 3] {
+        let (rect, _) = self.begin_row(false);
+        let width = rect.width() / 3.0;
+        let mut responses = Vec::new();
+        for (i, value) in values.into_iter().enumerate() {
+            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
+            responses.push(self.ui.put(cell.shrink2(egui::vec2(3.0, 0.0)), egui::TextEdit::singleline(value).desired_width(width)));
+        }
+        responses.try_into().expect("three fields")
+    }
+    pub(crate) fn three_headers(&mut self, labels: [&str; 3]) {
+        let (rect, _) = self.begin_row(true);
+        let width = rect.width() / 3.0;
+        for (i, label) in labels.into_iter().enumerate() {
+            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
+            self.ui.put(cell, egui::Label::new(bold(label)).truncate());
+        }
+    }
+    pub(crate) fn action(&mut self, key: &str, label: &str) -> egui::Response {
+        let (rect, split) = self.begin_row(false);
+        self.ui.put(self.key_rect(rect, split, false), egui::Label::new(key).truncate());
+        self.ui.put(
+            self.value_rect(rect, split),
+            egui::Button::new(label).corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
+        )
+    }
+
     /// An editable colour, drawn as the shared swatch button in the value
     /// column. The value is linear-space RGBA, as the renderer holds colours.
     pub(crate) fn color(&mut self, key: &str, value: &mut [f32; 4]) -> egui::Response {

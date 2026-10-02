@@ -518,7 +518,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::HaulRoads] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
@@ -588,6 +588,22 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
         spacing.item_spacing.x = MENU_LABEL_GAP;
 
+        if editor.active_workspace == Workspace::Planning {
+            MenuBarMenu::new(&tr!("haul-roads")).enabled(project.has_active_project).show(ui, |ui| {
+                for (label, command) in [
+                    (tr!("haul-draw"), UiCommand::StartHaulRoad),
+                    (tr!("haul-convert"), UiCommand::ConvertHaulSelection),
+                    (tr!("haul-import"), UiCommand::OpenHaulImport),
+                    (tr!("haul-export"), UiCommand::ExportHaulRoads),
+                    (tr!("haul-speed-limit"), UiCommand::EditHaulProperties),
+                ] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        commands.push(command);
+                        ui.close();
+                    }
+                }
+            });
+        }
         // Drill & Blast and Planning carry no discipline menus of their own
         // yet, and the run is what the workspace has rather than a fixed set of
         // titles: a menu that opens on nothing is left off it.

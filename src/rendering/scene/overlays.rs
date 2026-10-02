@@ -130,6 +130,45 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
 
+    if editor.active_workspace == crate::ui::state::Workspace::Planning && editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+        for issue in &editor.haul_issues {
+            draw_screen_cross(&mut overlay, issue.pos, 9.0, 2.0, [1.0, 0.65, 0.15, 1.0]);
+        }
+        for (block, connected) in &editor.haul_blocks {
+            let color = if *connected { [0.25, 0.85, 0.4, 0.45] } else { [0.95, 0.25, 0.25, 0.45] };
+            for ring in &block.rings {
+                let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                tessellate_polyline_stroke(&mut overlay, &verts, true, 2.0, color);
+            }
+        }
+    }
+    for pair in editor.haul_points.windows(2) {
+        draw_line(&mut overlay, pair[0], pair[1], 3.0, PREVIEW_COLOR);
+    }
+    if editor.haul_draw
+        && let (Some(&last), Some(cursor)) = (editor.haul_points.last(), editor.cursor_world)
+    {
+        draw_line(&mut overlay, last, cursor, 3.0, PREVIEW_COLOR);
+    }
+    if let Some(route) = &editor.haul_route {
+        for (points, color, loaded) in [(&route.loaded_path, [1.0, 0.2, 0.2, 1.0], true), (&route.empty_path, [1.0, 0.85, 0.1, 1.0], false)] {
+            for (i, pair) in points.windows(2).enumerate() {
+                if route.grade_lengthened && ((loaded && i == 0) || (!loaded && i + 2 == points.len())) {
+                    for step in (0..20).step_by(2) {
+                        draw_line(
+                            &mut overlay,
+                            pair[0].lerp(pair[1], f64::from(step) / 20.0),
+                            pair[0].lerp(pair[1], f64::from(step + 1) / 20.0),
+                            4.0,
+                            color,
+                        );
+                    }
+                } else {
+                    draw_line(&mut overlay, pair[0], pair[1], 4.0, color);
+                }
+            }
+        }
+    }
     draw_tie_preview(&mut overlay, editor);
     if editor.poly_finish_dialog {
         // Dialog is open: draw a dashed closing line from last point to first point.
