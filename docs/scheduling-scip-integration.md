@@ -291,6 +291,14 @@ the *same* cell, so a segment boundary is spent only on a change of bar, pile
 or priority. The loader's `rate` row already makes the blocks fit the segment
 one after another.
 
+Publication divides each loader's dig cell between its blocks in authored
+order, proportional to the tonnes assigned to each block. All material,
+destination and truck splits of the same block share its span. Animate,
+the Inspector and deliveries therefore show one block at a time for that
+loader; interval totals and the solved objective stay unchanged. The effective
+rate is the cell's total dug tonnes divided by its duration, since the solver
+does not record finer timing within the cell.
+
 - **Shared blocks.** When another loader can also dig the earlier block, the
   later block still waits for the end of the previous cell: who finished the
   earlier block first cannot be recovered from segment totals.

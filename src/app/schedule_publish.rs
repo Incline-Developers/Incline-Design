@@ -10,7 +10,8 @@
 //! What it does not do is decide anything. Which bar a movement was worked
 //! under is the replay's reconstruction; when a span started and ended is
 //! the solved event clock; what a stockpile held is the replay's balance.
-//! Publication only renames and indexes.
+//! Back-to-back dig sources divide their cell in authored order, proportional
+//! to their tonnes, so the timeline represents one block at a time per loader.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +21,7 @@ use crate::{
         BarId, DestinationId as ProjectDestinationId, LoaderAgentId,
         cashflow::Activity as ProjectActivity,
         optimisation::{
-            Activity, DestinationId, GroundId, LoaderId, SourceId, StockpileId, TaskId, TruckClassId,
+            Activity, DestinationId, GroundId, LoaderId, SourceId, StockpileId, TaskId, TaskKind, TruckClassId,
             blended::{
                 input::{BlendInput, GRADE_MARGIN},
                 replay::{BlendSolution, ReplayReport},
@@ -109,6 +110,60 @@ fn cell_times(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<(usize, 
     times
 }
 
+/// A loader can finish several blocks in one solved cell. They share its
+/// effective dig rate, but occupy consecutive spans in the bar's authored
+/// order. Material/destination/truck splits of one block share one span.
+fn ordered_dig_spans(sequence: &[GroundId], tonnes: &BTreeMap<GroundId, f64>, start_h: f64, end_h: f64) -> Result<BTreeMap<GroundId, (f64, f64)>, String> {
+    let total: f64 = tonnes.values().sum();
+    let mut remaining = tonnes.clone();
+    let mut spans = BTreeMap::new();
+    let mut worked = 0.0;
+    let mut at = start_h;
+    for ground in sequence {
+        let Some(tonnes) = remaining.remove(ground) else { continue };
+        worked += tonnes;
+        let end = if remaining.is_empty() {
+            end_h
+        } else {
+            start_h + (end_h - start_h) * (worked / total).clamp(0.0, 1.0)
+        };
+        spans.insert(*ground, (at, end));
+        at = end;
+    }
+    if !remaining.is_empty() {
+        return Err("published digging names a block outside its authored sequence".to_owned());
+    }
+    Ok(spans)
+}
+
+type DigTimes = BTreeMap<(LoaderId, TaskId, GroundId, usize, usize), (f64, f64)>;
+type ExecutionCellKey = (LoaderAgentId, BarId, u8, SourceKey, usize, usize);
+
+fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport, times: &BTreeMap<(usize, usize), (f64, f64)>) -> Result<DigTimes, String> {
+    let mut groups: BTreeMap<(LoaderId, TaskId, usize, usize), BTreeMap<GroundId, f64>> = BTreeMap::new();
+    for (index, row) in solution.movements.iter().enumerate() {
+        if row.tonnes_t <= DUST_T {
+            continue;
+        }
+        let candidate = input.movements.get(row.candidate).ok_or("published movement names an unknown candidate")?;
+        let SourceId::Ground(ground) = candidate.source else { continue };
+        let task = replay.row_tasks[index].ok_or("published digging has no authored bar")?;
+        *groups.entry((candidate.loader, task, row.interval, row.segment)).or_default().entry(ground).or_default() += row.tonnes_t;
+    }
+    let tasks: BTreeMap<_, _> = input.tasks.iter().map(|task| (task.id, task)).collect();
+    let mut result = BTreeMap::new();
+    for ((loader, task, interval, segment), tonnes) in groups {
+        let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or("published digging names an unknown bar")?.kind else {
+            return Err("published digging belongs to a non-dig bar".to_owned());
+        };
+        let &(start_h, end_h) = times.get(&(interval, segment)).ok_or("published digging names an unknown cell")?;
+        for (ground, span) in ordered_dig_spans(sequence, &tonnes, start_h, end_h)? {
+            result.insert((loader, task, ground, interval, segment), span);
+        }
+    }
+    Ok(result)
+}
+
 /// Merge `next` into `last` when they are one continuous span of the same
 /// work at the same rate. Rates that differ stay separate spans: combining
 /// them and spreading the total evenly would move tonnes in time.
@@ -138,10 +193,11 @@ pub(crate) fn publish(
         return Err("the replay did not attribute every published movement to a bar".to_owned());
     }
 
+    let dig_times = dig_times(input, solution, replay, &times)?;
     let mut omitted_rows = 0;
     let mut omitted_tonnes_t = 0.0;
-    // (agent, bar, activity, source, interval, segment) -> tonnes
-    let mut cells: BTreeMap<(LoaderAgentId, BarId, u8, SourceKey, usize, usize), f64> = BTreeMap::new();
+    // (agent, bar, activity, source, interval, segment) -> (start, end, tonnes)
+    let mut cells: BTreeMap<ExecutionCellKey, (f64, f64, f64)> = BTreeMap::new();
     let cycles: Vec<_> = input.movements.iter().map(|c| std::sync::Arc::new(c.cycle)).collect();
     let mut deliveries: Vec<Delivery> = Vec::with_capacity(solution.movements.len());
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
@@ -161,6 +217,10 @@ pub(crate) fn publish(
             continue;
         }
         let task = replay.row_tasks[index].ok_or_else(|| format!("movement row {index} was worked under no authored bar"))?;
+        let (start_h, end_h) = match candidate.source {
+            SourceId::Ground(ground) => dig_times[&(candidate.loader, task, ground, row.interval, row.segment)],
+            SourceId::Stockpile(_) => (start_h, end_h),
+        };
         let bar = *lookup.tasks.get(&task).ok_or("a movement names a bar capture did not record")?;
         let agent = *lookup.loaders.get(&candidate.loader).ok_or("a movement names a loader capture did not record")?;
         let source = lookup.source(candidate.source).ok_or("a movement names a source capture did not record")?;
@@ -206,7 +266,10 @@ pub(crate) fn publish(
             entry.0 += row.tonnes_t;
             entry.1 = entry.1.max(end_h);
         }
-        *cells.entry((agent, bar, activity as u8, SourceKey::of(source), row.interval, row.segment)).or_default() += row.tonnes_t;
+        cells
+            .entry((agent, bar, activity as u8, SourceKey::of(source), row.interval, row.segment))
+            .or_insert((start_h, end_h, 0.0))
+            .2 += row.tonnes_t;
         deliveries.push(Delivery {
             agent,
             bar,
@@ -227,8 +290,7 @@ pub(crate) fn publish(
     // One execution span per loader, bar and source in each cell, then
     // merged across cells where it is one continuous span at one rate.
     let mut executions: Vec<Execution> = Vec::with_capacity(cells.len());
-    for ((agent, bar, activity, key, interval, segment), tonnes) in cells {
-        let (start_h, end_h) = times[&(interval, segment)];
+    for ((agent, bar, activity, key, _, _), (start_h, end_h, tonnes)) in cells {
         executions.push(Execution {
             agent,
             bar,
