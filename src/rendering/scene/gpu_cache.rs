@@ -1667,6 +1667,7 @@ fn build_surface_chunks(
             |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
             &[mean_normal],
             chunk_origin,
+            (world_min + world_max) * 0.5,
             world_max - world_min,
         );
         if let Some(chunk) = upload_surface_chunk(

@@ -161,12 +161,20 @@ fn for_each_visible_object_aabb(
 /// measured over every vertex, so the box stays conservative. Falls back to
 /// the axis-aligned box whenever that is no larger, so no chunk culls worse.
 ///
-/// `vertices` are chunk-local (relative to `chunk_origin`, the AABB centre),
-/// read through `position`, and `aabb_size` is the chunk's full AABB extent.
+/// `vertices` are local to `chunk_origin` (which may be shared by several chunks),
+/// read through `position`. `aabb_center` and `aabb_size` describe its world-space
+/// AABB independently of that vertex origin.
 /// `extra_normals` adds slab normals to try beside the covariance's weakest
 /// direction and vertical - a surface passes its mean face normal; a point
 /// cloud, having no normals, passes none.
-pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, extra_normals: &[DVec3], chunk_origin: DVec3, aabb_size: DVec3) -> (DVec3, [Vec3; 3], Vec3) {
+pub(crate) fn fit_chunk_box<P>(
+    vertices: &[P],
+    position: impl Fn(&P) -> DVec3,
+    extra_normals: &[DVec3],
+    chunk_origin: DVec3,
+    aabb_center: DVec3,
+    aabb_size: DVec3,
+) -> (DVec3, [Vec3; 3], Vec3) {
     /// Vertices the orientation search scores against.
     const SEARCH_SAMPLES: usize = 1024;
     /// Coarse in-plane sweep over the quarter turn a box repeats in, then a
@@ -178,7 +186,9 @@ pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, e
     // than that rounding so the box never clips the geometry it bounds. Also
     // keeps a flat chunk's zero thickness from making every volume zero.
     let padding = 1e-6 * aabb_size.max_element() + 1e-3;
-    let aabb = (chunk_origin, [Vec3::X, Vec3::Y, Vec3::Z], (aabb_size * 0.5 + padding).as_vec3());
+    // Planning slabs share a vertex origin to keep seams aligned. That origin
+    // can be far outside this chunk; the fallback box must still surround it.
+    let aabb = (aabb_center, [Vec3::X, Vec3::Y, Vec3::Z], (aabb_size * 0.5 + padding).as_vec3());
     if vertices.len() < 3 {
         return aabb;
     }
