@@ -251,6 +251,12 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             if !reach.allows(candidate, *interval) {
                 continue;
             }
+            // And movements a pile's authored mode forbids this day: no
+            // receipts while it is not building, no reclaim while it is not
+            // reclaiming.
+            if !pile_mode_allows(input, candidate, *interval) {
+                continue;
+            }
             let bound = rate * interval.duration_h();
             for segment in 0..segments {
                 let column = rows.valued(bound, value, &format!("mv_{index}_{}_{segment}", interval.index));
@@ -913,7 +919,13 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                             rows.leq(terms, flags.len() as f64, &format!("rdydighi_{loader_index}_{task_index}_{position}"));
                         }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {
-                            let flags: Vec<R::Var> = approved_sources.iter().filter_map(|pile| stock.get(&(*pile, interval.index)).cloned()).collect();
+                            // A pile its mode keeps from reclaiming today gives
+                            // the bar no work, however much it holds.
+                            let flags: Vec<R::Var> = approved_sources
+                                .iter()
+                                .filter(|pile| input.piles.iter().any(|entry| entry.id == **pile && entry.reclaims(*interval)))
+                                .filter_map(|pile| stock.get(&(*pile, interval.index)).cloned())
+                                .collect();
                             if flags.is_empty() {
                                 rows.eq(vec![(ready, 1.0)], 0.0, &format!("rdyrecnone_{loader_index}_{task_index}_{position}"));
                                 continue;
@@ -1396,6 +1408,24 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // Movement value less period grade penalties, maximised; each valued
     // column carries its coefficient directly.
     Ok(())
+}
+
+/// Whether the authored modes of the piles a movement touches allow it in
+/// `interval`.
+pub(crate) fn pile_mode_allows(input: &BlendInput, candidate: &MovementCandidate, interval: Interval) -> bool {
+    let pile = |id: StockpileId| input.piles.iter().find(|entry| entry.id == id);
+    if let SourceId::Stockpile(source) = candidate.source
+        && pile(source).is_some_and(|entry| !entry.reclaims(interval))
+    {
+        return false;
+    }
+    let destination = input.destinations.iter().find(|entry| entry.id == candidate.destination);
+    if let Some(DestinationKind::Stockpile(target)) = destination.map(|entry| entry.kind)
+        && pile(target).is_some_and(|entry| !entry.builds(interval))
+    {
+        return false;
+    }
+    true
 }
 
 /// The most one pile can supply in one interval, from physics rather than

@@ -21,6 +21,7 @@ use crate::{
             SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations,
             grade_targets::{GradeTargetCellEdit, GradeTargetInput, GradeTargetValue},
             result::CalculatedSchedule,
+            stockpile_operation::{PileMode, PileModeCellEdit},
         },
     },
     ui::{
@@ -122,7 +123,7 @@ impl Figures<'_> {
                 periods.received_grade(address.destination()?, period, grade)?
             }
             CalendarRow::Value => periods.value(period)?,
-            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::GradeInput(..) => return None,
+            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::PileMode | CalendarRow::GradeInput(..) => return None,
         };
         Some((value, periods.is_partial(period)))
     }
@@ -175,7 +176,7 @@ fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
         // A crusher has no storage, so it has no inventory to report - and it
         // has an editable daily budget and grade inputs beneath its receipts.
         DestinationKind::Crusher => &[CalendarRow::CrusherLimit, CalendarRow::Received],
-        DestinationKind::Stockpile => &[CalendarRow::Received, CalendarRow::Reclaimed, CalendarRow::Cumulative],
+        DestinationKind::Stockpile => &[CalendarRow::PileMode, CalendarRow::Received, CalendarRow::Reclaimed, CalendarRow::Cumulative],
         DestinationKind::Dump => &[CalendarRow::Received, CalendarRow::Cumulative],
     }
 }
@@ -716,6 +717,7 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::DigTonnes => tr!("schedule-calendar-dig-tonnes"),
         CalendarRow::ReclaimTonnes => tr!("schedule-calendar-reclaim-tonnes"),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
+        CalendarRow::PileMode => tr!("pile-mode-row"),
         CalendarRow::Received => match destination {
             Some(DestinationKind::Crusher) => tr!("destination-calendar-processed"),
             _ => tr!("destination-calendar-received"),
@@ -904,8 +906,62 @@ fn draw_cell(
             color,
         );
     }
-    if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
+    if editor.schedule_calendar.mode_menu == Some(address) {
+        draw_mode_menu(ui, rect, address, editor, plan, session, commands);
+    } else if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
         response.on_hover_text(hover);
+    }
+}
+
+/// The choice list a Mode cell opens beneath itself. A day also offers its
+/// Default back.
+fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddress, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(destination) = address.destination() else {
+        editor.schedule_calendar.mode_menu = None;
+        return;
+    };
+    let operation = plan.stockpile_operation(destination);
+    let current = match address.cell {
+        CalendarCell::Default => Some(operation.default_mode),
+        CalendarCell::Period(day) => operation.periods.get(&day).copied(),
+    };
+    let mut choices: Vec<(Option<PileMode>, String)> = PileMode::ALL.into_iter().map(|mode| (Some(mode), mode.label())).collect();
+    if matches!(address.cell, CalendarCell::Period(_)) {
+        choices.insert(0, (None, tr!("pile-mode-inherit", mode = operation.default_mode.label())));
+    }
+    let mut chosen = None;
+    let area = egui::Area::new(ui.id().with(("pile_mode_menu", address.owner, address.cell)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.left_bottom())
+        .show(ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_min_width(rect.width());
+                for (mode, label) in &choices {
+                    if ui.selectable_label(*mode == current, label).clicked() {
+                        chosen = Some(*mode);
+                    }
+                }
+            });
+        });
+    if let Some(mode) = chosen {
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetPileModeCells {
+                edits: vec![PileModeCellEdit {
+                    destination,
+                    cell: address.cell,
+                    mode,
+                }],
+            },
+        ));
+        editor.schedule_calendar.mode_menu = None;
+        editor.schedule_calendar.error = None;
+        return;
+    }
+    let dismissed = ui.input(|input| input.key_pressed(egui::Key::Escape))
+        || (ui.input(|input| input.pointer.any_pressed()) && !area.response.contains_pointer() && !ui.rect_contains_pointer(rect));
+    if dismissed {
+        editor.schedule_calendar.mode_menu = None;
     }
 }
 
@@ -941,7 +997,7 @@ fn display_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Opt
         CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
         CalendarRow::Truck(field) => truck_text(plan, address, field),
         CalendarRow::CrusherLimit => crusher_text(plan, address),
-        CalendarRow::GradeInput(..) => raw_cell_text(plan, address),
+        CalendarRow::PileMode | CalendarRow::GradeInput(..) => raw_cell_text(plan, address),
         row => match figures.figure(address, destination_kind(destinations, address)) {
             Some((value, true)) => format!("{} *", format_figure(row, value)),
             Some((value, false)) => format_figure(row, value),
@@ -955,6 +1011,20 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
         CalendarRow::Input(_) => agent.map(|agent| resolved_hover(plan, agent, address)),
         CalendarRow::Truck(field) => Some(truck_hover(plan, address, field)),
         CalendarRow::CrusherLimit => Some(crusher_hover(plan, address)),
+        CalendarRow::PileMode => {
+            let operation = plan.stockpile_operation(address.destination()?);
+            Some(match address.cell {
+                CalendarCell::Default => tr!("pile-mode-default-hover"),
+                CalendarCell::Period(day) => {
+                    let source = if operation.periods.contains_key(&day) {
+                        tr!("schedule-calendar-explicit")
+                    } else {
+                        tr!("destination-calendar-inherited")
+                    };
+                    tr!("pile-mode-day-hover", mode = operation.mode_at(day).label(), source = source)
+                }
+            })
+        }
         CalendarRow::GradeInput(field, input) => {
             let destination = address.destination()?;
             let calendar = plan.crusher_grade_calendar(destination, field);
@@ -1165,6 +1235,7 @@ fn editable(address: CalendarCellAddress) -> bool {
     match address.row {
         CalendarRow::Truck(_) => address.truck().is_some(),
         CalendarRow::CrusherLimit | CalendarRow::GradeInput(..) => crusher_target(address).is_some(),
+        CalendarRow::PileMode => address.destination().is_some(),
         // Both default rates are the class's, shown here and edited in Setup.
         CalendarRow::Input(field) => !(address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate)),
         // Calculated: selectable so it can be copied, and nothing more.
@@ -1241,6 +1312,14 @@ fn raw_cell_text(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
                     .and_then(|row| row.get(input))
                     .map(|v| v.number().map(trimmed_number).unwrap_or_else(|| tr!("grade-calendar-none")))
                     .unwrap_or_default(),
+            }
+        }
+        CalendarRow::PileMode => {
+            let Some(destination) = address.destination() else { return String::new() };
+            let operation = plan.stockpile_operation(destination);
+            match address.cell {
+                CalendarCell::Default => operation.default_mode.label(),
+                CalendarCell::Period(day) => operation.periods.get(&day).map(|mode| mode.label()).unwrap_or_default(),
             }
         }
         CalendarRow::Truck(field) => truck_raw_text(plan, address, field),
@@ -1432,6 +1511,11 @@ fn begin_edit(editor: &mut EditorState, plan: &SchedulePlan, address: CalendarCe
     if !editable(address) {
         return;
     }
+    // A mode is chosen from a list; typing one still works.
+    if address.row == CalendarRow::PileMode && typed.is_none() {
+        editor.schedule_calendar.mode_menu = Some(address);
+        return;
+    }
     let text = typed.unwrap_or_else(|| raw_cell_text(plan, address));
     editor.schedule_calendar.draft = Some(CalendarCellDraft {
         address,
@@ -1439,6 +1523,14 @@ fn begin_edit(editor: &mut EditorState, plan: &SchedulePlan, address: CalendarCe
         error: None,
         request_focus: true,
     });
+}
+
+/// A typed or pasted mode: blank returns a day to the Default.
+fn parse_pile_mode(text: &str) -> Result<Option<PileMode>, String> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    PileMode::parse(text).map(Some).ok_or_else(|| tr!("pile-mode-invalid"))
 }
 
 fn parse_grade_cell(_input: GradeTargetInput, text: &str) -> Result<Option<GradeTargetValue>, String> {
@@ -1498,6 +1590,35 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
     // A crusher budget is the one destination input, and it commits through its
     // own edit: the loader calendar and the crusher calendar are different
     // things with different cells.
+    if draft.address.row == CalendarRow::PileMode {
+        let Some(destination) = draft.address.destination() else {
+            editor.schedule_calendar.draft = None;
+            return true;
+        };
+        match parse_pile_mode(&draft.text) {
+            Ok(mode) => {
+                commands.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetPileModeCells {
+                        edits: vec![PileModeCellEdit {
+                            destination,
+                            cell: draft.address.cell,
+                            mode,
+                        }],
+                    },
+                ));
+                editor.schedule_calendar.draft = None;
+                editor.schedule_calendar.error = None;
+                return true;
+            }
+            Err(error) => {
+                editor.schedule_calendar.error = Some(error.clone());
+                draft.error = Some(error);
+                draft.request_focus = true;
+                return false;
+            }
+        }
+    }
     if draft.address.row == CalendarRow::CrusherLimit {
         let Some(destination) = crusher_target(draft.address) else {
             editor.schedule_calendar.draft = None;
@@ -1753,12 +1874,23 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
     let mut crusher_edits = Vec::new();
     let mut truck_edits = Vec::new();
     let mut grade_edits = Vec::new();
+    let mut mode_edits = Vec::new();
     for row in r0..=r1 {
         for column in c0..=c1 {
             let Some(address) = address_at(editor, plan, destinations, row, column) else { continue };
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if address.row == CalendarRow::PileMode {
+                if let Some(destination) = address.destination() {
+                    mode_edits.push(PileModeCellEdit {
+                        destination,
+                        cell: address.cell,
+                        mode: None,
+                    });
+                }
+                continue;
             }
             if let CalendarRow::GradeInput(field, input) = address.row {
                 if let Some(destination) = address.destination() {
@@ -1821,6 +1953,9 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
     if !truck_edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
     }
+    if !mode_edits.is_empty() {
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: mode_edits }));
+    }
 }
 
 fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationRow], session: u32, commands: &mut Vec<UiCommand>, text: &str) {
@@ -1834,6 +1969,7 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     let mut crusher_edits = Vec::new();
     let mut truck_edits = Vec::new();
     let mut grade_edits = Vec::new();
+    let mut mode_edits = Vec::new();
     for (row_offset, values) in rows.iter().enumerate() {
         for (column_offset, text) in values.iter().enumerate() {
             let Some(address) = address_at(editor, plan, destinations, start_row + row_offset, start_column.saturating_add(column_offset as u32)) else {
@@ -1843,6 +1979,21 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
             if address.row.is_calculated() {
                 editor.schedule_calendar.error = Some(tr!("schedule-calendar-calculated-selection"));
                 return;
+            }
+            if address.row == CalendarRow::PileMode {
+                let Some(destination) = address.destination() else { return };
+                match parse_pile_mode(text) {
+                    Ok(mode) => mode_edits.push(PileModeCellEdit {
+                        destination,
+                        cell: address.cell,
+                        mode,
+                    }),
+                    Err(error) => {
+                        editor.schedule_calendar.error = Some(error);
+                        return;
+                    }
+                }
+                continue;
             }
             if let CalendarRow::GradeInput(field, input) = address.row {
                 let Some(destination) = address.destination() else { return };
@@ -1933,6 +2084,9 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
     }
     if !truck_edits.is_empty() {
         commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
+    }
+    if !mode_edits.is_empty() {
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: mode_edits }));
     }
 }
 

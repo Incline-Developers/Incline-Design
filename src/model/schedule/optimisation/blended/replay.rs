@@ -804,9 +804,10 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                             {
                                 return false;
                             }
-                            approved_sources
-                                .iter()
-                                .any(|pile| openings.get(&(*pile, interval.index)).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
+                            approved_sources.iter().any(|pile| {
+                                input.piles.iter().find(|entry| entry.id == *pile).is_some_and(|entry| entry.reclaims(*interval))
+                                    && openings.get(&(*pile, interval.index)).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T
+                            })
                         }
                         TaskKind::Delay => true,
                     }
@@ -948,6 +949,14 @@ fn replay_pile(
                     *slot += row.tonnes_t;
                 }
             }
+        }
+
+        // The authored mode of the interval's day.
+        if !pile.builds(*interval) {
+            checker.breach(&format!("pile {} receipts on a day it is not building, interval {k}", pile.id.0), received_t, 0.0);
+        }
+        if !pile.reclaims(*interval) {
+            checker.breach(&format!("pile {} reclaim on a day it is not reclaiming, interval {k}", pile.id.0), reclaimed_t, 0.0);
         }
 
         // Inventory release timing: a reclaim in interval k may only draw on

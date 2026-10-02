@@ -94,6 +94,10 @@ pub(crate) enum IdleReason {
     /// Every destination its material may go to is full, or at its crusher
     /// budget for the day.
     DestinationsFull,
+    /// A stockpile's authored mode stopped it: the piles it would reclaim
+    /// are not reclaiming today, or the piles its material would go to are
+    /// not building.
+    PileMode,
     /// Every truck class that can haul for it is fully used.
     NoTrucks,
     /// Work, room and trucks were all there: moving the material was worth
@@ -110,7 +114,8 @@ pub(crate) struct IdleSpan {
     /// `None` until [`CalculatedSchedule::classify_idle`] has explained it.
     pub(crate) reason: Option<IdleReason>,
     /// For [`IdleReason::DestinationsFull`], the destinations that had no
-    /// room, so the reason can name them. Empty otherwise.
+    /// room, and for [`IdleReason::PileMode`] the stockpiles its mode
+    /// closed, so the reason can name them. Empty otherwise.
     pub(crate) full: Vec<DestinationId>,
 }
 

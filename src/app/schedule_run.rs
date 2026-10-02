@@ -249,6 +249,9 @@ impl crate::app::App<'_> {
         for calendar in plan.crusher_grade_calendars() {
             calendar.hash_content(&mut hasher);
         }
+        for operation in plan.stockpile_operations() {
+            operation.hash_content(&mut hasher);
+        }
         // Reserve field *definitions*: a condition or a grade reads a field
         // through one, so re-aggregating or deleting one is an input change.
         for field in document.reserve_fields() {
@@ -910,8 +913,9 @@ fn result_status(calculation: &CalculatedSchedule) -> String {
     let mut status = match (report.quality, report.gap) {
         _ if first_only => tr!("schedule-run-first", day = day),
         (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", day = day),
-        (_, Some(gap)) => tr!("schedule-run-limited", day = day, gap = format!("{:.2}", gap * 100.0)),
-        (_, None) => tr!("schedule-run-limited-no-gap", day = day),
+        // The gap is a solver figure, and on a long horizon often measures
+        // how loose the bound is rather than the schedule: it is on hover.
+        _ => tr!("schedule-run-limited-no-gap", day = day),
     };
     // A restriction that can hold production back is said where the status
     // is read, not only in the details.
@@ -933,6 +937,8 @@ fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<Strin
         currency = currency.to_owned()
     )];
     lines.push(match (report.bound, report.gap) {
+        // A bound more than twice the schedule says nothing useful about it.
+        (Some(_), Some(gap)) if gap > 1.0 => tr!("schedule-detail-bound-weak"),
         (Some(bound), Some(gap)) if report.bound_source == BoundSource::Relaxation => tr!(
             "schedule-detail-bound-relaxation",
             bound = crate::ui::elements::schedule_calendar::format_money(bound),

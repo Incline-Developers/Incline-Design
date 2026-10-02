@@ -552,6 +552,9 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
             TaskKind::Reclaim { .. } => reclaim_tph,
             TaskKind::Delay => 0.0,
         };
+        let pile_entry = |pile: StockpileId| input.piles.iter().find(|entry| entry.id == pile);
+        let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval));
+        let builds = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.builds(interval));
         // What each bar could work at the start of the interval.
         let task_sources = |task: &crate::model::schedule::optimisation::Task| -> Vec<SourceId> {
             let mut sources = Vec::new();
@@ -568,6 +571,9 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
+                        if !reclaims(*pile) {
+                            continue;
+                        }
                         let held = lookup
                             .piles
                             .get(pile)
@@ -605,6 +611,27 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
         }
         let sources: Vec<SourceId> = open.iter().filter(|task| rate_for(&task.kind) > 0.0).flat_map(|task| task_sources(task)).collect();
         if sources.is_empty() {
+            // Stock was there, but the pile's mode keeps it from reclaiming.
+            let mut closed: Vec<_> = open
+                .iter()
+                .filter(|task| rate_for(&task.kind) > 0.0)
+                .filter_map(|task| match &task.kind {
+                    TaskKind::Reclaim { approved_sources, .. } => Some(approved_sources),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|pile| !reclaims(**pile))
+                .filter_map(|pile| {
+                    let project = lookup.piles.get(pile)?;
+                    let held = schedule.inventory_at(*project, start_h).map_or(0.0, |(tonnes, _)| tonnes);
+                    (held > IDLE_NEGLIGIBLE_T).then_some(*project)
+                })
+                .collect();
+            if !closed.is_empty() {
+                closed.sort_unstable();
+                closed.dedup();
+                return (IdleReason::PileMode, closed);
+            }
             return (IdleReason::WorkFinished, Vec::new());
         }
         let candidates: Vec<_> = input
@@ -644,6 +671,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
                 DestinationKind::Dump => found
                     .capacity_t
                     .is_none_or(|capacity| capacity - sum_within(project.and_then(|project| received.get(project)), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T),
+                DestinationKind::Stockpile(pile) if !builds(pile) => false,
                 DestinationKind::Stockpile(pile) => found.capacity_t.is_none_or(|capacity| {
                     let held = lookup
                         .piles
@@ -683,6 +711,20 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
                 .collect();
             full.sort_unstable();
             full.dedup();
+            // A pile its mode keeps from building is the planner's own
+            // setting, so it is the reason given, before any full one.
+            let mut closed: Vec<_> = candidates
+                .iter()
+                .filter_map(|movement| match input.destinations.iter().find(|found| found.id == movement.destination)?.kind {
+                    DestinationKind::Stockpile(pile) if !builds(pile) => lookup.destinations.get(&movement.destination).copied(),
+                    _ => None,
+                })
+                .collect();
+            if !closed.is_empty() {
+                closed.sort_unstable();
+                closed.dedup();
+                return (IdleReason::PileMode, closed);
+            }
             return (IdleReason::DestinationsFull, full);
         }
         let roomy: Vec<_> = roomy.into_iter().filter(|movement| open_sources.contains(&movement.source)).collect();

@@ -47,6 +47,11 @@
 //! clears the boundary by the formulation's own margin, and never where a
 //! grade-conditional value applies, which is the model's to price.
 //!
+//! A stockpile's authored mode is a fact of the interval: a pile not
+//! building has no room, so routing passes it over as it would a full one,
+//! and a pile not reclaiming gives a reclaim bar no work, so its loader moves
+//! on to its next bar as it would from an empty pile.
+//!
 //! A chunked pile follows the formulation's chunk lifecycle with one rule of
 //! its own: a chunk closes when it is full, and only then. Receipts go to the
 //! first chunk still open, up to its room. A chunk is open or closed for a
@@ -365,7 +370,7 @@ impl<'a> State<'a> {
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
-                        if self.released(*pile).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
+                        if !self.reclaims(*pile, interval) || self.released(*pile).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
                             continue;
                         }
                         for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
@@ -686,10 +691,17 @@ impl<'a> State<'a> {
             TaskKind::Reclaim { approved_sources, maximum_t } => {
                 reclaim_tph > 0.0
                     && maximum_t.is_none_or(|maximum| self.reclaimed.get(&bar).copied().unwrap_or(0.0) < maximum - NEGLIGIBLE_T)
-                    && approved_sources.iter().any(|pile| self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T))
+                    && approved_sources
+                        .iter()
+                        .any(|pile| self.reclaims(*pile, interval) && self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T))
             }
             TaskKind::Delay => true,
         }
+    }
+
+    /// Whether `pile`'s authored mode lets it be reclaimed in `interval`.
+    fn reclaims(&self, pile: StockpileId, interval: Interval) -> bool {
+        self.input.piles.iter().find(|entry| entry.id == pile).is_some_and(|entry| entry.reclaims(interval))
     }
 
     /// Reclaim candidates for one loader and pile under `bar`, admitted on
@@ -754,7 +766,9 @@ impl<'a> State<'a> {
             // when a delivering loader works blocks back to back.
             // A chunked pile also takes no more than its receiving chunk's room.
             DestinationKind::Stockpile(pile) => {
-                let Some(target) = input.piles.iter().find(|entry| entry.id == pile) else { return 0.0 };
+                let Some(target) = input.piles.iter().find(|entry| entry.id == pile).filter(|entry| entry.builds(interval)) else {
+                    return 0.0;
+                };
                 let room = target.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
                 match self.chunks.get(&pile) {
                     Some(chunks) => chunks.iter().find(|chunk| !chunk.closed).map_or(0.0, |chunk| room.min(chunk.capacity_t - chunk.held_t)),

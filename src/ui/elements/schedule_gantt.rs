@@ -1085,6 +1085,7 @@ fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
         Some(IdleReason::WorkFinished) => (tr!("idle-work-finished"), tr!("idle-work-finished-note")),
         Some(IdleReason::NoRoute) => (tr!("idle-no-route"), tr!("idle-no-route-note")),
         Some(IdleReason::DestinationsFull) => (tr!("idle-destinations-full"), tr!("idle-destinations-full-note")),
+        Some(IdleReason::PileMode) => (tr!("idle-pile-mode"), tr!("idle-pile-mode-note")),
         Some(IdleReason::NoTrucks) => (tr!("idle-no-trucks"), tr!("idle-no-trucks-note")),
         Some(IdleReason::NotWorthIt) => (tr!("idle-not-worth-it"), tr!("idle-not-worth-it-note")),
         None => (tr!("schedule-dispatch-idle"), String::new()),
@@ -1160,7 +1161,11 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
             ));
             if !span.full.is_empty() {
                 let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
-                ui.label(tr!("idle-full-list", destinations = names.join(", ")));
+                ui.label(if span.reason == Some(IdleReason::PileMode) {
+                    tr!("idle-pile-list", destinations = names.join(", "))
+                } else {
+                    tr!("idle-full-list", destinations = names.join(", "))
+                });
             }
             if !note.is_empty() {
                 ui.label(egui::RichText::new(note).weak());

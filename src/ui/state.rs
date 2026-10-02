@@ -4969,6 +4969,7 @@ impl UiCommand {
                 ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
                 ScheduleEdit::DuplicateTruckClass(id) => report(tr!("truck-duplicate-class"), format!("{id:?}")),
                 ScheduleEdit::DeleteTruckClass(id) => report(tr!("truck-delete-class"), format!("{id:?}")),
@@ -6137,6 +6138,10 @@ pub(crate) enum ScheduleEdit {
     SetCrusherCells {
         edits: Vec<crate::model::schedule::CrusherCellEdit>,
     },
+    /// Set stockpile Mode cells in the Calendar, as one undo step.
+    SetPileModeCells {
+        edits: Vec<crate::model::schedule::stockpile_operation::PileModeCellEdit>,
+    },
     /// Add a routing rule at the end of the priority order.
     AddRule {
         name: String,
@@ -6840,6 +6845,8 @@ pub(crate) enum CalendarRow {
     /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
     /// figure for the whole calculation, not for a day of it.
     CrusherLimit,
+    /// A stockpile's daily mode: building, reclaiming, both or neither.
+    PileMode,
     /// One truck class's fleet size or time percentages for the period. Sized
     /// here rather than in Setup because a fleet changes day to day, unlike the
     /// truck itself.
@@ -6959,6 +6966,8 @@ pub(crate) struct ScheduleCalendarView {
     pub(crate) grade_expanded: std::collections::HashSet<(crate::model::schedule::DestinationId, crate::model::ReserveFieldId)>,
     pub(crate) selection: Option<CalendarSelection>,
     pub(crate) draft: Option<CalendarCellDraft>,
+    /// The Mode cell whose choice list is open.
+    pub(crate) mode_menu: Option<CalendarCellAddress>,
     pub(crate) error: Option<String>,
 }
 
@@ -6973,6 +6982,7 @@ impl Default for ScheduleCalendarView {
             grade_expanded: Default::default(),
             selection: None,
             draft: None,
+            mode_menu: None,
             error: None,
         }
     }

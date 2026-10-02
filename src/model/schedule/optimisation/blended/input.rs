@@ -86,6 +86,7 @@ use crate::model::schedule::optimisation::{
     Activity, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundSource, Interval, IntervalRate, Loader, LoaderId, MovementCandidate, ReclaimOrder, RoutingRuleId,
     SourceId, StockpileId, Task, TaskKind, TruckClass,
 };
+pub(crate) use crate::model::schedule::stockpile_operation::PileMode;
 
 /// A blended pile: opening lots already combined by tonnes and contained
 /// quantity, because a blend has no ordered lots to preserve.
@@ -116,9 +117,27 @@ pub(crate) struct BlendPile {
     /// state the day before left, where a partly filled chunk may still be
     /// open and an emptied one is closed for good.
     pub(crate) chunk_closed: Vec<bool>,
+    /// The authored mode of each calendar day from hour 0. A day past the
+    /// end builds and reclaims.
+    #[serde(default)]
+    pub(crate) modes: Vec<PileMode>,
 }
 
 impl BlendPile {
+    pub(crate) fn mode(&self, interval: Interval) -> PileMode {
+        self.modes.get(interval.day() as usize).copied().unwrap_or_default()
+    }
+
+    /// Whether the pile may take deliveries in `interval`.
+    pub(crate) fn builds(&self, interval: Interval) -> bool {
+        self.mode(interval).builds()
+    }
+
+    /// Whether the pile may be reclaimed in `interval`.
+    pub(crate) fn reclaims(&self, interval: Interval) -> bool {
+        self.mode(interval).reclaims()
+    }
+
     /// The pile's total opening state, which is the per-chunk opening when
     /// one was authored and [`Self::opening_t`] otherwise.
     ///
@@ -173,6 +192,7 @@ impl BlendPile {
             order: ReclaimOrder::Fifo,
             chunk_opening: Vec::new(),
             chunk_closed: Vec::new(),
+            modes: Vec::new(),
         }
     }
 }

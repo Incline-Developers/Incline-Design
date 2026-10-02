@@ -23,6 +23,7 @@ pub(crate) mod inventory;
 pub(crate) mod optimisation;
 pub(crate) mod result;
 pub(crate) mod sequence;
+pub(crate) mod stockpile_operation;
 pub(crate) mod trucking;
 
 pub(crate) use calendar::{CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, LoaderCalendar, RateKind, SCHEDULE_PERIOD_H};
@@ -701,6 +702,9 @@ pub(crate) struct SchedulePlan {
     /// tracked grade. A calendar for an untracked grade is kept but ignored.
     #[serde(default)]
     crusher_grade_calendars: Vec<grade_targets::CrusherGradeCalendar>,
+    /// Daily stockpile modes, one calendar per stockpile that has one.
+    #[serde(default)]
+    stockpile_operations: Vec<stockpile_operation::StockpileOperation>,
     /// Destination grade targets from a short-lived unreleased build, read
     /// and dropped so such a project still opens: stockpile and dump grades
     /// are steered by routing, and crusher targets live in the Calendar.
@@ -738,6 +742,7 @@ impl Default for SchedulePlan {
             trucks: TruckFleetConfig::default(),
             cashflow: CashflowConfig::default(),
             crusher_grade_calendars: Vec::new(),
+            stockpile_operations: Vec::new(),
             retired_grade_targets: grade_targets::Retired,
             currency: default_currency(),
             experiment: experiment::ExperimentConfig::default(),
@@ -785,6 +790,7 @@ impl SchedulePlan {
             && self.trucks.is_empty()
             && self.cashflow.is_empty()
             && self.crusher_grade_calendars.is_empty()
+            && self.stockpile_operations.is_empty()
             && self.currency == cashflow::DEFAULT_CURRENCY
             && self.experiment.is_pristine()
             && self.delays.is_empty()
@@ -909,6 +915,39 @@ impl SchedulePlan {
 
     pub(crate) fn remove_destination_grade_targets(&mut self, destination: DestinationId) {
         self.crusher_grade_calendars.retain(|c| c.destination != destination);
+        self.stockpile_operations.retain(|o| o.destination != destination);
+    }
+
+    pub(crate) fn stockpile_operations(&self) -> &[stockpile_operation::StockpileOperation] {
+        &self.stockpile_operations
+    }
+
+    pub(crate) fn stockpile_operation(&self, destination: DestinationId) -> std::borrow::Cow<'_, stockpile_operation::StockpileOperation> {
+        match self.stockpile_operations.iter().find(|o| o.destination == destination) {
+            Some(operation) => std::borrow::Cow::Borrowed(operation),
+            None => std::borrow::Cow::Owned(stockpile_operation::StockpileOperation::new(destination)),
+        }
+    }
+
+    /// One Mode-row edit or a pasted rectangle of them, as one undo step.
+    pub(crate) fn set_pile_mode_cells(&mut self, edits: &[stockpile_operation::PileModeCellEdit]) -> ScheduleResult {
+        let mut operations = self.stockpile_operations.clone();
+        for edit in edits {
+            if let CalendarCell::Period(period) = edit.cell {
+                period.0.checked_add(1).ok_or(ScheduleError::CalendarPeriodOverflow)?;
+            }
+            let position = match operations.iter().position(|o| o.destination == edit.destination) {
+                Some(position) => position,
+                None => {
+                    operations.push(stockpile_operation::StockpileOperation::new(edit.destination));
+                    operations.len() - 1
+                }
+            };
+            operations[position].set_cell(edit.cell, edit.mode);
+        }
+        operations.retain(|o| !o.is_pristine());
+        self.stockpile_operations = operations;
+        Ok(())
     }
 
     pub(crate) fn cashflow(&self) -> &CashflowConfig {
@@ -1608,6 +1647,12 @@ impl SchedulePlan {
                 return Err(ScheduleError::InvalidGradeTarget);
             }
         }
+        for (index, operation) in self.stockpile_operations.iter().enumerate() {
+            operation.validate()?;
+            if self.stockpile_operations[..index].iter().any(|o| o.destination == operation.destination) {
+                return Err(ScheduleError::DuplicateCalendarCell);
+            }
+        }
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
@@ -1670,6 +1715,9 @@ impl SchedulePlan {
         self.cashflow.hash_content(hasher);
         for calendar in &self.crusher_grade_calendars {
             calendar.hash_content(hasher);
+        }
+        for operation in &self.stockpile_operations {
+            operation.hash_content(hasher);
         }
         self.cashflow.hash_names(hasher);
         self.currency.hash(hasher);
@@ -1741,6 +1789,11 @@ impl SchedulePlan {
                 .crusher_grade_calendars
                 .iter()
                 .map(|c| c.periods.len() * std::mem::size_of::<(CalendarPeriod, grade_targets::GradeTargetOverride)>())
+                .sum::<usize>()
+            + self
+                .stockpile_operations
+                .iter()
+                .map(|o| std::mem::size_of_val(o) + o.periods.len() * std::mem::size_of::<(CalendarPeriod, stockpile_operation::PileMode)>())
                 .sum::<usize>()
             + self.currency.len()
             + self.experiment.estimated_bytes()

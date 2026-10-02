@@ -862,9 +862,13 @@ reason does not colour the strip.
 A machine with no bars never reaches the solve, so the result holds nothing
 for it; its idle strip runs across the whole horizon, as no work assigned.
 
-The status line says only how far the schedule reaches and, after Improve,
-how close it is to the best possible. The value, run number and solver
-working are in its hover.
+The status line says only how far the schedule reaches, and "optimal" when
+Improve proves it. The gap to the best possible is in its hover with the
+value, run number and solver working: on a week of hourly intervals the
+relaxation bound often cannot finish inside the time limit, and a gap
+measured against SCIP's presolve bound describes the bound, not the
+schedule. A bound more than twice the schedule's value is reported as no
+useful bound.
 
 ## Delays
 

@@ -653,6 +653,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             },
             chunk_opening: Vec::new(),
             chunk_closed: Vec::new(),
+            modes: {
+                let operation = plan.stockpile_operation(*project_id);
+                let mut modes: Vec<_> = (0..days).map(|day| operation.mode_at(CalendarPeriod(day as u32))).collect();
+                while modes.last().is_some_and(|mode| *mode == Default::default()) {
+                    modes.pop();
+                }
+                modes
+            },
         };
         match representation {
             StockpileRepresentation::NotConfigured => unreachable!("refused above"),

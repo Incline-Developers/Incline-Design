@@ -269,6 +269,7 @@ impl Carry {
                         order: pile.order,
                         chunk_opening: chunks.iter().map(|(tonnes, contained, _)| (*tonnes, contained.clone())).collect(),
                         chunk_closed: chunks.iter().map(|(_, _, closed)| *closed).collect(),
+                        modes: pile.modes.clone(),
                     };
                 }
                 let (tonnes, contained) = self.piles.get(&pile.id).cloned().unwrap_or_else(|| pile.total_opening(grades));
@@ -281,6 +282,7 @@ impl Carry {
                     order: pile.order,
                     chunk_opening: Vec::new(),
                     chunk_closed: Vec::new(),
+                    modes: pile.modes.clone(),
                 }
             })
             .collect();
