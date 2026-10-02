@@ -553,8 +553,33 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, lookup: &
             TaskKind::Delay => 0.0,
         };
         let pile_entry = |pile: StockpileId| input.piles.iter().find(|entry| entry.id == pile);
-        let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval));
-        let builds = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.builds(interval));
+        let project_pile = |pile: StockpileId| lookup.piles.get(&pile).copied();
+        // An unchunked pile with a rest is not reclaimable while anything it
+        // received is still resting.
+        let resting = |pile: StockpileId| {
+            let Some(entry) = pile_entry(pile).filter(|entry| entry.rest_h > 0.0 && entry.chunks.is_empty()) else {
+                return false;
+            };
+            let project = project_pile(pile);
+            schedule.deliveries.iter().any(|delivery| {
+                Some(delivery.destination) == project
+                    && delivery.tonnes > IDLE_NEGLIGIBLE_T
+                    && delivery.start_h < start_h - 1e-9
+                    && !entry.rested(delivery.end_h.min(start_h), interval)
+            })
+        };
+        let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval)) && !resting(pile);
+        // A pile that may not build and reclaim at once, reclaimed here.
+        let reclaimed_here = |pile: StockpileId| {
+            let project = project_pile(pile);
+            schedule.executions.iter().any(|execution| {
+                matches!(execution.source, WorkSource::Stockpile(source) if Some(source) == project)
+                    && execution.tonnes > IDLE_NEGLIGIBLE_T
+                    && execution.start_h < end_h - 1e-9
+                    && execution.end_h > start_h + 1e-9
+            })
+        };
+        let builds = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.builds(interval) && !(entry.exclusive && reclaimed_here(pile)));
         // What each bar could work at the start of the interval.
         let task_sources = |task: &crate::model::schedule::optimisation::Task| -> Vec<SourceId> {
             let mut sources = Vec::new();

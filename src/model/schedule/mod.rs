@@ -929,6 +929,19 @@ impl SchedulePlan {
         }
     }
 
+    /// Change one stockpile's per-pile operating settings.
+    pub(crate) fn set_stockpile_operating(&mut self, destination: DestinationId, simultaneous: bool, rest_h: f64) -> ScheduleResult {
+        let rest_h = stockpile_operation::checked_rest(rest_h)?;
+        let mut operation = self.stockpile_operation(destination).into_owned();
+        operation.simultaneous = simultaneous;
+        operation.rest_h = rest_h;
+        self.stockpile_operations.retain(|o| o.destination != destination);
+        if !operation.is_pristine() {
+            self.stockpile_operations.push(operation);
+        }
+        Ok(())
+    }
+
     /// One Mode-row edit or a pasted rectangle of them, as one undo step.
     pub(crate) fn set_pile_mode_cells(&mut self, edits: &[stockpile_operation::PileModeCellEdit]) -> ScheduleResult {
         let mut operations = self.stockpile_operations.clone();

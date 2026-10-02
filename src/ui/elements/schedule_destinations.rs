@@ -55,6 +55,18 @@ fn parse_capacity(text: &str) -> Result<Option<f64>, String> {
     Ok(Some(value))
 }
 
+/// A rest in hours: blank is none.
+fn parse_rest(text: &str) -> Result<f64, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(0.0);
+    }
+    text.parse::<f64>()
+        .ok()
+        .and_then(|hours| crate::model::schedule::stockpile_operation::checked_rest(hours).ok())
+        .ok_or_else(|| crate::model::schedule::ScheduleError::InvalidExperimentSetting.message())
+}
+
 fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -180,7 +192,14 @@ pub(crate) fn draw_destination_properties(
         .crusher(entry.solid.map_or_else(|| standalone_of(entry.id), |_| standalone_of(entry.id)))
         .and_then(|calendar| calendar.default_tpd);
     let crusher_default = if entry.kind == DestinationKind::Crusher { crusher_default } else { None };
-    let source = (entry.name.clone(), entry.capacity_t, crusher_default, entry.distance_km.to_bits());
+    let operation = plan.stockpile_operation(entry.id).into_owned();
+    let source = (
+        entry.name.clone(),
+        entry.capacity_t,
+        crusher_default,
+        entry.distance_km.to_bits(),
+        operation.rest_h.to_bits(),
+    );
     if editor
         .schedule_destination_draft
         .as_ref()
@@ -192,6 +211,7 @@ pub(crate) fn draw_destination_properties(
             capacity: capacity_text(entry.capacity_t),
             crusher_default: capacity_text(crusher_default),
             distance: super::schedule_trucking::number(entry.distance_km),
+            rest: super::schedule_trucking::number(operation.rest_h),
             source,
         });
     }
@@ -219,7 +239,8 @@ pub(crate) fn draw_destination_properties(
     } else {
         0
     };
-    let rows_used = 5 + usize::from(linked) + 2 * usize::from(stockpile) + optimisation_rows;
+    let rest_error = parse_rest(&draft.rest).err();
+    let rows_used = 5 + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
     let mut chunk_draft = editor.schedule_chunk_draft.take();
@@ -300,6 +321,36 @@ pub(crate) fn draw_destination_properties(
                 .is_some_and(|capacity| entry.opening_t > capacity)
                 .then(|| crate::model::schedule::ScheduleError::OpeningOverCapacity.message());
             rows.readonly(&tr!("inventory-opening-tonnes"), &tonnes(entry.opening_t), None, over.as_deref());
+            // How the pile may be worked. Its day-by-day Mode is in the
+            // Calendar; these two hold for every day.
+            let mut simultaneous = operation.simultaneous;
+            rows.checkbox(&tr!("pile-simultaneous"), &mut simultaneous).on_hover_text(tr!("pile-simultaneous-help"));
+            if simultaneous != operation.simultaneous {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetStockpileOperating {
+                        destination: entry.id,
+                        simultaneous,
+                        rest_h: operation.rest_h,
+                    },
+                ));
+            }
+            let response = rows.field(&tr!("pile-rest"), &mut draft.rest, rest_error.as_deref());
+            let committed = response.lost_focus();
+            response.on_hover_text(tr!("pile-rest-help"));
+            if committed
+                && let Ok(rest_h) = parse_rest(&draft.rest)
+                && rest_h != operation.rest_h
+            {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetStockpileOperating {
+                        destination: entry.id,
+                        simultaneous: operation.simultaneous,
+                        rest_h,
+                    },
+                ));
+            }
             // The representation. The authored lots above are untouched by
             // it: choosing one changes what the optimiser is told, not what
             // the project holds.

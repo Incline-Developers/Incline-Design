@@ -88,6 +88,15 @@ use crate::model::schedule::optimisation::{
 };
 pub(crate) use crate::model::schedule::stockpile_operation::PileMode;
 
+/// Hours by which a rest may fall short, so a boundary computed two ways
+/// agrees.
+pub(crate) const REST_TOLERANCE_H: f64 = 1e-6;
+
+/// The least an interval's deliveries to a pile may total and still restart
+/// its rest. The model counts no less as building, and the replay and the
+/// dispatcher count no less as a delivery that rests.
+pub(crate) const REST_RECEIPT_T: f64 = 1e-4;
+
 /// A blended pile: opening lots already combined by tonnes and contained
 /// quantity, because a blend has no ordered lots to preserve.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -121,6 +130,23 @@ pub(crate) struct BlendPile {
     /// end builds and reclaims.
     #[serde(default)]
     pub(crate) modes: Vec<PileMode>,
+    /// No deliveries in an interval the pile is reclaimed in.
+    #[serde(default)]
+    pub(crate) exclusive: bool,
+    /// Hours new material rests before reclaim: since the last delivery for
+    /// an unchunked pile, since the chunk closed for a chunked one.
+    #[serde(default)]
+    pub(crate) rest_h: f64,
+    /// End of the last interval before this input's first in which the pile
+    /// received anything; `None` when opening stock is all it holds, which is
+    /// rested. Set by a day-by-day window.
+    #[serde(default)]
+    pub(crate) last_receipt_h: Option<f64>,
+    /// When each chunk that starts closed closed, aligned with
+    /// [`Self::chunks`]; `None` or missing means long enough ago to be
+    /// rested. Set by a day-by-day window.
+    #[serde(default)]
+    pub(crate) chunk_closed_h: Vec<Option<f64>>,
 }
 
 impl BlendPile {
@@ -136,6 +162,18 @@ impl BlendPile {
     /// Whether the pile may be reclaimed in `interval`.
     pub(crate) fn reclaims(&self, interval: Interval) -> bool {
         self.mode(interval).reclaims()
+    }
+
+    /// Whether material delivered in an interval ending at `received_end_h`
+    /// has rested by `interval`.
+    pub(crate) fn rested(&self, received_end_h: f64, interval: Interval) -> bool {
+        received_end_h <= interval.start_h - self.rest_h + REST_TOLERANCE_H
+    }
+
+    /// Whether chunk `chunk`, closed from the start of the input, has rested
+    /// by `interval`.
+    pub(crate) fn opening_chunk_rested(&self, chunk: usize, interval: Interval) -> bool {
+        self.chunk_closed_h.get(chunk).copied().flatten().is_none_or(|closed_h| self.rested(closed_h, interval))
     }
 
     /// The pile's total opening state, which is the per-chunk opening when
@@ -193,6 +231,10 @@ impl BlendPile {
             chunk_opening: Vec::new(),
             chunk_closed: Vec::new(),
             modes: Vec::new(),
+            exclusive: false,
+            rest_h: 0.0,
+            last_receipt_h: None,
+            chunk_closed_h: Vec::new(),
         }
     }
 }

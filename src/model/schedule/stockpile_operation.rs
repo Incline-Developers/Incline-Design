@@ -4,6 +4,10 @@
 //! limit - and enforced by every schedule: a pile not building is passed over
 //! by routing as if it were full, and a reclaim bar on a pile not reclaiming
 //! has no work, so its loader moves on to its next bar.
+//!
+//! Two per-pile settings sit beside the calendar, in Setup: whether the pile
+//! may take deliveries and be reclaimed in the same hour, and how many hours
+//! new material must rest before it is reclaimed.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +73,17 @@ pub(crate) struct StockpileOperation {
     pub(crate) default_mode: PileMode,
     #[serde(default)]
     pub(crate) periods: std::collections::BTreeMap<CalendarPeriod, PileMode>,
+    /// Whether deliveries and reclaim may happen in the same interval.
+    #[serde(default = "simultaneous_default")]
+    pub(crate) simultaneous: bool,
+    /// Hours material must rest before it is reclaimed: since the last
+    /// delivery for a blended pile, since its chunk closed for a chunked one.
+    #[serde(default)]
+    pub(crate) rest_h: f64,
+}
+
+fn simultaneous_default() -> bool {
+    true
 }
 
 impl StockpileOperation {
@@ -77,6 +92,8 @@ impl StockpileOperation {
             destination,
             default_mode: PileMode::default(),
             periods: Default::default(),
+            simultaneous: true,
+            rest_h: 0.0,
         }
     }
 
@@ -101,10 +118,11 @@ impl StockpileOperation {
     }
 
     pub(crate) fn is_pristine(&self) -> bool {
-        self.default_mode == PileMode::default() && self.periods.is_empty()
+        self.default_mode == PileMode::default() && self.periods.is_empty() && self.simultaneous && self.rest_h == 0.0
     }
 
     pub(crate) fn validate(&self) -> ScheduleResult {
+        checked_rest(self.rest_h)?;
         for period in self.periods.keys() {
             period.0.checked_add(1).ok_or(ScheduleError::CalendarPeriodOverflow)?;
         }
@@ -115,10 +133,20 @@ impl StockpileOperation {
         use std::hash::Hash;
         self.destination.hash(hasher);
         self.default_mode.hash(hasher);
+        self.simultaneous.hash(hasher);
+        self.rest_h.to_bits().hash(hasher);
         for (period, mode) in &self.periods {
             period.hash(hasher);
             mode.hash(hasher);
         }
+    }
+}
+
+pub(crate) fn checked_rest(hours: f64) -> ScheduleResult<f64> {
+    if hours.is_finite() && hours >= 0.0 {
+        Ok(hours)
+    } else {
+        Err(ScheduleError::InvalidExperimentSetting)
     }
 }
 

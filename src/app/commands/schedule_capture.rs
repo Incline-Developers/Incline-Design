@@ -661,6 +661,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
                 modes
             },
+            exclusive: !plan.stockpile_operation(*project_id).simultaneous,
+            rest_h: plan.stockpile_operation(*project_id).rest_h,
+            last_receipt_h: None,
+            chunk_closed_h: Vec::new(),
         };
         match representation {
             StockpileRepresentation::NotConfigured => unreachable!("refused above"),

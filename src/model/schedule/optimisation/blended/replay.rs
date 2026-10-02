@@ -891,6 +891,7 @@ fn replay_pile(
     let input = checker.input;
     let (mut open_t, mut open_q) = pile.total_opening(grades);
     let ceilings = super::input::grade_ceilings(input);
+    let mut last_receipt_h = pile.last_receipt_h;
 
     for interval in &input.intervals {
         if checker.cancelled() {
@@ -898,7 +899,9 @@ fn replay_pile(
         }
         let k = interval.index;
         let interval_duration = interval.duration_h();
-        openings.insert((pile.id, k), open_t);
+        // An unchunked pile still resting has no work for a reclaim bar.
+        let resting = pile.chunks.is_empty() && last_receipt_h.is_some_and(|received_h| !pile.rested(received_h, *interval));
+        openings.insert((pile.id, k), if resting { 0.0 } else { open_t });
 
         // Receipts and reclaims inside this interval, from the rows alone.
         let mut received_t = 0.0;
@@ -949,6 +952,19 @@ fn replay_pile(
                     *slot += row.tonnes_t;
                 }
             }
+        }
+
+        if resting {
+            checker.breach(&format!("pile {} reclaim before its rest, interval {k}", pile.id.0), reclaimed_t, 0.0);
+        }
+        if pile.exclusive && received_t > REPLAY_TOLERANCE_T && reclaimed_t > REPLAY_TOLERANCE_T {
+            checker.report.issues.push(format!(
+                "pile {} received {received_t:.6} t and was reclaimed {reclaimed_t:.6} t in interval {k}, but may not do both at once",
+                pile.id.0
+            ));
+        }
+        if received_t > super::input::REST_RECEIPT_T {
+            last_receipt_h = Some(interval.end_h);
         }
 
         // The authored mode of the interval's day.
@@ -1331,10 +1347,30 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             }
         }
 
+        // When each chunk closed, from the published rows, so its rest can
+        // be judged: a chunk closed from the start closed when the pile says.
+        let closed_since: Vec<Option<f64>> = (0..count)
+            .map(|chunk| {
+                if pile.chunk_starts_closed(chunk) {
+                    return Some(pile.chunk_closed_h.get(chunk).copied().flatten().unwrap_or(f64::NEG_INFINITY));
+                }
+                solution
+                    .chunks
+                    .iter()
+                    .filter(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.closed)
+                    .map(|entry| entry.interval)
+                    .min()
+                    .and_then(|first| checker.input.intervals.get(first))
+                    .map(|interval| interval.start_h)
+            })
+            .collect();
         for interval in 0..checker.input.intervals.len() {
             if checker.cancelled() {
                 return drawn;
             }
+            let at = checker.input.intervals[interval];
+            // Closed, and closed for the pile's rest.
+            let released = |chunk: usize, entry: &ChunkRow| entry.closed && closed_since[chunk].is_some_and(|closed_h| pile.rested(closed_h, at));
             let row = |chunk: usize| -> Option<ChunkRow> {
                 solution
                     .chunks
@@ -1371,6 +1407,12 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                             pile.id.0, state.received_t
                         ));
                     }
+                }
+                if state.closed && !released(chunk, &state) && state.reclaimed_t > dust {
+                    checker
+                        .report
+                        .issues
+                        .push(format!("pile {} chunk {chunk} was reclaimed in interval {interval} before its rest", pile.id.0));
                 }
                 if !state.closed && state.reclaimed_t > REPLAY_TOLERANCE_T {
                     if state.reclaimed_t <= dust {
@@ -1412,7 +1454,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                         }
                         crate::model::schedule::optimisation::ReclaimOrder::Lifo => {
                             for later in (chunk + 1)..count {
-                                if row(later).is_some_and(|entry| entry.closed && entry.open_t > dust) {
+                                if row(later).is_some_and(|entry| released(later, &entry) && entry.open_t > dust) {
                                     checker.report.issues.push(format!(
                                         "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while released chunk {later} still held material",
                                         pile.id.0

@@ -4969,6 +4969,7 @@ impl UiCommand {
                 ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
                 ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
                 ScheduleEdit::DuplicateTruckClass(id) => report(tr!("truck-duplicate-class"), format!("{id:?}")),
@@ -5834,8 +5835,10 @@ pub(crate) struct ScheduleDestinationDraft {
     pub(crate) id: crate::model::schedule::DestinationId,
     /// What the project held when this draft was seeded, so an edit made
     /// elsewhere replaces the draft rather than being overwritten by it.
-    pub(crate) source: (String, Option<f64>, Option<f64>, u64),
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64, u64),
     pub(crate) name: String,
+    /// A stockpile's rest before reclaim, in hours.
+    pub(crate) rest: String,
     pub(crate) capacity: String,
     /// A crusher's default daily budget, blank for unlimited.
     pub(crate) crusher_default: String,
@@ -6141,6 +6144,13 @@ pub(crate) enum ScheduleEdit {
     /// Set stockpile Mode cells in the Calendar, as one undo step.
     SetPileModeCells {
         edits: Vec<crate::model::schedule::stockpile_operation::PileModeCellEdit>,
+    },
+    /// Set whether a stockpile may build and reclaim at once, and how long
+    /// new material rests before reclaim.
+    SetStockpileOperating {
+        destination: crate::model::schedule::DestinationId,
+        simultaneous: bool,
+        rest_h: f64,
     },
     /// Add a routing rule at the end of the priority order.
     AddRule {

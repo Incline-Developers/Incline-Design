@@ -84,6 +84,11 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
             ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
             ScheduleEdit::SetPileModeCells { edits } => self.edit_schedule(|plan| plan.set_pile_mode_cells(&edits)),
+            ScheduleEdit::SetStockpileOperating {
+                destination,
+                simultaneous,
+                rest_h,
+            } => self.edit_schedule(|plan| plan.set_stockpile_operating(destination, simultaneous, rest_h)),
             ScheduleEdit::AddRule { name, destinations } => self.add_destination_rule(name, destinations),
             ScheduleEdit::DuplicateRule(rule) => self.duplicate_destination_rule(rule),
             ScheduleEdit::DeleteRule(rule) => self.delete_destination_rule(rule),

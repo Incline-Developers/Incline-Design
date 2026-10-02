@@ -123,6 +123,10 @@ pub(crate) struct Carry {
     /// A chunked pile's chunks: tonnes, contained quantity per grade, and
     /// whether the chunk is closed.
     chunks: BTreeMap<StockpileId, Vec<(f64, Vec<f64>, bool)>>,
+    /// End of the last interval each pile received in, for its rest.
+    last_receipt_h: BTreeMap<StockpileId, f64>,
+    /// When each chunk closed, for its rest; `None` for long enough ago.
+    chunk_closed_h: BTreeMap<StockpileId, Vec<Option<f64>>>,
     /// Keyed by task index; only bars with an authored cap.
     reclaim_left: BTreeMap<usize, f64>,
     dump_left: BTreeMap<DestinationId, f64>,
@@ -155,6 +159,13 @@ impl Carry {
                         .collect();
                     (pile.id, chunks)
                 })
+                .collect(),
+            last_receipt_h: input.piles.iter().filter_map(|pile| Some((pile.id, pile.last_receipt_h?))).collect(),
+            chunk_closed_h: input
+                .piles
+                .iter()
+                .filter(|pile| !pile.chunks.is_empty())
+                .map(|pile| (pile.id, (0..pile.chunks.len()).map(|c| pile.chunk_closed_h.get(c).copied().flatten()).collect()))
                 .collect(),
             reclaim_left: input
                 .tasks
@@ -270,6 +281,10 @@ impl Carry {
                         chunk_opening: chunks.iter().map(|(tonnes, contained, _)| (*tonnes, contained.clone())).collect(),
                         chunk_closed: chunks.iter().map(|(_, _, closed)| *closed).collect(),
                         modes: pile.modes.clone(),
+                        exclusive: pile.exclusive,
+                        rest_h: pile.rest_h,
+                        last_receipt_h: self.last_receipt_h.get(&pile.id).copied().or(pile.last_receipt_h),
+                        chunk_closed_h: self.chunk_closed_h.get(&pile.id).cloned().unwrap_or_else(|| pile.chunk_closed_h.clone()),
                     };
                 }
                 let (tonnes, contained) = self.piles.get(&pile.id).cloned().unwrap_or_else(|| pile.total_opening(grades));
@@ -283,6 +298,10 @@ impl Carry {
                     chunk_opening: Vec::new(),
                     chunk_closed: Vec::new(),
                     modes: pile.modes.clone(),
+                    exclusive: pile.exclusive,
+                    rest_h: pile.rest_h,
+                    last_receipt_h: self.last_receipt_h.get(&pile.id).copied().or(pile.last_receipt_h),
+                    chunk_closed_h: Vec::new(),
                 }
             })
             .collect();
@@ -326,6 +345,7 @@ impl Carry {
     /// Advance past a window's kept intervals. `solution` and `replay` are
     /// the window's own, in its local interval numbering.
     pub(crate) fn advance(&mut self, full: &BlendInput, window: Window, solution: &BlendSolution, replay: &ReplayReport) {
+        let mut received: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
         for row in solution.movements.iter().filter(|row| row.interval < window.committed) {
             let Some(candidate) = full.movements.get(row.candidate) else { continue };
             if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
@@ -349,6 +369,9 @@ impl Carry {
             if let Some(left) = self.dump_left.get_mut(&candidate.destination) {
                 *left -= row.tonnes_t;
             }
+            if let Some(DestinationKind::Stockpile(pile)) = full.destinations.iter().find(|destination| destination.id == candidate.destination).map(|d| d.kind) {
+                *received.entry((pile, row.interval)).or_default() += row.tonnes_t;
+            }
             if full
                 .destinations
                 .iter()
@@ -356,6 +379,14 @@ impl Carry {
                 && let Some(interval) = full.intervals.get(window.first + row.interval)
             {
                 *self.crusher_used.entry((candidate.destination, interval.day() as usize)).or_default() += row.tonnes_t;
+            }
+        }
+        for ((pile, interval), tonnes) in received {
+            if tonnes > super::input::REST_RECEIPT_T
+                && let Some(interval) = full.intervals.get(window.first + interval)
+            {
+                let last = self.last_receipt_h.entry(pile).or_insert(interval.end_h);
+                *last = last.max(interval.end_h);
             }
         }
         super::replay::accumulate_target_receipts(
@@ -376,7 +407,21 @@ impl Carry {
                 self.piles.insert(pile.id, (tonnes, contained));
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
+            let closed_h = self.chunk_closed_h.entry(pile.id).or_insert_with(|| vec![None; pile.chunks.len()]);
             for (c, chunk) in chunks.iter_mut().enumerate() {
+                // Closed in this window: when, for its rest.
+                if !chunk.2
+                    && let Some(first) = solution
+                        .chunks
+                        .iter()
+                        .filter(|row| row.pile == pile.id && row.chunk == c && row.closed && row.interval < window.committed)
+                        .map(|row| row.interval)
+                        .min()
+                    && let Some(interval) = full.intervals.get(window.first + first)
+                    && let Some(slot) = closed_h.get_mut(c)
+                {
+                    *slot = Some(interval.start_h);
+                }
                 if let Some((tonnes, contained)) = replay.chunk_intervals.get(&(pile.id, c, last)) {
                     // Never above the chunk's capacity: the model's own
                     // opening row would otherwise have no solution for a

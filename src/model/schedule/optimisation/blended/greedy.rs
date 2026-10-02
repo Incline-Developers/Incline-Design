@@ -63,12 +63,12 @@
 //! chunk; the dispatcher never does, which is what kept it out of the dead end
 //! where every chunk closed early and the diggers had nowhere to deliver.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use highs::{Col, HighsModelStatus, RowProblem, Sense};
 
 use super::{
-    input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, authored_tasks, interval_rate, task_active, task_authorises},
+    input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, authored_tasks, interval_rate, task_active, task_authorises},
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow},
 };
 use crate::model::schedule::optimisation::{
@@ -112,6 +112,11 @@ struct State<'a> {
     /// What each dump has taken, and each crusher day.
     dumped: BTreeMap<DestinationId, f64>,
     crushed: BTreeMap<(DestinationId, u32), f64>,
+    /// End of the last interval each pile received in, for its rest.
+    last_receipt_h: BTreeMap<StockpileId, f64>,
+    /// Piles that may not build and reclaim at once, closed to deliveries
+    /// this interval because a reclaim bar is drawing them.
+    blocked: BTreeSet<StockpileId>,
     /// Keyed by task index.
     reclaimed: BTreeMap<usize, f64>,
     /// Dig candidates by (loader, block, material) and reclaim candidates
@@ -133,6 +138,8 @@ struct Chunk {
     held_t: f64,
     held_q: Vec<f64>,
     closed: bool,
+    /// When it closed, for its rest; `None` for long enough ago.
+    closed_h: Option<f64>,
 }
 
 /// What a pile releases to reclaim in an interval.
@@ -222,6 +229,8 @@ impl<'a> State<'a> {
             chunk_rows: Vec::new(),
             dumped: BTreeMap::new(),
             crushed: BTreeMap::new(),
+            last_receipt_h: input.piles.iter().filter_map(|pile| Some((pile.id, pile.last_receipt_h?))).collect(),
+            blocked: BTreeSet::new(),
             reclaimed: BTreeMap::new(),
             digs,
             reclaims,
@@ -273,7 +282,43 @@ impl<'a> State<'a> {
         // spare, open the next one and solve again with the finished block
         // held finished. The earlier answer stays feasible, so no re-solve is
         // worth less.
+        // A pile that may not build and reclaim at once gives the hour to
+        // the reclaim bar drawing it. One that the bar then leaves untouched
+        // is opened again, so the hour is not lost to nothing.
+        self.blocked = bars
+            .iter()
+            .filter_map(|bar| match &input.tasks[bar.task].kind {
+                TaskKind::Reclaim { approved_sources, .. } => Some(approved_sources),
+                _ => None,
+            })
+            .flatten()
+            .copied()
+            .filter(|pile| {
+                input.piles.iter().any(|entry| entry.id == *pile && entry.exclusive)
+                    && self.reclaims(*pile, interval)
+                    && self.released(*pile, interval).is_some_and(|released| released.tonnes > NEGLIGIBLE_T)
+            })
+            .collect();
         let mut plan = self.solve(interval, &bars)?;
+        if !self.blocked.is_empty() {
+            let idle: Vec<StockpileId> = self
+                .blocked
+                .iter()
+                .copied()
+                .filter(|pile| {
+                    plan.rows
+                        .iter()
+                        .filter(|(index, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
+                        .map(|(_, tonnes)| tonnes)
+                        .sum::<f64>()
+                        <= NEGLIGIBLE_T
+                })
+                .collect();
+            if !idle.is_empty() {
+                self.blocked.retain(|pile| !idle.contains(pile));
+                plan = self.solve(interval, &bars)?;
+            }
+        }
         loop {
             let mut grew = false;
             for bar in &mut bars {
@@ -370,7 +415,7 @@ impl<'a> State<'a> {
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
-                        if !self.reclaims(*pile, interval) || self.released(*pile).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
+                        if !self.reclaims(*pile, interval) || self.released(*pile, interval).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
                             continue;
                         }
                         for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
@@ -389,7 +434,7 @@ impl<'a> State<'a> {
             problem.add_row(..=self.ground.get(&block).copied().unwrap_or(0.0), terms);
         }
         for (pile, terms) in pile_draw {
-            problem.add_row(..=self.released(pile).map_or(0.0, |released| released.tonnes), terms);
+            problem.add_row(..=self.released(pile, interval).map_or(0.0, |released| released.tonnes), terms);
         }
 
         // Shared room: truck hours per class, and each destination's.
@@ -432,7 +477,7 @@ impl<'a> State<'a> {
                         continue;
                     }
                     let fraction = match movement.source {
-                        SourceId::Stockpile(pile) if movement.activity == Activity::Reclaim => self.released(pile).and_then(|r| r.blend.get(target.grade).copied()),
+                        SourceId::Stockpile(pile) if movement.activity == Activity::Reclaim => self.released(pile, interval).and_then(|r| r.blend.get(target.grade).copied()),
                         _ => input.grades.fraction(movement.material, target.grade),
                     }
                     .unwrap_or(0.0);
@@ -514,7 +559,7 @@ impl<'a> State<'a> {
         // empties it, so a drained chunk reads as empty to the order rules.
         let mut released: BTreeMap<StockpileId, Released> = BTreeMap::new();
         for pile in &input.piles {
-            if let Some(found) = self.released(pile.id) {
+            if let Some(found) = self.released(pile.id, interval) {
                 released.insert(pile.id, found);
             }
         }
@@ -581,6 +626,11 @@ impl<'a> State<'a> {
                 }
             }
         }
+        for (pile, (received_t, _)) in &received {
+            if *received_t > REST_RECEIPT_T {
+                self.last_receipt_h.insert(*pile, interval.end_h);
+            }
+        }
         for (pile, (open_t, open_q)) in &mut self.piles {
             if let Some(chunks) = self.chunks.get_mut(pile) {
                 let reclaimed = drawn.get(pile).copied().unwrap_or(0.0);
@@ -622,6 +672,7 @@ impl<'a> State<'a> {
                     // Full, it closes for the next interval.
                     if !chunk.closed && chunk.capacity_t - chunk.held_t <= SNAP_T {
                         chunk.closed = true;
+                        chunk.closed_h = Some(interval.end_h);
                     }
                 }
                 *open_t = chunks.iter().map(|chunk| chunk.held_t).sum();
@@ -648,9 +699,13 @@ impl<'a> State<'a> {
     /// What `pile` releases to reclaim this interval: an unchunked pile its
     /// whole opening blend, a chunked one the chunk its order releases, if
     /// any.
-    fn released(&self, pile: StockpileId) -> Option<Released> {
+    fn released(&self, pile: StockpileId, interval: Interval) -> Option<Released> {
         let blend = |tonnes: f64, contained: &[f64]| contained.iter().map(|value| if tonnes > 0.0 { value / tonnes } else { 0.0 }).collect();
+        let entry = self.input.piles.iter().find(|entry| entry.id == pile)?;
         let Some(chunks) = self.chunks.get(&pile) else {
+            if !self.rested(pile, interval) {
+                return None;
+            }
             let (open_t, open_q) = self.piles.get(&pile)?;
             return Some(Released {
                 chunk: None,
@@ -658,10 +713,11 @@ impl<'a> State<'a> {
                 blend: blend(*open_t, open_q),
             });
         };
-        let order = self.input.piles.iter().find(|entry| entry.id == pile)?.order;
-        let index = match order {
-            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| chunks[index].closed)?,
-            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| chunk.closed && chunk.held_t > FINISHED_T)?,
+        // A closed chunk still resting is not yet released.
+        let released = |chunk: &Chunk| chunk.closed && chunk.closed_h.is_none_or(|closed_h| entry.rested(closed_h, interval));
+        let index = match entry.order {
+            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| released(&chunks[index]))?,
+            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| released(chunk) && chunk.held_t > FINISHED_T)?,
         };
         let chunk = &chunks[index];
         Some(Released {
@@ -699,16 +755,28 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Whether `pile`'s authored mode lets it be reclaimed in `interval`.
+    /// Whether `pile` may be reclaimed in `interval`: its authored mode
+    /// allows it and, unchunked, its newest material has rested. A chunked
+    /// pile's rest is its chunks' own, judged where a chunk is released.
     fn reclaims(&self, pile: StockpileId, interval: Interval) -> bool {
-        self.input.piles.iter().find(|entry| entry.id == pile).is_some_and(|entry| entry.reclaims(interval))
+        self.input.piles.iter().find(|entry| entry.id == pile).is_some_and(|entry| entry.reclaims(interval)) && self.rested(pile, interval)
+    }
+
+    /// Whether an unchunked pile's newest material has rested by `interval`.
+    fn rested(&self, pile: StockpileId, interval: Interval) -> bool {
+        let Some(entry) = self.input.piles.iter().find(|entry| entry.id == pile) else {
+            return false;
+        };
+        !entry.chunks.is_empty() || self.last_receipt_h.get(&pile).is_none_or(|received_h| entry.rested(*received_h, interval))
     }
 
     /// Reclaim candidates for one loader and pile under `bar`, admitted on
     /// the blend the pile releases with the formulation's margin to spare.
     fn reclaim_candidates(&self, loader: usize, pile: StockpileId, bar: usize, interval: Interval) -> Vec<usize> {
         let input = self.input;
-        let Some(Released { tonnes, blend, .. }) = self.released(pile) else { return Vec::new() };
+        let Some(Released { tonnes, blend, .. }) = self.released(pile, interval) else {
+            return Vec::new();
+        };
         let band = GRADE_MARGIN + GRADE_CUSHION_T / tonnes.max(GRADE_CUSHION_T) + 1e-9;
         self.reclaims
             .get(&(loader, pile))
@@ -766,7 +834,12 @@ impl<'a> State<'a> {
             // when a delivering loader works blocks back to back.
             // A chunked pile also takes no more than its receiving chunk's room.
             DestinationKind::Stockpile(pile) => {
-                let Some(target) = input.piles.iter().find(|entry| entry.id == pile).filter(|entry| entry.builds(interval)) else {
+                let Some(target) = input
+                    .piles
+                    .iter()
+                    .find(|entry| entry.id == pile)
+                    .filter(|entry| entry.builds(interval) && !self.blocked.contains(&pile))
+                else {
                     return 0.0;
                 };
                 let room = target.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
@@ -823,6 +896,7 @@ fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
                 held_t,
                 held_q,
                 closed: pile.chunk_starts_closed(index),
+                closed_h: pile.chunk_closed_h.get(index).copied().flatten(),
             }
         })
         .collect()
