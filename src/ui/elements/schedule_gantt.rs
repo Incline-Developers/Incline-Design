@@ -2,7 +2,9 @@
 //! elapsed project time.
 //!
 //! Rows, the ruler, the navigation - and the authored bars, which is where a
-//! bar is created, named, copied, assigned, laned and positioned.
+//! bar is created, named, copied, assigned, laned and positioned. A time
+//! slider always stands across the timeline, shared with Animate's scrubber;
+//! the Inspector beside it ([`super::schedule_inspector`]) reads that instant.
 //!
 //! An authored bar is a **work window**: the period its loader is allowed to
 //! work that dig sequence or reclaim. What is actually worked in that period
@@ -164,7 +166,19 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
                 // Names are resolved here, at draw time, by stable id: a
                 // rename relabels a calculated span without recalculating it.
                 let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-                draw_canvas(ui, canvas, editor, &plan, &destinations, session, commands);
+                let inspector_width = super::schedule_inspector::INSPECTOR_WIDTH;
+                let inspect = editor.gantt_inspector_open && canvas.width() >= inspector_width + super::schedule_inspector::MIN_TIMELINE_WIDTH;
+                let timeline = if inspect {
+                    egui::Rect::from_min_max(canvas.min, egui::pos2(canvas.right() - inspector_width, canvas.bottom()))
+                } else {
+                    canvas
+                };
+                draw_canvas(ui, timeline, editor, &plan, &destinations, session, commands);
+                if inspect {
+                    let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
+                    let panel = egui::Rect::from_min_max(egui::pos2(timeline.right(), canvas.top()), canvas.max);
+                    super::schedule_inspector::draw_inspector(ui, panel, editor, &plan, &destinations, &fields);
+                }
             }
             ui.allocate_rect(available, egui::Sense::hover());
         })
@@ -617,6 +631,9 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
             editor.gantt.reset_to(extent);
         }
         ui.add_space(8.0);
+        ui.toggle_value(&mut editor.gantt_inspector_open, tr!("gantt-inspector"))
+            .on_hover_text(tr!("gantt-inspector-help"));
+        ui.add_space(8.0);
         ui.label(
             egui::RichText::new(tr!(
                 "gantt-range",
@@ -739,11 +756,10 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
     draw_palette_drop(ui, body, editor, plan, &layout.rows, session, commands);
     draw_delay_drop_menu(ui, editor, plan, session, commands);
+    editor.schedule_result = schedule;
     // Over everything, because it marks an instant across all of it, and last
     // so its handle takes the pointer from the bars it crosses.
-    let horizon_h = schedule.as_deref().map_or(0.0, |schedule| schedule.requested_end_h);
-    editor.schedule_result = schedule;
-    draw_playhead(ui, ruler, body, editor, horizon_h);
+    draw_time_slider(ui, ruler, body, editor, interval, over_canvas);
 
     if plan.agents().is_empty() && layout.rows.is_empty() {
         centred_note(ui, body, tr!("gantt-empty-fleet"));
@@ -775,53 +791,145 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     }
 }
 
-/// Width of the playhead's grab strip, and the side of the tab that heads it.
-const PLAYHEAD_GRAB_W: f32 = 9.0;
-const PLAYHEAD_TAB: f32 = 12.0;
+/// Width of the slider line's grab strip across the rows.
+const SLIDER_GRAB_W: f32 = 9.0;
+/// Height of the slider's time label, which is also its handle in the ruler.
+const SLIDER_LABEL_H: f32 = 16.0;
 
-/// The animation playhead: one instant, marked across the whole timeline and
-/// dragged along it.
+/// Where a dragged slider lands: whole hours once the ruler counts in hours
+/// or coarser steps, quarter hours when zoomed in to single hours.
+fn snap_slider(seconds: f64, interval: f64) -> f64 {
+    let step = if interval > GanttView::HOUR { GanttView::HOUR } else { GanttView::HOUR / 4.0 };
+    ((seconds / step).round() * step).max(0.0)
+}
+
+/// The time slider: one instant, marked across the whole timeline.
 ///
-/// It is the Animate page's scrubber, seen from here - the two read and write
-/// the same elapsed time, so dragging it here is what moving that slider does.
-/// It appears only while there is a current result to scrub, which is exactly
-/// when that slider is live; with nothing calculated there is no instant for it
-/// to name.
-fn draw_playhead(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, editor: &mut EditorState, horizon_h: f64) {
-    if horizon_h <= 0.0 || !body.is_positive() {
+/// Always there, calculated schedule or not. It is the instant the Inspector
+/// reads and Animate's scrubber, seen from here - the three share one time -
+/// and it is where bar tools will act. Pressing anywhere on the ruler moves it
+/// there, dragging along the ruler or the line scrubs it, and the arrow keys
+/// step it an hour (a day with Shift) while the pointer is over the Gantt.
+/// Scrolled out of view, a label pinned to that edge of the ruler says where
+/// it is, and pressing it brings it back.
+fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui::Rect, editor: &mut EditorState, interval: f64, over_canvas: bool) {
+    if !body.is_positive() || !ruler.is_positive() {
         return;
     }
-    let time_h = editor.schedule_animation_time_h.clamp(0.0, horizon_h);
-    editor.schedule_animation_time_h = time_h;
-    let x = editor.gantt.x_of(time_h * GanttView::HOUR, body.left(), body.width());
-    // Scrolled out of the window: nothing is drawn, and nothing is grabbable
-    // either, rather than a handle pinned to the edge that names an instant
-    // that is not under it.
+    let color = ui.visuals().selection.stroke.color;
+    // Black or white, whichever reads on the label's fill in this theme.
+    let on_fill = |fill: egui::Color32| {
+        let luma = 0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
+        if luma > 150.0 { egui::Color32::BLACK } else { egui::Color32::WHITE }
+    };
+    let to_hours = |seconds: f64| seconds / GanttView::HOUR;
+
+    if over_canvas && ui.memory(|memory| memory.focused().is_none()) {
+        // Every press counts, each with its own Shift: several can land in
+        // one frame, and a held key repeats.
+        let step: f64 = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .map(|event| match event {
+                    egui::Event::Key {
+                        key, pressed: true, modifiers, ..
+                    } => {
+                        let unit = if modifiers.shift { 24.0 } else { 1.0 };
+                        match key {
+                            egui::Key::ArrowRight => unit,
+                            egui::Key::ArrowLeft => -unit,
+                            _ => 0.0,
+                        }
+                    }
+                    _ => 0.0,
+                })
+                .sum()
+        });
+        if step != 0.0 {
+            // Stepped from the whole hour, so a slider dropped at 14:15 steps
+            // to 15:00 rather than carrying the quarter along.
+            let from = if step > 0.0 { editor.schedule_time_h.floor() } else { editor.schedule_time_h.ceil() };
+            editor.schedule_time_h = (from + step).max(0.0);
+            // Followed when stepped past an edge, so the keys never walk it
+            // somewhere it cannot be seen.
+            let seconds = editor.schedule_time_h * GanttView::HOUR;
+            if seconds < editor.gantt.start_seconds || seconds > editor.gantt.end_seconds() {
+                editor.gantt.pan(seconds - editor.gantt.start_seconds - editor.gantt.span_seconds / 2.0);
+            }
+        }
+    }
+
+    let ruler_response = ui
+        .interact(ruler, ui.id().with("gantt_ruler"), egui::Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    // A click is read as well as a press: a quick one can go down and up
+    // inside a single frame.
+    if (ruler_response.is_pointer_button_down_on() || ruler_response.dragged() || ruler_response.clicked())
+        && let Some(pointer) = ruler_response.interact_pointer_pos().or_else(|| ui.input(|input| input.pointer.interact_pos()))
+    {
+        editor.schedule_time_h = to_hours(snap_slider(editor.gantt.seconds_at(pointer.x, body.left(), body.width()), interval));
+    }
+
+    let seconds = editor.schedule_time_h.max(0.0) * GanttView::HOUR;
+    let x = editor.gantt.x_of(seconds, body.left(), body.width());
+    let label = instant_label(seconds);
+    let font = egui::FontId::proportional(12.0);
+    let text_color = on_fill(color);
+    let galley = ui.painter().layout_no_wrap(label, font, text_color);
+    let label_w = galley.size().x + 12.0;
+    let label_top = ruler.top() + 2.0;
+
     if !(body.left()..=body.right()).contains(&x) {
+        // Out of view: a pinned label at the edge it lies beyond.
+        let left_side = x < body.left();
+        let arrow = if left_side { "‹ " } else { " ›" };
+        let galley = ui.painter().layout_no_wrap(
+            if left_side {
+                format!("{arrow}{}", instant_label(seconds))
+            } else {
+                format!("{}{arrow}", instant_label(seconds))
+            },
+            egui::FontId::proportional(12.0),
+            text_color,
+        );
+        let width = galley.size().x + 12.0;
+        let min_x = if left_side { ruler.left() + 2.0 } else { ruler.right() - 2.0 - width };
+        let pill = egui::Rect::from_min_size(egui::pos2(min_x, label_top), egui::vec2(width, SLIDER_LABEL_H));
+        let response = ui
+            .interact(pill, ui.id().with("gantt_slider_away"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(tr!("gantt-slider-away"));
+        if response.clicked() {
+            editor.gantt.pan(seconds - editor.gantt.start_seconds - editor.gantt.span_seconds / 2.0);
+        }
+        let fill = if response.hovered() { color } else { color.gamma_multiply(0.8) };
+        ui.painter().rect_filled(pill, GROUP_CORNER_RADIUS, fill);
+        ui.painter().galley(pill.center() - galley.size() / 2.0, galley, text_color);
         return;
     }
-    let grab = egui::Rect::from_min_max(egui::pos2(x - PLAYHEAD_GRAB_W / 2.0, ruler.top()), egui::pos2(x + PLAYHEAD_GRAB_W / 2.0, body.bottom()));
+
+    let grab = egui::Rect::from_min_max(egui::pos2(x - SLIDER_GRAB_W / 2.0, ruler.bottom()), egui::pos2(x + SLIDER_GRAB_W / 2.0, body.bottom()));
     let response = ui
-        .interact(grab, ui.id().with("gantt_playhead"), egui::Sense::drag())
+        .interact(grab, ui.id().with("gantt_slider"), egui::Sense::drag())
         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     if response.dragged()
         && let Some(pointer) = response.interact_pointer_pos()
     {
-        let seconds = editor.gantt.seconds_at(pointer.x, body.left(), body.width());
-        editor.schedule_animation_time_h = (seconds / GanttView::HOUR).clamp(0.0, horizon_h);
+        editor.schedule_time_h = to_hours(snap_slider(editor.gantt.seconds_at(pointer.x, body.left(), body.width()), interval));
     }
-    let color = if response.dragged() || response.hovered() {
-        ui.visuals().selection.stroke.color
-    } else {
-        ui.visuals().selection.stroke.color.gamma_multiply(0.8)
-    };
+    let active = response.dragged() || response.hovered() || ruler_response.dragged() || ruler_response.hovered();
+    let line = if active { color } else { color.gamma_multiply(0.8) };
+    // Re-read: a press this frame has moved it.
+    let x = editor.gantt.x_of(editor.schedule_time_h * GanttView::HOUR, body.left(), body.width());
     let painter = ui.painter();
-    painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, body.bottom())], egui::Stroke::new(1.5, color));
-    // A tab in the ruler rather than on the bars: the handle has to be
-    // grabbable at any zoom, and the rows are where the work is read.
-    let tab = egui::Rect::from_min_size(egui::pos2(x - PLAYHEAD_TAB / 2.0, ruler.top()), egui::vec2(PLAYHEAD_TAB, PLAYHEAD_TAB * 0.8));
-    painter.rect_filled(tab, 2.0, color);
-    response.on_hover_text(tr!("gantt-playhead", at = instant_label(time_h * GanttView::HOUR)));
+    painter.line_segment([egui::pos2(x, label_top + SLIDER_LABEL_H), egui::pos2(x, body.bottom())], egui::Stroke::new(1.5, line));
+    // The label is the handle, kept inside the ruler at either end.
+    let left = (x - label_w / 2.0).clamp(ruler.left() + 1.0, (ruler.right() - label_w - 1.0).max(ruler.left() + 1.0));
+    let pill = egui::Rect::from_min_size(egui::pos2(left, label_top), egui::vec2(label_w, SLIDER_LABEL_H));
+    painter.rect_filled(pill, GROUP_CORNER_RADIUS, line);
+    let galley = painter.layout_no_wrap(instant_label(editor.schedule_time_h * GanttView::HOUR), egui::FontId::proportional(12.0), text_color);
+    painter.galley(pill.center() - galley.size() / 2.0, galley, text_color);
 }
 
 /// The time ruler: minor ticks with their labels, and - while the minor ticks
@@ -1067,17 +1175,17 @@ fn span_rect(view: GanttView, body: egui::Rect, start_h: f64, end_h: f64, top: f
 ///
 /// One colour, not a palette keyed by bar or block: the band sits on the bar
 /// it belongs to, and which block it was on is the hover's to say.
-const WORKING_COLOR: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0xD6);
+pub(super) const WORKING_COLOR: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0xD6);
 /// Reclaim: the same band in a second hue, so drawing a pile down never reads
 /// as digging ground.
-const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB5, 0x8A);
+pub(super) const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB5, 0x8A);
 /// Idle: a muted amber along the foot of the row, distinct from the working
 /// band above the bar at a glance and at a small size. One colour whatever
 /// the reason; the reason is the hover's to say.
-const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
+pub(super) const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
 
 /// The short name and the explanation of one idle reason.
-fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
+pub(super) fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
     match reason {
         Some(IdleReason::Delayed) => (tr!("idle-delayed"), tr!("idle-delayed-note")),
         Some(IdleReason::Unavailable) => (tr!("idle-unavailable"), tr!("idle-unavailable-note")),
@@ -1201,7 +1309,25 @@ fn source_label(source: WorkSource, bar: &ScheduleBar, report: Option<&ScheduleB
     }
 }
 
-fn destination_label(id: DestinationId, destinations: &[DestinationView]) -> String {
+/// A source as a planner names it: a block with the area it lies in.
+pub(super) fn qualified_source_label(
+    source: WorkSource,
+    bar: &ScheduleBar,
+    report: Option<&ScheduleBarView>,
+    schedule: &CalculatedSchedule,
+    destinations: &[DestinationView],
+) -> String {
+    let name = source_label(source, bar, report, schedule, destinations);
+    match source {
+        WorkSource::Block(block) => match member_of(schedule, bar, report, block).and_then(|member| member.area.clone()) {
+            Some(area) => format!("{area} · {name}"),
+            None => name,
+        },
+        WorkSource::Stockpile(_) => name,
+    }
+}
+
+pub(super) fn destination_label(id: DestinationId, destinations: &[DestinationView]) -> String {
     destinations
         .iter()
         .find(|entry| entry.id == id)
@@ -1215,7 +1341,7 @@ fn destination_label(id: DestinationId, destinations: &[DestinationView]) -> Str
 ///
 /// Built only on hover: it scans the result, and nothing that scans the
 /// result belongs on the paint path.
-fn execution_tooltip(
+pub(super) fn execution_tooltip(
     execution: &Execution,
     bar: &ScheduleBar,
     report: Option<&ScheduleBarView>,
@@ -1227,14 +1353,7 @@ fn execution_tooltip(
         Activity::Dig => tr!("schedule-dispatch-execution"),
         Activity::Reclaim => tr!("schedule-dispatch-reclaim"),
     };
-    let source = source_label(execution.source, bar, report, schedule, destinations);
-    let source = match execution.source {
-        WorkSource::Block(block) => match member_of(schedule, bar, report, block).and_then(|member| member.area.clone()) {
-            Some(area) => format!("{area} · {source}"),
-            None => source,
-        },
-        WorkSource::Stockpile(_) => source,
-    };
+    let source = qualified_source_label(execution.source, bar, report, schedule, destinations);
     let mut lines = vec![
         tr!("schedule-dispatch-heading", kind = kind, source = source),
         tr_format!(

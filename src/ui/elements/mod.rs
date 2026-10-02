@@ -23,6 +23,7 @@ pub(crate) mod schedule_cashflow;
 pub(crate) mod schedule_delays;
 pub(crate) mod schedule_destinations;
 pub(crate) mod schedule_gantt;
+pub(crate) mod schedule_inspector;
 /// The schedule optimiser's settings: horizon, resolution, solve limits,
 /// grade units and stockpile representation.
 pub(crate) mod schedule_optimisation;

@@ -137,7 +137,6 @@ impl TruckFleet {
     /// Units scaled by the two time percentages: the fleet actually turning a
     /// wheel. Both percentages apply once, to truck supply, and never to a
     /// loader's rate.
-    #[allow(dead_code, reason = "the optimised run in a later stage is what consumes truck supply")]
     pub(crate) fn effective_units(self) -> f64 {
         f64::from(self.units) * self.availability * self.utilisation
     }

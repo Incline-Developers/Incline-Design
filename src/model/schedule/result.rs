@@ -851,6 +851,51 @@ impl CalculatedSchedule {
             .filter(move |draw| draw.pile == pile && draw.start_h < end_h - 1e-9 && draw.end_h > start_h + 1e-9)
     }
 
+    /// The spans being worked at `hour`. Half-open, so an instant on a
+    /// boundary belongs to the span that starts there.
+    pub(crate) fn executions_at(&self, hour: f64) -> impl Iterator<Item = &Execution> {
+        self.executions.iter().filter(move |execution| execution.start_h <= hour && hour < execution.end_h)
+    }
+
+    /// The movements under way at `hour`, half-open like [`Self::executions_at`].
+    pub(crate) fn deliveries_at(&self, hour: f64) -> impl Iterator<Item = &Delivery> {
+        self.deliveries.iter().filter(move |delivery| delivery.start_h <= hour && hour < delivery.end_h)
+    }
+
+    /// The idle span one loader is in at `hour`, if it is idle then.
+    pub(crate) fn idle_at(&self, agent: LoaderAgentId, hour: f64) -> Option<&IdleSpan> {
+        self.idle.iter().find(|span| span.agent == agent && span.start_h <= hour && hour < span.end_h)
+    }
+
+    /// Tonnes and contained quantity per grade a destination received over
+    /// `[from_h, to_h)`, each delivery counted for the part of it inside.
+    pub(crate) fn received_between(&self, destination: DestinationId, from_h: f64, to_h: f64) -> (f64, Vec<f64>) {
+        let mut tonnes = 0.0;
+        let mut contained = vec![0.0; self.grades.len()];
+        for delivery in self.deliveries.iter().filter(|delivery| delivery.destination == destination) {
+            let duration = delivery.end_h - delivery.start_h;
+            let overlap = delivery.end_h.min(to_h) - delivery.start_h.max(from_h);
+            if duration <= 0.0 || overlap <= 0.0 {
+                continue;
+            }
+            let share = overlap / duration;
+            tonnes += delivery.tonnes * share;
+            for (total, quantity) in contained.iter_mut().zip(&delivery.contained) {
+                *total += quantity * share;
+            }
+        }
+        (tonnes, contained)
+    }
+
+    /// When a destination last finished receiving, at or before `hour`.
+    pub(crate) fn last_receipt_before(&self, destination: DestinationId, hour: f64) -> Option<f64> {
+        self.deliveries
+            .iter()
+            .filter(|delivery| delivery.destination == destination && delivery.tonnes > 0.0 && delivery.end_h <= hour + 1e-9)
+            .map(|delivery| delivery.end_h)
+            .reduce(f64::max)
+    }
+
     /// The last hour anything was worked, for framing a view.
     pub(crate) fn last_activity_h(&self) -> f64 {
         self.executions.iter().map(|execution| execution.end_h).fold(0.0, f64::max)

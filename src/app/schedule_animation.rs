@@ -245,12 +245,6 @@ impl Visibility {
 #[derive(Default)]
 pub(crate) struct ScheduleAnimation {
     identity: Option<Identity>,
-    /// The run the time cursor was last rewound for.
-    ///
-    /// Tracked apart from `identity` because it is maintained whether or not
-    /// the Animate page is open: the Gantt sets the same cursor, so arriving
-    /// here must not rewind what was set there. Only a new result does that.
-    cursor_identity: Option<Identity>,
     index: Option<AnimationIndex>,
     source: Vec<SourceBlock>,
     /// Fingerprint of the calculated solids `source` was taken from, so it is
@@ -329,6 +323,12 @@ impl crate::app::App<'_> {
         self.editor.schedule_animation_pending = false;
     }
 
+    /// The instant the view is cut for: the schedule's slider, held inside
+    /// the calculated horizon.
+    fn animation_time_h(&self) -> f64 {
+        self.editor.schedule_time_h.clamp(0.0, self.editor.schedule_animation_horizon_h.max(0.0))
+    }
+
     /// Refresh the animation view without starting either planning pipeline.
     pub(crate) fn sync_schedule_animation(&mut self) {
         let animate = self.editor.is_schedule_animation();
@@ -336,6 +336,8 @@ impl crate::app::App<'_> {
         if self.schedule_animation.identity.is_some_and(|identity| Some(identity.runtime) != runtime) {
             self.abandon_animation_geometry();
             self.schedule_animation = ScheduleAnimation::default();
+            // Another project's instant means nothing here.
+            self.editor.schedule_time_h = 0.0;
         }
         // Read from the held calculation rather than copying it. It owns the
         // execution log, the idle log and the ledger; cloning all three once a
@@ -348,14 +350,6 @@ impl crate::app::App<'_> {
             solids_generation: calculation.generation,
         });
 
-        // Ahead of the page gate, because the cursor is not this page's: the
-        // Gantt's playhead is the same instant, and it is set there while this
-        // page is closed. A new result rewinds it; opening the page does not.
-        if current && self.schedule_animation.cursor_identity != identity {
-            self.schedule_animation.cursor_identity = identity;
-            self.editor.schedule_animation_time_h = 0.0;
-        }
-
         if !animate {
             // Geometry for a page nobody is looking at, which would publish
             // into the scene and invalidate every cache in it when it landed.
@@ -366,11 +360,9 @@ impl crate::app::App<'_> {
         }
 
         if current && self.schedule_animation.identity != identity {
-            let cursor_identity = self.schedule_animation.cursor_identity;
             self.abandon_animation_geometry();
             self.schedule_animation = ScheduleAnimation::default();
             self.schedule_animation.identity = identity;
-            self.schedule_animation.cursor_identity = cursor_identity;
             // Built before the result is stored, so the borrow of the held
             // calculation ends before the animation state is written.
             let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(calculation));
@@ -426,7 +418,6 @@ impl crate::app::App<'_> {
                 self.abandon_animation_geometry();
             }
             self.schedule_animation.set_depleted(false);
-            self.editor.schedule_animation_time_h = 0.0;
             self.editor.schedule_animation_shown_h = 0.0;
             self.editor.schedule_animation_degraded = false;
             // Why the slider is off and what turns it back on. What the
@@ -444,9 +435,9 @@ impl crate::app::App<'_> {
             return;
         }
 
-        let horizon = self.editor.schedule_animation_horizon_h;
-        let time_h = self.editor.schedule_animation_time_h.clamp(0.0, horizon);
-        self.editor.schedule_animation_time_h = time_h;
+        // The slider itself is left where it is: the Gantt may hold it past
+        // the calculated horizon, and only the cut is bounded by it.
+        let time_h = self.animation_time_h();
         self.schedule_animation.set_depleted(true);
 
         // One batch in flight at a time, and the cursor's latest position
@@ -726,7 +717,7 @@ impl crate::app::App<'_> {
                 // frame - two scene rebuilds and two rounds of upload to end
                 // where the view already was. Dropped instead, and the frame
                 // asked for below finds the position settled.
-                if app.animation_is_current(app.editor.schedule_animation_time_h) {
+                if app.animation_is_current(app.animation_time_h()) {
                     app.redraw_requested = true;
                     return;
                 }

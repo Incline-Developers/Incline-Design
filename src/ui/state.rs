@@ -2675,7 +2675,12 @@ pub(crate) struct EditorState {
     pub(crate) schedule_animation_hidden_solids: HashSet<crate::model::SolidId>,
     pub(crate) schedule_animation_hidden_rows: Vec<SolidsViewRow>,
     pub(crate) schedule_animation_hidden_blasts: HashSet<BlastShapeRef>,
-    pub(crate) schedule_animation_time_h: f64,
+    /// The schedule's time slider, in hours from the origin: one instant
+    /// shared by the Gantt's slider, the Inspector beside it and Animate's
+    /// scrubber, so moving any of them moves the others. Session-only, and
+    /// kept across recalculations - a planner inspecting day 3 who edits a
+    /// bar is still looking at day 3 when the new schedule lands.
+    pub(crate) schedule_time_h: f64,
     /// The instant the geometry on screen was actually cut for, which trails
     /// the cursor while a batch is in flight.  The readout names this rather
     /// than the cursor, so the number never claims ground the view is not
@@ -2720,6 +2725,8 @@ pub(crate) struct EditorState {
     pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
+    /// Whether the Inspector is open beside the Gantt.
+    pub(crate) gantt_inspector_open: bool,
     pub(crate) schedule_calendar: ScheduleCalendarView,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
@@ -3786,7 +3793,7 @@ impl EditorState {
             schedule_animation_hidden_solids: HashSet::new(),
             schedule_animation_hidden_rows: Vec::new(),
             schedule_animation_hidden_blasts: HashSet::new(),
-            schedule_animation_time_h: 0.0,
+            schedule_time_h: 0.0,
             schedule_animation_shown_h: 0.0,
             schedule_animation_horizon_h: 0.0,
             schedule_animation_enabled: false,
@@ -3809,6 +3816,7 @@ impl EditorState {
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
+            gantt_inspector_open: true,
             schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
             survey: Default::default(),

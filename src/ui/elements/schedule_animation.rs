@@ -87,15 +87,15 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
 
             let band_height = 30.0;
             let (band, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), band_height), egui::Sense::hover());
-            paint_period_band(ui, band, horizon, editor.schedule_animation_time_h);
+            paint_period_band(ui, band, horizon, editor.schedule_time_h);
 
             ui.spacing_mut().slider_width = ui.available_width();
             ui.spacing_mut().interact_size.y = 28.0;
             ui.add_enabled(
                 editor.schedule_animation_enabled,
-                egui::Slider::new(&mut editor.schedule_animation_time_h, 0.0..=horizon.max(f64::EPSILON))
+                egui::Slider::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON))
                     .show_value(false)
-                    .clamping(egui::SliderClamping::Always),
+                    .clamping(egui::SliderClamping::Edits),
             );
         })
         .response
