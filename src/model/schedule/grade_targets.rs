@@ -18,9 +18,11 @@ impl<'de> Deserialize<'de> for Retired {
 }
 
 /// Every target is priced on one calendar day's receipts, aligned to hour 0.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 pub(crate) const TARGET_PERIOD_H: f64 = super::SCHEDULE_PERIOD_H;
 
 /// The calendar day an hour falls in.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 pub(crate) fn target_day(hour: f64) -> u32 {
     (hour / TARGET_PERIOD_H).floor() as u32
 }
@@ -67,6 +69,7 @@ impl GradeTarget {
         result
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn penalty(&self, tonnes: f64, contained: f64) -> f64 {
         self.hinges()
             .iter()

@@ -30,10 +30,12 @@ pub(crate) enum PileMode {
 impl PileMode {
     pub(crate) const ALL: [Self; 4] = [Self::BuildAndReclaim, Self::BuildOnly, Self::ReclaimOnly, Self::Off];
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn builds(self) -> bool {
         matches!(self, Self::BuildAndReclaim | Self::BuildOnly)
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn reclaims(self) -> bool {
         matches!(self, Self::BuildAndReclaim | Self::ReclaimOnly)
     }
