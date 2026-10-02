@@ -1464,6 +1464,28 @@ pub(crate) fn section_named_apart<'a>(sections: &'a [WorkingSection], field: &st
         .find(|section| section.field == field && same_name(&section.name, code) && !section.codes.iter().any(|held| held == code))
 }
 
+/// `sections` after `from` is renamed `to` in `field`: a section holding
+/// `from` takes `to` in its place, or beside it while an interval still holds
+/// `from`, so the renamed intervals keep their pick. A `to` some section of
+/// the field already holds stays where it is.
+pub(crate) fn sections_after_rename(sections: &[WorkingSection], field: &str, from: &str, to: &str, from_remains: bool) -> Vec<WorkingSection> {
+    let mut sections = sections.to_vec();
+    if sections.iter().any(|section| section.field == field && section.codes.iter().any(|code| code == to)) {
+        return sections;
+    }
+    for section in sections.iter_mut().filter(|section| section.field == field) {
+        let Some(at) = section.codes.iter().position(|code| code == from) else {
+            continue;
+        };
+        if from_remains {
+            section.codes.insert(at + 1, to.to_owned());
+        } else {
+            section.codes[at] = to.to_owned();
+        }
+    }
+    sections
+}
+
 /// What stops `name` naming a new working section of `field` holding
 /// `members`. The editor asks before offering to add one and
 /// [`tidy_working_sections`] before keeping one, so the two agree.

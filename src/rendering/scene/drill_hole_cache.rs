@@ -312,7 +312,7 @@ pub(crate) struct DrillHoleGpuCache {
     /// A drill hole dataset is edited in place - a tie laid, a collar turned -
     /// with the item's revision as the only signal that anything changed, so
     /// there is nothing in the dataset itself for the cached scene image in
-    /// `frame::main_scene_cache_key` to key on. It hashes this counter
+    /// `slice_preview::slice_preview_scene_key` to key on. It hashes this counter
     /// instead: every rebuild here re-renders the scene the instances are
     /// drawn into, rather than leaving the edit invisible until the camera
     /// next moves.

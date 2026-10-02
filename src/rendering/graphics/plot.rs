@@ -286,7 +286,17 @@ impl<'a> Graphics<'a> {
         let key = {
             use std::hash::{DefaultHasher, Hash, Hasher};
             let mut hasher = DefaultHasher::new();
-            super::slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
+            super::slice_preview::slice_preview_scene_key(
+                editor,
+                document,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+                self.drill_hole_gpu.content_key(),
+            )
+            .hash(&mut hasher);
             (width, height).hash(&mut hasher);
             for value in [center.x, center.y, center.z, zoom] {
                 value.to_bits().hash(&mut hasher);

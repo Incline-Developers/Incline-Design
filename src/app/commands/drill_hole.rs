@@ -7,8 +7,8 @@ use crate::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
             CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource,
-            DrillHoleStyle, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, TraceStation, WIDE_CATEGORY_FIELD_HINT,
-            clamp_disc_diameter, clamp_string_pixel_width,
+            DrillHoleStyle, DrillValue, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, TraceStation,
+            WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -473,10 +473,22 @@ impl<'a> App<'a> {
             return;
         }
         let count = records.len();
+        // An interval left out of the rename, in another hole or missing a
+        // depth, still holds the old name.
+        let old = DrillValue::Category(from.clone());
+        let held = dataset
+            .dataset
+            .holes
+            .iter()
+            .flat_map(|hole| &hole.intervals)
+            .filter(|interval| interval.values.get(&field) == Some(&old))
+            .count();
+        let sections = crate::model::drill_hole::sections_after_rename(&dataset.color.working_sections, &field, &from, &to, held > count);
         let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
         commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
             ItemStyle::DrillHole { loaded, mut color } => {
                 color.carry_category_color(&field, &from, &to);
+                color.working_sections = sections;
                 ItemStyle::DrillHole { loaded, color }
             }
             other => other,

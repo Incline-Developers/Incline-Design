@@ -21,6 +21,7 @@ use crate::{
 /// visible topology items with their display styles. Preview re-renders are
 /// skipped while this key (plus the preview's own view state) is unchanged,
 /// instead of performing a second full scene render per main-viewport frame.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn slice_preview_scene_key(
     editor: &EditorState,
     document: &Document,
@@ -29,6 +30,7 @@ pub(super) fn slice_preview_scene_key(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     rasters: &[OpenRasterTexture],
+    drill_hole_content_key: u64,
 ) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
@@ -110,6 +112,12 @@ pub(super) fn slice_preview_scene_key(
         dataset.color.disc_diameter.to_bits().hash(&mut hasher);
         dataset.color.string_pixel_width.to_bits().hash(&mut hasher);
     }
+    // Every other item kind reaches this key by the identity of the data it is
+    // holding, but a drill hole dataset is edited in place - laying a tie,
+    // turning a collar, renaming a seam - so nothing about it above would
+    // change. Its instance cache is resynced each frame, and it reports what
+    // it is holding: see `DrillHoleGpuCache::content_key`.
+    drill_hole_content_key.hash(&mut hasher);
     for point_cloud in point_clouds {
         point_cloud.id.hash(&mut hasher);
         point_cloud.state.loaded.hash(&mut hasher);
@@ -575,7 +583,17 @@ impl<'a> Graphics<'a> {
         let key = {
             use std::hash::{DefaultHasher, Hash, Hasher};
             let mut hasher = DefaultHasher::new();
-            slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
+            slice_preview_scene_key(
+                editor,
+                document,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+                self.drill_hole_gpu.content_key(),
+            )
+            .hash(&mut hasher);
             (requested.width, requested.height).hash(&mut hasher);
             center.x.to_bits().hash(&mut hasher);
             center.y.to_bits().hash(&mut hasher);
@@ -617,7 +635,16 @@ impl<'a> Graphics<'a> {
         let Some(preview) = &self.slice_preview else {
             return;
         };
-        let key = slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
+        let key = slice_preview_scene_key(
+            editor,
+            document,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            self.drill_hole_gpu.content_key(),
+        );
         let view_pending = self.slice_view.as_ref().is_some_and(super::SliceViewState::has_pending_updates);
         if self.interaction_active() || self.point_cloud_gpu.has_pending_uploads() || view_pending || self.detached_preview_scene_key != Some(key) {
             self.detached_preview_scene_key = Some(key);
