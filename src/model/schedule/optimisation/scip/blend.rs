@@ -6,7 +6,10 @@
 //! supplies columns, linear rows and the one operation the two methods do
 //! differently.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use russcip::{Model, ProblemCreated, Variable, prelude::*};
 
@@ -28,6 +31,8 @@ struct ScipRows<'a> {
     sizes: BlendSizes,
     cancel: Option<&'a AtomicBool>,
     checks: Option<&'a AtomicU64>,
+    /// Each pile's capacity, which its mixing rows are divided by.
+    capacities: BTreeMap<StockpileId, f64>,
 }
 
 impl Rows for ScipRows<'_> {
@@ -91,11 +96,22 @@ impl Rows for ScipRows<'_> {
     /// `Q_recl * T_open - T_recl * Q_open = 0`, posted through
     /// `SCIPcreateConsBasicQuadraticNonlinear`. Nonconvex, and the reason this
     /// backend was investigated at all.
-    fn mix(&mut self, _pile: StockpileId, _interval: usize, _grade: usize, recl_q: Variable, open_t: Variable, recl_t: Variable, open_q: Variable, name: &str) {
+    ///
+    /// Divided through by the pile's capacity. SCIP checks the row against an
+    /// absolute tolerance of 1e-6, but unscaled its two products reach about
+    /// 3e10 on a full 200,000 t pile reclaimed at 3,000 t/h, where double
+    /// precision alone leaves residuals several times it: a reclaim at exactly
+    /// the pile's blend could not be certified, and on such a pile the
+    /// hourly dispatch schedule was never completed into a seed. Scaled,
+    /// rounding sits far inside the tolerance, while the reclaimed blend the
+    /// tolerance admits is still within `1e-6 x capacity / (T_recl x T_open)`
+    /// grade units of the pile's: a millionth for a tonne from a full pile.
+    fn mix(&mut self, pile: StockpileId, _interval: usize, _grade: usize, recl_q: Variable, open_t: Variable, recl_t: Variable, open_q: Variable, name: &str) {
         self.sizes.nonlinear_constraints += 1;
         let q1: Vec<&Variable> = vec![&recl_q, &recl_t];
         let q2: Vec<&Variable> = vec![&open_t, &open_q];
-        let mut coefs = [1.0, -1.0];
+        let scale = self.capacities.get(&pile).copied().filter(|capacity| *capacity > 1.0).map_or(1.0, f64::recip);
+        let mut coefs = [scale, -scale];
         self.model.add_cons_quadratic(Vec::new(), &mut [], q1, q2, &mut coefs, 0.0, 0.0, name);
     }
 }
@@ -117,6 +133,7 @@ pub(crate) fn formulate_scip_with_cancel(input: &BlendInput, cancel: Option<&Ato
         sizes: BlendSizes::default(),
         cancel,
         checks,
+        capacities: input.piles.iter().map(|pile| (pile.id, pile.capacity_t)).collect(),
     };
     formulate(&mut rows, input)?;
     Ok(BlendFormulation {

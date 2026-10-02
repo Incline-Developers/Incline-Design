@@ -33,7 +33,7 @@ use crate::model::schedule::{
     optimisation::{
         Activity, DestinationKind, SourceId, TaskKind,
         blended::{
-            formulation::BlendSizes,
+            formulation::{BlendColumns, BlendSizes},
             greedy,
             input::BlendInput,
             relaxation::{RelaxationBound, relaxation_bound},
@@ -1272,13 +1272,37 @@ fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFl
 /// duration held to the seed's value, give or take [`SEED_BAND_ABSOLUTE`]
 /// and [`SEED_BAND_RELATIVE`], and a movement the seed does not make held at
 /// zero, so what is left for SCIP is to fill in the state and indicator
-/// columns those imply. The completed solution is SCIP's own, so it
-/// satisfies the model as SCIP checks it. SCIP's own completion
+/// columns those imply. An unchunked pile's state is held too, at exactly
+/// what the seed's movements give it (see [`pin_pile_state`]). The completed
+/// solution is SCIP's own, so it satisfies the model as SCIP checks it.
+/// Should that hold leave no completion, the movements are tried alone.
+///
+/// The copy is solved without presolve. Presolved, SCIP checked the
+/// completion in its reduced problem, and mapped back onto the original
+/// columns it overran a loader's rate row by up to 0.007 t on a real week:
+/// SCIP then refused it as a start. Nearly every column is already fixed,
+/// so presolve has little to do. SCIP's own completion
 /// heuristic was tried first and is not used: given the same values as a
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
 /// seventieth of the seed.
 fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duration>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+    let started = Instant::now();
+    match complete_seed_with(input, seed, true, limit, cancel) {
+        // A stitched day-by-day seed may need its movements' band to meet
+        // the model's rows, which exact pile state can rule out: try again
+        // with the movements held alone, in what is left.
+        Err(problem) if !cancel.is_cancelled() && limit.is_none_or(|limit| started.elapsed() < limit) => {
+            let left = limit.map(|limit| limit.saturating_sub(started.elapsed()));
+            complete_seed_with(input, seed, false, left, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
+        }
+        done => done,
+    }
+}
+
+/// [`complete_seed`], with unchunked piles' state held exactly when
+/// `pin_piles` is set.
+fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool, limit: Option<Duration>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
     let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None).map_err(|_| "cancelled".to_owned())?;
     let tonnes: BTreeMap<(usize, usize, usize), f64> = seed.movements.iter().map(|row| ((row.candidate, row.interval, row.segment), row.tonnes_t)).collect();
     let missing = tonnes.keys().filter(|key| !built.columns.movement.contains_key(key)).count();
@@ -1307,8 +1331,21 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duratio
             fix(column, *duration);
         }
     }
+    if pin_piles {
+        pin_pile_state(input, seed, &built.columns, |column, value| {
+            let value = value.clamp(column.lb(), column.ub());
+            // SAFETY: as for `fix` above.
+            unsafe {
+                ffi::SCIPchgVarLb(scip, column.inner(), value);
+                ffi::SCIPchgVarUb(scip, column.inner(), value);
+            }
+        });
+    }
     let mut model = configure(built.model.hide_output(), limit, None)?;
     model = without_mpec(model)?;
+    model = model
+        .set_int_param("presolving/maxrounds", 0)
+        .map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
     adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
@@ -1318,6 +1355,61 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duratio
         return Err(format!("SCIP found no completion ({:?})", solved.status()));
     };
     Ok(solved.orig_vars().iter().map(|variable| (variable.name(), best.val(variable))).collect())
+}
+
+/// Hold each unchunked pile's state - opening and reclaimed tonnes, and the
+/// contained quantity of each grade in both - at what the seed's movements
+/// give it under perfect mixing, as the replay computes it.
+///
+/// With only the movements held, every mixing equality is left a bilinear
+/// row for SCIP to search, and across a week of a reclaimed pile it ran out
+/// of time without a completion. Held, the equalities are only checked.
+/// Chunked piles mix per chunk and are left to SCIP.
+fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColumns<Variable>, mut pin: impl FnMut(&Variable, f64)) {
+    let grades = input.grades.count();
+    for pile in input.piles.iter().filter(|pile| pile.chunks.is_empty()) {
+        let mut open_t = pile.opening_t;
+        let mut open_q: Vec<f64> = (0..grades).map(|g| pile.opening_q.get(g).copied().unwrap_or(0.0)).collect();
+        for interval in &input.intervals {
+            let k = interval.index;
+            let mut received_t = 0.0;
+            let mut received_q = vec![0.0; grades];
+            let mut reclaimed_t = 0.0;
+            for row in seed.movements.iter().filter(|row| row.interval == k) {
+                let candidate = &input.movements[row.candidate];
+                let to_pile = input
+                    .destinations
+                    .iter()
+                    .any(|destination| destination.id == candidate.destination && destination.kind == DestinationKind::Stockpile(pile.id));
+                if to_pile {
+                    received_t += row.tonnes_t;
+                    for (g, quantity) in received_q.iter_mut().enumerate() {
+                        *quantity += row.tonnes_t * input.grades.fraction(candidate.material, g).unwrap_or(0.0);
+                    }
+                }
+                if candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id) {
+                    reclaimed_t += row.tonnes_t;
+                }
+            }
+            let blend: Vec<f64> = open_q.iter().map(|quantity| if open_t > 0.0 { quantity / open_t } else { 0.0 }).collect();
+            if let Some(column) = columns.open_t.get(&(pile.id, k)) {
+                pin(column, open_t);
+            }
+            if let Some(column) = columns.recl_t.get(&(pile.id, k)) {
+                pin(column, reclaimed_t);
+            }
+            for g in 0..grades {
+                if let Some(column) = columns.open_q.get(&(pile.id, k, g)) {
+                    pin(column, open_q[g]);
+                }
+                if let Some(column) = columns.recl_q.get(&(pile.id, k, g)) {
+                    pin(column, blend[g] * reclaimed_t);
+                }
+                open_q[g] += received_q[g] - blend[g] * reclaimed_t;
+            }
+            open_t += received_t - reclaimed_t;
+        }
+    }
 }
 
 /// Hand SCIP the completed seed. SCIP checks it against the original model

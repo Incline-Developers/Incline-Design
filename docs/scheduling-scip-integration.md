@@ -350,6 +350,23 @@ dispatcher"):
    was tried with the stitched movements as a partial solution and is not
    used: it searched a neighbourhood of them instead, spent the whole budget,
    and returned 1.09M (with `boundwidening = 0` as well).
+
+   An unchunked pile's state is held as well, exactly: opening and reclaimed
+   tonnes, and each grade's contained quantity in both, as the seed's
+   movements give them under perfect mixing. With only the movements held,
+   every mixing equality was left a bilinear row to search, and a DreamLand
+   week with a Reclaim bar on a full 200,000 t pile ran out of time without a
+   completion. The copy is solved without presolve: presolved, its answer
+   mapped back onto the original columns overran a loader's rate row by up to
+   0.007 t, and SCIP refused it as a start. That costs a few seconds (a
+   dig-only week completes in 5.6 s instead of 1.8 s).
+
+   The mixing rows themselves are divided by the pile's capacity. SCIP checks
+   them to an absolute 1e-6, and unscaled their products reach about 3e10 on
+   that pile, where double precision alone leaves larger residuals: a reclaim
+   at exactly the pile's blend could not be certified, and the completion was
+   proven infeasible. Scaled, the blend SCIP admits is still within
+   `1e-6 x capacity / (T_recl x T_open)` grade units of the pile's.
 3. **Whole horizon, seeded.** The completed solution is added before solving;
    SCIP checks it against the original model before storing it. The
    seeded-mode workaround (`misc/allowweakdualreds = false`) applies. The
