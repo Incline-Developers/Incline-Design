@@ -1886,6 +1886,20 @@ pub(crate) struct EditorState {
     pub(crate) drill_pattern_preview_key: Option<crate::ui::dialogs::drill_pattern::PatternPreviewKey>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
+    pub(crate) show_haul_roads: bool,
+    pub(crate) haul_draw: bool,
+    pub(crate) haul_delete_node: Option<crate::model::haulage::NodeId>,
+    pub(crate) import_as_haul_roads: bool,
+    pub(crate) haul_points: Vec<DVec3>,
+    pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>)>,
+    pub(crate) haul_view_revision: u64,
+    pub(crate) haul_issues: Vec<crate::model::haulage::network::NetworkIssue>,
+    pub(crate) haul_blocks: Vec<(BlastOutline, bool)>,
+    pub(crate) haul_source_point: Option<DVec3>,
+    pub(crate) haul_move_node: Option<crate::model::haulage::NodeId>,
+    pub(crate) haul_move_shape: Option<(crate::model::haulage::RoadId, usize)>,
+    pub(crate) haul_pins: Vec<((f32, f32), crate::model::schedule::DestinationId, bool)>,
+    pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
     pub(crate) new_project_dialog_open: bool,
@@ -3109,6 +3123,17 @@ impl EditorState {
         self.drape_phase = DrapePhase::Designs;
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
+        self.haul_draw = false;
+        self.haul_points.clear();
+        self.haul_route = None;
+        self.haul_block_cache_key = None;
+        self.haul_issues.clear();
+        self.haul_blocks.clear();
+        self.haul_move_node = None;
+        self.haul_move_shape = None;
+        self.haul_delete_node = None;
+        self.haul_source_point = None;
+        self.haul_pins.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
         self.poly_finish_dialog_confirm_armed = false;
@@ -3408,6 +3433,20 @@ impl EditorState {
             drill_pattern_preview_error: None,
             drill_pattern_preview_key: None,
             cursor_world: None,
+            show_haul_roads: false,
+            haul_draw: false,
+            haul_delete_node: None,
+            import_as_haul_roads: false,
+            haul_points: Vec::new(),
+            haul_block_cache_key: None,
+            haul_view_revision: 0,
+            haul_issues: Vec::new(),
+            haul_blocks: Vec::new(),
+            haul_source_point: None,
+            haul_move_node: None,
+            haul_move_shape: None,
+            haul_pins: Vec::new(),
+            haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
             #[cfg(target_arch = "wasm32")]
@@ -4181,6 +4220,7 @@ impl ToolHatch {
 /// their own; the whole set stays in the Interface preferences tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewToggle {
+    HaulRoads,
     Console,
     DarkMode,
 }
@@ -4188,6 +4228,7 @@ pub(crate) enum ViewToggle {
 impl ViewToggle {
     pub(crate) fn label(self) -> String {
         match self {
+            Self::HaulRoads => tr!("haul-roads"),
             Self::Console => tr!(literal = "Show Console"),
             Self::DarkMode => tr!(literal = "Dark Mode"),
         }
@@ -4198,6 +4239,7 @@ impl ViewToggle {
     /// [`PreferencesDraft`] built to read one bool out of.
     pub(crate) fn get(self, editor: &EditorState) -> bool {
         match self {
+            Self::HaulRoads => editor.show_haul_roads,
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
         }
@@ -4210,7 +4252,41 @@ impl ViewToggle {
 /// (button clicks, menu selections, dialog confirmations).  The app layer
 /// matches on these in its event loop.
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum HaulEdit {
+    Draw(Vec<DVec3>),
+    ConvertSelection,
+    MoveNode(crate::model::haulage::NodeId, DVec3),
+    MoveShape(crate::model::haulage::RoadId, usize, DVec3),
+    DeleteRoad(crate::model::haulage::RoadId),
+    DeleteNode(crate::model::haulage::NodeId),
+    Join(crate::model::haulage::NodeId, crate::model::haulage::NodeId),
+    Split(crate::model::haulage::RoadId, DVec3),
+    Role(crate::model::haulage::NodeId, Option<crate::model::haulage::NodeRole>),
+    RoadProperties(Vec<crate::model::haulage::RoadId>, Option<String>, Option<f64>),
+    Settings(crate::model::haulage::network::HaulSettings),
+    Fixed(crate::model::schedule::DestinationId, bool),
+    Pin(crate::model::schedule::DestinationId, DVec3),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
+    Haulage {
+        project: u32,
+        edit: HaulEdit,
+    },
+    RefreshHaulOverlay,
+    StartHaulRoad,
+    OpenHaulImport,
+    EditHaulProperties,
+    FinishHaulRoad,
+    ConvertHaulSelection,
+    FrameHaulPoint(DVec3),
+    NewHaulDestination {
+        node: crate::model::haulage::NodeId,
+        kind: crate::model::schedule::DestinationKind,
+    },
+    ExportHaulRoads,
+
     SetActiveTool(ActiveTool),
     /// Open/close the Drill & Blast pattern builder from its toolbar cell.
     ToggleCreateDrillPattern,
@@ -4888,6 +4964,16 @@ impl UiCommand {
             | Self::SetReserveModelIncluded { .. }
             | Self::SetSolidsTopography { .. }
             | Self::UpdateSolid { .. }
+            | Self::Haulage { .. }
+            | Self::RefreshHaulOverlay
+            | Self::StartHaulRoad
+            | Self::OpenHaulImport
+            | Self::EditHaulProperties
+            | Self::FinishHaulRoad
+            | Self::ConvertHaulSelection
+            | Self::FrameHaulPoint(_)
+            | Self::NewHaulDestination { .. }
+            | Self::ExportHaulRoads
             | Self::ResetSolidPreviewView
             | Self::RecomputeReserveStats(_)
             | Self::RunPlanningStage(_)
@@ -5066,7 +5152,9 @@ impl UiCommand {
                 | ScheduleEdit::SetDestinationDistance { .. }
                 | ScheduleEdit::RenameTruckClass { .. }
                 | ScheduleEdit::SetTruckClassPayload { .. }
-                | ScheduleEdit::SetTruckClassSpeeds { .. }
+                | ScheduleEdit::SetTruckClassHaulage { .. }
+                | ScheduleEdit::SetClassSpotTime { .. }
+                | ScheduleEdit::SetDestinationDumpTime { .. }
                 | ScheduleEdit::RenameTruckingRule { .. }
                 | ScheduleEdit::SetTruckingRuleEnabled { .. }
                 | ScheduleEdit::SetTruckingRuleLoaders { .. }
@@ -5543,6 +5631,9 @@ pub(crate) struct UiProjectView {
     /// open project in turn and so holds whichever was copied last: opening a
     /// second project must not change or show the first one's fleet.
     pub(crate) schedule: crate::model::schedule::SchedulePlan,
+    pub(crate) haulage: crate::model::haulage::HaulNetwork,
+    pub(crate) haul_points: std::collections::BTreeMap<crate::model::schedule::DestinationId, DVec3>,
+    pub(crate) haul_destinations: Vec<crate::model::schedule::destinations::DestinationView>,
     /// Runtime id of the active project, the session token fleet edits are
     /// addressed to. Zero when no project is open - never a live id, so a
     /// command that somehow escaped an empty workspace is refused rather than
@@ -5873,7 +5964,7 @@ pub(crate) struct ScheduleDestinationDraft {
     pub(crate) id: crate::model::schedule::DestinationId,
     /// What the project held when this draft was seeded, so an edit made
     /// elsewhere replaces the draft rather than being overwritten by it.
-    pub(crate) source: (String, Option<f64>, Option<f64>, u64, u64),
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64, u64, Option<u64>),
     pub(crate) name: String,
     /// A stockpile's rest before reclaim, in hours.
     pub(crate) rest: String,
@@ -5883,6 +5974,7 @@ pub(crate) struct ScheduleDestinationDraft {
     /// One-way haul distance in kilometres. Always a figure - there is no
     /// blank state, because every destination is somewhere.
     pub(crate) distance: String,
+    pub(crate) dump_time: String,
 }
 
 /// One truck class's cells as they are being typed.
@@ -5897,8 +5989,11 @@ pub(crate) struct ScheduleTruckClassDraft {
     pub(crate) source: (String, u64, u64, u64),
     pub(crate) name: String,
     pub(crate) payload: String,
-    pub(crate) loaded: String,
-    pub(crate) unloaded: String,
+    pub(crate) haul_source: String,
+    pub(crate) maximum_speed: String,
+    pub(crate) maximum_grade: String,
+    pub(crate) dump_time: String,
+    pub(crate) grade_rows: Vec<(String, String, String)>,
 }
 
 /// Which rule a condition being written belongs to.
@@ -5974,12 +6069,13 @@ pub(crate) struct ScheduleConditionDraft {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleClassDraft {
     pub(crate) id: crate::model::schedule::LoaderClassId,
-    pub(crate) source: (String, f64, f64),
+    pub(crate) source: (String, f64, f64, f64),
     pub(crate) name: String,
     pub(crate) rate: String,
     /// The rate this type reclaims at, typed on its own: the two rates are
     /// separate answers, so committing one must not carry the other with it.
     pub(crate) reclaim_rate: String,
+    pub(crate) spot_time: String,
 }
 
 /// The editable cell of one loader agent, on the same rule as
@@ -6257,11 +6353,22 @@ pub(crate) enum ScheduleEdit {
     /// Both speeds at once: they are two halves of one travel cycle, and an
     /// editor that committed them separately would put two undo steps on the
     /// stack for one thought.
-    SetTruckClassSpeeds {
+    SetTruckClassHaulage {
         class: crate::model::schedule::TruckClassId,
-        loaded_kph: f64,
-        unloaded_kph: f64,
+        speeds: Vec<crate::model::schedule::trucking::GradeSpeed>,
+        maximum_speed_kph: f64,
+        maximum_grade: f64,
+        dump_time_s: f64,
     },
+    SetDestinationDumpTime {
+        destination: crate::model::schedule::StandaloneDestinationId,
+        seconds: Option<f64>,
+    },
+    SetClassSpotTime {
+        class: crate::model::schedule::LoaderClassId,
+        seconds: f64,
+    },
+
     /// Apply one atomic truck-calendar edit, or one rectangular paste or clear.
     SetTruckCells {
         edits: Vec<crate::model::schedule::TruckCellEdit>,
@@ -6901,6 +7008,8 @@ pub(crate) enum CalendarRow {
     Truck(crate::model::schedule::TruckField),
     /// Truck-hours one class spent hauling in the period.
     TruckHours,
+    TruckCycle,
+    TruckTonneKm,
     /// What a destination received in the period. For a crusher this is what
     /// it processed, direct mining and reclaim together.
     Received,
@@ -6931,7 +7040,16 @@ impl CalendarRow {
     pub(crate) fn is_calculated(self) -> bool {
         matches!(
             self,
-            Self::DigTonnes | Self::ReclaimTonnes | Self::TruckHours | Self::Received | Self::Reclaimed | Self::Cumulative | Self::GradeActual(_) | Self::Value
+            Self::DigTonnes
+                | Self::ReclaimTonnes
+                | Self::TruckHours
+                | Self::TruckCycle
+                | Self::TruckTonneKm
+                | Self::Received
+                | Self::Reclaimed
+                | Self::Cumulative
+                | Self::GradeActual(_)
+                | Self::Value
         )
     }
 

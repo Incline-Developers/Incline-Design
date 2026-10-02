@@ -242,6 +242,8 @@ pub(crate) struct StandaloneDestination {
     /// Crusher only.
     #[serde(default)]
     pub(crate) crusher: CrusherCalendar,
+    #[serde(default)]
+    pub(crate) dump_time_s: Option<f64>,
 }
 
 /// The scheduling settings of one solid-backed destination.
@@ -847,6 +849,19 @@ impl RoutingConfig {
     }
 
     /// Store a one-way haul distance against any destination.
+    pub(crate) fn dump_time_s(&self, id: DestinationId) -> Option<f64> {
+        match id {
+            DestinationId::Standalone(id) => self.standalone(id).and_then(|d| d.dump_time_s),
+            DestinationId::Solid(_) => None,
+        }
+    }
+    pub(crate) fn set_dump_time_s(&mut self, id: StandaloneDestinationId, seconds: Option<f64>) -> ScheduleResult {
+        if seconds.is_some_and(|v| !v.is_finite() || v < 0.0) {
+            return Err(ScheduleError::InvalidSpeed);
+        }
+        self.standalone_mut(id)?.dump_time_s = seconds;
+        Ok(())
+    }
     pub(crate) fn set_distance_km(&mut self, id: DestinationId, distance_km: f64) -> ScheduleResult {
         let distance_km = super::trucking::checked_distance(distance_km)?;
         match id {
@@ -995,6 +1010,7 @@ impl RoutingConfig {
             distance_km: DEFAULT_DISTANCE_KM,
             inventory: StockpileInventory::default(),
             crusher: CrusherCalendar::default(),
+            dump_time_s: None,
         });
         Ok(id)
     }
@@ -1260,7 +1276,11 @@ impl RoutingConfig {
                 checked_capacity(capacity)?;
             }
             super::trucking::checked_distance(entry.distance_km)?;
+
             entry.crusher.validate()?;
+            if entry.dump_time_s.is_some_and(|v| !v.is_finite() || v < 0.0) {
+                return Err(ScheduleError::InvalidSpeed);
+            }
         }
         for (index, entry) in self.solids.iter().enumerate() {
             if self.solids[..index].iter().any(|earlier| earlier.solid == entry.solid) {
@@ -1359,6 +1379,7 @@ impl RoutingConfig {
             entry.kind.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
             entry.distance_km.to_bits().hash(hasher);
+
             entry.inventory.hash_content(hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(hasher);
             for (period, value) in &entry.crusher.periods {
@@ -1371,6 +1392,7 @@ impl RoutingConfig {
             entry.solid.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
             entry.distance_km.to_bits().hash(hasher);
+
             entry.inventory.hash_content(hasher);
         }
         for rule in &self.rules {

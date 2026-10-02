@@ -76,6 +76,7 @@ fn candidate(loader: u32, activity: Activity, source: SourceId, material: u32, d
         destination: DestinationId(destination),
         truck: TruckClassId(0),
         truck_hours_per_tonne: 0.0,
+        cycle: Default::default(),
         routing_rule: RoutingRuleId(0),
         routing_preference: 0,
         cashflow: vec![CashflowContribution {
@@ -861,6 +862,7 @@ fn reclaim_candidate(loader: u32, material: u32, destination: u32, value: f64) -
         destination: DestinationId(destination),
         truck: TruckClassId(1),
         truck_hours_per_tonne: 0.02,
+        cycle: Default::default(),
         routing_rule: RoutingRuleId(3),
         routing_preference: 0,
         cashflow: vec![CashflowContribution {
@@ -962,6 +964,7 @@ fn expanded_fixture(hours: f64, step_h: f64, parcel_t: f64) -> OptimisationInput
             destination: DestinationId(1),
             truck: TruckClassId(1),
             truck_hours_per_tonne: 0.01 + f64::from(loader) * 0.001,
+            cycle: Default::default(),
             routing_rule: RoutingRuleId(1),
             routing_preference: 0,
             cashflow: vec![CashflowContribution {
@@ -977,6 +980,7 @@ fn expanded_fixture(hours: f64, step_h: f64, parcel_t: f64) -> OptimisationInput
             destination: DestinationId(2),
             truck: TruckClassId(1),
             truck_hours_per_tonne: 0.015,
+            cycle: Default::default(),
             routing_rule: RoutingRuleId(2),
             routing_preference: 1,
             cashflow: vec![CashflowContribution {

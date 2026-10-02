@@ -318,6 +318,8 @@ pub(crate) struct MovementCandidate {
     pub(crate) destination: DestinationId,
     pub(crate) truck: TruckClassId,
     pub(crate) truck_hours_per_tonne: f64,
+    #[serde(default)]
+    pub(crate) cycle: super::trucking::CycleBreakdown,
     pub(crate) routing_rule: RoutingRuleId,
     pub(crate) routing_preference: u32,
     pub(crate) cashflow: Vec<CashflowContribution>,

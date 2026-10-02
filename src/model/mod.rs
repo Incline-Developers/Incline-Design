@@ -16,6 +16,7 @@ pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
 pub(crate) mod ground_filter;
+pub(crate) mod haulage;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod input;
 pub(crate) mod kernel;
@@ -87,6 +88,8 @@ pub(crate) enum SceneEntityId {
     /// surface is picked. Everything downstream that works on a selection can
     /// then reach it like any other entity.
     Raster(raster::RasterTextureId),
+    HaulRoad(haulage::RoadId),
+    HaulNode(haulage::NodeId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1303,6 +1306,8 @@ pub(crate) struct Document {
     /// an empty schedule rather than failing to load.
     #[serde(default)]
     schedule: schedule::SchedulePlan,
+    #[serde(default)]
+    haulage: haulage::HaulNetwork,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -1410,6 +1415,11 @@ impl Document {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         use anyhow::bail;
         const LOCAL_MASK: u64 = u32::MAX as u64;
+        self.haulage.clone().validate()?;
+        anyhow::ensure!(
+            self.haulage.nodes.iter().all(|n| n.id.0 <= LOCAL_MASK) && self.haulage.roads.iter().all(|r| r.id.0 <= LOCAL_MASK),
+            "haul ids outside project range"
+        );
 
         let mut layer_ids = std::collections::HashSet::with_capacity(self.layers.len());
         for layer in self.layers.iter().chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref())) {
@@ -1825,6 +1835,33 @@ impl Document {
         &self.solids
     }
 
+    pub(crate) fn haulage(&self) -> &haulage::HaulNetwork {
+        &self.haulage
+    }
+
+    pub(crate) fn set_haulage(&mut self, mut network: haulage::HaulNetwork) {
+        network.raise_allocator_to(&self.haulage);
+        if self.haulage != network {
+            self.haulage = network;
+            self.touch();
+        }
+    }
+
+    pub(crate) fn restore_haulage(&mut self, network: haulage::HaulNetwork) {
+        self.haulage = network;
+    }
+
+    pub(crate) fn append_haulage_from(&mut self, source: &Document) {
+        self.haulage.nodes.extend(source.haulage.nodes.iter().cloned());
+        self.haulage.roads.extend(source.haulage.roads.iter().cloned());
+    }
+
+    pub(crate) fn merge_haulage_from(&mut self, source: &Document) {
+        if self.haulage.nodes.is_empty() {
+            self.haulage = source.haulage.clone();
+        }
+    }
+
     pub(crate) fn schedule(&self) -> &schedule::SchedulePlan {
         &self.schedule
     }
@@ -2146,6 +2183,7 @@ impl Document {
         // Ids changed identity: restamp everything at the current revision so
         // stale pre-namespace entries cannot alias new ids.
         self.object_revisions = self.objects.iter().map(|object| (object.id(), self.revision)).collect();
+        self.haulage.apply_namespace(namespace);
         self.next_layer_id = runtime_id(self.next_layer_id);
         self.next_object_id = runtime_id(self.next_object_id);
     }
@@ -2256,6 +2294,7 @@ impl Document {
         // the fingerprint that decides whether the project is dirty - and,
         // because an undo puts the whole plan back, it un-dirties by itself.
         self.schedule.hash_content(&mut hasher);
+        self.haulage.hash_content(&mut hasher);
         hasher.finish()
     }
 
@@ -2324,6 +2363,7 @@ impl ItemRef {
             SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
             SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
             SceneEntityId::Raster(id) => Some(Self::Raster(id)),
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => None,
         }
     }
 }
@@ -3187,6 +3227,10 @@ pub(crate) enum Command {
     /// handful of names and rates, and swapping it whole is what guarantees
     /// undo restores the same ids - which every Gantt row and, later, every
     /// block assignment is keyed by.
+    SetHaulNetwork {
+        before: Box<haulage::HaulNetwork>,
+        after: Box<haulage::HaulNetwork>,
+    },
     SetSchedulePlan {
         before: Box<schedule::SchedulePlan>,
         after: Box<schedule::SchedulePlan>,
@@ -3263,6 +3307,7 @@ impl Command {
                 Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::SetHaulNetwork { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
                     .iter()
@@ -3430,6 +3475,7 @@ impl Command {
             | Command::AddFolder { .. }
             | Command::RenameFolder { .. }
             | Command::SetLayerFolder { .. }
+            | Command::SetHaulNetwork { .. }
             | Command::SetSchedulePlan { .. } => {}
         }
     }
@@ -3560,6 +3606,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, after, .. } => {
                 target.document.set_object_hidden(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::SetHaulNetwork { after, .. } => {
+                target.document.set_haulage((**after).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { after, .. } => {
@@ -3711,6 +3761,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, before, .. } => {
                 target.document.set_object_hidden(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetHaulNetwork { before, .. } => {
+                target.document.set_haulage((**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { before, .. } => {

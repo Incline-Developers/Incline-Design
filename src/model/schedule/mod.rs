@@ -365,6 +365,7 @@ pub(crate) struct LoaderClass {
     pub(crate) default_dig_rate_tph: f64,
     /// Tonnes per productive hour reclaiming. Strictly positive and finite.
     pub(crate) default_reclaim_rate_tph: f64,
+    pub(crate) spot_time_s: f64,
 }
 
 /// What a saved class is read through: a project written before reclaim existed
@@ -378,6 +379,8 @@ struct ClassRepr {
     default_dig_rate_tph: f64,
     #[serde(default)]
     default_reclaim_rate_tph: Option<f64>,
+    #[serde(default)]
+    spot_time_s: f64,
 }
 
 impl From<ClassRepr> for LoaderClass {
@@ -387,6 +390,7 @@ impl From<ClassRepr> for LoaderClass {
             name: repr.name,
             default_dig_rate_tph: repr.default_dig_rate_tph,
             default_reclaim_rate_tph: repr.default_reclaim_rate_tph.unwrap_or(repr.default_dig_rate_tph),
+            spot_time_s: repr.spot_time_s,
         }
     }
 }
@@ -1056,6 +1060,7 @@ impl SchedulePlan {
             name,
             default_dig_rate_tph: rate,
             default_reclaim_rate_tph: rate,
+            spot_time_s: 45.0,
         });
         Ok(id)
     }
@@ -1079,6 +1084,14 @@ impl SchedulePlan {
         let rate = checked_rate(rate_tph)?;
         let class = self.classes.iter_mut().find(|class| class.id == id).ok_or(ScheduleError::UnknownClass)?;
         class.default_dig_rate_tph = rate;
+        Ok(())
+    }
+
+    pub(crate) fn set_class_spot_time(&mut self, id: LoaderClassId, seconds: f64) -> ScheduleResult {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err(ScheduleError::InvalidRate);
+        }
+        self.classes.iter_mut().find(|c| c.id == id).ok_or(ScheduleError::UnknownClass)?.spot_time_s = seconds;
         Ok(())
     }
 
@@ -1608,6 +1621,9 @@ impl SchedulePlan {
             checked_name(&class.name)?;
             checked_rate(class.default_dig_rate_tph)?;
             checked_rate(class.default_reclaim_rate_tph)?;
+            if !class.spot_time_s.is_finite() || class.spot_time_s < 0.0 {
+                return Err(ScheduleError::InvalidRate);
+            }
             if self.classes[..index].iter().any(|earlier| same_name(&earlier.name, &class.name)) {
                 return Err(ScheduleError::DuplicateName(class.name.clone()));
             }
@@ -1702,6 +1718,7 @@ impl SchedulePlan {
             class.name.hash(hasher);
             class.default_dig_rate_tph.to_bits().hash(hasher);
             class.default_reclaim_rate_tph.to_bits().hash(hasher);
+            class.spot_time_s.to_bits().hash(hasher);
         }
         for agent in &self.agents {
             agent.id.hash(hasher);

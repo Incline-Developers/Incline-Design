@@ -132,12 +132,50 @@ pub(crate) struct Delivery {
     pub(crate) end_h: f64,
     pub(crate) tonnes: f64,
     pub(crate) truck_hours: f64,
+    pub(crate) cycle: std::sync::Arc<super::trucking::CycleBreakdown>,
     /// Signed movement value, every matching rule added, conditional rules
     /// valued at their authored boundaries.
     pub(crate) value: f64,
     /// Weighted quantity (tonnes × stored grade) per tracked grade,
     /// aligned with [`CalculatedSchedule::grades`].
     pub(crate) contained: Vec<f64>,
+}
+
+/// Tonnes-weighted haul figures. Summable across deliveries, hours and days.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct HaulSummary {
+    pub(crate) tonnes: f64,
+    pub(crate) cycle_t_h: f64,
+    pub(crate) loaded_t_km: f64,
+    pub(crate) rise_t_m: f64,
+    pub(crate) spot_t_h: f64,
+    pub(crate) load_t_h: f64,
+    pub(crate) loaded_t_h: f64,
+    pub(crate) dump_t_h: f64,
+    pub(crate) empty_t_h: f64,
+}
+impl HaulSummary {
+    pub(crate) fn add(&mut self, delivery: &Delivery, share: f64) {
+        let t = delivery.tonnes * share;
+        self.tonnes += t;
+        self.cycle_t_h += delivery.cycle.total_h() * t;
+        self.loaded_t_km += delivery.cycle.loaded_km * t;
+        self.rise_t_m += delivery.cycle.rise_m * t;
+        self.spot_t_h += delivery.cycle.spot_h * t;
+        self.load_t_h += delivery.cycle.load_h * t;
+        self.loaded_t_h += delivery.cycle.loaded_h * t;
+        self.dump_t_h += delivery.cycle.dump_h * t;
+        self.empty_t_h += delivery.cycle.empty_h * t;
+    }
+    pub(crate) fn average(self, value: f64) -> f64 {
+        if self.tonnes > 0.0 { value / self.tonnes } else { 0.0 }
+    }
+    pub(crate) fn cycle_minutes(self) -> f64 {
+        self.average(self.cycle_t_h) * 60.0
+    }
+    pub(crate) fn distance_km(self) -> f64 {
+        self.average(self.loaded_t_km)
+    }
 }
 
 /// What one dig block started with and what it had left.
@@ -432,6 +470,7 @@ pub(crate) struct PeriodTotals {
     reclaimed: BTreeMap<(DestinationId, u32), f64>,
     closing: BTreeMap<(DestinationId, u32), (f64, Vec<f64>)>,
     truck_hours: BTreeMap<(TruckClassId, u32), f64>,
+    truck_haul: BTreeMap<(TruckClassId, u32), HaulSummary>,
     value: BTreeMap<u32, f64>,
 }
 
@@ -496,6 +535,9 @@ impl PeriodTotals {
                     *totals.reclaimed.entry((pile, period)).or_default() += share;
                 });
             }
+            apportion(delivery.start_h, delivery.end_h, 1.0, |period, share| {
+                totals.truck_haul.entry((delivery.truck, period)).or_default().add(delivery, share)
+            });
             apportion(delivery.start_h, delivery.end_h, delivery.truck_hours, |period, share| {
                 *totals.truck_hours.entry((delivery.truck, period)).or_default() += share;
             });
@@ -577,6 +619,10 @@ impl PeriodTotals {
         self.covers(period)
             .then(|| self.closing.get(&(pile, period)).map(|(tonnes, contained)| (*tonnes, contained.as_slice())))
             .flatten()
+    }
+
+    pub(crate) fn truck_haul(&self, truck: TruckClassId, period: u32) -> Option<HaulSummary> {
+        self.covers(period).then(|| self.truck_haul.get(&(truck, period)).copied().unwrap_or_default())
     }
 
     pub(crate) fn truck_hours(&self, truck: TruckClassId, period: u32) -> Option<f64> {
@@ -672,6 +718,7 @@ pub(crate) struct CalculatedSchedule {
     by_block: HashMap<DigBlockId, usize>,
     inventory: HashMap<DestinationId, Vec<InventoryKnot>>,
     hourly: HashMap<DestinationId, HourlyReceipts>,
+    truck_use: HashMap<TruckClassId, Vec<(f64, f64)>>,
 }
 
 /// Everything [`CalculatedSchedule::new`] indexes.
@@ -730,6 +777,32 @@ impl CalculatedSchedule {
         let periods = PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles);
         let inventory = inventory_curves(&parts.piles, &parts.deliveries);
         let hourly = hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries);
+        let mut truck_use: HashMap<TruckClassId, Vec<(f64, f64)>> = HashMap::new();
+        for delivery in &parts.deliveries {
+            let duration = delivery.end_h - delivery.start_h;
+            if duration > 0.0 {
+                let units = delivery.truck_hours / duration;
+                let events = truck_use.entry(delivery.truck).or_default();
+                events.push((delivery.start_h, units));
+                events.push((delivery.end_h, -units));
+            }
+        }
+        for events in truck_use.values_mut() {
+            events.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut knots: Vec<(f64, f64)> = Vec::new();
+            let mut units = 0.0;
+            for &(hour, delta) in events.iter() {
+                units += delta;
+                if let Some(last) = knots.last_mut()
+                    && last.0 == hour
+                {
+                    last.1 = units.max(0.0);
+                } else {
+                    knots.push((hour, units.max(0.0)));
+                }
+            }
+            *events = knots;
+        }
         Self {
             run: parts.run,
             semantic: parts.semantic,
@@ -751,6 +824,7 @@ impl CalculatedSchedule {
             by_block,
             inventory,
             hourly,
+            truck_use,
         }
     }
 
@@ -903,6 +977,16 @@ impl CalculatedSchedule {
 
     /// What a destination received hour by hour, or `None` when it received
     /// nothing at all.
+    pub(crate) fn truck_use_knots(&self, class: TruckClassId) -> &[(f64, f64)] {
+        self.truck_use.get(&class).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn trucks_in_use(&self, class: TruckClassId, hour: f64) -> f64 {
+        let Some(knots) = self.truck_use.get(&class) else { return 0.0 };
+        let at = knots.partition_point(|(h, _)| *h <= hour);
+        at.checked_sub(1).map_or(0.0, |i| knots[i].1)
+    }
+
     pub(crate) fn hourly_receipts(&self, destination: DestinationId) -> Option<&HourlyReceipts> {
         self.hourly.get(&destination)
     }

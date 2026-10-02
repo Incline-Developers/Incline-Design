@@ -23,13 +23,12 @@
 //!
 //! # What the coefficients are, and what they are not
 //!
-//! The cycle here is *travel only*: out loaded, back empty, over one
-//! nominated one-way distance. Loading, spotting, dumping and queuing are all
-//! excluded, and the figure is named Travel cycle time so nothing reads it as
-//! a complete cycle. `travel_limited_tonnes` exists to explain one class on
-//! one route and nothing else: a fleet is one resource shared across every
-//! movement it is permitted to serve, and handing each route its own copy of
-//! that allowance would multiply the fleet by the number of routes.
+//! Cycles include loader spotting, nominal loading, loaded travel, dumping,
+//! and empty travel. Road routes use directional grade speeds and endpoint
+//! acceleration losses. Fixed-distance routes use the same cycle breakdown.
+//! Queuing is excluded; utilisation is the planner's allowance for delays.
+//! Legacy projects retain zero spot/dump times and their old speeds in every
+//! grade band. Their truck demand still increases by nominal loading time.
 
 use std::collections::BTreeMap;
 
@@ -176,7 +175,6 @@ impl TruckCalendar {
     /// The whole point of a sparse calendar: an interval that spans a year of
     /// default days crosses no change at all, and integrating over it costs one
     /// step rather than 365.
-    #[allow(dead_code, reason = "read by the capacity integration, which the optimised run consumes")]
     pub(crate) fn next_change_after(&self, period: CalendarPeriod) -> Option<CalendarPeriod> {
         let current = self.values_at(period);
         // The period *after* an override ends is itself a change back to the
@@ -239,7 +237,7 @@ impl TruckCalendar {
 
 /// One type of haul truck, and the pool of them on site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "TruckClassRepr")]
 pub(crate) struct TruckClass {
     pub(crate) id: TruckClassId,
     pub(crate) name: String,
@@ -250,8 +248,90 @@ pub(crate) struct TruckClass {
     pub(crate) payload_t: f64,
     pub(crate) loaded_speed_kph: f64,
     pub(crate) unloaded_speed_kph: f64,
+    pub(crate) grade_speeds: Vec<GradeSpeed>,
+    pub(crate) maximum_speed_kph: f64,
+    pub(crate) maximum_grade: f64,
+    pub(crate) dump_time_s: f64,
     #[serde(default)]
     pub(crate) calendar: TruckCalendar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GradeSpeed {
+    pub(crate) from_grade: f64,
+    pub(crate) loaded_kph: f64,
+    pub(crate) empty_kph: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TruckClassRepr {
+    id: TruckClassId,
+    name: String,
+    payload_t: f64,
+    loaded_speed_kph: f64,
+    unloaded_speed_kph: f64,
+    #[serde(default)]
+    calendar: TruckCalendar,
+    #[serde(default)]
+    grade_speeds: Option<Vec<GradeSpeed>>,
+    #[serde(default)]
+    maximum_speed_kph: Option<f64>,
+    #[serde(default)]
+    maximum_grade: Option<f64>,
+    #[serde(default)]
+    dump_time_s: f64,
+}
+impl From<TruckClassRepr> for TruckClass {
+    fn from(r: TruckClassRepr) -> Self {
+        let speeds = r.grade_speeds.unwrap_or_else(|| {
+            [-1.0, -0.06, -0.02, 0.02, 0.06]
+                .into_iter()
+                .map(|from_grade| GradeSpeed {
+                    from_grade,
+                    loaded_kph: r.loaded_speed_kph,
+                    empty_kph: r.unloaded_speed_kph,
+                })
+                .collect()
+        });
+        Self {
+            id: r.id,
+            name: r.name,
+            payload_t: r.payload_t,
+            loaded_speed_kph: r.loaded_speed_kph,
+            unloaded_speed_kph: r.unloaded_speed_kph,
+            calendar: r.calendar,
+            grade_speeds: speeds,
+            maximum_speed_kph: r.maximum_speed_kph.unwrap_or(r.loaded_speed_kph.max(r.unloaded_speed_kph)),
+            maximum_grade: r.maximum_grade.unwrap_or(0.1),
+            dump_time_s: r.dump_time_s,
+        }
+    }
+}
+impl TruckClass {
+    pub(crate) fn speed(&self, grade: f64, loaded: bool, limit: Option<f64>) -> f64 {
+        let row = self.grade_speeds.iter().rev().find(|r| r.from_grade <= grade).or(self.grade_speeds.first());
+        let speed = row
+            .map(|r| if loaded { r.loaded_kph } else { r.empty_kph })
+            .unwrap_or(if loaded { self.loaded_speed_kph } else { self.unloaded_speed_kph });
+        speed.min(self.maximum_speed_kph).min(limit.unwrap_or(f64::INFINITY))
+    }
+    pub(crate) fn validate_haulage(&self) -> ScheduleResult {
+        checked_positive(self.maximum_speed_kph, ScheduleError::InvalidSpeed)?;
+        checked_positive(self.maximum_grade, ScheduleError::InvalidSpeed)?;
+        if !self.dump_time_s.is_finite() || self.dump_time_s < 0.0 || self.grade_speeds.is_empty() {
+            return Err(ScheduleError::InvalidSpeed);
+        }
+        for (i, row) in self.grade_speeds.iter().enumerate() {
+            if !row.from_grade.is_finite() || (i > 0 && row.from_grade <= self.grade_speeds[i - 1].from_grade) {
+                return Err(ScheduleError::InvalidSpeed);
+            }
+            checked_positive(row.loaded_kph, ScheduleError::InvalidSpeed)?;
+            checked_positive(row.empty_kph, ScheduleError::InvalidSpeed)?;
+        }
+        Ok(())
+    }
 }
 
 /// Where one movement runs from and to, as the coefficients see it.
@@ -267,7 +347,6 @@ pub(crate) struct RouteContext {
 
 /// The source half of a [`RouteContext`], as the run knows it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code, reason = "the ground half is named by the optimised run in a later stage")]
 pub(crate) enum RouteSource {
     Ground {
         solid: crate::model::SolidId,
@@ -306,7 +385,6 @@ impl TruckingRule {
     /// Alternatives within each selector, conjunction across them: a rule
     /// naming two loaders and two destinations covers either loader delivering
     /// to either destination, and nothing else.
-    #[allow(dead_code, reason = "matching is consumed by the optimised run in a later stage")]
     pub(crate) fn matches(&self, route: RouteContext) -> bool {
         if !self.enabled {
             return false;
@@ -389,8 +467,6 @@ impl TruckingRule {
             + size_of_val(self.classes.as_slice())
     }
 }
-
-#[allow(dead_code, reason = "reached through TruckingRule::matches")]
 fn scope_covers(scope: MovementSourceScope, source: RouteSource) -> bool {
     match (scope, source) {
         (MovementSourceScope::Ground(ground), RouteSource::Ground { solid, bench, flitch }) => ground.covers(solid, bench, flitch),
@@ -460,6 +536,23 @@ impl TruckFleetConfig {
             payload_t: DEFAULT_PAYLOAD_T,
             loaded_speed_kph: DEFAULT_LOADED_KPH,
             unloaded_speed_kph: DEFAULT_UNLOADED_KPH,
+            grade_speeds: [
+                (-1.0, 15.0, 25.0),
+                (-0.06, 25.0, 35.0),
+                (-0.02, DEFAULT_LOADED_KPH, DEFAULT_UNLOADED_KPH),
+                (0.02, 20.0, 40.0),
+                (0.06, 11.0, 22.0),
+            ]
+            .into_iter()
+            .map(|(from_grade, loaded_kph, empty_kph)| GradeSpeed {
+                from_grade,
+                loaded_kph,
+                empty_kph,
+            })
+            .collect(),
+            maximum_speed_kph: 50.0,
+            maximum_grade: 0.1,
+            dump_time_s: 60.0,
             calendar: TruckCalendar::default(),
         });
         Ok(id)
@@ -496,12 +589,14 @@ impl TruckFleetConfig {
         Ok(())
     }
 
-    pub(crate) fn set_class_speeds(&mut self, id: TruckClassId, loaded_kph: f64, unloaded_kph: f64) -> ScheduleResult {
-        let loaded = checked_positive(loaded_kph, ScheduleError::InvalidSpeed)?;
-        let unloaded = checked_positive(unloaded_kph, ScheduleError::InvalidSpeed)?;
-        let class = self.class_mut(id)?;
-        class.loaded_speed_kph = loaded;
-        class.unloaded_speed_kph = unloaded;
+    pub(crate) fn set_class_haulage(&mut self, id: TruckClassId, speeds: Vec<GradeSpeed>, maximum_speed_kph: f64, maximum_grade: f64, dump_time_s: f64) -> ScheduleResult {
+        let mut class = self.class(id).ok_or(ScheduleError::UnknownTruckClass)?.clone();
+        class.grade_speeds = speeds;
+        class.maximum_speed_kph = maximum_speed_kph;
+        class.maximum_grade = maximum_grade;
+        class.dump_time_s = dump_time_s;
+        class.validate_haulage()?;
+        *self.class_mut(id)? = class;
         Ok(())
     }
 
@@ -687,7 +782,6 @@ impl TruckFleetConfig {
     ///
     /// An empty answer means no rule described this movement, which is a
     /// configuration answer and not permission to use anything.
-    #[allow(dead_code, reason = "consumed by the optimised run in a later stage")]
     pub(crate) fn allowed_classes(&self, route: RouteContext) -> Vec<TruckClassId> {
         let mut allowed: Vec<TruckClassId> = Vec::new();
         for rule in self.rules.iter().filter(|rule| rule.matches(route)) {
@@ -714,6 +808,7 @@ impl TruckFleetConfig {
             checked_positive(class.loaded_speed_kph, ScheduleError::InvalidSpeed)?;
             checked_positive(class.unloaded_speed_kph, ScheduleError::InvalidSpeed)?;
             class.calendar.validate()?;
+            class.validate_haulage()?;
         }
         for (index, rule) in self.rules.iter().enumerate() {
             if self.rules[..index].iter().any(|earlier| earlier.id == rule.id) {
@@ -777,6 +872,12 @@ impl TruckFleetConfig {
             class.loaded_speed_kph.to_bits().hash(hasher);
             class.unloaded_speed_kph.to_bits().hash(hasher);
             class.calendar.hash_content(hasher);
+            class.maximum_speed_kph.to_bits().hash(hasher);
+            class.maximum_grade.to_bits().hash(hasher);
+            class.dump_time_s.to_bits().hash(hasher);
+            for row in &class.grade_speeds {
+                (row.from_grade.to_bits(), row.loaded_kph.to_bits(), row.empty_kph.to_bits()).hash(hasher);
+            }
         }
         for rule in &self.rules {
             rule.hash_content(hasher);
@@ -788,7 +889,12 @@ impl TruckFleetConfig {
             + self
                 .classes
                 .iter()
-                .map(|class| size_of::<TruckClass>() + class.name.len() + class.calendar.periods.len() * size_of::<(CalendarPeriod, TruckPeriodOverride)>())
+                .map(|class| {
+                    size_of::<TruckClass>()
+                        + class.grade_speeds.len() * size_of::<GradeSpeed>()
+                        + class.name.len()
+                        + class.calendar.periods.len() * size_of::<(CalendarPeriod, TruckPeriodOverride)>()
+                })
                 .sum::<usize>()
             + self.rules.iter().map(TruckingRule::estimated_bytes).sum::<usize>()
     }
@@ -797,24 +903,16 @@ impl TruckFleetConfig {
 /// What one class costs per tonne on one route.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TransportCoefficients {
-    /// Out loaded and back empty. Travel only - see the module documentation.
+    /// Full spot/load/haul/dump/return cycle, including nominal loading.
     pub(crate) travel_cycle_h: f64,
     /// Truck-hours one tonne of this class's payload consumes on this route.
     pub(crate) truck_hours_per_tonne: f64,
 }
 
-/// The travel coefficients for one class over one one-way distance.
-///
-/// Takes the whole [`RouteContext`] even though only the distance is read from
-/// it today: the distance is a stand-in for a haulage calculation, and when
-/// that arrives it must be able to consult the loader and the source without
-/// any rule or caller changing.
-pub(crate) fn coefficients(class: &TruckClass, _route: RouteContext, one_way_km: f64) -> ScheduleResult<TransportCoefficients> {
-    let distance = checked_positive(one_way_km, ScheduleError::InvalidDistance)?;
-    let loaded = checked_positive(class.loaded_speed_kph, ScheduleError::InvalidSpeed)?;
-    let unloaded = checked_positive(class.unloaded_speed_kph, ScheduleError::InvalidSpeed)?;
+/// All paths, including fixed-distance fallback, share this coefficient.
+pub(crate) fn coefficients_from_cycle(class: &TruckClass, cycle: CycleBreakdown) -> ScheduleResult<TransportCoefficients> {
     let payload = checked_positive(class.payload_t, ScheduleError::InvalidPayload)?;
-    let travel_cycle_h = distance / loaded + distance / unloaded;
+    let travel_cycle_h = cycle.total_h();
     let truck_hours_per_tonne = travel_cycle_h / payload;
     if !travel_cycle_h.is_finite() || !truck_hours_per_tonne.is_finite() || truck_hours_per_tonne <= 0.0 {
         return Err(ScheduleError::UnrepresentableTransport);
@@ -825,6 +923,37 @@ pub(crate) fn coefficients(class: &TruckClass, _route: RouteContext, one_way_km:
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CycleBreakdown {
+    pub(crate) spot_h: f64,
+    pub(crate) load_h: f64,
+    pub(crate) loaded_h: f64,
+    pub(crate) dump_h: f64,
+    pub(crate) empty_h: f64,
+    pub(crate) loaded_km: f64,
+    pub(crate) empty_km: f64,
+    pub(crate) rise_m: f64,
+}
+impl CycleBreakdown {
+    pub(crate) fn total_h(self) -> f64 {
+        self.spot_h + self.load_h + self.loaded_h + self.dump_h + self.empty_h
+    }
+    pub(crate) fn fixed(class: &TruckClass, distance_km: f64, loader_rate: f64, spot_s: f64, dump_s: Option<f64>, _acceleration: f64) -> Self {
+        let loaded = class.speed(0.0, true, None);
+        let empty = class.speed(0.0, false, None);
+        Self {
+            spot_h: spot_s / 3600.0,
+            load_h: if loader_rate > 0.0 { class.payload_t / loader_rate } else { 0.0 },
+            loaded_h: distance_km / loaded,
+            empty_h: distance_km / empty,
+            dump_h: dump_s.unwrap_or(class.dump_time_s) / 3600.0,
+            loaded_km: distance_km,
+            empty_km: distance_km,
+            rise_m: 0.0,
+        }
+    }
+}
+
 /// Truck-hours one class can supply between two elapsed project hours.
 ///
 /// Integrated over the calendar rather than sampled at the start: an interval
@@ -832,7 +961,6 @@ pub(crate) fn coefficients(class: &TruckClass, _route: RouteContext, one_way_km:
 /// hours for that half, and taking the opening day's settings for the whole
 /// span would invent trucks that were never rostered. Sparse, so a span of
 /// unchanged days costs one step.
-#[allow(dead_code, reason = "consumed by the optimised run in a later stage")]
 pub(crate) fn available_truck_hours(calendar: &TruckCalendar, from_h: f64, to_h: f64) -> ScheduleResult<f64> {
     if !from_h.is_finite() || !to_h.is_finite() || from_h < 0.0 {
         return Err(ScheduleError::UnrepresentableTransport);

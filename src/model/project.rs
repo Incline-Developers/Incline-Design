@@ -613,6 +613,7 @@ impl ProjectStore {
             // Reserves Field List needs to survive the rebuild too.
             scene.clone_reserve_fields_from(document);
             scene.clone_solids_from(document);
+            scene.append_haulage_from(document);
         }
         scene.rebuild_object_index();
         scene

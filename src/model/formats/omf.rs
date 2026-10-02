@@ -82,6 +82,7 @@ const META_SOLIDS: &str = "incline:solids";
 /// The Schedule workspace's loader fleet, versioned independently of the
 /// planning metadata beside it so a future shape change can be read back
 /// deliberately rather than guessed at.
+const META_HAULAGE: &str = "incline:haulage";
 const META_SCHEDULE: &str = "incline:schedule";
 /// Payload version written into [`META_SCHEDULE`], and the only one this
 /// build reads.
@@ -120,6 +121,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_RESERVE_FIELDS,
     META_SOLIDS,
     META_SCHEDULE,
+    META_HAULAGE,
 ];
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
@@ -672,6 +674,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             .collect();
     }
     put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
+    if !document.haulage().is_pristine() {
+        put(&mut element, META_HAULAGE, serde_json::to_value(document.haulage().local_copy())?);
+    }
     let schedule = document.schedule();
     if !schedule.is_pristine() {
         put(
@@ -2440,6 +2445,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|value| serde_json::from_value::<Vec<Solid>>(value).ok())
         {
             document.restore_solids(solids);
+        }
+        if let Some(value) = element.metadata.get(META_HAULAGE).cloned() {
+            let mut network: crate::model::haulage::HaulNetwork = serde_json::from_value(value).context("read haul network")?;
+            network.validate().context("validate haul network")?;
+            document.restore_haulage(network);
         }
         if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {
             // Unlike the two lists above, a malformed schedule is reported
