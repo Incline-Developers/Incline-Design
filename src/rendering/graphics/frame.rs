@@ -1,6 +1,8 @@
 use super::*;
 use crate::rendering::scene::{
-    build::{self, DocumentSceneBuildInput, DynamicSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene, restyle_document_scene},
+    build::{
+        self, DocumentSceneBuildInput, DynamicSceneBuildInput, FlowSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene, rebuild_flow_scene, restyle_document_scene,
+    },
     overlays::{OverlaySceneBuildInput, rebuild_editor_overlay},
 };
 
@@ -388,6 +390,28 @@ impl<'a> Graphics<'a> {
                 &mut self.dynamic_stroke_capacity,
                 &mut self.dynamic_strokes,
                 "Dynamic Scene Stroke Buffer",
+            );
+        }
+
+        // Animate's haul flows move every frame while shown, and clear once
+        // when they stop.
+        if !editor.animation_flows.is_empty() || !self.flow_strokes.is_empty() {
+            let view_proj = self.view_proj();
+            self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {
+                flows: &editor.animation_flows,
+                flow_strokes: &mut self.flow_strokes,
+                view_proj,
+                scene_origin: self.scene_origin,
+                scale_factor,
+                time_s: self.flow_clock.elapsed().as_secs_f64(),
+            });
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.flow_stroke_gpu,
+                &mut self.flow_stroke_capacity,
+                &mut self.flow_strokes,
+                "Haul Flow Stroke Buffer",
             );
         }
 

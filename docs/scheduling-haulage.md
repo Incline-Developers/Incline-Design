@@ -158,6 +158,14 @@ the busiest. Routes are worked out once per schedule and network, with the same
 searches capture uses; only the projection and the stripes are redone each
 frame, and only while flows are on screen.
 
+The flows are scene strokes (`rendering/scene/build.rs::rebuild_flow_scene`),
+depth-tested like any other line, so a solid still standing in front of a road
+hides its band and stripes. A faint line along the same route is drawn first
+without the depth test, so a haul behind a solid still shows where it runs.
+The hover read-out and key are painted over the scene by
+`ui/mod.rs::draw_haul_flows`, and hovering finds a road whether or not it is
+hidden.
+
 ## Validation
 
 Validated on Linux desktop against the unsaved DreamLand sample: road drawing,
@@ -191,6 +199,10 @@ moving to ROM A and OSA A. Temporary tests covered the nearest interior join,
 a linked block's longer route, link persistence and the split dump/reclaim
 roles, and were removed. Native clippy and a wasm `cargo check` passed (the
 latter with its existing unused-trucking warnings).
+
+Depth-tested flows were checked on the same sample from a low view across the
+pit: the band and stripes stop where the ramp passes under unmined blocks and
+the faint line continues through them, and the stripes still move.
 
 Screenshots: [Layout with a selected block and route check](haulage/layout.png),
 [Setup](haulage/setup.png), [Animate flows](haulage/animate-flows.png),

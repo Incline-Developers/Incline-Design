@@ -507,7 +507,14 @@ impl<'a> Graphics<'a> {
                         Some(&index) => flows[index].tph += tph,
                         None => {
                             segments.insert(segment, flows.len());
-                            flows.push(crate::ui::state::HaulFlowSegment { a, b, offset: along, tph });
+                            flows.push(crate::ui::state::HaulFlowSegment {
+                                from: pair[0],
+                                to: pair[1],
+                                a,
+                                b,
+                                offset: along,
+                                tph,
+                            });
                         }
                     }
                     along += (b.0 - a.0).hypot(b.1 - a.1);

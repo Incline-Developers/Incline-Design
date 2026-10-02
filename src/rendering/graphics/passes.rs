@@ -1282,6 +1282,19 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, 0..self.dynamic_strokes.len() as u32);
         }
 
+        // The faint underlay first, through anything in front of it, then
+        // the depth-tested band and stripes over it.
+        let flows = self.flow_strokes.len() as u32;
+        if flows > 0 {
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.flow_stroke_gpu.slice(..));
+            render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
+            render_pass.draw(0..6, 0..self.flow_underlay);
+            render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
+            render_pass.draw(0..6, self.flow_underlay..flows);
+        }
+
         if !self.overlay_strokes.is_empty() {
             render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);

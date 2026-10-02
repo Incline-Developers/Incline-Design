@@ -344,6 +344,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) stroke_gpu: wgpu::Buffer,
     pub(super) overlay_stroke_gpu: wgpu::Buffer,
     pub(super) dynamic_stroke_gpu: wgpu::Buffer,
+    pub(super) flow_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
@@ -414,6 +415,14 @@ pub(crate) struct Graphics<'a> {
     /// preview); see `rebuild_dynamic_scene`.
     pub(super) dynamic_strokes: Vec<StrokeInstance>,
     pub(super) dynamic_stroke_capacity: usize,
+    /// Per-frame strokes for Animate's moving haul flows; the first
+    /// `flow_underlay` are drawn without a depth test. See
+    /// `rebuild_flow_scene`.
+    pub(super) flow_strokes: Vec<StrokeInstance>,
+    pub(super) flow_stroke_capacity: usize,
+    pub(super) flow_underlay: u32,
+    /// The clock the flow stripes move by.
+    pub(super) flow_clock: web_time::Instant,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,

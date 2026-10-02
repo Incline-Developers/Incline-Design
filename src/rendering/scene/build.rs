@@ -12,7 +12,7 @@ use crate::{
     },
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
         scene::{
@@ -663,4 +663,105 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
             }
         }
     }
+}
+
+pub(crate) struct FlowSceneBuildInput<'a> {
+    pub(crate) flows: &'a [crate::ui::state::HaulFlowSegment],
+    pub(crate) flow_strokes: &'a mut Vec<StrokeInstance>,
+    pub(crate) view_proj: glam::DMat4,
+    pub(crate) scene_origin: DVec3,
+    pub(crate) scale_factor: f32,
+    /// Seconds on a steady clock; only its rate matters.
+    pub(crate) time_s: f64,
+}
+
+/// Animate's haul flows: each loaded route as a band coloured and sized by
+/// its share of the busiest road's tonnes per hour, with stripes moving
+/// along it faster the more it carries.
+///
+/// Returns how many leading strokes are the faint underlay, drawn without a
+/// depth test so a haul behind a solid still shows where it runs; the band
+/// and stripes after it are depth-tested like any other line in the scene.
+/// Rebuilt every frame while flows are shown, since the stripes move; a few
+/// hundred strokes at most.
+pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
+    /// Stripe period and length along the route, in logical pixels.
+    const PERIOD: f32 = 18.0;
+    const DASH: f32 = 8.0;
+    const COOL: [f32; 3] = [70.0 / 255.0, 175.0 / 255.0, 215.0 / 255.0];
+    const WARM: [f32; 3] = [250.0 / 255.0, 165.0 / 255.0, 45.0 / 255.0];
+    let FlowSceneBuildInput {
+        flows,
+        flow_strokes,
+        view_proj,
+        scene_origin,
+        scale_factor,
+        time_s,
+    } = input;
+    flow_strokes.clear();
+    if flows.is_empty() {
+        return 0;
+    }
+    let mut unused_fill_vertices: Vec<Vertex> = Vec::new();
+    let mut unused_fill_indices: Vec<u32> = Vec::new();
+    let mut ctx = DrawContext::unstyled(flow_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
+    let busiest = flows.iter().map(|flow| flow.tph).fold(0.0, f64::max).max(1e-9);
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32, alpha: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, alpha];
+    let pieces: Vec<_> = flows
+        .iter()
+        .filter_map(|flow| {
+            let length = (flow.b.0 - flow.a.0).hypot(flow.b.1 - flow.a.1);
+            let share = (flow.tph / busiest) as f32;
+            (length >= 0.5).then(|| (flow, share, length, 3.0 + 4.0 * share, mix(COOL, WARM, share, 1.0)))
+        })
+        .collect();
+    for &(flow, share, _, _, color) in &pieces {
+        draw_line(&mut ctx, flow.from, flow.to, 1.5 + 1.5 * share, [color[0], color[1], color[2], 0.35]);
+    }
+    let underlay = ctx.strokes.len() as u32;
+    // Outline, then band, then stripes, each over every piece before the
+    // next: a piece's dark edge never cuts across its neighbour, and round
+    // joins close the corners between them.
+    let outline = [0.0, 0.0, 0.0, 0.43];
+    for &(flow, _, _, width, _) in &pieces {
+        draw_line(&mut ctx, flow.from, flow.to, width + 2.0, outline);
+        draw_round_join(&mut ctx, flow.from, width + 2.0, outline);
+        draw_round_join(&mut ctx, flow.to, width + 2.0, outline);
+    }
+    for &(flow, _, _, width, color) in &pieces {
+        let band = [color[0] * 0.85, color[1] * 0.85, color[2] * 0.85, 1.0];
+        draw_line(&mut ctx, flow.from, flow.to, width, band);
+        draw_round_join(&mut ctx, flow.from, width, band);
+        draw_round_join(&mut ctx, flow.to, width, band);
+    }
+    let period = PERIOD * scale_factor;
+    let dash = DASH * scale_factor;
+    for &(flow, share, length, width, color) in &pieces {
+        let stripe = mix([color[0], color[1], color[2]], [1.0; 3], 0.65, 1.0);
+        // A fraction of the way along the piece on screen, as a fraction of
+        // the way along it in the world: perspective foreshortens the far end.
+        let w = |point: DVec3| (view_proj * point.extend(1.0)).w.abs().max(1e-9);
+        let (wa, wb) = (w(flow.from), w(flow.to));
+        let world = |along: f32| {
+            let s = f64::from((along / length).clamp(0.0, 1.0));
+            flow.from.lerp(flow.to, s * wa / ((1.0 - s) * wb + s * wa))
+        };
+        // Dashes sit at fixed places along the whole route, shifted by time,
+        // so they flow on unbroken from one piece into the next.
+        let speed = (10.0 + 60.0 * share) * scale_factor;
+        let shift = ((time_s * f64::from(speed)) % f64::from(period)) as f32;
+        let mut k = ((flow.offset - shift) / period).floor();
+        loop {
+            let from = k * period + shift - flow.offset;
+            if from > length {
+                break;
+            }
+            let to = (from + dash).min(length);
+            if to > from.max(0.0) {
+                draw_line(&mut ctx, world(from.max(0.0)), world(to), width * 0.55, stripe);
+            }
+            k += 1.0;
+        }
+    }
+    underlay
 }

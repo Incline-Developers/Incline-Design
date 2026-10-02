@@ -646,11 +646,14 @@ pub(crate) type HaulFlowKey = (
     crate::model::schedule::TruckClassId,
 );
 
-/// One straight piece of a loaded haul on screen, in window pixels, with the
-/// tonnes per hour crossing it. `offset` is how far along its route it
-/// starts, so the stripes run on unbroken from one piece to the next.
+/// One straight piece of a loaded haul, from `from` to `to` in the world
+/// and `a` to `b` on screen in window pixels, with the tonnes per hour
+/// crossing it. `offset` is how far along its route it starts on screen, so
+/// the stripes run on unbroken from one piece to the next.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HaulFlowSegment {
+    pub(crate) from: DVec3,
+    pub(crate) to: DVec3,
     pub(crate) a: (f32, f32),
     pub(crate) b: (f32, f32),
     pub(crate) offset: f32,
