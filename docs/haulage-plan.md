@@ -1,6 +1,6 @@
 # Haulage: implementation plan
 
-Status: agreed roadmap item, not started. Roadmap order is inspection views
+Status: agreed roadmap item, decisions settled (section 6), not started. Roadmap order is inspection views
 (done), **haulage**, sequencing rules, scenarios. This document is the brief
 for whoever implements it. Read `AGENTS.md` first.
 
@@ -55,92 +55,137 @@ Useful geometry already available:
 
 ## 3. Design
 
-### 3.1 Road network: polylines on chosen layers, speed limit per layer
+### 3.1 Haul roads are their own objects
 
-Planners already have road and ramp strings, usually from DXF, and they
-already sort them into layers. Industry tools and the simulation papers all
-build the network the same way: from exported road polylines, merged into
-segments. Don't invent a road editor. The network is **every polyline on the
-layers the user ticks as road layers**, drawn and edited with the existing
-CAD tools.
+Roads are a dedicated **haul network**, not plain polylines (decision D4):
+they need actions of their own, such as promoting a road node to a stockpile,
+dump or crusher, setting a speed limit on a road, and later opening and
+closing roads over time. DXF interoperability comes from converting in both
+directions.
 
-- **Road layers table:** layer, ticked, and an optional **speed limit**
-  (km/h). Planners already separate ramps, in-pit roads and main haul roads
-  into layers, so a per-layer limit covers most signposted speeds without a
-  road-sign tool.
-- **Graph build:**
-  - Nodes at vertices, edges along segments.
-  - Bulged segments are flattened (reuse the tessellation in
-    `Object::string_geometry`).
-  - Chains of degree-2 nodes collapse into one edge, with summed length and
-    time, so dense imported strings don't slow the path search. There is no
-    geometric loss.
-- **Joining:**
-  - Vertices from different polylines join when they are within a **join
-    tolerance** in 3D (default 2 m).
-  - A vertex that lands on another polyline's segment, in plan and within
-    tolerance in elevation, splits that segment and joins it. T-junctions are
-    the common case.
-  - Plan crossings at different elevations do **not** join, so a ramp passing
-    over a bench road stays separate.
-- **Per-edge figures:** 3D length, signed grade (rise over plan run), and the
-  layer's speed limit.
-- **Diagnostics** ("issues"), shown in the Layout panel and as markers in the
-  view; clicking one frames the camera on it:
-  - dead ends (degree-1 nodes that aren't a dump or reclaim point);
-  - near misses (ends within 3× tolerance of another road but not joined);
-  - separate pieces (connected components beyond the largest);
-  - edges steeper than a sanity limit (default 15 %).
-
-Not in scope for now (section 5, "Later"): per-polyline speed signs, slow
-points and stop signs, one-way and no-entry roads, roads that open and close
-over time, cornering speeds, and traffic interaction.
+- **Model:** a `HaulNetwork` on the `Document`, beside `solids` and
+  `schedule`, with its own id counters, allocated and protected like the
+  others: never reused, never rewound by an undo.
+  - `HaulNode { id, pos: DVec3, role: Option<NodeRole> }`: an explicit
+    junction or end. Roads meet only where they share a node, so topology is
+    authored, not guessed every run.
+  - `HaulRoad { id, name, from: NodeId, to: NodeId, verts: Vec<DVec3>,
+    speed_limit_kph: Option<f64> }`: the shape between two nodes.
+    Intermediate vertices are shape points, not junctions.
+  - `NodeRole`: dump point or reclaim point of a destination
+    (`DestinationId`). Later: bench exit, waypoint.
+  - Undo goes through the normal edit path. Persisted in OMF with
+    `#[serde(default)]`, so older projects open with an empty network.
+- **Scene:**
+  - Add `SceneEntityId::HaulRoad(RoadId)` and `SceneEntityId::HaulNode(NodeId)`
+    so roads and nodes pick, select, hover and highlight like everything else
+    (`rendering/query.rs`, `rendering/pick.rs`).
+  - Draw them from the scene build (`rendering/scene/`) keyed by the
+    network's revision, like design strings. Never rebuild per frame.
+  - Roads are drawn thicker than design strings, with nodes as dots and
+    role nodes as labelled pins.
+  - They're visible in every Planning page and hidden in Design unless
+    toggled.
+- **Tools** (Haulage → Layout; also in the canvas right-click menu and
+  `mac.rs`, per `AGENTS.md` → Menus):
+  - **Draw road:** click points; snapping to existing nodes joins them,
+    snapping to the middle of a road splits it with a new node, and the
+    existing snap index covers surfaces and design objects. Esc or
+    double-click ends it.
+  - **Move node, move shape point, delete road or node** (a node is
+    deleted with its roads, after a confirmation when it has a role),
+    **split road here**, **join two nodes**.
+  - **Node right-click menu:**
+    - *Make dump point for ▸* an existing destination;
+    - *Make reclaim point for ▸* an existing stockpile;
+    - *New stockpile here*, *New dump here*, *New crusher here*: these
+      create a standalone destination with this node as its dump point,
+      then select it in Schedule Setup for naming;
+    - *Clear role*.
+  - **Road right-click menu:** *Set speed limit…* (applies to the
+    selection), *Rename*.
+- **DXF and polylines:**
+  - **Convert to roads:** select polylines, run the command. Their vertices
+    become shape points. Ends, and any vertex within the **join tolerance**
+    (default 2 m, 3D) of another road, become shared nodes. A vertex that
+    lands on another road's segment, in plan and within tolerance in
+    elevation, splits it. Plan crossings at different elevations don't join,
+    so an overpass stays separate.
+  - The original polylines are kept, and the user can hide or delete them.
+  - **Import DXF** gets an option "As haul roads", which imports then
+    converts.
+  - **Export roads** writes them as polylines to DXF, one layer for the
+    network.
+- **Per-edge figures** for routing: 3D length, signed grade, and speed
+  limit.
+  - Bulged input is flattened on conversion, so roads are straight
+    segments.
+  - Chains of shape points are already single roads, so the path graph is
+    exactly nodes and roads.
+- **Issues** (a list in the Layout panel and markers in the view; clicking
+  one frames the camera on it):
+  - dead ends that have no role;
+  - near misses (an end within 3× the join tolerance of another road, not
+    joined);
+  - separate pieces (components beyond the largest);
+  - roads steeper than a truck class's maximum grade (see 3.3);
+  - roles whose destination no longer exists.
 
 ### 3.2 Where trucks join the network
 
 **Dig blocks.**
 - A truck runs on the **bench floor**, so the block's travel point is its
-  anchor at the flitch's bench-floor RL (the bench base).
-- The block connects to the nearest road point **on its bench**: within the
-  bench's elevation band and within an **auto-join distance** (setting,
-  default 300 m).
-- The connecting leg is travelled at the **bench speed** (setting, default
-  15 km/h), not the class's road speed. Industry tools use a slower
-  in-work-area speed for the bench leg. One value is enough here.
-- **Connected and unconnected blocks.** A block with no road on its bench
-  within the auto-join distance is *unconnected*. In the Layout view, connected
-  blocks are tinted green and unconnected ones red. This is the clearest way
-  to see where a ramp or bench road is missing, and the established workflow
-  is to draw roads until every block is connected.
-- **An unconnected block still schedules:**
-  - it joins the nearest road at any elevation, as the crow flies, at bench
-    speed;
-  - capture raises a warning naming the area and bench ("No road on this
-    bench within 300 m; joined a road 640 m away").
-  - Readiness lists unconnected blocks as warnings, not errors.
+  anchor at the flitch's bench-floor RL.
+- **Access leg** from a block to a candidate road point (a node, or the
+  closest point on a road):
+  - plan distance `d`, height difference `Δz`;
+  - class maximum grade `g` (see 3.3);
+  - **leg length = max(√(d² + Δz²), |Δz| / g)**.
+
+  The leg can't be steeper than the class can climb or descend. A road 12 m
+  above a block at 10 % costs at least 120 m of travel, even if it is
+  directly overhead (the user's rule). The leg's effective grade is then
+  `Δz / leg length`, so it is travelled at the class's grade speed for that
+  grade (3.3), capped at the **bench speed** (setting, default 15 km/h).
+- **Choosing the join:**
+  - Don't just take the nearest point. Consider the road points within the
+    **auto-join distance** (setting, default 300 m; widen to the nearest
+    road if there are none) and take the one with the least total time,
+    access leg plus network path.
+  - This falls out of the routing for free: per block, the minimum over
+    candidate access points of (leg time + the destination search's time at
+    that point). Use a handful of candidates (the nearest node, and the
+    closest point on each nearby road, up to about 8).
+- **Connected and unconnected:**
+  - A block is *connected* when its best access leg is within the auto-join
+    distance and needed no added length for grade, meaning there's a road on
+    or near its bench.
+  - In the Layout view, connected blocks are tinted green and unconnected
+    ones red. This is the quickest way to see where a ramp or bench road is
+    missing.
+  - An unconnected block still schedules on its grade-limited straight leg.
+    Capture warns naming the area and bench ("No road on this bench; joined a
+    road 12 m above, assuming 120 m at 10 %"). Readiness lists unconnected
+    blocks as warnings, not errors (D5).
 
 **Destinations.**
-- Each destination gets a **dump point**.
-  - Solid destinations default to the road point nearest the solid's plan
-    centroid at its top surface. The user can override it by picking in the
-    view.
-  - Standalone destinations need a picked point.
-- **Stockpiles** may also have a separate **reclaim point**. It defaults to
-  the dump point. Real piles are often built from one side and reclaimed from
-  another, and industry tools handle this with separate build and reclaim
-  points.
-- Store both on the destination settings in `destinations.rs`, next to
-  `distance_km`, as `Option<[f64; 3]>`.
+- **Dump point:** each destination has one dump point, a node with the
+  dump-point role.
+  - Solid destinations with no node assigned default to the road point
+    nearest the solid's plan centroid at its top surface. They're shown in
+    the UI as "Nearest road", with a one-click "Make it a node" to pin it.
+  - Standalone destinations need a node.
+- **Reclaim point:** stockpiles may have a separate one, defaulting to the
+  dump point. Real piles are often built from one side and reclaimed from the
+  other.
 - **Reclaim** runs from the pile's reclaim point to the receiving
   destination's dump point.
-
-**Fallback.**
-- A destination with no dump point, or no usable network, keeps today's
-  fixed one-way distance (per destination).
-- The UI shows which method each destination uses ("Roads" or "Fixed
-  2.0 km").
-- A project with no road layers behaves exactly as today, apart from the
-  cycle additions in 3.3.
+- **Fallback:**
+  - A destination with no dump point and no usable network keeps today's
+    fixed one-way distance.
+  - The UI shows the method ("Roads" or "Fixed 2.0 km").
+  - A project with no roads behaves as today, apart from the cycle additions
+    in 3.3.
 
 ### 3.3 Cycle time per class
 
@@ -169,7 +214,7 @@ empty travel.**
   - **Speed** = the lowest of three limits:
     - the class's **grade speed** for that edge's grade and load state (see
       below);
-    - the road layer's speed limit;
+    - the road's speed limit;
     - the class's maximum speed.
 
     Industry tools always take the lowest applicable limit.
@@ -181,6 +226,10 @@ empty travel.**
     starting from rest on a short section run as low as 0.25–0.5 of the
     maximum. This one term captures most of that without a
     velocity-profile simulation.
+- **Maximum grade per class** (default 10 %): the steepest grade the class
+  may climb or descend. It shapes the access leg (3.2). Roads steeper than it
+  are flagged as issues but still used, because the road is the design and
+  the flag tells the planner to check it.
 - **Grade speed table per class** (replaces the two speed fields). Rows are
   grade bands, each with a loaded and an empty speed. This mirrors how sites
   set loaded and unloaded speed limits by grade, and stands in for rimpull
@@ -221,41 +270,38 @@ projects without roads.
 
 ### 3.4 Where the computation lives
 
-- **`model/haulage/`** (new module; pure, no UI, wasm-safe):
-  - `network.rs`: graph build, joining, chain collapse, issues, and a
-    nearest-point spatial index (uniform grid over segment bounding boxes).
-  - `routing.rs`: Dijkstra over edge time for a given class and load state.
-    - Run one search from each dump and reclaim point per class per
-      direction (reverse graph for the loaded leg into a destination), then
-      look up every block's access node.
-    - That gives points × classes × 2 searches, not one per candidate.
-    - Edge times depend on the class, so the graph is shared and the weights
-      are computed per class.
-  - `HaulageSettings` (persisted on the `Document` with the schedule plan):
-    - road layers with optional speed limits;
-    - join tolerance, auto-join distance, bench speed, acceleration.
-
-    The road polylines themselves stay ordinary objects.
+- **`model/haulage/`** (new module; pure model code, wasm-safe):
+  - `network.rs`: the `HaulNetwork` entity and its edits (draw, split, join,
+    move, delete, convert polylines, roles), the issue list, and a
+    nearest-point spatial index (uniform grid over road bounding boxes) for
+    access candidates.
+  - `routing.rs`: Dijkstra over road time for a given class and load state.
+    - Run one search from each dump and reclaim point per class per direction
+      (reverse graph for the loaded leg into a destination).
+    - Each block then takes the minimum over its access candidates (3.2).
+    - That gives points × classes × 2 searches, not one per candidate. Edge
+      times depend on the class, so the graph is shared and the weights are
+      computed per class.
+  - Haulage settings on the network: join tolerance, auto-join distance,
+    bench speed, acceleration.
 - **One formula.** `trucking::coefficients` gains a variant that takes the
   route's computed breakdown:
   `CycleBreakdown { spot_h, load_h, loaded_h, dump_h, empty_h, loaded_km,
   empty_km, rise_m }`. The fixed-distance path builds the same breakdown.
 - **Capture.**
-  - Build the network once per run from a snapshot of the road objects. It
-    must be an owned copy, because capture runs off the UI thread.
+  - Capture runs off the UI thread, so it takes an owned clone of the
+    network, which is small.
   - Compute breakdowns and attach them to `MovementCandidate`.
   - Keep `truck_hours_per_tonne` as the field the solvers read, and add the
     breakdown beside it for publishing. The solvers must not change.
 - **Fingerprint.**
   - Hash into the run fingerprint (`schedule_run.rs`):
-    - the road layers' object content (ids, vertices);
-    - the haulage settings and the dump and reclaim points;
+    - the network's content and settings;
     - the new class fields, loader spot times and the loader rates used for
       load time.
-  - Editing a road then recalculates. Make sure unrelated object edits on
-    other layers do **not** recalculate.
-- **Caching:** the graph can be cached by that hash (job queue,
-  `app/jobs.rs`) if it's slow on real data. Measure first.
+  - Editing a road then recalculates; other object edits don't.
+- **Caching:** cache the search results by that hash if they're slow on real
+  data. Measure first.
 
 ### 3.5 Publishing
 
@@ -277,33 +323,31 @@ are (decision D2).
 Replace the scaffold step list with a small side panel, in the style of the
 Schedule Setup lists:
 
-- **Road layers:** each drawing layer with a tick and an optional speed
-  limit. Ticking one rebuilds the network overlay immediately.
+- **Tools:** Draw road, Convert selection to roads, Import DXF as roads,
+  Export roads.
 - **Network:** one summary line, for example "42 roads · 3 issues · 118 of
   120 blocks connected". The issues are listed below on expansion, and
   clicking one frames the camera on it.
-- **Dump points:** one row per destination, showing its method ("Roads" or
-  "Fixed 2.0 km"). Its menu offers Pick dump point, Pick reclaim point
-  (stockpiles), Use nearest road, and Use fixed distance.
-  - Picking follows the existing select-then-act and snapping patterns;
-    while picking, the viewport stops taking selection.
+- **Destinations:** one row per destination with its method ("Roads ·
+  node", "Nearest road", or "Fixed 2.0 km"). Clicking a row frames its dump
+  point. Its menu offers Pick node, Make nearest point a node, and Use fixed
+  distance.
 - **Settings** (folded): join tolerance, auto-join distance, bench speed,
   acceleration.
 
-**Viewport overlay** while on this page:
+**On this page:**
+- roads are tinted by grade (flat neutral, uphill warm, steeper than some
+  class's maximum red);
+- dig blocks are tinted faintly, green when connected and red when not.
 
-- **Roads:** edges tinted by grade (flat neutral, uphill warm, steep red),
-  with junction dots and issue markers.
-- **Blocks:** dig blocks tinted green when connected and red when not. Draw
-  them faintly, so the roads stay the subject.
-- **Points:** dump and reclaim points as labelled pins.
-
-Hovering a road shows its layer, length, grade and speed limit.
+Hovering a road shows its name, length, grade and speed limit. Hovering a
+node shows its role.
 
 **Route check** (the haul query). Pick a dig block, or a stockpile for
 reclaim, then a destination and a truck class.
-- The overlay highlights the loaded path in red and the empty path in
-  yellow, the convention planners know.
+- The view highlights the loaded path in red and the empty path in yellow,
+  including the access leg. When grade lengthened the access leg, it is drawn
+  dashed.
 - A card shows:
   - the cycle breakdown (spot, load, haul, dump, return, total minutes);
   - one-way distance and rise;
@@ -314,18 +358,14 @@ reclaim, then a destination and a truck class.
 
 This is how a planner learns to trust the model, so it's worth getting right.
 
-The overlay is a viewport overlay, not scene geometry. Never rebuild scene
-caches per frame (`AGENTS.md` → Invalidation and caching). Drawing it with
-egui's painter from projected points, the way existing screen-space markers
-do, is likely simplest. Block tints may need the existing solid or block
-highlight path instead. Check how `solids_view.rs` and `dig_strips.rs` tint
-blocks.
+Block tints may need the existing solid or block highlight path; check how
+`solids_view.rs` and `dig_strips.rs` tint blocks.
 
 ### 4.2 Schedule Setup
 
 - **Truck Classes:**
-  - Replace the two speed fields with the grade speed table, plus a
-    **maximum speed** and **dump time (s)**.
+  - Replace the two speed fields with the grade speed table, plus
+    **maximum speed**, **maximum grade** and **dump time (s)**.
   - Show a greyed example line under the table once a schedule exists, for
     example "Busiest route: 23.4 min cycle". Optional.
 - **Loader Classes:** add **spot time (s)**.
@@ -359,37 +399,46 @@ blocks.
 
 Each phase is committed separately and checked with screenshots.
 
-**Phase 1: road network and Layout view (no schedule effect).**
-- `model/haulage/network.rs` with focused tests:
-  - join tolerance and T-junction split;
-  - an overpass is not joined;
-  - chain collapse keeps total length;
-  - dead-end and near-miss detection;
+**Phase 1: the haul network entity and its tools (no schedule effect).**
+- `HaulNetwork` model, edits, undo and persistence, with focused tests:
+  - draw, split and join keep topology;
+  - convert polylines: join tolerance, T-junction split, overpass not
+    joined;
+  - deleting a node deletes its roads;
+  - issues: dead ends, near misses, pieces;
   - grade sign.
-- Haulage settings persisted, with undo through the normal edit path.
-- Layout side panel: road layers with speed limits, network summary and
-  issues, overlay.
+- `SceneEntityId` variants, scene drawing, picking and hover.
+- Tools: draw road, edit nodes and shape points, split, join, delete, set
+  speed limit, rename. Convert selection, DXF import "as haul roads", and
+  export.
+- Menus in all three places (`AGENTS.md`).
+- Layout side panel: tools, network summary and issues.
 - Wire `SetPlanningSubpage` for Haulage, which is ignored today.
 
-**Phase 2: block connection, dump points and route check.**
-- Block travel points, auto-join, and the connected/unconnected tint.
-- Dump and reclaim points, with a picker and nearest-road defaults.
+**Phase 2: roles, block connection and route check.**
+- **Node roles:** promote a node to a dump or reclaim point, or create a
+  new stockpile, dump or crusher on it. Nearest-road defaults for solid
+  destinations.
+- **Block access** with the grade-limited leg, and the connected/unconnected
+  tint.
 - `routing.rs` with tests:
   - a straight flat road matches the analytic cycle, including the
     acceleration loss;
   - a ramp is slower uphill loaded;
-  - a layer speed limit caps speed;
+  - a speed limit caps speed;
   - directionality;
+  - a road 12 m above a block costs a 120 m leg at 10 %;
+  - the best join beats the nearest when the nearest is up a cliff;
   - a disconnected network falls back.
 - The Route check card, path highlight and profile.
 
 **Phase 3: cycle model into the schedule.**
-- Class fields (grade table, maximum speed, dump time) and loader spot time,
+- Class fields (grade table, maximum speed, maximum grade, dump time) and loader spot time,
   with serde defaults and migration from the old speeds.
 - Breakdown-based `coefficients`.
 - Capture builds the network and per-block breakdowns, with warnings for
   unconnected blocks; extend the fingerprint.
-- Check equivalence: a project with no road layers, and with spot, load and
+- Check equivalence: a project with no roads, and with spot, load and
   dump forced to zero, must produce the same schedule as before.
 - Publish breakdowns.
 - Update `trucking.rs` module docs and remove the
@@ -409,12 +458,12 @@ Each phase is committed separately and checked with screenshots.
 
 **Later (ask before starting).** Ordered by likely value:
 1. **Roads that open and close over time,** such as staged ramps: open from
-   or until a day, per layer. This needs per-period coefficients, meaning
+   or until a day, per road or group of roads. This needs per-period coefficients, meaning
    candidates split at the change days, which does touch the formulation.
 2. **Cornering speeds:** speed by deflection angle at switchbacks and
    intersections. This needs an edge-based path search.
-3. **Per-polyline speed signs, slow points and one-way roads.**
-4. **In-pit and ex-pit split:** waypoints, or a layer flag, so reports
+3. **Slow points, stop signs and one-way roads** on roads and nodes. Per-road speed limits are already in phase 1.
+4. **In-pit and ex-pit split:** waypoints, or a road tag, so reports
    subtotal haulage by area.
 5. **Exports:**
    - each scheduled haul as a 3D polyline (DXF);
@@ -427,23 +476,24 @@ Each phase is committed separately and checked with screenshots.
 Out of scope entirely: tyre heat limits, battery and trolley trucks, and
 traffic micro-simulation.
 
-## 6. Decisions for the user (recommended defaults in bold)
+## 6. Decisions (agreed 2026-10-02)
 
 - **D1.** Spot, load and dump time count for every project, including ones
-  without roads: **yes, documented**. The alternative is keeping travel-only
-  until roads are set up.
-- **D2.** Truck classes and rules: **stay in Schedule Setup**, with Haulage
-  holding roads, block connection and dump points. The alternative is moving
-  all truck setup into the Haulage tab.
-- **D3.** Speed model: **a grade speed table (loaded and empty) per class,
-  plus layer speed limits and one acceleration loss per stop**. The
-  alternatives are a simpler flat/uphill/downhill table, or full rimpull and
-  retarder curves.
-- **D4.** The road network: **polylines on ticked layers**. The alternative
-  is a dedicated road object type with its own drawing tools.
-- **D5.** Unconnected blocks: **schedule with a warning**, joining the
-  nearest road as the crow flies. The alternative is to refuse to calculate
-  until every block is connected, which is how dedicated haul tools behave.
+  without roads, and the change is documented. **Agreed.**
+- **D2.** Truck classes and rules stay in Schedule Setup, with Haulage
+  holding roads, block connection and dump points. **Agreed.**
+- **D3.** Speeds come from a grade speed table (loaded and empty) per class,
+  plus road speed limits and one acceleration loss per stop. **Agreed.**
+- **D4.** Roads are **dedicated haul-network objects** with explicit nodes,
+  so nodes can be promoted to stockpiles, dumps and crushers, and roads can
+  carry speed limits now and other rules later. DXF interoperability comes
+  through "Convert to roads", "Import DXF as roads" and "Export roads".
+  **Agreed, changed from plain polylines on ticked layers.**
+- **D5.** Unconnected blocks schedule with a warning, joining a road in a
+  straight line. The leg can't be steeper than the class's **maximum
+  grade**: a road Δz above or below needs at least |Δz| ÷ max grade of
+  travel (12 m at 10 % is 120 m). The join chosen is the quickest overall,
+  not merely the nearest. **Agreed, with the user's maximum-grade rule.**
 
 ## 7. Working rules for the implementer
 
