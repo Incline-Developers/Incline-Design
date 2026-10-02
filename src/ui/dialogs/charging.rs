@@ -170,35 +170,31 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
             menu::menu_section(ui, tr!("charging-preview"));
             let preview = dialog.preview.as_mut().expect("set above");
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(tr!("charging-preview-on-a"));
-                ui.add(egui::DragValue::new(&mut preview.0).range(0.5..=200.0).speed(0.1).max_decimals(1).suffix(" m"));
-                ui.label(tr!("charging-preview-hole-of"));
-                let mut millimetres = preview.1 * 1_000.0;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut millimetres)
-                            .range(20.0..=1_000.0)
-                            .speed(1.0)
-                            .max_decimals(0)
-                            .prefix("Ø ")
-                            .suffix(" mm"),
-                    )
-                    .changed()
-                {
-                    preview.1 = millimetres / 1_000.0;
-                }
-                if let Some(pattern) = from_pattern
-                    && (pattern.0 - preview.0).abs() + (pattern.1 - preview.1).abs() > 1.0e-9
-                    && ui
-                        .link(tr!("charging-preview-use-pattern"))
-                        .on_hover_text(tr!("charging-preview-active-pattern-median-hole"))
-                        .clicked()
-                {
-                    *preview = pattern;
-                }
-            });
+            // Labelled fields rather than a sentence built around the inputs, which no
+            // translation could reorder.
+            MenuFieldF64::new(tr!("drill-pattern-hole-depth"), &mut preview.0, 0.5..=200.0)
+                .max_decimals(1)
+                .suffix(format!(" {}", tr!("common-m")))
+                .show(ui);
+            let mut millimetres = preview.1 * 1_000.0;
+            if MenuFieldF64::new(tr!("drill-pattern-hole-diameter"), &mut millimetres, 20.0..=1_000.0)
+                .speed(1.0)
+                .max_decimals(0)
+                .suffix(" mm")
+                .show(ui)
+                .changed()
+            {
+                preview.1 = millimetres / 1_000.0;
+            }
+            if let Some(pattern) = from_pattern
+                && (pattern.0 - preview.0).abs() + (pattern.1 - preview.1).abs() > 1.0e-9
+                && ui
+                    .add(MenuButton::new(tr!("charging-preview-use-pattern-hole")))
+                    .on_hover_text(tr!("charging-preview-active-pattern-median-hole"))
+                    .clicked()
+            {
+                *preview = pattern;
+            }
             ui.add_space(6.0);
             let problem = rule.problem(&products);
             match (&problem, &laid) {
