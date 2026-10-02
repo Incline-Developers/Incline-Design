@@ -27,7 +27,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_choice_row, grid_color_row, grid_row, grid_separator_row, grid_value_row, property_table_height},
-            explorer::{ExplorerEntry, ExplorerHeader, paint_fixed_stripes, reserve_fixed_stripes},
+            explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
             menu::{MenuFieldCombo, MenuFieldF64, committed},
         },
@@ -47,42 +47,36 @@ fn striped_list(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: PlanningPage, commands: &mut Vec<UiCommand>) {
     match page {
-        PlanningPage::Solids => return draw_solids_steps(ui, editor, commands),
-        PlanningPage::Schedule => return striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor, commands)),
-        PlanningPage::Haulage => {}
+        PlanningPage::Solids => draw_solids_steps(ui, editor, commands),
+        PlanningPage::Schedule => striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor, commands)),
+        PlanningPage::Haulage => striped_list(ui, |ui| draw_haulage_steps(ui, editor)),
     }
-    let selection_id = egui::Id::new(("planning_configuration_selected", page));
-    let mut configuration = ui.data(|data| data.get_temp::<bool>(selection_id)).unwrap_or(false);
-    striped_list(ui, |ui| {
+}
+
+/// Haulage Setup's steps. The road network has nothing to run; truck classes
+/// carry the Schedule pipeline's own check of them.
+fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
+    use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
+    let mut step = editor.haulage_setup_step;
+    for entry in HaulageStep::ALL {
+        let state = match entry {
+            HaulageStep::Network => StageState::Complete,
+            HaulageStep::TruckClasses => editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()].state,
+        };
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            if ExplorerEntry::new(egui::Id::new("planning_configuration"), bold(&tr!("planning-configuration")))
-                .leading_icon(unthemed_icon!("step_complete.svg"), egui::Color32::WHITE)
+            let response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
+                .leading_icon(step_icon(state), stage_tint(ui, state))
                 .header_aligned_icon()
-                .selected(configuration)
+                .selected(step == entry)
                 .show(ui)
-                .response
-                .clicked()
-            {
-                configuration = true;
+                .response;
+            if response.clicked() {
+                step = entry;
             }
         });
-        ExplorerHeader::new(egui::Id::new("planning_site_data"), tr!("planning-site-data"))
-            .icon(unthemed_icon!("step_pending.svg"))
-            .show(ui, |ui| {
-                if ExplorerEntry::new(egui::Id::new("planning_site_contents"), bold(&tr!("planning-content")))
-                    .leading_icon(unthemed_icon!("step_pending.svg"), egui::Color32::WHITE)
-                    .header_aligned_icon()
-                    .selected(!configuration)
-                    .show(ui)
-                    .response
-                    .clicked()
-                {
-                    configuration = false;
-                }
-            });
-    });
-    ui.data_mut(|data| data.insert_temp(selection_id, configuration));
+    }
+    editor.haulage_setup_step = step;
 }
 
 fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
@@ -1578,72 +1572,28 @@ fn draw_solids_details(
     }
 }
 
-fn category_labels() -> [String; 4] {
-    [tr!("planning-dumps"), tr!("planning-stockpiles"), tr!("planning-loaders"), tr!("planning-trucks")]
-}
-
-/// Id of, and the last choice made in, the content category list. Read
-/// separately from the list that sets it, because the list is an island the
-/// user can close and the items beside it still have to know what they list.
-fn category_id(page: PlanningPage) -> egui::Id {
-    egui::Id::new(("planning_site_category", page))
-}
-
-fn current_category(ui: &egui::Ui, page: PlanningPage) -> usize {
-    ui.data(|data| data.get_temp::<usize>(category_id(page))).unwrap_or(0).min(3)
-}
-
-fn draw_content_categories(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) -> usize {
-    let category_id = category_id(page);
-    let mut category = current_category(ui, page);
-    DataGrid::new("planning_categories", rect, &tr!("planning-content"))
-        .column_header(&tr!("planning-content-type"))
-        .show(ui, |ui| {
-            for (index, label) in category_labels().iter().enumerate() {
-                if grid_row(ui, GridRow::new(label).selected(category == index)).clicked() {
-                    category = index;
-                }
+/// Haulage Setup's panes: the road network's settings, or the truck classes
+/// list beside the selected class.
+fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let session = project.active_session;
+    match editor.haulage_setup_step {
+        crate::ui::state::HaulageStep::Network => {
+            central_island(ui, layout, |ui, rect| super::haulage::draw_network_settings(ui, rect, &project.haulage, session, commands));
+        }
+        crate::ui::state::HaulageStep::TruckClasses => {
+            let plan = project.schedule.clone();
+            // Open on a class rather than an empty table.
+            if editor.schedule_selected_truck_class.is_none_or(|id| plan.trucks().class(id).is_none()) {
+                editor.schedule_selected_truck_class = plan.trucks().classes.first().map(|c| c.id);
             }
-        });
-    ui.data_mut(|data| data.insert_temp(category_id, category));
-    category
-}
-
-fn draw_items(ui: &mut egui::Ui, rect: egui::Rect, category: usize) {
-    let label = &category_labels()[category];
-    let new_label = match category {
-        0 => tr!("planning-new-dump"),
-        1 => tr!("planning-new-stockpile"),
-        2 => tr!("planning-new-loader"),
-        _ => tr!("planning-new-truck"),
-    };
-    DataGrid::new("planning_items", rect, label).column_header(&tr!("planning-name")).show(ui, |ui| {
-        // No item rows yet; the whole body is free space that offers "New ...".
-        let body = ui.available_rect_before_wrap();
-        if body.is_positive() {
-            let response = ui.interact(body, ui.id().with(("new_item_space", category)), egui::Sense::click());
-            context_menu_popup(&response, label, |ui| {
-                ContextMenuAction::new(new_label.clone()).enabled(false).show(ui);
+            island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
+                super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
             });
         }
-    });
-}
-
-fn draw_item_properties(ui: &mut egui::Ui, rect: egui::Rect) {
-    PropertyTable::new("planning_properties", rect, &tr!("planning-properties")).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        // Fields arrive once an item is selectable.
-    });
-}
-
-fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) {
-    let name_id = egui::Id::new(("planning_schedule_name", page));
-    let mut schedule_name = ui.data(|data| data.get_temp::<String>(name_id)).unwrap_or_default();
-    PropertyTable::new("planning_configuration", rect, &tr!("planning-configuration")).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        rows.field(&tr!("planning-schedule-name"), &mut schedule_name, None);
-    });
-    ui.data_mut(|data| data.insert_temp(name_id, schedule_name));
+    }
 }
 
 /// The Schedule Setup subpage's panes: a list beside the properties of the
@@ -1770,25 +1720,10 @@ pub(crate) fn draw_details(
     page: PlanningPage,
 ) -> PlanningLayout {
     let mut layout = PlanningLayout::default();
-    let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-        if page == PlanningPage::Solids {
-            draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands);
-            return;
-        }
-        if page == PlanningPage::Schedule {
-            draw_schedule_details(ui, &mut layout, editor, project, document, commands);
-            return;
-        }
-        let configuration = ui
-            .data(|data| data.get_temp::<bool>(egui::Id::new(("planning_configuration_selected", page))))
-            .unwrap_or(false);
-        if configuration {
-            central_island(ui, &mut layout, |ui, rect| draw_configuration(ui, rect, page));
-            return;
-        }
-        let category = island(ui, &mut layout, "planning_categories_island", 260.0, |ui, rect| draw_content_categories(ui, rect, page));
-        island(ui, &mut layout, "planning_items_island", 320.0, |ui, rect| draw_items(ui, rect, category));
-        central_island(ui, &mut layout, draw_item_properties);
+    let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match page {
+        PlanningPage::Solids => draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands),
+        PlanningPage::Schedule => draw_schedule_details(ui, &mut layout, editor, project, document, commands),
+        PlanningPage::Haulage => draw_haulage_details(ui, &mut layout, editor, project, commands),
     });
     layout.rect = response.response.rect;
     layout

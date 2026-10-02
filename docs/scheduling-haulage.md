@@ -1,8 +1,11 @@
 # Haul roads and truck cycle times
 
-Haulage → Layout holds the road network, destination dump and reclaim points,
-connection checks and the Route check. Truck and loader classes stay in
-Schedule Setup. A road is a dedicated planning object: its ends are junction
+Haulage has two pages. **Setup** holds the road network settings (join
+tolerance, auto-join distance, bench speed, acceleration) and the truck
+classes, which moved here from Schedule Setup; Schedule's pipeline still checks
+them, and its repair links open this page. **Layout** holds the road network,
+destination dump and reclaim points, block connections and the Route check.
+Loader classes stay in Schedule Setup. A road is a dedicated planning object: its ends are junction
 nodes and its intermediate vertices only shape the road. Moving a node moves
 all incident roads. Undo preserves the network's allocated IDs. OMF stores the
 network, settings and roles; older projects start with an empty network.
@@ -18,8 +21,13 @@ T-junctions within the 3D tolerance and keeps elevated crossings separate.
 Export writes one DXF polyline per road.
 
 The Layout panel reads top to bottom: tools; a one-line summary (roads, length,
-blocks connected); the selection; issues; roads; destinations; the route check;
-settings. Drag a node or bend point in the viewport to move it, with its roads
+blocks connected); the selected block; the selected road or node; the route
+check; issues; destinations; roads. The explorer column carries a Solids
+Navigation tree of its own, like Animate's: hide solids, benches, blasts or
+flitches to see and click the blocks underneath. Hidden blocks are neither
+drawn nor clickable, and a click takes the highest visible block under the
+cursor. The selected block is filled orange, with a line to where it meets the
+roads. Drag a node or bend point in the viewport to move it, with its roads
 previewed until release; a still click only selects. Selecting a road shows its
 name, length, steepest grade and speed limit; selecting a node shows its role
 and coordinates. The role list also creates a new stockpile, dump or crusher at
@@ -30,9 +38,22 @@ themselves on hover, and frame and select it on click.
 
 Each destination row has a choice of how trucks reach it: a selected node, the
 nearest road to a solid's surface, a node added at that nearest point, or its
-fixed distance. The route check needs only a click on a dig block: destination,
+fixed distance. A node's role is a dump point, a reclaim point, or for a
+stockpile both at once (**Dump & reclaim point**). Giving a node one half of a
+role another node holds moves only that half; a stockpile made from a node, or
+pointed at one, starts as dump & reclaim unless it already has a separate
+reclaim point. The route check needs only a click on a dig block: destination,
 truck class and loader start filled in, and the result recalculates whenever
 the question or the project changes.
+
+A block joins the network at the nearest point on any road, interior points
+included. To choose instead, select the block and press **Choose node…**, then
+click a node, or a point on a road, which splits the road there. The block is
+then held to that node whatever is nearer; **Use nearest road** releases it. A
+link is stored with the network by the block's solid, flitch base RL and a
+point inside it, so a rerun that redraws strips keeps it with whichever block
+covers that point. Linked blocks always count as connected, still pay their
+grade-limited drive to the node, and show a blue line to it on the Layout.
 
 ## Cycle model
 
@@ -77,14 +98,21 @@ grade`. A road 12 m above a block at 10% therefore requires at least 120 m of
 access. Its effective grade is height change divided by that access length.
 Dig access is capped at the bench speed, initially 15 km/h.
 
-The query compares projections onto nearby roads plus the nearest junction,
-choosing the least total cycle rather than simply the nearest road. The
+A block joins at the nearest road point by grade-limited access length. Only
+points within a metre of that nearest one - the same junction reached along
+different roads - compete on total cycle time; a farther point is never chosen
+for being quicker overall, because the straight leg to it would cut through
+the pit walls. (The first implementation took the least total cycle among all
+nearby roads, which joined blocks to distant junctions.) The
 initial auto-join distance is 300 m and join tolerance is 2 m. If no road is
 nearby, the nearest road is considered. A block is connected when its
 grade-limited access fits within the auto-join distance; a road 12 m above is
 connected at 120 m, and the route check says the leg was lengthened. Unconnected
 blocks still schedule; Readiness reports how many in one line, and Layout tints
-them red. Route check draws a lengthened access leg dashed.
+them red. Route check draws a lengthened access leg dashed. A road end is
+reported as a dead end only when no dig block is within the auto-join
+distance of it and no block is linked to it: the end of a road into a working
+face is where its blocks join.
 
 Explicit dump/reclaim roles take priority. Solid destinations can use the
 nearest road to their surface centroid; trucks then also drive the straight,
@@ -118,6 +146,18 @@ With spot, load and dump zero, fixed-distance coefficients match the previous
 travel-only calculation. New classes receive the generic starting settings
 above. Review class speeds and times before calculating production schedules.
 
+## Animate
+
+While Schedule → Animate shows a current result, every loaded haul under way at
+the shown instant is drawn along its route. Each delivery adds its tonnes per
+hour to each road segment it uses, so a road shared by several blocks shows
+their sum. Stripes run from the loader towards the destination; they move
+faster and the line is wider and warmer (blue to amber) the more tonnes per
+hour cross it. Hovering a segment gives its rate, and a key in the corner gives
+the busiest. Routes are worked out once per schedule and network, with the same
+searches capture uses; only the projection and the stripes are redone each
+frame, and only while flows are on screen.
+
 ## Validation
 
 Validated on Linux desktop against the unsaved DreamLand sample: road drawing,
@@ -142,6 +182,17 @@ a schedule calculation. Temporary tests covered the destination access leg, the
 120 m grade-limited access counting as connected, and loose-node pruning, and
 were removed. Native clippy and a wasm `cargo check` passed.
 
-Screenshots: [Layout and route check](haulage/layout.png),
+The second rework (Setup page, Solids Navigation, nearest-point joins, block
+links, dump & reclaim roles and Animate flows) was driven on the same unsaved
+sample: hiding benches and clicking a block beneath, linking a block to a ramp
+end and seeing the route check follow, the Road network and Truck Classes
+steps, setting ROM B's node to dump & reclaim, and scrubbing Animate with flows
+moving to ROM A and OSA A. Temporary tests covered the nearest interior join,
+a linked block's longer route, link persistence and the split dump/reclaim
+roles, and were removed. Native clippy and a wasm `cargo check` passed (the
+latter with its existing unused-trucking warnings).
+
+Screenshots: [Layout with a selected block and route check](haulage/layout.png),
+[Setup](haulage/setup.png), [Animate flows](haulage/animate-flows.png),
 [truck settings](haulage/truck-settings.png),
 [Calendar](haulage/calendar.png), [Inspector](haulage/inspector.png).

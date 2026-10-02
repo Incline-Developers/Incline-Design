@@ -121,7 +121,7 @@ impl EditorState {
     pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
         match self.planning_page {
             PlanningPage::Solids => self.solids_subpage,
-            PlanningPage::Haulage => PlanningSubpage::Layout,
+            PlanningPage::Haulage => self.haulage_subpage,
             PlanningPage::Schedule => self.schedule_subpage,
         }
     }
@@ -618,6 +618,73 @@ pub(crate) struct SolidsViewRow {
     pub(crate) solid: crate::model::SolidId,
     /// The slice of that solid, or `None` for the solid as a whole.
     pub(crate) band: Option<BenchSelection>,
+}
+
+/// What a Solids Navigation tree has hidden: whole solids, bench or flitch
+/// rows, and blasts. Session-only, and separate per page, so hiding ground to
+/// pick a block on Haulage leaves Animate showing it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SolidsVisibility {
+    pub(crate) solids: HashSet<crate::model::SolidId>,
+    pub(crate) rows: Vec<SolidsViewRow>,
+    pub(crate) blasts: HashSet<BlastShapeRef>,
+}
+
+impl SolidsVisibility {
+    pub(crate) fn hides(&self, solid: crate::model::SolidId, bench: BenchSelection, flitch: BenchSelection, blast: Option<BlastShapeRef>) -> bool {
+        self.solids.contains(&solid)
+            || self.rows.contains(&SolidsViewRow { solid, band: Some(bench) })
+            || self.rows.contains(&SolidsViewRow { solid, band: Some(flitch) })
+            || blast.is_some_and(|blast| self.blasts.contains(&blast))
+    }
+}
+
+/// What a schedule hauls along one route: where from, where to, in what.
+pub(crate) type HaulFlowKey = (
+    crate::model::schedule::result::WorkSource,
+    crate::model::schedule::DestinationId,
+    crate::model::schedule::TruckClassId,
+);
+
+/// One straight piece of a loaded haul on screen, in window pixels, with the
+/// tonnes per hour crossing it. `offset` is how far along its route it
+/// starts, so the stripes run on unbroken from one piece to the next.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HaulFlowSegment {
+    pub(crate) a: (f32, f32),
+    pub(crate) b: (f32, f32),
+    pub(crate) offset: f32,
+    pub(crate) tph: f64,
+}
+
+/// One dig block as the Haulage layout shows it: its outline, and how it
+/// meets the road network.
+#[derive(Clone, Debug)]
+pub(crate) struct HaulBlock {
+    pub(crate) id: crate::model::DigBlockId,
+    pub(crate) solid: crate::model::SolidId,
+    pub(crate) bench: BenchSelection,
+    pub(crate) flitch: BenchSelection,
+    pub(crate) blast: Option<BlastShapeRef>,
+    pub(crate) name: String,
+    pub(crate) anchor: [f64; 2],
+    /// The footprint in plan, which a block link is matched against.
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+    /// The footprint at the flitch base, for drawing.
+    pub(crate) rings: Vec<Vec<glam::DVec3>>,
+    /// The node it is held to, when it is not left to the nearest road.
+    pub(crate) link: Option<crate::model::haulage::NodeId>,
+    /// Where it meets the network, and the grade-limited drive there.
+    pub(crate) join: Option<glam::DVec3>,
+    pub(crate) access_m: f64,
+    pub(crate) connected: bool,
+}
+
+impl HaulBlock {
+    /// Where trucks load: the anchor, at the flitch base.
+    pub(crate) fn point(&self) -> glam::DVec3 {
+        glam::DVec3::new(self.anchor[0], self.anchor[1], self.flitch.base)
+    }
 }
 
 /// A row of the Benching step's results: one bench, or one flitch inside it.
@@ -1894,8 +1961,17 @@ pub(crate) struct EditorState {
     pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>, u64)>,
     pub(crate) haul_view_revision: u64,
     pub(crate) haul_issues: Vec<crate::model::haulage::network::NetworkIssue>,
-    pub(crate) haul_blocks: Vec<(BlastOutline, bool)>,
-    pub(crate) haul_source_point: Option<DVec3>,
+    pub(crate) haul_blocks: Vec<HaulBlock>,
+    /// The dig block clicked on the Layout, which the route check starts from.
+    pub(crate) haul_selected_block: Option<crate::model::DigBlockId>,
+    /// While set, the next node clicked is the one the selected block is held to.
+    pub(crate) haul_link_pick: bool,
+    /// What the block tint was last drawn for: the hidden ground and the
+    /// selected block. Compared each frame so a change redraws it.
+    pub(crate) haul_display_drawn: (SolidsVisibility, Option<crate::model::DigBlockId>),
+    /// The Layout's own Solids Navigation.
+    pub(crate) haul_hidden: SolidsVisibility,
+    pub(crate) haul_navigation_selection: Vec<SolidsViewRow>,
     /// Where the next road point would land: on a road or node to join it,
     /// on the surface under the cursor, or level with the previous point.
     pub(crate) haul_cursor: Option<DVec3>,
@@ -1903,7 +1979,15 @@ pub(crate) struct EditorState {
     /// The road point right-clicked to open the canvas menu, where Split
     /// cuts. The live cursor has moved onto the menu by then.
     pub(crate) haul_menu_point: Option<DVec3>,
-    pub(crate) haul_pins: Vec<((f32, f32), crate::model::schedule::DestinationId, bool)>,
+    pub(crate) haul_pins: Vec<((f32, f32), crate::model::haulage::NodeRole)>,
+    /// Animate's haul routes: the loaded path of each source, destination
+    /// and truck class the schedule moves material by, worked out once per
+    /// schedule and network rather than per frame.
+    pub(crate) animation_routes: HashMap<HaulFlowKey, Vec<DVec3>>,
+    pub(crate) animation_routes_key: Option<(usize, u64)>,
+    /// The road segments trucks are loaded on at the shown instant, projected
+    /// to the window each frame like the other tool overlays.
+    pub(crate) animation_flows: Vec<HaulFlowSegment>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
@@ -2535,6 +2619,8 @@ pub(crate) struct EditorState {
     pub(crate) active_workspace: Workspace,
     pub(crate) planning_page: PlanningPage,
     pub(crate) schedule_subpage: PlanningSubpage,
+    pub(crate) haulage_subpage: PlanningSubpage,
+    pub(crate) haulage_setup_step: HaulageStep,
     /// Which Solids subpage is showing: its setup, or the view of what that
     /// setup produced.
     pub(crate) solids_subpage: PlanningSubpage,
@@ -2702,9 +2788,7 @@ pub(crate) struct EditorState {
     /// Schedule Animate is session-only: selection and visibility here never
     /// move the Solids View page or alter saved project item visibility.
     pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
-    pub(crate) schedule_animation_hidden_solids: HashSet<crate::model::SolidId>,
-    pub(crate) schedule_animation_hidden_rows: Vec<SolidsViewRow>,
-    pub(crate) schedule_animation_hidden_blasts: HashSet<BlastShapeRef>,
+    pub(crate) schedule_animation_hidden: SolidsVisibility,
     /// The schedule's time slider, in hours from the origin: one instant
     /// shared by the Gantt's slider, the Inspector beside it and Animate's
     /// scrubber, so moving any of them moves the others. Session-only, and
@@ -2927,8 +3011,24 @@ impl EditorState {
     /// Whether a snap mode is up. The section snaps as the plan does: its
     /// targets are the ones inside the slab, and off them the cursor falls
     /// back to the section plane like any unsnapped pick.
+    /// Whether the Haulage Layout - the road network over the viewport - is
+    /// showing.
     pub(crate) fn is_haulage_page(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
+    }
+
+    /// Open a Schedule Setup step, wherever it lives: truck classes are set
+    /// up on the Haulage page, beside the roads they drive.
+    pub(crate) fn open_schedule_step(&mut self, step: ScheduleStep) {
+        if step == ScheduleStep::TruckClasses {
+            self.planning_page = PlanningPage::Haulage;
+            self.haulage_subpage = PlanningSubpage::Setup;
+            self.haulage_setup_step = HaulageStep::TruckClasses;
+        } else {
+            self.planning_page = PlanningPage::Schedule;
+            self.schedule_subpage = PlanningSubpage::Setup;
+            self.schedule_setup_step = step;
+        }
     }
 
     /// Placing a road point or dragging one: the cursor snaps as a drawing
@@ -3148,7 +3248,10 @@ impl EditorState {
         self.haul_drag = None;
         self.haul_menu_point = None;
         self.haul_delete_node = None;
-        self.haul_source_point = None;
+        self.haul_selected_block = None;
+        self.haul_link_pick = false;
+        self.haul_hidden = SolidsVisibility::default();
+        self.haul_navigation_selection.clear();
         self.haul_pins.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
@@ -3458,11 +3561,18 @@ impl EditorState {
             haul_view_revision: 0,
             haul_issues: Vec::new(),
             haul_blocks: Vec::new(),
-            haul_source_point: None,
+            haul_selected_block: None,
+            haul_link_pick: false,
+            haul_display_drawn: Default::default(),
+            haul_hidden: SolidsVisibility::default(),
+            haul_navigation_selection: Vec::new(),
             haul_cursor: None,
             haul_drag: None,
             haul_menu_point: None,
             haul_pins: Vec::new(),
+            animation_routes: HashMap::new(),
+            animation_routes_key: None,
+            animation_flows: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -3796,6 +3906,8 @@ impl EditorState {
             active_workspace: Workspace::Production,
             planning_page: PlanningPage::Solids,
             schedule_subpage: PlanningSubpage::Setup,
+            haulage_subpage: PlanningSubpage::Layout,
+            haulage_setup_step: HaulageStep::Network,
             solids_subpage: PlanningSubpage::Setup,
             solids_view_selection: Vec::new(),
             planning_selected_block_model: None,
@@ -3861,9 +3973,7 @@ impl EditorState {
             schedule_auto_recalculate: true,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
-            schedule_animation_hidden_solids: HashSet::new(),
-            schedule_animation_hidden_rows: Vec::new(),
-            schedule_animation_hidden_blasts: HashSet::new(),
+            schedule_animation_hidden: SolidsVisibility::default(),
             schedule_time_h: 0.0,
             schedule_animation_shown_h: 0.0,
             schedule_animation_horizon_h: 0.0,
@@ -4300,7 +4410,17 @@ pub(crate) enum HaulEdit {
     RoadProperties(Vec<crate::model::haulage::RoadId>, Option<String>, Option<f64>),
     Settings(crate::model::haulage::network::HaulSettings),
     Fixed(crate::model::schedule::DestinationId, bool),
-    Pin(crate::model::schedule::DestinationId, DVec3),
+    /// Add a node where a destination meets the road, giving it that role.
+    Pin(crate::model::haulage::NodeRole, DVec3),
+    /// Hold a dig block to a node, or (`None`) leave it to the nearest road.
+    /// `at` is a node's position or a point on a road, which becomes a node.
+    LinkBlock {
+        solid: crate::model::SolidId,
+        flitch_base: f64,
+        face: std::sync::Arc<crate::model::arrangement::Face>,
+        probe: [f64; 2],
+        at: Option<DVec3>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -5764,7 +5884,7 @@ impl PlanningPage {
     pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
         match self {
             Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
-            Self::Haulage => &[PlanningSubpage::Layout],
+            Self::Haulage => &[PlanningSubpage::Setup, PlanningSubpage::Layout],
             Self::Schedule => &[
                 PlanningSubpage::Setup,
                 PlanningSubpage::Calendar,
@@ -5772,6 +5892,25 @@ impl PlanningPage {
                 PlanningSubpage::Charts,
                 PlanningSubpage::Animate,
             ],
+        }
+    }
+}
+
+/// The Haulage Setup page's steps: how roads join and are driven, then the
+/// trucks that drive them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum HaulageStep {
+    Network,
+    TruckClasses,
+}
+
+impl HaulageStep {
+    pub(crate) const ALL: [Self; 2] = [Self::Network, Self::TruckClasses];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Network => tr!("haul-step-network"),
+            Self::TruckClasses => tr!("truck-classes"),
         }
     }
 }

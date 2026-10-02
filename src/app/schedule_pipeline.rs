@@ -1491,6 +1491,8 @@ impl crate::app::App<'_> {
                 let unconnected: Vec<f64> = snapshot
                     .blocks
                     .iter()
+                    // A block held to a node is connected by choice.
+                    .filter(|block| network.block_link(block.solid, block.flitch.base, &block.ground).and_then(|id| index.node_join(id)).is_none())
                     .filter_map(|block| index.access_m(glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base), reach, grade))
                     .filter(|access| *access > reach)
                     .collect();

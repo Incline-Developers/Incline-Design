@@ -76,7 +76,9 @@ pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> O
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let mut step = editor.schedule_setup_step;
     let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
-    for entry in ScheduleStep::ALL {
+    // Truck classes are set up on the Haulage page, beside the roads they
+    // drive; the step is still checked here, as part of this pipeline.
+    for entry in ScheduleStep::ALL.into_iter().filter(|step| *step != ScheduleStep::TruckClasses) {
         let status = &editor.schedule_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);

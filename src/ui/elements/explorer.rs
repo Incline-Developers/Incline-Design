@@ -386,19 +386,32 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
-            let animation_solids = if editor.is_schedule_animation() {
-                egui::Panel::top("schedule_animation_solids_navigation")
-                    .resizable(true)
-                    .default_size((ui.available_height() * 0.5).max(120.0))
-                    .min_size(90.0)
-                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new(crate::i18n::tr!(literal = "Solids Navigation")).strong());
-                        super::solids_view::draw_animation_tree(ui, editor, document, commands);
-                    })
-                    .response
-                    .rect
+            // Animate and the Haulage Layout each keep a Solids Navigation of
+            // their own: hiding ground to see a block, or to click the right
+            // one, belongs to that page alone.
+            let navigation = if editor.is_schedule_animation() {
+                Some(super::solids_view::NavigationTree::Animation)
+            } else if editor.is_haulage_page() {
+                Some(super::solids_view::NavigationTree::Haulage)
+            } else {
+                None
+            };
+            let animation_solids = if let Some(tree) = navigation {
+                egui::Panel::top(match tree {
+                    super::solids_view::NavigationTree::Animation => "schedule_animation_solids_navigation",
+                    super::solids_view::NavigationTree::Haulage => "haulage_solids_navigation",
+                })
+                .resizable(true)
+                .default_size((ui.available_height() * 0.5).max(120.0))
+                .min_size(90.0)
+                .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                .show(ui, |ui| {
+                    heading(ui, &crate::i18n::tr!(literal = "Solids Navigation"));
+                    super::solids_view::draw_animation_tree(ui, editor, document, tree, commands);
+                })
+                .response
+                .rect
             } else {
                 egui::Rect::NOTHING
             };

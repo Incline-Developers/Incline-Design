@@ -363,8 +363,8 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             });
         }
     }
-    if editor.active_workspace == crate::ui::state::Workspace::Planning && editor.planning_page == crate::ui::state::PlanningPage::Haulage {
-        for (block, connected) in &editor.haul_blocks {
+    if editor.is_haulage_page() {
+        for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
             let mut points = Vec::new();
             let mut holes = Vec::new();
             for (i, ring) in block.rings.iter().enumerate() {
@@ -385,7 +385,14 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 draw_ctx.fill_vertex_buf,
                 draw_ctx.fill_index_buf,
                 &mesh,
-                if *connected { [0.25, 0.85, 0.4, 0.04] } else { [0.95, 0.25, 0.25, 0.04] },
+                if editor.haul_selected_block == Some(block.id) {
+                    let [r, g, b, _] = super::overlays::HAUL_SELECTED_BLOCK;
+                    [r, g, b, 0.3]
+                } else if block.connected {
+                    [0.25, 0.85, 0.4, 0.04]
+                } else {
+                    [0.95, 0.25, 0.25, 0.08]
+                },
                 scene_origin,
                 STYLE_SLOT_NONE,
             );

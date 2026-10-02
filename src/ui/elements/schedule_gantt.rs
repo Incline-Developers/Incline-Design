@@ -627,11 +627,7 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                 };
                 if ui.button(label).clicked() {
                     match target {
-                        ScheduleRepairTarget::Schedule(step) => {
-                            editor.planning_page = PlanningPage::Schedule;
-                            editor.schedule_subpage = PlanningSubpage::Setup;
-                            editor.schedule_setup_step = step;
-                        }
+                        ScheduleRepairTarget::Schedule(step) => editor.open_schedule_step(step),
                         ScheduleRepairTarget::Solids(step) => {
                             editor.planning_page = PlanningPage::Solids;
                             editor.solids_subpage = PlanningSubpage::Setup;

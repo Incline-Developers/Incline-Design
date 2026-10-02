@@ -276,6 +276,8 @@ struct GroundContext {
     /// Which of the block's captured portions this is, for diagnostics.
     portion: usize,
     position: glam::DVec3,
+    /// The road node the block is held to, when it is not left to the nearest road.
+    haul_link: Option<crate::model::haulage::NodeId>,
 }
 
 impl GroundContext {
@@ -822,6 +824,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     values: portion.values.clone(),
                     portion: index,
                     position: glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base),
+                    haul_link: source.haulage.block_link(block.solid, block.flitch.base, &block.ground),
                 },
             );
         }
@@ -1157,6 +1160,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 ExpandArgs {
                                     activity: Activity::Dig,
                                     position: Some(held.position),
+                                    haul_link: held.haul_link,
                                     loader: task.loader,
                                     agent,
                                     loader_name,
@@ -1266,6 +1270,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             ExpandArgs {
                                 activity: Activity::Reclaim,
                                 position: None,
+                                haul_link: None,
                                 loader: task.loader,
                                 agent,
                                 loader_name,
@@ -1434,7 +1439,10 @@ impl<'a> HaulCapture<'a> {
                 .searches
                 .entry((args.destination, class.id))
                 .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
-            if let Some(route) = search.as_ref().and_then(|s| s.route(&self.index, source, args.activity == Activity::Dig, rate, spot, dump)) {
+            if let Some(route) = search
+                .as_ref()
+                .and_then(|s| s.route(&self.index, source, args.haul_link, args.activity == Activity::Dig, rate, spot, dump))
+            {
                 return route.cycle;
             }
         }
@@ -1447,6 +1455,7 @@ impl<'a> HaulCapture<'a> {
 struct ExpandArgs<'a> {
     activity: Activity,
     position: Option<glam::DVec3>,
+    haul_link: Option<crate::model::haulage::NodeId>,
     loader: LoaderId,
     agent: LoaderAgentId,
     loader_name: &'a str,

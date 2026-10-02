@@ -255,9 +255,21 @@ impl<'a> DestinationSearch<'a> {
     }
     /// Both searches are reused for all blocks/materials for this class and
     /// destination. Only the short access candidates are evaluated per block.
-    pub(crate) fn route(&self, index: &RoadIndex, source: DVec3, bench_access: bool, loader_rate: f64, spot_s: f64, dump_s: Option<f64>) -> Option<RouteCheck> {
+    /// `link` is the node a block has been held to, if any.
+    #[allow(clippy::too_many_arguments, reason = "one block's whole question; a struct would only be unpacked again")]
+    pub(crate) fn route(
+        &self,
+        index: &RoadIndex,
+        source: DVec3,
+        link: Option<NodeId>,
+        bench_access: bool,
+        loader_rate: f64,
+        spot_s: f64,
+        dump_s: Option<f64>,
+    ) -> Option<RouteCheck> {
         let mut best: Option<RouteCheck> = None;
-        for join in index.candidates(source, self.network.settings.auto_join_m) {
+        let linked = link.is_some_and(|id| index.node_join(id).is_some());
+        for join in index.joins(source, link, self.network.settings.auto_join_m, self.class.maximum_grade) {
             let Some(mut loaded) = self.road_leg(join, false) else { continue };
             let Some(mut empty) = self.road_leg(join, true) else { continue };
             let direct = source.distance(join.2);
@@ -311,7 +323,7 @@ impl<'a> DestinationSearch<'a> {
                 empty_path: empty.points,
                 // Connected means a road within reach; a grade-lengthened leg
                 // still costs its full length but is not a missing road.
-                connected: access_m <= self.network.settings.auto_join_m,
+                connected: linked || access_m <= self.network.settings.auto_join_m,
                 access_m,
                 access_rise_m: rise,
                 grade_lengthened: lengthened,

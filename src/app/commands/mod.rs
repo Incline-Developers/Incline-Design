@@ -420,6 +420,7 @@ impl<'a> App<'a> {
                 self.editor.canvas_context_menu_open = false;
                 self.editor.active_workspace = crate::ui::state::Workspace::Planning;
                 self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+                self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
                 self.refresh_haulage_view();
                 Ok(())
             }
@@ -909,7 +910,11 @@ impl<'a> App<'a> {
                         }
                         crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
                         crate::ui::state::PlanningPage::Haulage => {
+                            self.editor.haulage_subpage = subpage;
                             self.editor.haul_route = None;
+                            self.editor.haul_draw = false;
+                            self.editor.haul_points.clear();
+                            self.editor.haul_link_pick = false;
                         }
                     }
                     if self.editor.is_planning_viewport() {

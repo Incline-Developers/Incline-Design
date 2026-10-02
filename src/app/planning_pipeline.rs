@@ -430,6 +430,13 @@ impl crate::app::App<'_> {
                 self.refresh_haulage_view();
                 self.invalidate_geometry();
             }
+            // Hiding ground in Solids Navigation, or picking a block, changes
+            // which blocks are tinted and how.
+            if self.editor.haul_display_drawn.0 != self.editor.haul_hidden || self.editor.haul_display_drawn.1 != self.editor.haul_selected_block {
+                self.editor.haul_display_drawn = (self.editor.haul_hidden.clone(), self.editor.haul_selected_block);
+                self.invalidate_geometry();
+                self.invalidate_overlay();
+            }
         }
         self.mirror_planning_stages();
         // After this pipeline, never beside it: the Schedule Setup readiness

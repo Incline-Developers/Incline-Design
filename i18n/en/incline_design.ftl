@@ -1667,24 +1667,16 @@ asset-unloading = Unloading asset data
 asset-load-failed = Could not load asset data
 asset-unload-failed = Could not unload asset data
 
-# Planning → Set Up. Shared labels, plus Haulage's scaffold: its content
-# category list is wired up; item rows and property fields fill in with the
-# feature. Schedule's own labels are under "Schedule setup" below.
+# Planning → Set Up. Shared labels; Schedule's own are under "Schedule setup"
+# below, Haulage's under the haul- keys.
 planning-configuration = Configuration
-planning-site-data = Site Data
-planning-content = Content
-planning-content-type = Content Type
 
 planning-dumps = Dumps
 planning-stockpiles = Stockpiles
-planning-loaders = Loaders
-planning-trucks = Trucks
 
 planning-name = Name
 planning-new-dump = New Dump
 planning-new-stockpile = New Stockpile
-planning-new-loader = New Loader
-planning-new-truck = New Truck
 
 planning-properties = Properties
 planning-property = Property
@@ -3170,7 +3162,6 @@ haul-near-miss = Near miss
 haul-separate-piece = Separate piece
 haul-steep = Too steep
 haul-missing-destination = Missing destination
-haul-settings = Settings
 haul-join = Join tolerance
 haul-join-help = Road ends and points this close are joined into one node when drawing, converting or importing.
 haul-auto-join = Auto-join distance
@@ -3255,6 +3246,25 @@ haul-shape-hint = Drag a node or bend point in the viewport to reshape the road.
 haul-role-none = Junction (no destination)
 haul-role-dump = Dump point · { $destination }
 haul-role-reclaim = Reclaim point · { $destination }
+haul-role-both = Dump & reclaim point · { $destination }
+haul-dump-and-reclaim = Dump & reclaim
+haul-both-point = Dump & reclaim point for
+haul-link-missed = Click a node or a road to hold the block to it.
+haul-block-deselect = Clear the selected block
+haul-block-linked = Held to { $node } · { $length } m drive
+haul-block-nearest = Joins the nearest road · { $length } m drive
+haul-block-far = Nearest road is { $length } m away, beyond the auto-join distance
+haul-block-no-roads = No roads yet
+haul-link-pick = Choose node…
+haul-link-change = Change node…
+haul-link-help = Hold this block to a node of your choosing instead of the nearest road: click this, then a node or a point on a road in the viewport.
+haul-link-clear = Use nearest road
+haul-link-clear-help = Let this block join whichever road is nearest again.
+haul-link-picking = Click a node or a road in the viewport · Esc cancels
+haul-step-network = Road network
+haul-flow-hover = { $rate } t/h loaded
+haul-flow-legend = Loaded hauls now · stripes run faster and wider with tonnage · busiest { $rate } t/h
+haul-network-intro = How roads are joined as they are drawn, how far dig blocks reach for a road, and how trucks drive on and off the bench.
 haul-role-help = Trucks deliver to a dump point and load from a stockpile's reclaim point. A stockpile with no reclaim point is loaded at its dump point.
 haul-node-on = End of { $road }
 haul-join-help = Merge the two selected nodes into one, joining their roads.
@@ -3270,14 +3280,14 @@ haul-limit-hover = Speed limit { $speed } km/h
 haul-destination-frame = Show in the viewport
 haul-use-selected-node = The selected node
 haul-pin-help = Put a node on the road nearest this destination and make it the dump point, so you can move it.
-haul-method-help = How trucks reach this destination: a road node you chose, the road nearest its surface, or its fixed haul distance from Schedule Setup.
+haul-method-help = How trucks reach this destination: a road node you chose, the road nearest its surface, or its fixed haul distance from its destination setup.
 haul-destinations-hint = Select a node to offer it here, or right-click a node in the viewport.
 haul-from = From
 haul-to = To
 haul-from-pick = Click a dig block
 haul-from-pile = Reclaim from { $pile }
 haul-from-hint = Click a dig block in the viewport, or choose a source above.
-haul-need-truck = Add a truck class in Schedule Setup to check routes.
+haul-need-truck = Add a truck class in Haulage Setup to check routes.
 haul-need-loader = Add a loader in Schedule Setup to check routes.
 haul-per-truck = { $rate } t/h per truck
 haul-match-help = Theoretical matching: trucks are assumed never to queue at the loader or the destination.

@@ -1418,6 +1418,9 @@ impl<'a> App<'a> {
             KeyCode::Escape => {
                 if self.editor.haul_drag.take().is_some() {
                     self.invalidate_overlay();
+                } else if self.editor.haul_link_pick {
+                    self.editor.haul_link_pick = false;
+                    self.redraw_requested = true;
                 } else if self.editor.haul_draw {
                     self.finish_haul_road();
                 } else if self.editor.tie_anchor.is_some() {

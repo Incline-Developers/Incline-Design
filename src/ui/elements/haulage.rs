@@ -108,7 +108,43 @@ pub(crate) fn role_label(destinations: &[destinations::DestinationView], role: O
         None => tr!("haul-role-none"),
         Some(NodeRole::Dump(id)) => tr!("haul-role-dump", destination = destination_name(destinations, id)),
         Some(NodeRole::Reclaim(id)) => tr!("haul-role-reclaim", destination = destination_name(destinations, id)),
+        Some(NodeRole::DumpAndReclaim(id)) => tr!("haul-role-both", destination = destination_name(destinations, id)),
     }
+}
+
+/// The roles a node can take for one destination: a stockpile is also
+/// loaded from, at its own point or where it is tipped.
+fn roles_for(destination: &destinations::DestinationView) -> Vec<NodeRole> {
+    if destination.kind == DestinationKind::Stockpile {
+        vec![NodeRole::DumpAndReclaim(destination.id), NodeRole::Dump(destination.id), NodeRole::Reclaim(destination.id)]
+    } else {
+        vec![NodeRole::Dump(destination.id)]
+    }
+}
+
+/// The role a node takes when it becomes a destination's way in: a pile is
+/// loaded there too, unless it already has a reclaim point of its own.
+fn arrival_role(network: &HaulNetwork, destination: &destinations::DestinationView) -> NodeRole {
+    let separate_reclaim = network.nodes.iter().any(|n| n.role == Some(NodeRole::Reclaim(destination.id)));
+    if destination.kind == DestinationKind::Stockpile && !separate_reclaim {
+        NodeRole::DumpAndReclaim(destination.id)
+    } else {
+        NodeRole::Dump(destination.id)
+    }
+}
+
+/// A quiet framed group, for the selection and the route check's answer.
+fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS)
+        .inner_margin(egui::Margin::same(8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
 }
 
 /// A node's name in lists and issues: its role, else the road it ends.
@@ -138,13 +174,14 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, _document:
             tools(ui, editor, network, commands);
             ui.separator();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
                 summary(ui, editor, network);
+                block_card(ui, editor, network, &destinations, session, commands);
                 selection(ui, editor, network, &destinations, session, commands);
-                issues(ui, editor, network, &destinations, commands);
-                roads(ui, editor, network, session, commands);
-                destination_access(ui, editor, network, project, &destinations, session, commands);
                 route_check(ui, editor, network, project, &destinations, commands);
-                settings(ui, network, session, commands);
+                issues(ui, editor, network, &destinations, commands);
+                destination_access(ui, editor, network, project, &destinations, session, commands);
+                roads(ui, editor, network, session, commands);
             });
         })
 }
@@ -193,7 +230,7 @@ fn summary(ui: &mut egui::Ui, editor: &EditorState, network: &HaulNetwork) {
             "{text} · {}",
             tr!(
                 "haul-connected",
-                connected = editor.haul_blocks.iter().filter(|(_, c)| *c).count().to_string(),
+                connected = editor.haul_blocks.iter().filter(|b| b.connected).count().to_string(),
                 total = editor.haul_blocks.len().to_string()
             )
         );
@@ -201,9 +238,71 @@ fn summary(ui: &mut egui::Ui, editor: &EditorState, network: &HaulNetwork) {
     ui.label(egui::RichText::new(text).weak()).on_hover_text(tr!("haul-connected-help"));
 }
 
+/// The dig block clicked in the viewport: where it meets the roads, and the
+/// way to hold it to a node of the planner's choosing instead.
+fn block_card(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork, destinations: &[destinations::DestinationView], session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(block) = editor.haul_selected_block.and_then(|id| editor.haul_blocks.iter().find(|b| b.id == id)).cloned() else {
+        editor.haul_link_pick = false;
+        return;
+    };
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(crate::ui::fonts::bold(&block.name));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("×").on_hover_text(tr!("haul-block-deselect")).clicked() {
+                    editor.haul_selected_block = None;
+                    editor.haul_link_pick = false;
+                }
+            });
+        });
+        let length = format!("{:.0}", block.access_m);
+        match (block.link, block.join) {
+            (Some(node), _) => {
+                ui.label(egui::RichText::new(tr!("haul-block-linked", node = node_label(network, destinations, node), length = length)).weak());
+            }
+            (None, Some(_)) if block.connected => {
+                ui.label(egui::RichText::new(tr!("haul-block-nearest", length = length)).weak());
+            }
+            (None, Some(_)) => {
+                ui.colored_label(ui.visuals().warn_fg_color, tr!("haul-block-far", length = length));
+            }
+            (None, None) => {
+                ui.colored_label(ui.visuals().warn_fg_color, tr!("haul-block-no-roads"));
+            }
+        }
+        ui.horizontal(|ui| {
+            let picking = editor.haul_link_pick;
+            let label = if block.link.is_some() { tr!("haul-link-change") } else { tr!("haul-link-pick") };
+            if ui
+                .add_enabled(!network.roads.is_empty(), egui::Button::new(label).selected(picking))
+                .on_hover_text(tr!("haul-link-help"))
+                .clicked()
+            {
+                editor.haul_link_pick = !picking;
+            }
+            if block.link.is_some() && ui.button(tr!("haul-link-clear")).on_hover_text(tr!("haul-link-clear-help")).clicked() {
+                command(
+                    commands,
+                    session,
+                    HaulEdit::LinkBlock {
+                        solid: block.solid,
+                        flitch_base: block.flitch.base,
+                        face: block.face.clone(),
+                        probe: block.anchor,
+                        at: None,
+                    },
+                );
+            }
+        });
+        if editor.haul_link_pick {
+            ui.label(egui::RichText::new(tr!("haul-link-picking")).small().color(ui.visuals().selection.stroke.color));
+        }
+    });
+}
+
 fn selection(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork, destinations: &[destinations::DestinationView], session: u32, commands: &mut Vec<UiCommand>) {
     if let Some(id) = editor.haul_delete_node {
-        ui.group(|ui| {
+        card(ui, |ui| {
             ui.label(tr!("haul-delete-role-confirm"));
             ui.horizontal(|ui| {
                 if ui.button(tr!("haul-delete")).clicked() {
@@ -229,9 +328,7 @@ fn selection(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork,
     if roads.is_empty() && nodes.is_empty() {
         return;
     }
-    ui.add_space(4.0);
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
+    card(ui, |ui| {
         if let [id] = roads[..] {
             let road = network.road(id).expect("selected road");
             ui.label(crate::ui::fonts::bold(&tr!("haul-road")));
@@ -280,15 +377,10 @@ fn selection(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork,
                         command(commands, session, HaulEdit::Role(id, None));
                     }
                     for destination in destinations {
-                        let role = NodeRole::Dump(destination.id);
-                        if ui.selectable_label(node.role == Some(role), role_label(destinations, Some(role))).clicked() {
-                            command(commands, session, HaulEdit::Role(id, Some(role)));
-                        }
-                    }
-                    for destination in destinations.iter().filter(|d| d.kind == DestinationKind::Stockpile) {
-                        let role = NodeRole::Reclaim(destination.id);
-                        if ui.selectable_label(node.role == Some(role), role_label(destinations, Some(role))).clicked() {
-                            command(commands, session, HaulEdit::Role(id, Some(role)));
+                        for role in roles_for(destination) {
+                            if ui.selectable_label(node.role == Some(role), role_label(destinations, Some(role))).clicked() {
+                                command(commands, session, HaulEdit::Role(id, Some(role)));
+                            }
                         }
                     }
                     ui.separator();
@@ -433,7 +525,7 @@ fn destination_access(
         egui::Grid::new("haul_destination_grid").num_columns(2).striped(false).show(ui, |ui| {
             for destination in destinations {
                 let fixed = network.fixed_destinations.contains(&destination.id);
-                let node = network.nodes.iter().find(|n| n.role == Some(NodeRole::Dump(destination.id)));
+                let node = network.nodes.iter().find(|n| n.role.is_some_and(|r| r.destination() == destination.id && r.dumps()));
                 let centroid = project.haul_points.get(&destination.id).copied();
                 let on_fixed = fixed || network.roads.is_empty() || (node.is_none() && centroid.is_none());
                 let current = if fixed || network.roads.is_empty() {
@@ -463,7 +555,7 @@ fn destination_access(
                             command(
                                 commands,
                                 session,
-                                HaulEdit::Many(vec![HaulEdit::Fixed(destination.id, false), HaulEdit::Role(id, Some(NodeRole::Dump(destination.id)))]),
+                                HaulEdit::Many(vec![HaulEdit::Fixed(destination.id, false), HaulEdit::Role(id, Some(arrival_role(network, destination)))]),
                             );
                         }
                         if centroid.is_some() {
@@ -475,7 +567,7 @@ fn destination_access(
                             if let Some(point) = centroid.and_then(|p| RoadIndex::new(network).candidates(p, 0.0).first().map(|c| c.2))
                                 && ui.selectable_label(false, tr!("haul-pin-nearest")).on_hover_text(tr!("haul-pin-help")).clicked()
                             {
-                                command(commands, session, HaulEdit::Pin(destination.id, point));
+                                command(commands, session, HaulEdit::Pin(arrival_role(network, destination), point));
                             }
                         }
                         if ui
@@ -488,7 +580,7 @@ fn destination_access(
                                 network
                                     .nodes
                                     .iter()
-                                    .filter(|n| n.role == Some(NodeRole::Dump(destination.id)) || n.role == Some(NodeRole::Reclaim(destination.id)))
+                                    .filter(|n| n.role.is_some_and(|r| r.destination() == destination.id))
                                     .map(|n| HaulEdit::Role(n.id, None)),
                             );
                             command(commands, session, HaulEdit::Many(edits));
@@ -505,9 +597,16 @@ fn destination_access(
     });
 }
 
-fn settings(ui: &mut egui::Ui, network: &HaulNetwork, session: u32, commands: &mut Vec<UiCommand>) {
-    section(ui, "haul_settings", tr!("haul-settings"), false, |ui| {
-        egui::Grid::new("haul_settings_grid").num_columns(2).show(ui, |ui| {
+/// Haulage Setup's Road network step: how roads join and how blocks reach
+/// them. Each figure carries its explanation beneath it rather than on hover:
+/// this is the page where a planner reads what they are setting.
+pub(crate) fn draw_network_settings(ui: &mut egui::Ui, rect: egui::Rect, network: &HaulNetwork, session: u32, commands: &mut Vec<UiCommand>) {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(16.0)), |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_max_width(560.0);
+            ui.heading(tr!("haul-step-network"));
+            ui.label(egui::RichText::new(tr!("haul-network-intro")).weak());
+            ui.add_space(12.0);
             let current = network.settings.clone();
             let fields: [(String, String, f64, std::ops::RangeInclusive<f64>, &str); 4] = [
                 (tr!("haul-join"), tr!("haul-join-help"), current.join_tolerance_m, 0.01..=100.0, " m"),
@@ -516,18 +615,25 @@ fn settings(ui: &mut egui::Ui, network: &HaulNetwork, session: u32, commands: &m
                 (tr!("haul-acceleration"), tr!("haul-acceleration-help"), current.acceleration_kph_s, 0.1..=20.0, " km/h/s"),
             ];
             for (index, (label, help, value, range, suffix)) in fields.into_iter().enumerate() {
-                ui.label(label).on_hover_text(help);
-                if let Some(value) = committed_number(ui, ui.id().with(("haul_setting", index)), value, range, 0.1, suffix) {
-                    let mut settings = current.clone();
-                    *[
-                        &mut settings.join_tolerance_m,
-                        &mut settings.auto_join_m,
-                        &mut settings.bench_speed_kph,
-                        &mut settings.acceleration_kph_s,
-                    ][index] = value;
-                    command(commands, session, HaulEdit::Settings(settings));
-                }
-                ui.end_row();
+                card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(crate::ui::fonts::bold(&label));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(value) = committed_number(ui, ui.id().with(("haul_setting", index)), value, range, 0.1, suffix) {
+                                let mut settings = current.clone();
+                                *[
+                                    &mut settings.join_tolerance_m,
+                                    &mut settings.auto_join_m,
+                                    &mut settings.bench_speed_kph,
+                                    &mut settings.acceleration_kph_s,
+                                ][index] = value;
+                                command(commands, session, HaulEdit::Settings(settings));
+                            }
+                        });
+                    });
+                    ui.label(egui::RichText::new(help).weak());
+                });
+                ui.add_space(6.0);
             }
         });
     });
@@ -555,15 +661,16 @@ fn node_menu(
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    for (title, reclaim) in [(tr!("haul-dump-point"), false), (tr!("haul-reclaim-point"), true)] {
+    for (title, kind) in [(tr!("haul-dump-point"), 0), (tr!("haul-reclaim-point"), 1), (tr!("haul-both-point"), 2)] {
         context_submenu(ui, &title, true, |ui| {
-            for destination in destinations.iter().filter(|d| !reclaim || d.kind == DestinationKind::Stockpile) {
+            for destination in destinations.iter().filter(|d| kind == 0 || d.kind == DestinationKind::Stockpile) {
                 if ContextMenuAction::new(&destination.name).show(ui).clicked() {
-                    command(
-                        commands,
-                        session,
-                        HaulEdit::Role(id, Some(if reclaim { NodeRole::Reclaim(destination.id) } else { NodeRole::Dump(destination.id) })),
-                    );
+                    let role = match kind {
+                        0 => NodeRole::Dump(destination.id),
+                        1 => NodeRole::Reclaim(destination.id),
+                        _ => NodeRole::DumpAndReclaim(destination.id),
+                    };
+                    command(commands, session, HaulEdit::Role(id, Some(role)));
                     ui.close();
                 }
             }
@@ -643,7 +750,8 @@ fn coordinates(ui: &mut egui::Ui, id: egui::Id, pos: &mut DVec3) -> bool {
 enum Origin {
     #[default]
     Unset,
-    Block(String, DVec3),
+    /// A dig block: its id, name, loading point and the node it is held to.
+    Block(crate::model::DigBlockId, String, DVec3, Option<NodeId>),
     Pile(DestinationId),
 }
 
@@ -681,27 +789,35 @@ fn route_check(
         let id = ui.id().with(("haul_query", project.active_session));
         let mut q = ui.data(|d| d.get_temp::<Query>(id)).unwrap_or_default();
         let previous_key = ui.data(|d| d.get_temp::<u64>(id.with("key")));
-        if let Some(point) = editor.haul_source_point.take() {
-            let name = editor
-                .haul_blocks
-                .iter()
-                .find(|(b, _)| (b.anchor[0] - point.x).abs() < 1e-6 && (b.anchor[1] - point.y).abs() < 1e-6)
-                .map(|(b, _)| b.name.clone())
-                .unwrap_or_else(|| format!("{:.0}, {:.0}", point.x, point.y));
-            q.from = Origin::Block(name, point);
+        // A block clicked in the viewport becomes the source; one already
+        // chosen follows its own record, so a new link is checked at once.
+        let clicked_id = id.with("clicked");
+        let last_clicked = ui.data(|d| d.get_temp::<Option<crate::model::DigBlockId>>(clicked_id)).flatten();
+        if editor.haul_selected_block != last_clicked {
+            if let Some(block) = editor.haul_selected_block {
+                q.from = Origin::Block(block, String::new(), DVec3::ZERO, None);
+            }
+            ui.data_mut(|d| d.insert_temp(clicked_id, editor.haul_selected_block));
+        }
+        if let Origin::Block(block_id, ..) = q.from {
+            q.from = match editor.haul_blocks.iter().find(|b| b.id == block_id) {
+                Some(block) => Origin::Block(block.id, block.name.clone(), block.point(), block.link),
+                None => Origin::Unset,
+            };
         }
         fill_defaults(&mut q, project, destinations);
         egui::Grid::new("haul_query_grid").num_columns(2).show(ui, |ui| {
             ui.label(tr!("haul-from"));
             let from_text = match &q.from {
                 Origin::Unset => tr!("haul-from-pick"),
-                Origin::Block(name, _) => name.clone(),
+                Origin::Block(_, name, ..) => name.clone(),
                 Origin::Pile(pile) => tr!("haul-from-pile", pile = destination_name(destinations, *pile)),
             };
             egui::ComboBox::from_id_salt("haul_from").width(190.0).selected_text(from_text).show_ui(ui, |ui| {
-                for (block, _) in &editor.haul_blocks {
-                    let point = DVec3::new(block.anchor[0], block.anchor[1], block.plane);
-                    let this = Origin::Block(block.name.clone(), point);
+                // Blocks are chosen by clicking them; the list offers the one
+                // selected, beside the piles that are reclaimed from.
+                if let Some(block) = editor.haul_selected_block.and_then(|id| editor.haul_blocks.iter().find(|b| b.id == id)) {
+                    let this = Origin::Block(block.id, block.name.clone(), block.point(), block.link);
                     if ui.selectable_label(q.from == this, &block.name).clicked() {
                         q.from = this;
                     }
@@ -754,7 +870,11 @@ fn route_check(
             project.active_session.hash(&mut hasher);
             match &q.from {
                 Origin::Unset => 0u8.hash(&mut hasher),
-                Origin::Block(_, p) => p.to_array().map(f64::to_bits).hash(&mut hasher),
+                Origin::Block(id, _, p, link) => {
+                    id.hash(&mut hasher);
+                    p.to_array().map(f64::to_bits).hash(&mut hasher);
+                    link.hash(&mut hasher);
+                }
                 Origin::Pile(id) => id.hash(&mut hasher),
             }
             q.destination.hash(&mut hasher);
@@ -792,11 +912,12 @@ fn check(network: &HaulNetwork, project: &UiProjectView, q: &Query) -> Option<Ro
     let destination = q.destination?;
     let class = project.schedule.trucks().class(q.truck?)?;
     let loader = project.schedule.agent(q.loader?).and_then(|a| project.schedule.class(a.class_id))?;
-    let (source, rate, bench) = match &q.from {
+    let (source, link, rate, bench) = match &q.from {
         Origin::Unset => return None,
-        Origin::Block(_, point) => (Some(*point), loader.default_dig_rate_tph, true),
+        Origin::Block(_, _, point, link) => (Some(*point), *link, loader.default_dig_rate_tph, true),
         Origin::Pile(pile) => (
             network.destination_point(*pile, true, project.haul_points.get(pile).copied()),
+            None,
             loader.default_reclaim_rate_tph,
             false,
         ),
@@ -805,7 +926,7 @@ fn check(network: &HaulNetwork, project: &UiProjectView, q: &Query) -> Option<Ro
     let index = RoadIndex::new(network);
     let routed = source
         .zip(network.destination_point(destination, false, project.haul_points.get(&destination).copied()))
-        .and_then(|(source, target)| DestinationSearch::new(network, &index, class, target)?.route(&index, source, bench, rate, loader.spot_time_s, dump));
+        .and_then(|(source, target)| DestinationSearch::new(network, &index, class, target)?.route(&index, source, link, bench, rate, loader.spot_time_s, dump));
     Some(routed.unwrap_or_else(|| RouteCheck {
         cycle: crate::model::schedule::trucking::CycleBreakdown::fixed(
             class,

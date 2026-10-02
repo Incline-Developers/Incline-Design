@@ -29,6 +29,10 @@ pub(crate) struct OverlaySceneBuildInput<'a> {
 /// rather than as one more line on the bench.
 const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 
+/// The Haulage Layout's selected dig block, and the line to where it joins
+/// the roads: the selection orange the rest of the scene uses.
+pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
+
 /// How many pieces a leg replacing an existing connector is broken into. Odd,
 /// so a dashed run starts and ends on a mark rather than on a gap.
 const TIE_OVERWRITE_DASHES: usize = 9;
@@ -130,15 +134,31 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
 
-    if editor.active_workspace == crate::ui::state::Workspace::Planning && editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+    if editor.is_haulage_page() {
         for issue in &editor.haul_issues {
             draw_screen_cross(&mut overlay, issue.pos, 9.0, 2.0, [1.0, 0.65, 0.15, 1.0]);
         }
-        for (block, connected) in &editor.haul_blocks {
-            let color = if *connected { [0.25, 0.85, 0.4, 0.45] } else { [0.95, 0.25, 0.25, 0.45] };
+        for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
+            let selected = editor.haul_selected_block == Some(block.id);
+            let (color, width) = if selected {
+                (HAUL_SELECTED_BLOCK, 3.5)
+            } else if block.connected {
+                ([0.25, 0.85, 0.4, 0.45], 1.5)
+            } else {
+                ([0.95, 0.25, 0.25, 0.55], 1.5)
+            };
             for ring in &block.rings {
                 let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
-                tessellate_polyline_stroke(&mut overlay, &verts, true, 2.0, color);
+                tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
+            }
+            // Where it meets the roads: always for the selected block, and
+            // for any held to a chosen node, so a link is never invisible.
+            if let Some(join) = block.join
+                && (selected || block.link.is_some())
+            {
+                let color = if selected { HAUL_SELECTED_BLOCK } else { [0.35, 0.75, 0.95, 0.8] };
+                draw_line(&mut overlay, block.point(), join, if selected { 2.5 } else { 1.5 }, color);
+                draw_screen_cross(&mut overlay, block.point(), 6.0, 2.0, color);
             }
         }
     }

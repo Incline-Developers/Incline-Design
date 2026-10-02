@@ -1230,21 +1230,44 @@ fn draw_ui(
         }
     }
     let scale = root_ui.ctx().pixels_per_point();
-    for ((x, y), id, reclaim) in &editor.haul_pins {
-        let name = match id {
-            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(*id).map(|d| d.name.clone()),
-            crate::model::schedule::DestinationId::Solid(id) => document.solid(*id).map(|d| d.name.clone()),
+    // Destination points: the name, and what trucks do there, on a pill
+    // that stays legible over pale ground. Zoomed out, a label that would
+    // land on one already drawn gives way rather than stacking illegibly.
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for ((x, y), role) in &editor.haul_pins {
+        let name = match role.destination() {
+            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| d.name.clone()),
+            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| d.name.clone()),
         }
         .unwrap_or_else(|| tr!("destination-unresolved"));
-        let label = format!("{} · {}", name, if *reclaim { tr!("haul-reclaim") } else { tr!("haul-dump") });
-        root_ui.painter().with_clip_rect(canvas_rect).text(
-            egui::pos2(x / scale + 8.0, y / scale - 8.0),
-            egui::Align2::LEFT_BOTTOM,
-            label,
-            egui::FontId::proportional(12.0),
-            egui::Color32::WHITE,
+        let what = match role {
+            crate::model::haulage::NodeRole::Dump(_) => tr!("haul-dump"),
+            crate::model::haulage::NodeRole::Reclaim(_) => tr!("haul-reclaim"),
+            crate::model::haulage::NodeRole::DumpAndReclaim(_) => tr!("haul-dump-and-reclaim"),
+        };
+        let painter = root_ui.painter().with_clip_rect(canvas_rect);
+        let visuals = root_ui.visuals();
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.0), visuals.strong_text_color()));
+        job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
+        let galley = painter.layout_job(job);
+        let anchor = egui::pos2(x / scale, y / scale);
+        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
+        if placed.iter().any(|other| other.intersects(rect)) {
+            continue;
+        }
+        placed.push(rect);
+        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
+        painter.rect(
+            rect,
+            widgets::toolbar::GROUP_CORNER_RADIUS,
+            visuals.window_fill().gamma_multiply(0.92),
+            visuals.window_stroke(),
+            egui::StrokeKind::Inside,
         );
+        painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
     }
+    draw_haul_flows(root_ui, editor, canvas_rect);
     // --- Canvas overlays ---
 
     // Orbit marker (clipped to the 3D viewport)
@@ -1722,4 +1745,94 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals
+}
+
+/// Animate's haul flows: the loaded routes trucks are on at the shown
+/// instant. Stripes run from the loader towards the destination, faster and
+/// wider - and the line under them warmer - the more tonnes per hour cross
+/// that piece of road, so where the haulage concentrates reads at a glance.
+fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    const PERIOD: f32 = 18.0;
+    const DASH: f32 = 8.0;
+    let flows = &editor.animation_flows;
+    if flows.is_empty() {
+        return;
+    }
+    let scale = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let time = ui.input(|i| i.time) as f32;
+    let busiest = flows.iter().map(|f| f.tph).fold(0.0, f64::max).max(1e-9);
+    let cool = egui::Color32::from_rgb(70, 175, 215);
+    let warm = egui::Color32::from_rgb(250, 165, 45);
+    let pointer = ui.ctx().pointer_hover_pos().filter(|p| canvas_rect.contains(*p));
+    let mut hovered: Option<f64> = None;
+    // Each piece on screen: its ends, length, direction, width and colour.
+    let pieces: Vec<_> = flows
+        .iter()
+        .filter_map(|flow| {
+            let share = (flow.tph / busiest) as f32;
+            let a = egui::pos2(flow.a.0 / scale, flow.a.1 / scale);
+            let b = egui::pos2(flow.b.0 / scale, flow.b.1 / scale);
+            let length = a.distance(b);
+            (length >= 0.5).then(|| (flow, share, a, b, length, (b - a) / length, 3.0 + 4.0 * share, cool.lerp_to_gamma(warm, share)))
+        })
+        .collect();
+    // Outline, then line, then stripes, each over every piece before the
+    // next: a piece's dark edge never cuts across its neighbour, and round
+    // ends close the corners between them.
+    for &(_, _, a, b, _, _, width, _) in &pieces {
+        let outline = egui::Color32::from_black_alpha(110);
+        painter.line_segment([a, b], egui::Stroke::new(width + 2.0, outline));
+        painter.circle_filled(a, (width + 2.0) * 0.5, outline);
+        painter.circle_filled(b, (width + 2.0) * 0.5, outline);
+    }
+    for &(_, _, a, b, _, _, width, color) in &pieces {
+        let color = color.gamma_multiply(0.85);
+        painter.line_segment([a, b], egui::Stroke::new(width, color));
+        painter.circle_filled(a, width * 0.5, color);
+        painter.circle_filled(b, width * 0.5, color);
+    }
+    for &(flow, share, a, _, length, direction, width, color) in &pieces {
+        // Dashes sit at fixed places along the whole route, shifted by time,
+        // so they flow on unbroken from one segment into the next.
+        let speed = 10.0 + 60.0 * share;
+        let shift = (time * speed).rem_euclid(PERIOD);
+        let start = flow.offset / scale;
+        let stripe = egui::Stroke::new(width * 0.55, color.lerp_to_gamma(egui::Color32::WHITE, 0.65));
+        let mut k = ((start - shift) / PERIOD).floor();
+        loop {
+            let from = k * PERIOD + shift - start;
+            if from > length {
+                break;
+            }
+            let to = (from + DASH).min(length);
+            if to > from.max(0.0) {
+                painter.line_segment([a + direction * from.max(0.0), a + direction * to], stripe);
+            }
+            k += 1.0;
+        }
+        if let Some(p) = pointer {
+            let t = (p - a).dot(direction).clamp(0.0, length);
+            if p.distance(a + direction * t) <= width + 4.0 {
+                hovered = Some(hovered.map_or(flow.tph, |h: f64| h.max(flow.tph)));
+            }
+        }
+    }
+    if let (Some(tph), Some(p)) = (hovered, pointer) {
+        let galley = painter.layout_no_wrap(
+            tr!("haul-flow-hover", rate = format!("{tph:.0}")),
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
+        let rect = egui::Rect::from_min_size(p + egui::vec2(12.0, 18.0), galley.size() + egui::vec2(12.0, 8.0));
+        painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill());
+        painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().text_color());
+    }
+    // A key in the corner: what the stripes mean, and what the busiest road carries.
+    let legend = tr!("haul-flow-legend", rate = format!("{busiest:.0}"));
+    let galley = painter.layout_no_wrap(legend, egui::FontId::proportional(11.0), ui.visuals().weak_text_color());
+    let rect = egui::Rect::from_min_size(canvas_rect.left_bottom() + egui::vec2(12.0, -galley.size().y - 20.0), galley.size() + egui::vec2(12.0, 8.0));
+    painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill().gamma_multiply(0.9));
+    painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().weak_text_color());
+    ui.ctx().request_repaint();
 }

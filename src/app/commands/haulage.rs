@@ -54,57 +54,127 @@ impl crate::app::App<'_> {
         }
         points
     }
+    /// The loaded path of every route the shown schedule hauls by, for
+    /// Animate to draw its flows along. Rebuilt only when the schedule or the
+    /// project changes: one search per destination and truck class serves
+    /// every block, as it does in capture.
+    pub(crate) fn sync_animation_routes(&mut self) {
+        let Some(schedule) = self.editor.schedule_result.clone() else {
+            self.editor.animation_routes.clear();
+            self.editor.animation_routes_key = None;
+            return;
+        };
+        let Some(document) = self.workspace.active_document() else { return };
+        let key = (std::sync::Arc::as_ptr(&schedule) as usize, document.revision());
+        if self.editor.animation_routes_key == Some(key) {
+            return;
+        }
+        self.editor.animation_routes_key = Some(key);
+        let mut routes = std::collections::HashMap::new();
+        let network = document.haulage();
+        if !network.roads.is_empty() {
+            let centroids = self.haul_destination_points(document);
+            let blocks: std::collections::HashMap<_, _> = self
+                .planning_snapshot()
+                .map(|snapshot| {
+                    snapshot
+                        .blocks
+                        .iter()
+                        .map(|b| {
+                            let point = DVec3::new(b.anchor[0], b.anchor[1], b.flitch.base);
+                            (b.id, (point, network.block_link(b.solid, b.flitch.base, &b.ground)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let index = crate::model::haulage::network::RoadIndex::new(network);
+            let trucks = document.schedule().trucks();
+            let mut searches = std::collections::HashMap::new();
+            let wanted: std::collections::HashSet<_> = schedule.deliveries.iter().map(|d| (d.destination, d.truck, d.source)).collect();
+            for (destination, truck, source) in wanted {
+                let (Some(class), Some(target)) = (trucks.class(truck), network.destination_point(destination, false, centroids.get(&destination).copied())) else {
+                    continue;
+                };
+                let (from, link, bench) = match source {
+                    crate::model::schedule::result::WorkSource::Block(id) => match blocks.get(&id) {
+                        Some((point, link)) => (*point, *link, true),
+                        None => continue,
+                    },
+                    crate::model::schedule::result::WorkSource::Stockpile(pile) => match network.destination_point(pile, true, centroids.get(&pile).copied()) {
+                        Some(point) => (point, None, false),
+                        None => continue,
+                    },
+                };
+                let search = searches
+                    .entry((destination, truck))
+                    .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(network, &index, class, target));
+                if let Some(route) = search.as_ref().and_then(|s| s.route(&index, from, link, bench, 0.0, 0.0, None))
+                    && route.loaded_path.len() >= 2
+                {
+                    routes.insert((source, destination, truck), route.loaded_path);
+                }
+            }
+        }
+        self.editor.animation_routes = routes;
+    }
     pub(crate) fn refresh_haulage_view(&mut self) {
         if self.editor.planning_page != crate::ui::state::PlanningPage::Haulage {
             return;
         }
         self.editor.haul_view_revision = self.editor.haul_view_revision.wrapping_add(1);
         self.editor.haul_blocks.clear();
-        if let Some(document) = self.workspace.active_document() {
-            let destinations: Vec<_> = document
-                .schedule()
-                .routing()
-                .standalone
-                .iter()
-                .map(|d| DestinationId::Standalone(d.id))
-                .chain(
-                    document
-                        .solids()
-                        .iter()
-                        .filter(|s| s.kind != crate::model::SolidKind::Pit)
-                        .map(|s| DestinationId::Solid(s.id)),
-                )
-                .collect();
-            let grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
-            self.editor.haul_issues = document.haulage().issues(&destinations, grade);
-        }
-        let Ok(snapshot) = self.planning_snapshot() else { return };
+        self.editor.haul_issues.clear();
+        let snapshot = self.planning_snapshot().ok();
         let Some(document) = self.workspace.active_document() else { return };
         let network = document.haulage();
         let index = crate::model::haulage::network::RoadIndex::new(network);
         let max_grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
-        for block in snapshot.blocks {
+        let reach = network.settings.auto_join_m;
+        for block in snapshot.iter().flat_map(|s| &s.blocks) {
             let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
-            let connected = index
-                .access_m(point, network.settings.auto_join_m, max_grade)
-                .is_some_and(|a| a <= network.settings.auto_join_m);
-            self.editor.haul_blocks.push((
-                crate::ui::state::BlastOutline {
-                    solid: block.solid,
-                    bench_base: block.flitch.base,
-                    plane: block.flitch.base,
-                    name: format!("{} · {:.0} · {}", block.solid_name, block.flitch.base, block.name),
-                    anchor: block.anchor,
-                    area: block.plan_area,
-                    rings: block
-                        .ground
-                        .iter()
-                        .map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, block.flitch.base)).collect())
-                        .collect(),
-                },
-                connected,
-            ));
+            let link = network.block_link(block.solid, block.flitch.base, &block.ground);
+            let join = index.joins(point, link, reach, max_grade).first().map(|j| j.2);
+            let access_m = join.map_or(f64::INFINITY, |j| crate::model::haulage::network::access_length(point, j, max_grade));
+            let linked = link.is_some() && join.is_some();
+            self.editor.haul_blocks.push(crate::ui::state::HaulBlock {
+                id: block.id,
+                solid: block.solid,
+                bench: block.bench,
+                flitch: block.flitch,
+                blast: block.blast,
+                name: format!("{} · {:.0} · {}", block.solid_name, block.flitch.base, block.name),
+                anchor: block.anchor,
+                face: block.ground.clone(),
+                rings: block
+                    .ground
+                    .iter()
+                    .map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, block.flitch.base)).collect())
+                    .collect(),
+                link: link.filter(|_| linked),
+                join,
+                access_m,
+                connected: linked || access_m <= reach,
+            });
         }
+        if self.editor.haul_selected_block.is_some_and(|id| !self.editor.haul_blocks.iter().any(|b| b.id == id)) {
+            self.editor.haul_selected_block = None;
+        }
+        let destinations: Vec<_> = document
+            .schedule()
+            .routing()
+            .standalone
+            .iter()
+            .map(|d| DestinationId::Standalone(d.id))
+            .chain(
+                document
+                    .solids()
+                    .iter()
+                    .filter(|s| s.kind != crate::model::SolidKind::Pit)
+                    .map(|s| DestinationId::Solid(s.id)),
+            )
+            .collect();
+        let anchors: Vec<_> = self.editor.haul_blocks.iter().map(crate::ui::state::HaulBlock::point).collect();
+        self.editor.haul_issues = network.issues(&destinations, max_grade, &anchors);
         self.invalidate_overlay();
     }
     pub(crate) fn edit_haulage(&mut self, project: u32, edit: HaulEdit) -> anyhow::Result<()> {
@@ -208,10 +278,20 @@ impl crate::app::App<'_> {
                     after.fixed_destinations.push(destination);
                 }
             }
-            HaulEdit::Pin(destination, pos) => {
+            HaulEdit::Pin(role, pos) => {
                 let id = after.join_point(pos)?;
-                after.set_role(id, Some(NodeRole::Dump(destination)))?;
-                after.fixed_destinations.retain(|id| *id != destination);
+                after.set_role(id, Some(role))?;
+                after.fixed_destinations.retain(|id| *id != role.destination());
+            }
+            HaulEdit::LinkBlock {
+                solid,
+                flitch_base,
+                face,
+                probe,
+                at,
+            } => {
+                let node = at.map(|p| after.join_point(p)).transpose()?;
+                after.set_block_link(solid, flitch_base, &face, probe, node)?;
             }
         }
         Ok(())
@@ -219,6 +299,7 @@ impl crate::app::App<'_> {
     pub(crate) fn start_haul_road(&mut self) {
         self.editor.active_workspace = crate::ui::state::Workspace::Planning;
         self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+        self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
         self.refresh_haulage_view();
         self.editor.haul_draw = true;
         self.editor.haul_points.clear();
@@ -263,6 +344,36 @@ impl crate::app::App<'_> {
             .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles)
             .map(|(_, point)| point)
             .or_else(|| graphics.cursor_world(fallback_z))
+    }
+    /// The click that ends picking a node for the selected block: a node, or
+    /// a point on a road, which is split there to make one.
+    pub(crate) fn pick_haul_link(&mut self) {
+        self.editor.haul_link_pick = false;
+        let Some(graphics) = self.graphics.as_ref() else { return };
+        let Some(document) = self.workspace.active_document() else { return };
+        let at = match graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled) {
+            Some((SceneEntityId::HaulNode(id), _)) => document.haulage().node(id).map(|n| n.pos),
+            Some((SceneEntityId::HaulRoad(_), point)) => Some(point),
+            _ => None,
+        };
+        let Some(at) = at else {
+            crate::userspace_log!("{}", tr!("haul-link-missed"));
+            return;
+        };
+        let Some(block) = self.editor.haul_selected_block.and_then(|id| self.editor.haul_blocks.iter().find(|b| b.id == id)).cloned() else {
+            return;
+        };
+        let Some(runtime) = self.workspace.active_project().map(|p| p.runtime_id) else { return };
+        let edit = HaulEdit::LinkBlock {
+            solid: block.solid,
+            flitch_base: block.flitch.base,
+            face: block.face.clone(),
+            probe: block.anchor,
+            at: Some(at),
+        };
+        if let Err(error) = self.edit_haulage(runtime, edit) {
+            crate::userspace_warn!("{error:#}");
+        }
     }
     pub(crate) fn place_haul_point(&mut self) {
         let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
@@ -397,7 +508,16 @@ impl crate::app::App<'_> {
         let added = after.routing_mut().add_standalone(&name, kind).map_err(|e| anyhow::anyhow!(e.message()))?;
         let destination = DestinationId::Standalone(added);
         let mut next = network.clone();
-        next.set_role(node, Some(NodeRole::Dump(destination)))?;
+        // A new pile is tipped and loaded at the node it was made from until
+        // a separate reclaim point is chosen.
+        next.set_role(
+            node,
+            Some(if kind == DestinationKind::Stockpile {
+                NodeRole::DumpAndReclaim(destination)
+            } else {
+                NodeRole::Dump(destination)
+            }),
+        )?;
         self.execute_edit(Command::Batch(vec![
             Command::SetSchedulePlan {
                 before: Box::new(before),

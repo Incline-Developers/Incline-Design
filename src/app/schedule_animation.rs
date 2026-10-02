@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use crate::{
     app::{commands::solids::preview_triangulation, jobs::JobKey},
     model::{DigBlockId, SolidId, arrangement::Face, formats::mesh_data::Triangulation, schedule::animation::AnimationIndex, triangulation::OpenTriangulation},
-    ui::state::{BenchSelection, BlastShapeRef, SolidsViewRow},
+    ui::state::{BenchSelection, BlastShapeRef},
 };
 
 /// How finely a cut is placed. The depleted fraction is rounded to a multiple
@@ -211,33 +211,15 @@ enum Cut {
     Failed(String),
 }
 
-#[derive(Clone, Default, PartialEq)]
-struct Visibility {
-    solids: HashSet<SolidId>,
-    rows: Vec<SolidsViewRow>,
-    blasts: HashSet<BlastShapeRef>,
+type Visibility = crate::ui::state::SolidsVisibility;
+
+trait HidesBlock {
+    fn hides_block(&self, block: &SourceBlock) -> bool;
 }
 
-impl Visibility {
-    fn from_editor(editor: &crate::ui::state::EditorState) -> Self {
-        Self {
-            solids: editor.schedule_animation_hidden_solids.clone(),
-            rows: editor.schedule_animation_hidden_rows.clone(),
-            blasts: editor.schedule_animation_hidden_blasts.clone(),
-        }
-    }
-
-    fn hides(&self, block: &SourceBlock) -> bool {
-        self.solids.contains(&block.solid)
-            || self.rows.contains(&SolidsViewRow {
-                solid: block.solid,
-                band: Some(block.bench),
-            })
-            || self.rows.contains(&SolidsViewRow {
-                solid: block.solid,
-                band: Some(block.flitch),
-            })
-            || block.blast.is_some_and(|blast| self.blasts.contains(&blast))
+impl HidesBlock for Visibility {
+    fn hides_block(&self, block: &SourceBlock) -> bool {
+        self.hides(block.solid, block.bench, block.flitch, block.blast)
     }
 }
 
@@ -358,6 +340,7 @@ impl crate::app::App<'_> {
             }
             return;
         }
+        self.sync_animation_routes();
 
         if current && self.schedule_animation.identity != identity {
             self.abandon_animation_geometry();
@@ -406,7 +389,7 @@ impl crate::app::App<'_> {
         // or not there is a run to deplete by: a view showing authored solids
         // whole still has to hide the ones the user has hidden, and it is the
         // same hidden set that filters both.
-        let visibility = Visibility::from_editor(&self.editor);
+        let visibility = self.editor.schedule_animation_hidden.clone();
         if self.schedule_animation.hidden != visibility {
             self.schedule_animation.hidden = visibility;
             self.schedule_animation.hidden_generation = self.schedule_animation.hidden_generation.wrapping_add(1);
@@ -641,7 +624,7 @@ impl crate::app::App<'_> {
             .source
             .iter()
             .enumerate()
-            .filter(|(_, block)| !hidden.hides(block))
+            .filter(|(_, block)| !hidden.hides_block(block))
             .all(|(slot, block)| self.schedule_animation.slots.get(slot).and_then(|slot| slot.cut) == Some(CutKey::of(index.depleted_fraction(block.id, time_h))))
     }
 
@@ -653,7 +636,7 @@ impl crate::app::App<'_> {
             .source
             .iter()
             .enumerate()
-            .filter(|(_, block)| !hidden.hides(block))
+            .filter(|(_, block)| !hidden.hides_block(block))
             .filter_map(|(slot, block)| {
                 let cut = CutKey::of(index.depleted_fraction(block.id, time_h));
                 let standing = self.schedule_animation.slots.get(slot).and_then(|slot| slot.cut) == Some(cut);
@@ -789,7 +772,7 @@ impl crate::app::App<'_> {
             .schedule_animation
             .source
             .iter()
-            .filter(|block| !hidden.hides(block))
+            .filter(|block| !hidden.hides_block(block))
             .map(|block| block.mesh.id)
             .collect();
         // Every open surface, on the project's own visibility.

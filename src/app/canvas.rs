@@ -329,21 +329,42 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !dragged
-            && self.editor.active_workspace == crate::ui::state::Workspace::Planning
-            && self.editor.planning_page == crate::ui::state::PlanningPage::Haulage
-            && self.editor.active_tool == ActiveTool::None
-            && !self.editor.haul_draw
-            && !pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
-            && let Some(point) = self.editor.haul_blocks.iter().find_map(|(block, _)| {
-                let world = self.graphics.as_ref()?.cursor_world(block.plane)?;
-                let face: Vec<Vec<glam::DVec2>> = block.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
-                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| glam::DVec3::new(block.anchor[0], block.anchor[1], block.plane))
-            })
-        {
-            self.editor.haul_source_point = Some(point);
+        if !dragged && self.editor.is_haulage_page() && self.editor.haul_link_pick {
+            self.pick_haul_link();
             self.invalidate_overlay();
             return;
+        }
+        if !dragged && self.editor.is_haulage_page() && self.editor.active_tool == ActiveTool::None && !self.editor.haul_draw {
+            let on_network = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+            // Only blocks left visible in Solids Navigation can be clicked,
+            // and of those under the cursor the highest - the one on top.
+            let hidden = &self.editor.haul_hidden;
+            let block = (!on_network)
+                .then(|| {
+                    self.editor
+                        .haul_blocks
+                        .iter()
+                        .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+                        .filter(|b| {
+                            self.graphics
+                                .as_ref()
+                                .and_then(|g| g.cursor_world(b.flitch.base))
+                                .is_some_and(|world| crate::model::arrangement::point_in_face(&b.face, world.truncate()))
+                        })
+                        .max_by(|a, b| a.flitch.base.total_cmp(&b.flitch.base))
+                        .map(|b| b.id)
+                })
+                .flatten();
+            if let Some(id) = block {
+                self.editor.haul_selected_block = Some(id);
+                self.editor
+                    .selected_handles
+                    .retain(|h| !matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+                self.invalidate_overlay();
+                return;
+            }
+            self.editor.haul_selected_block = None;
+            self.invalidate_overlay();
         }
         if !dragged
             && self.editor.is_dig_strips_step()

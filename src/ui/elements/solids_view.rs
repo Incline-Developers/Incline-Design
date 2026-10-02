@@ -34,10 +34,39 @@ pub(crate) fn draw_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &
     draw_tree_to_depth(ui, editor, document, true, commands);
 }
 
+/// Which page a Solids Navigation tree drives. Each keeps its own hidden
+/// set and selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavigationTree {
+    Animation,
+    Haulage,
+}
+
+fn hidden(editor: &EditorState, tree: NavigationTree) -> &crate::ui::state::SolidsVisibility {
+    match tree {
+        NavigationTree::Animation => &editor.schedule_animation_hidden,
+        NavigationTree::Haulage => &editor.haul_hidden,
+    }
+}
+
+fn hidden_mut(editor: &mut EditorState, tree: NavigationTree) -> &mut crate::ui::state::SolidsVisibility {
+    match tree {
+        NavigationTree::Animation => &mut editor.schedule_animation_hidden,
+        NavigationTree::Haulage => &mut editor.haul_hidden,
+    }
+}
+
+fn navigation_selection(editor: &EditorState, tree: NavigationTree) -> &[SolidsViewRow] {
+    match tree {
+        NavigationTree::Animation => &editor.schedule_animation_selection,
+        NavigationTree::Haulage => &editor.haul_navigation_selection,
+    }
+}
+
 /// Animate's independent hierarchy. Every row has the same eye affordance as
 /// the Objects navigator, while clicking a solid also frames it in the main
 /// viewport.
-pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, tree: NavigationTree, commands: &mut Vec<UiCommand>) {
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -51,15 +80,15 @@ pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, d
             if solids.is_empty() {
                 continue;
             }
-            let kind_visible = solids.iter().any(|solid| !editor.schedule_animation_hidden_solids.contains(&solid.id));
+            let kind_visible = solids.iter().any(|solid| !hidden(editor, tree).solids.contains(&solid.id));
             let (_, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_kind", kind as u8)), &kind_label(kind), false, kind_visible, |ui| {
                 for solid in &solids {
-                    draw_animation_solid(ui, editor, document, solid, commands);
+                    draw_animation_solid(ui, editor, document, solid, tree, commands);
                 }
             });
             if visibility_clicked {
                 for solid in &solids {
-                    set_animation_solid_visible(editor, solid.id, !kind_visible);
+                    set_animation_solid_visible(editor, tree, solid.id, !kind_visible);
                 }
             }
         }
@@ -67,11 +96,24 @@ pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, d
     });
 }
 
-fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: &Document, solid: &crate::model::Solid, commands: &mut Vec<UiCommand>) {
-    let occupied = editor.solid_view_bands.get(&solid.id).cloned();
+fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: &Document, solid: &crate::model::Solid, tree: NavigationTree, commands: &mut Vec<UiCommand>) {
+    // Haulage lists the flitches its dig blocks are on: the occupied bands
+    // are only gathered while a page that draws the solids is open.
+    let occupied = match tree {
+        NavigationTree::Haulage if editor.haul_blocks.iter().any(|b| b.solid == solid.id) => {
+            let mut flitches: Vec<BenchSelection> = Vec::new();
+            for block in editor.haul_blocks.iter().filter(|b| b.solid == solid.id) {
+                if !flitches.contains(&block.flitch) {
+                    flitches.push(block.flitch);
+                }
+            }
+            Some(flitches)
+        }
+        _ => editor.solid_view_bands.get(&solid.id).cloned(),
+    };
     let solid_rows = descendants(solid, occupied.as_ref(), true);
-    let selected = group_selected(&editor.schedule_animation_selection, &solid_rows);
-    let visible = !editor.schedule_animation_hidden_solids.contains(&solid.id);
+    let selected = group_selected(navigation_selection(editor, tree), &solid_rows);
+    let visible = !hidden(editor, tree).solids.contains(&solid.id);
     let (clicked, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_solid", solid.id.0)), &solid.name, selected, visible, |ui| {
         if occupied.is_none() {
             explorer_note(ui, tr!("planning-solid-geometry-pending"));
@@ -86,8 +128,8 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                 solid: solid.id,
                 band: Some(bench_band),
             };
-            let bench_selected = group_selected(&editor.schedule_animation_selection, std::slice::from_ref(&bench_row));
-            let bench_visible = visible && !editor.schedule_animation_hidden_rows.contains(&bench_row);
+            let bench_selected = group_selected(navigation_selection(editor, tree), std::slice::from_ref(&bench_row));
+            let bench_visible = visible && !hidden(editor, tree).rows.contains(&bench_row);
             let (bench_clicked, bench_visibility_clicked) = animation_parent_row(
                 ui,
                 egui::Id::new(("animation_bench", solid.id.0, bench.base.to_bits())),
@@ -98,7 +140,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                     let blasts = solid.blasting.bench(bench.base).map(|entry| entry.blasts.as_slice()).unwrap_or_default();
                     for (blast_index, blast) in blasts.iter().enumerate() {
                         let blast_ref = BlastShapeRef::new(solid.id, bench.base, blast.anchor);
-                        let blast_visible = bench_visible && !editor.schedule_animation_hidden_blasts.contains(&blast_ref);
+                        let blast_visible = bench_visible && !hidden(editor, tree).blasts.contains(&blast_ref);
                         let (_, blast_visibility_clicked) = animation_parent_row(
                             ui,
                             egui::Id::new(("animation_blast", solid.id.0, bench.base.to_bits(), blast_index)),
@@ -115,43 +157,58 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                                             is_flitch: true,
                                         }),
                                     };
-                                    let flitch_visible = blast_visible && !editor.schedule_animation_hidden_rows.contains(&flitch_row);
+                                    let flitch_visible = blast_visible && !hidden(editor, tree).rows.contains(&flitch_row);
                                     let row = animation_leaf_row(
                                         ui,
                                         egui::Id::new(("animation_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
                                         &format_rl(flitch.base),
-                                        group_selected(&editor.schedule_animation_selection, std::slice::from_ref(&flitch_row)),
+                                        group_selected(navigation_selection(editor, tree), std::slice::from_ref(&flitch_row)),
                                         flitch_visible,
                                     );
                                     if row.0 {
-                                        select_animation_rows(ui, editor, vec![flitch_row]);
+                                        select_animation_rows(ui, editor, tree, vec![flitch_row]);
                                     }
                                     if row.1 {
-                                        set_animation_row_visible(editor, flitch_row, bench_row, !flitch_visible);
+                                        set_animation_row_visible(editor, tree, flitch_row, bench_row, !flitch_visible);
                                     }
                                 }
                             },
                         );
                         if blast_visibility_clicked {
-                            set_animation_blast_visible(editor, blast_ref, bench_row, !blast_visible);
+                            set_animation_blast_visible(editor, tree, blast_ref, bench_row, !blast_visible);
                         }
                     }
                 },
             );
             if bench_clicked {
-                select_animation_rows(ui, editor, vec![bench_row]);
+                select_animation_rows(ui, editor, tree, vec![bench_row]);
             }
             if bench_visibility_clicked {
-                set_animation_row_visible(editor, bench_row, bench_row, !bench_visible);
+                set_animation_row_visible(editor, tree, bench_row, bench_row, !bench_visible);
             }
         }
     });
     if clicked {
-        select_animation_rows(ui, editor, solid_rows);
-        commands.push(UiCommand::FocusScheduleAnimationSolid(solid.id));
+        select_animation_rows(ui, editor, tree, solid_rows);
+        match tree {
+            NavigationTree::Animation => commands.push(UiCommand::FocusScheduleAnimationSolid(solid.id)),
+            NavigationTree::Haulage => {
+                let points: Vec<_> = editor
+                    .haul_blocks
+                    .iter()
+                    .filter(|b| b.solid == solid.id)
+                    .flat_map(|b| b.rings.iter().flatten().copied())
+                    .collect();
+                if let Some(min) = points.iter().copied().reduce(glam::DVec3::min)
+                    && let Some(max) = points.iter().copied().reduce(glam::DVec3::max)
+                {
+                    commands.push(UiCommand::FrameHaul(min, max));
+                }
+            }
+        }
     }
     if visibility_clicked {
-        set_animation_solid_visible(editor, solid.id, !visible);
+        set_animation_solid_visible(editor, tree, solid.id, !visible);
     }
 }
 
@@ -177,38 +234,42 @@ fn animation_leaf_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bo
     (row.response.clicked(), row.visibility_clicked)
 }
 
-fn select_animation_rows(ui: &egui::Ui, editor: &mut EditorState, rows: Vec<SolidsViewRow>) {
+fn select_animation_rows(ui: &egui::Ui, editor: &mut EditorState, tree: NavigationTree, rows: Vec<SolidsViewRow>) {
     let extend = ui.input(|input| input.modifiers.command || input.modifiers.shift);
-    apply_selection(&mut editor.schedule_animation_selection, &rows, extend);
+    let selection = match tree {
+        NavigationTree::Animation => &mut editor.schedule_animation_selection,
+        NavigationTree::Haulage => &mut editor.haul_navigation_selection,
+    };
+    apply_selection(selection, &rows, extend);
     ui.ctx().request_repaint();
 }
 
-fn set_animation_solid_visible(editor: &mut EditorState, solid: crate::model::SolidId, visible: bool) {
+fn set_animation_solid_visible(editor: &mut EditorState, tree: NavigationTree, solid: crate::model::SolidId, visible: bool) {
     if visible {
-        editor.schedule_animation_hidden_solids.remove(&solid);
-        editor.schedule_animation_hidden_rows.retain(|row| row.solid != solid);
-        editor.schedule_animation_hidden_blasts.retain(|blast| blast.solid != solid);
+        hidden_mut(editor, tree).solids.remove(&solid);
+        hidden_mut(editor, tree).rows.retain(|row| row.solid != solid);
+        hidden_mut(editor, tree).blasts.retain(|blast| blast.solid != solid);
     } else {
-        editor.schedule_animation_hidden_solids.insert(solid);
+        hidden_mut(editor, tree).solids.insert(solid);
     }
 }
 
-fn set_animation_row_visible(editor: &mut EditorState, row: SolidsViewRow, parent: SolidsViewRow, visible: bool) {
-    editor.schedule_animation_hidden_solids.remove(&row.solid);
+fn set_animation_row_visible(editor: &mut EditorState, tree: NavigationTree, row: SolidsViewRow, parent: SolidsViewRow, visible: bool) {
+    hidden_mut(editor, tree).solids.remove(&row.solid);
     if visible {
-        editor.schedule_animation_hidden_rows.retain(|hidden| *hidden != row && *hidden != parent);
-    } else if !editor.schedule_animation_hidden_rows.contains(&row) {
-        editor.schedule_animation_hidden_rows.push(row);
+        hidden_mut(editor, tree).rows.retain(|hidden| *hidden != row && *hidden != parent);
+    } else if !hidden_mut(editor, tree).rows.contains(&row) {
+        hidden_mut(editor, tree).rows.push(row);
     }
 }
 
-fn set_animation_blast_visible(editor: &mut EditorState, blast: BlastShapeRef, bench: SolidsViewRow, visible: bool) {
-    editor.schedule_animation_hidden_solids.remove(&blast.solid);
-    editor.schedule_animation_hidden_rows.retain(|row| *row != bench);
+fn set_animation_blast_visible(editor: &mut EditorState, tree: NavigationTree, blast: BlastShapeRef, bench: SolidsViewRow, visible: bool) {
+    hidden_mut(editor, tree).solids.remove(&blast.solid);
+    hidden_mut(editor, tree).rows.retain(|row| *row != bench);
     if visible {
-        editor.schedule_animation_hidden_blasts.remove(&blast);
+        hidden_mut(editor, tree).blasts.remove(&blast);
     } else {
-        editor.schedule_animation_hidden_blasts.insert(blast);
+        hidden_mut(editor, tree).blasts.insert(blast);
     }
 }
 

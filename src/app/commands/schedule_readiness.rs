@@ -456,7 +456,9 @@ impl crate::app::App<'_> {
             // The Calendar and the Charts report off the same held result, so
             // on those pages the result stays mirrored - under the same
             // currentness gate - rather than being taken off the page.
-            if keeps_reports {
+            // Animate reads it too: its haul flows and the timeline's
+            // stockpile figures are the held result at the shown instant.
+            if keeps_reports || self.editor.is_schedule_animation() {
                 self.mirror_schedule_calculation();
             } else if self.editor.schedule_result.take().is_some() {
                 self.redraw_requested = true;
