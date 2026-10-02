@@ -1,6 +1,6 @@
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     ui::state::{ActiveTool, DelayProduct},
     userspace_log, userspace_warn,
 };
@@ -11,9 +11,9 @@ impl<'a> App<'a> {
     pub(crate) fn toggle_rotation_centre(&mut self) {
         if self.editor.rotation_centre.is_some() {
             self.clear_rotation_centre();
-            userspace_log!("{}", tr!(literal = "Released the centre of rotation"));
+            userspace_log!("{}", tr!("cmd-view-released-centre-rotation"));
         } else if self.editor.fly_mode_enabled {
-            userspace_warn!("{}", tr!(literal = "The centre of rotation is not available in flying mode"));
+            userspace_warn!("{}", tr!("cmd-view-centre-rotation-not-available-flying"));
         } else {
             self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
         }
@@ -49,7 +49,7 @@ impl<'a> App<'a> {
                 self.editor.z_level,
                 self.editor.xray_enabled,
             ) else {
-                userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
+                userspace_warn!("{}", tr!("cmd-view-no-point-under-cursor-fix"));
                 return;
             };
             centre
@@ -58,8 +58,8 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Fixed the centre of rotation at %x%, %y%, %z%",
+            tr!(
+                "cmd-view-fixed-centre-rotation-x-y",
                 x = format!("{:.3}", centre.x),
                 y = format!("{:.3}", centre.y),
                 z = format!("{:.3}", centre.z)
@@ -82,7 +82,7 @@ impl<'a> App<'a> {
         // The topology GPU cache detects the style change during the next
         // render; document geometry does not need rebuilding.
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set topology wireframes = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-topology-wireframes-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -90,7 +90,7 @@ impl<'a> App<'a> {
         self.editor.show_points = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set view points = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-view-points-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -102,7 +102,7 @@ impl<'a> App<'a> {
         self.editor.cinematic_enabled = enabled;
         self.invalidate_geometry();
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set cinematic view = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-cinematic-view-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -114,7 +114,7 @@ impl<'a> App<'a> {
     pub(crate) fn set_xy_grid_shown(&mut self, enabled: bool) {
         self.editor.show_xy_grid = enabled;
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set XY grid = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-view-set-xy-grid-enabled", enabled = enabled.to_string()));
     }
 
     /// Flip one View menu switch and save it, exactly as the Interface tab
@@ -143,9 +143,18 @@ impl<'a> App<'a> {
         self.apply_preferences(preferences)
     }
 
+    /// Change the borehole log's trace colours or scales, routed through the
+    /// preferences the same way [`Self::set_language`] is.
+    pub(crate) fn set_well_log_style(&mut self, style: crate::ui::widgets::log_traces::WellLogStyle) -> anyhow::Result<()> {
+        let mut preferences = self.editor.current_preferences();
+        preferences.well_log_style = style;
+        self.apply_preferences(preferences)
+    }
+
     pub(crate) fn apply_preferences(&mut self, mut preferences: crate::ui::state::PreferencesDraft) -> anyhow::Result<()> {
         // Clamp once, up front, so the saved config, the applied editor state
         // and the retained draft cannot diverge.
+        preferences.well_log_style = preferences.well_log_style.sanitized();
         preferences.ui_size_percent = crate::app::io::finite_clamped(preferences.ui_size_percent, 50.0, 200.0, crate::app::io::default_ui_size_percent());
         preferences.snap_poll_rate = preferences.snap_poll_rate.clamp(5, 1000);
         preferences.frame_rate_cap = preferences.frame_rate_cap.clamp(20, 1000);
@@ -160,14 +169,12 @@ impl<'a> App<'a> {
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
 
-        crate::app::io::save_config(&config_from(
-            &preferences,
-            self.editor.workspace_order,
-            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
-            self.editor.survey.definitions.clone(),
-            self.editor.survey.local_system.clone(),
-        ))?;
-
+        // Apply to the editor before attempting to save. A save failure must
+        // not leave the editor holding a stale style: a widget whose draft no
+        // longer matches `self.editor.*` re-sends this command every frame,
+        // so a persistent save error would otherwise repeat forever instead
+        // of being reported once below.
+        self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
         self.editor.panel_chrome = preferences.panel_chrome;
@@ -230,6 +237,19 @@ impl<'a> App<'a> {
             preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
+
+        // Saved last: the editor already holds the new preferences above, so
+        // a failure here is reported once by the caller and does not leave
+        // the draft and the editor disagreeing.
+        crate::app::io::save_config(&config_from(
+            &preferences,
+            self.editor.workspace_order,
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
+        ))?;
+
         Ok(())
     }
 
@@ -284,7 +304,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("{}", tr!(literal = "Reset view (fit to extents)"));
+        userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -300,7 +320,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("{}", tr!(literal = "Zoom to extents (preserving angle)"));
+        userspace_log!("{}", tr!("cmd-view-zoom-extents-preserving-angle"));
     }
 }
 
@@ -318,11 +338,13 @@ pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
     workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
+    blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
+        well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
         panel_chrome: preferences.panel_chrome,
@@ -353,6 +375,7 @@ pub(crate) fn config_from(
         fly_near_clip_limit: preferences.fly_near_clip_limit,
         fly_max_clip_span: preferences.fly_max_clip_span,
         delay_products,
+        blast_library,
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),

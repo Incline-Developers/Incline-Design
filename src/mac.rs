@@ -16,7 +16,7 @@ use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Axis, SceneEntityId},
     ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
 };
@@ -42,6 +42,12 @@ struct MenuState {
     /// Whether exactly one loaded drill-hole collection is selected, which is
     /// what block-model estimation runs on.
     can_create_block_model: bool,
+    /// Whether any hole is selected, which is what reference points are
+    /// placed on.
+    can_build_reference_points: bool,
+    /// Whether enough design points are selected to triangulate a surface
+    /// from, which is what Build Surface runs on.
+    can_build_reference_surface: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -98,6 +104,10 @@ pub(crate) enum MacMenuAction {
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
+    /// The Drillholes menu's row that opens the reference points dialog.
+    OpenReferencePoints,
+    /// The Drillholes menu's row that opens the build surface dialog.
+    OpenReferenceSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -166,6 +176,8 @@ impl MacMenuAction {
         Self::OpenAbout,
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
+        Self::OpenReferencePoints,
+        Self::OpenReferenceSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -281,7 +293,7 @@ fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, targ
 /// Replace winit's fallback macOS menu with Incline Design's native menu bar.
 pub(crate) fn install_menu_bar() {
     let Some(mtm) = MainThreadMarker::new() else {
-        log::error!("{}", crate::i18n::tr!(literal = "Cannot install the macOS menu bar away from the main thread"));
+        log::error!("{}", crate::i18n::tr!("mac-cannot-install-macos-menu-bar"));
         return;
     };
 
@@ -304,7 +316,7 @@ pub(crate) fn install_menu_bar() {
     add_separator(&application_menu, mtm);
     add_action(
         &application_menu,
-        &tr_format!(literal = "Quit %app%", app = crate::APP_NAME),
+        &tr!("mac-quit-app", app = crate::APP_NAME.to_string()),
         "q",
         MacMenuAction::RequestExit,
         &target,
@@ -322,7 +334,7 @@ pub(crate) fn install_menu_bar() {
     let recent_item = add_submenu(&file_menu, &tr!("menu-file-open-recent"), &recent_menu, mtm);
     recent_item.setTag(RECENT_SUBMENU_TAG);
     recent_item.setEnabled(false);
-    add_action(&file_menu, &tr!(literal = "Reveal in Finder"), "", MacMenuAction::ShowProjectInFileManager, &target, mtm);
+    add_action(&file_menu, &tr!("common-reveal-finder"), "", MacMenuAction::ShowProjectInFileManager, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, &tr!("menu-file-save-project"), "s", MacMenuAction::SaveProject, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-save-project-as"), "S", MacMenuAction::SaveProjectAs, &target, mtm);
@@ -409,7 +421,7 @@ pub(crate) fn install_menu_bar() {
     triangulation_menu.setAutoenablesItems(false);
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Clip Surface by Polyline..."),
+        &tr!("common-clip-surface-polyline"),
         "",
         MacMenuAction::OpenCutTriangulationByPolyline,
         &target,
@@ -417,7 +429,7 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Slice Triangulation by Z Range..."),
+        &tr!("common-slice-triangulation-z-range"),
         "",
         MacMenuAction::OpenCutTriangulationByZ,
         &target,
@@ -425,7 +437,7 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Trim to Topology..."),
+        &tr!("common-trim-topology"),
         "",
         MacMenuAction::OpenCutTriangulationBySurface,
         &target,
@@ -434,7 +446,7 @@ pub(crate) fn install_menu_bar() {
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Cut Topology with Pit Shell..."),
+        &tr!("common-cut-topology-pit-shell"),
         "",
         MacMenuAction::OpenCutTopologyByPitShell,
         &target,
@@ -442,7 +454,7 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Merge Shell into Topology..."),
+        &tr!("common-merge-shell-into-topology-ellipsis"),
         "",
         MacMenuAction::OpenIncludeSolidInTopology,
         &target,
@@ -451,7 +463,7 @@ pub(crate) fn install_menu_bar() {
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
-        &tr!(literal = "Generate Contour Lines..."),
+        &tr!("common-generate-contour-lines"),
         "",
         MacMenuAction::OpenContourTriangulation,
         &target,
@@ -462,14 +474,14 @@ pub(crate) fn install_menu_bar() {
 
     let raster_menu = menu(&tr!("ws-menubar-raster"), mtm);
     raster_menu.setAutoenablesItems(false);
-    add_action(&raster_menu, &tr!(literal = "Undrape All"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
+    add_action(&raster_menu, &tr!("common-undrape-all"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
 
     let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
     block_model_menu.setAutoenablesItems(false);
     add_action(
         &block_model_menu,
-        &tr!(literal = "Create Ore Triangulation..."),
+        &tr!("common-create-ore-triangulation-ellipsis"),
         "",
         MacMenuAction::OpenCreateOreTriangulation,
         &target,
@@ -482,9 +494,19 @@ pub(crate) fn install_menu_bar() {
     drill_hole_menu.setAutoenablesItems(false);
     add_action(
         &drill_hole_menu,
-        &tr!(literal = "Create Block Model..."),
+        &tr!("common-create-block-model-ellipsis"),
         "",
         MacMenuAction::OpenCreateBlockModel,
+        &target,
+        mtm,
+    );
+    add_separator(&drill_hole_menu, mtm);
+    add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!("common-build-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenReferenceSurface,
         &target,
         mtm,
     );
@@ -500,16 +522,9 @@ pub(crate) fn install_menu_bar() {
 
     let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
     point_cloud_menu.setAutoenablesItems(false);
-    add_action(
-        &point_cloud_menu,
-        &tr!(literal = "Create Triangulation..."),
-        "",
-        MacMenuAction::OpenPointCloudTin,
-        &target,
-        mtm,
-    );
-    add_action(&point_cloud_menu, &tr!(literal = "Join..."), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
-    add_action(&point_cloud_menu, &tr!(literal = "Classify..."), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
+    add_action(&point_cloud_menu, &tr!("common-create-triangulation"), "", MacMenuAction::OpenPointCloudTin, &target, mtm);
+    add_action(&point_cloud_menu, &tr!("common-join"), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
+    add_action(&point_cloud_menu, &tr!("common-classify"), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
     app.setMainMenu(Some(&root));
@@ -624,6 +639,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         one_surface_selected: editor.selection_counts.triangulations == 1,
         can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
         can_create_block_model: editor.selection_counts.drill_holes == 1,
+        can_build_reference_points: editor.selection_counts.reference_holes > 0,
+        can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
@@ -663,6 +680,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     // opened with rather than on a pick list filled inside their dialog.
     set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
+    set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
+    set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);

@@ -82,14 +82,14 @@ impl<'a> App<'a> {
             self.execute_edit(Command::Replace { before, after });
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    crate::i18n::tr!(literal = "Chamfer"),
-                    crate::i18n::tr_format!(literal = "Radius %radius%", radius = format!("{:.3}", self.editor.chamfer_radius)),
+                    crate::i18n::tr!("common-chamfer"),
+                    crate::i18n::tr!("cmd-chamfer-radius", radius = format!("{:.3}", self.editor.chamfer_radius)),
                 ),
-                crate::i18n::tr_format!(
-                    literal = "Chamfered corner %corner% with radius %radius% and %segments% segments",
-                    corner = ci,
+                crate::i18n::tr!(
+                    "cmd-chamfer-applied",
+                    corner = ci.to_string(),
                     radius = format!("{:.3}", self.editor.chamfer_radius),
-                    segments = self.editor.chamfer_segments
+                    segments = self.editor.chamfer_segments.to_string()
                 ),
             );
         }

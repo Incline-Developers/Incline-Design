@@ -27,7 +27,7 @@ impl<'a> App<'a> {
     pub(crate) fn open_triangulation_input(&mut self, input: crate::model::input::InputFile) {
         let source_name = input.source.name.clone();
         self.spawn_job_reporting_progress(
-            crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name),
+            crate::i18n::tr!("cmd-block-model-loading-name", name = source_name.to_string()),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -35,7 +35,7 @@ impl<'a> App<'a> {
                 }
                 let crate::model::input::InputFile { source, bytes, reservation } = input;
                 let source_name = source.name;
-                let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!(literal = "Triangulation"));
+                let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!("ws-menubar-triangulation"));
                 // The bytes are already in memory here, so the read share of
                 // the bar covers parsing alone.
                 let mesh = formats::read_mesh_bytes(&source_name, &bytes, &progress.phase(0.0, LOAD_READ_SHARE))
@@ -80,7 +80,7 @@ impl<'a> App<'a> {
                     }
                     app.invalidate_topology_bounds_and_redraw();
                 }
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load triangulation: %error%", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-session-failed-load-triangulation-error", error = format!("{error:#}"))),
             },
         );
     }
@@ -100,9 +100,9 @@ impl<'a> App<'a> {
         }
 
         let source_name = file_name(path);
-        let name = crate::model::project::imported_item_name(path, &crate::i18n::tr!(literal = "Triangulation"));
+        let name = crate::model::project::imported_item_name(path, &crate::i18n::tr!("ws-menubar-triangulation"));
         let path = path.to_path_buf();
-        let (ticket, progress) = self.begin_reported_task(tr_format!(literal = "Loading %name%", name = &source_name));
+        let (ticket, progress) = self.begin_reported_task(tr!("cmd-block-model-loading-name", name = source_name.to_string()));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -117,12 +117,12 @@ impl<'a> App<'a> {
                         .map_err(|err| anyhow::anyhow!("Failed to read {}: {err}", path.display()))?;
                     userspace_log!(
                         "{}",
-                        tr_format!(
-                            literal = "Loaded triangulation '%name%' (%path%, %vertex_count% vertices, %face_count% faces)",
-                            name = name,
-                            path = path.display(),
-                            vertex_count = mesh.vertex_count(),
-                            face_count = mesh.face_count()
+                        tr!(
+                            "cmd-session-loaded-triangulation",
+                            name = name.to_string(),
+                            path = path.display().to_string(),
+                            vertex_count = mesh.vertex_count().to_string(),
+                            face_count = mesh.face_count().to_string()
                         )
                     );
                     let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
@@ -195,12 +195,12 @@ impl<'a> App<'a> {
                 }
                 Ok(Err(e)) => {
                     let message = format!("{e:#}");
-                    userspace_warn!("{}", tr_format!(literal = "Failed to load triangulation: %message%", message = message));
+                    userspace_warn!("{}", tr!("cmd-session-failed-load-triangulation-message", message = message.to_string()));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("{}", tr_format!(literal = "Triangulation load for %path% ended without a result", path = path.display()));
+                    userspace_warn!("{}", tr!("cmd-session-triangulation-load-no-result", path = path.display().to_string()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -235,7 +235,7 @@ impl<'a> App<'a> {
         if self.active_triangulation == Some(id) {
             self.active_triangulation = None;
         }
-        userspace_log!("{}", tr_format!(literal = "Unloaded triangulation '%name%'", name = name));
+        userspace_log!("{}", tr!("cmd-session-unloaded-triangulation-name", name = name.to_string()));
         self.invalidate_topology_bounds_and_redraw();
         self.persist_session();
     }
@@ -254,7 +254,7 @@ impl<'a> App<'a> {
         // Rasters draped onto this surface are a property of the surface, so
         // they come back with it; nothing else references it.
         self.delete_project_item(ItemRef::Triangulation(id));
-        userspace_log!("{}", tr_format!(literal = "Deleted triangulation '%name%' from project", name = name));
+        userspace_log!("{}", tr!("cmd-session-deleted-triangulation", name = name.to_string()));
     }
 
     fn clear_dialog_refs_to_triangulation(&mut self, id: TriangulationId) {
@@ -297,8 +297,8 @@ impl<'a> App<'a> {
         if let Some(style) = self.item_style(item) {
             self.set_item_style(item, style.with_color(new_color));
         }
-        self.log_when_gesture_ends(tr_format!(
-            literal = "Set triangulation %tri_id% color to %color%",
+        self.log_when_gesture_ends(tr!(
+            "cmd-session-set-triangulation-tri-id-color",
             tri_id = format!("{tri_id:?}"),
             color = format!("{new_color:?}")
         ));
@@ -320,7 +320,7 @@ impl<'a> App<'a> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                userspace_warn!("{}", tr_format!(literal = "Triangulation operation failed: %message%", message = message));
+                userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = message.to_string()));
             }
         }
     }
@@ -330,6 +330,15 @@ impl<'a> App<'a> {
     /// it. The heavy build (mesh assembly + BVH) is done by
     /// `build_generated_triangulation`, which can run on a worker thread.
     pub(crate) fn insert_generated_triangulation(&mut self, built: crate::model::triangulation::GeneratedTriangulation) {
+        self.insert_generated_triangulation_in(built, crate::model::SectionKind::natural_for(MemberKind::Triangulation));
+    }
+
+    /// The same, for a tool that knows where its surface belongs.
+    ///
+    /// A derived surface is born beside what it was derived from when that
+    /// section can show one - see [`crate::model::SectionKind::derived_for`] -
+    /// and always at the section root, never in one of its collections.
+    pub(crate) fn insert_generated_triangulation_in(&mut self, built: crate::model::triangulation::GeneratedTriangulation, section: crate::model::SectionKind) {
         let crate::model::triangulation::GeneratedTriangulation {
             name,
             mesh,
@@ -348,7 +357,7 @@ impl<'a> App<'a> {
         let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.triangulations.push(OpenTriangulation {
             id,
-            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None),
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section),
             name: name.clone(),
             mesh,
             spatial,
@@ -366,11 +375,11 @@ impl<'a> App<'a> {
         self.editor.selected_handles.insert(crate::model::SceneEntityId::Triangulation(id));
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Created triangulation '%name%' (%vertex_count% vertices, %face_count% faces) from surface type %surface_type%",
-                name = name,
-                vertex_count = vertex_count,
-                face_count = face_count,
+            tr!(
+                "cmd-session-created-triangulation",
+                name = name.to_string(),
+                vertex_count = vertex_count.to_string(),
+                face_count = face_count.to_string(),
                 surface_type = format!("{surface_type:?}")
             )
         );

@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         FolderId, FolderRegistry, LayerId, MemberKind, SectionKind,
         formats::omf::{self, ImportBundle, PayloadSource, ProjectSnapshot},
@@ -31,6 +31,64 @@ pub(crate) enum ViewOnOpen {
     Keep,
 }
 
+/// Reconcile colour state restored from an OMF style blob with the dataset it
+/// now belongs to: every saved colour is kept, every unnamed code gets a
+/// generated one, nothing is marked dirty, and the gap is reported.
+pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole::OpenDrillHoleDataset) {
+    let (kept, dropped) = crate::model::drill_hole::tidy_working_sections(std::mem::take(&mut open.color.working_sections), &open.dataset.fields);
+    open.color.working_sections = kept;
+    if !dropped.is_empty() {
+        let details = dropped
+            .iter()
+            .map(|section| {
+                tr!(
+                    "cmd-drill-hole-name-reason",
+                    name = section.name.clone().to_string(),
+                    reason = section.problem.message().to_string()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        userspace_warn!(
+            "{}",
+            tr!(
+                "cmd-omf-dataset-name-count-working-section",
+                name = open.name.clone().to_string(),
+                count = dropped.len().to_string(),
+                details = details.to_string()
+            )
+        );
+    }
+    if open.color.by_working_section
+        && let Some(field) = open.color.active_field.as_deref()
+        && !open.color.working_sections.iter().any(|section| section.field == field)
+    {
+        open.color.by_working_section = false;
+    }
+
+    let Some(key) = open.color.active_field.clone() else { return };
+    let dataset = std::sync::Arc::clone(&open.dataset);
+    let Some(field) = dataset.field(&key) else { return };
+    let crate::model::drill_hole::DrillFieldKind::Categorical { categories } = &field.kind else {
+        return;
+    };
+    let total = categories.len();
+    let saved = categories.iter().filter(|code| open.color.category_color(code).is_some()).count();
+    let filled = open.color.reconcile_categories(field);
+    if filled > 0 {
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-omf-field-codes-partly-coloured",
+                name = open.name.clone().to_string(),
+                field = field.label.clone().to_string(),
+                saved = saved.to_string(),
+                total = total.to_string()
+            )
+        );
+    }
+}
+
 /// How much of the project's folder registry a snapshot carries.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FolderScope {
@@ -43,7 +101,7 @@ enum FolderScope {
     Referenced,
 }
 
-/// Every folder id a snapshot's own content sits in, across all six sections.
+/// Every folder id a snapshot's own content sits in, across every section.
 fn referenced_folders(snapshot: &ProjectSnapshot) -> std::collections::HashSet<FolderId> {
     let mut referenced = std::collections::HashSet::new();
     if let Some(design) = &snapshot.designs {
@@ -119,7 +177,7 @@ impl<'a> App<'a> {
             .active_project()
             .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| tr!(literal = "Incline Design project"));
+            .unwrap_or_else(|| tr!("common-incline-design-project"));
         let designs = self.workspace.active_project().and_then(|project| selected_designs(&project.project, &selection.designs));
         let mut snapshot = ProjectSnapshot {
             name,
@@ -139,7 +197,7 @@ impl<'a> App<'a> {
         // project's folder list, so an export with nothing ticked would
         // otherwise slip past this guard.
         if snapshot.item_count() == 0 {
-            anyhow::bail!(tr!(literal = "There is no open Incline Design data to export"));
+            anyhow::bail!(tr!("cmd-omf-there-no-open-incline-design"));
         }
         Ok(snapshot)
     }
@@ -157,7 +215,11 @@ impl<'a> App<'a> {
         for warning in &lossy_save_warnings {
             userspace_warn!(
                 "{}",
-                tr_format!(literal = "%source_name%: %warning%", source_name = source_name.clone(), warning = warning.clone())
+                tr!(
+                    "cmd-omf-source-name-warning",
+                    source_name = source_name.clone().to_string(),
+                    warning = warning.clone().to_string()
+                )
             );
         }
         let ImportBundle {
@@ -181,7 +243,7 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
-        // Merged once, for all six sections, before anything is installed:
+        // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
         for imported in designs {
@@ -199,9 +261,9 @@ impl<'a> App<'a> {
             Err(error) => {
                 userspace_warn!(
                     "{}",
-                    tr_format!(
-                        literal = "Could not open project %source_name%: %error%",
-                        source_name = source_name.clone(),
+                    tr!(
+                        "cmd-omf-could-not-open-project-source",
+                        source_name = source_name.clone().to_string(),
                         error = format!("{error:#}")
                     )
                 );
@@ -209,6 +271,8 @@ impl<'a> App<'a> {
             }
         };
         self.set_active_project(opened);
+        // A grid at Z=0 sits far from real data and swings under it while orbiting.
+        self.editor.show_xy_grid = false;
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
@@ -226,11 +290,7 @@ impl<'a> App<'a> {
 
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Opened project '%project_name%' from %source_name%",
-                project_name = project_name,
-                source_name = source_name
-            )
+            tr!("cmd-omf-opened-project", project_name = project_name.to_string(), source_name = source_name.to_string())
         );
         self.invalidate_geometry();
         if should_fit {
@@ -245,7 +305,7 @@ impl<'a> App<'a> {
             return;
         }
         self.spawn_job_reporting_progress(
-            tr!(literal = "Importing project…"),
+            tr!("cmd-omf-importing-project"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = paths.len().max(1) as f32;
@@ -259,7 +319,7 @@ impl<'a> App<'a> {
                         .file_name()
                         .and_then(|name| name.to_str())
                         .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("{}.omf", tr!(literal = "Untitled")));
+                        .unwrap_or_else(|| format!("{}.omf", tr!("common-untitled")));
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
                     decoded.push((name.clone(), omf::from_bytes(&name, bytes, &phase)?));
                 }
@@ -267,7 +327,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF import failed: %error%", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-import-failed", error = format!("{error:#}"))),
             },
         );
     }
@@ -276,7 +336,7 @@ impl<'a> App<'a> {
     pub(crate) fn import_web_omf_sources(&mut self) -> Result<()> {
         let files = self.take_web_import_files(crate::ui::state::DataMenu::Omf)?;
         self.spawn_job_reporting_progress(
-            tr!(literal = "Importing project…"),
+            tr!("cmd-omf-importing-project"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = files.len().max(1) as f32;
@@ -293,7 +353,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF import failed: %error%", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-import-failed", error = format!("{error:#}"))),
             },
         );
         Ok(())
@@ -301,7 +361,7 @@ impl<'a> App<'a> {
 
     fn apply_omf_bundles(&mut self, bundles: Vec<(String, ImportBundle)>) {
         if self.workspace.active_project().is_none() {
-            userspace_warn!("{}", tr!(literal = "Create or open a project before merging data"));
+            userspace_warn!("{}", tr!("cmd-omf-create-open-project-before-merging"));
             return;
         }
         let should_fit = !self.scene_has_renderables();
@@ -318,15 +378,16 @@ impl<'a> App<'a> {
                 && self.raster_textures.is_empty();
             let count = bundle.item_count();
             if count == 0 {
-                userspace_warn!(
-                    "{}",
-                    tr_format!(literal = "Project '%source_name%' contains no supported data elements", source_name = source_name.clone())
-                );
+                userspace_warn!("{}", tr!("cmd-omf-project-source-name-contains-no", source_name = source_name.clone().to_string()));
             }
             for warning in &bundle.warnings {
                 userspace_warn!(
                     "{}",
-                    tr_format!(literal = "%source_name%: %warning%", source_name = source_name.clone(), warning = warning.clone())
+                    tr!(
+                        "cmd-omf-source-name-warning",
+                        source_name = source_name.clone().to_string(),
+                        warning = warning.clone().to_string()
+                    )
                 );
             }
             let ImportBundle {
@@ -355,12 +416,11 @@ impl<'a> App<'a> {
                 {
                     userspace_warn!(
                         "{}",
-                        tr_format!(
-                            literal =
-                                "%source_name%: coordinate reference system '%source_crs%' differs from project CRS '%target_crs%'; coordinates were merged without reprojection",
-                            source_name = source_name.clone(),
-                            source_crs = source_crs,
-                            target_crs = target_crs
+                        tr!(
+                            "cmd-omf-crs-differs",
+                            source_name = source_name.clone().to_string(),
+                            source_crs = source_crs.to_string(),
+                            target_crs = target_crs.to_string()
                         )
                     );
                 }
@@ -371,11 +431,11 @@ impl<'a> App<'a> {
                 } else if !target_units.is_empty() && !source_units.is_empty() && !target_units.eq_ignore_ascii_case(source_units) {
                     userspace_warn!(
                         "{}",
-                        tr_format!(
-                            literal = "%source_name%: units '%source_units%' differ from project units '%target_units%'; coordinates were merged without conversion",
-                            source_name = source_name.clone(),
-                            source_units = source_units,
-                            target_units = target_units
+                        tr!(
+                            "cmd-omf-source-name-units-source-units",
+                            source_name = source_name.clone().to_string(),
+                            source_units = source_units.to_string(),
+                            target_units = target_units.to_string()
                         )
                     );
                 }
@@ -383,15 +443,15 @@ impl<'a> App<'a> {
             if origin.iter().any(|value| *value != 0.0) {
                 userspace_log!(
                     "{}",
-                    tr_format!(
-                        literal = "%source_name%: applied project origin %origin% before merge",
-                        source_name = source_name.clone(),
+                    tr!(
+                        "cmd-omf-source-name-applied-project-origin",
+                        source_name = source_name.clone().to_string(),
                         origin = format!("{origin:?}")
                     )
                 );
             }
 
-            // Merged once, for all six sections, before any design, layer or
+            // Merged once, for every section, before any design, layer or
             // item below looks its own membership up in the same map. Unlike
             // opening a whole project, the target registry already has
             // content of its own, so an incoming name is never assumed to be
@@ -414,11 +474,11 @@ impl<'a> App<'a> {
             imported_items += count;
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "Imported project '%project_name%' from %source_name%: %count% top-level dataset(s)",
-                    project_name = project_name,
-                    source_name = source_name,
-                    count = count
+                tr!(
+                    "cmd-omf-imported-project",
+                    project_name = project_name.to_string(),
+                    source_name = source_name.to_string(),
+                    count = count.to_string()
                 )
             );
         }
@@ -571,6 +631,8 @@ impl<'a> App<'a> {
                     .with_section(imported.section)
                     .with_folder(folder);
                 open.color = imported.color;
+                open.geophysics = imported.geophysics;
+                reconcile_restored_drill_color(open);
             }
         }
 
@@ -598,7 +660,7 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         {
             self.spawn_job_reporting_progress(
-                tr!(literal = "Encoding project…"),
+                tr!("cmd-omf-encoding-project"),
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
@@ -608,7 +670,7 @@ impl<'a> App<'a> {
                 },
                 move |_app, result| match result {
                     Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
-                    Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF export failed: %error%", error = format!("{error:#}"))),
+                    Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
                 },
             );
         }
@@ -636,13 +698,14 @@ impl<'a> App<'a> {
         }
         let display_path = path.clone();
         self.spawn_job_reporting_progress(
-            tr_format!(
-                literal = "Exporting %name%…",
-                name = display_path
+            tr!(
+                "cmd-file-exporting-name",
+                name = (display_path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| format!("{}.omf", tr!(literal = "Untitled")))
+                    .unwrap_or_else(|| format!("{}.omf", tr!("common-untitled"))))
+                .to_string()
             ),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
@@ -652,8 +715,8 @@ impl<'a> App<'a> {
                 omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))
             },
             move |_app, result| match result {
-                Ok(()) => userspace_log!("{}", tr_format!(literal = "Exported project to %path%", path = display_path.display().to_string())),
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF export failed: %error%", error = format!("{error:#}"))),
+                Ok(()) => userspace_log!("{}", tr!("cmd-omf-exported-project-path", path = display_path.display().to_string())),
+                Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
             },
         );
     }

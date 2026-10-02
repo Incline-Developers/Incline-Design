@@ -60,6 +60,49 @@ pub(crate) fn terrain_budget_target(point_count: usize, budget: TerrainBudget) -
     target.clamp(3, point_count)
 }
 
+/// Peak working memory (bytes) of a terrain TIN build over `point_count` input
+/// points - the ground points alone when `ground_only` - so the
+/// dialog can warn before a configuration risks the process. The cloud itself
+/// is already resident and not counted.
+///
+/// The constants are measured, not derived: allocation peaks on scanline-ordered
+/// synthetic terrain, rounded up. A cloud whose points arrive in no spatial
+/// order at all bins into per-thread cell maps that overlap, and can peak
+/// several times higher in the binning pass.
+pub(crate) fn estimate_terrain_tin_memory_bytes(point_count: usize, ground_only: bool, budget: TerrainBudget, sampler: TerrainSampler, candidate_multiplier: u32) -> u64 {
+    /// Binning pass, per occupied cell: the cell map, its per-thread partials,
+    /// and the occupancy set. The adaptive quadtree built after it is smaller.
+    const BIN_BYTES_PER_CELL: f64 = 220.0;
+    /// Occupancy set, per cell, which stays alive through triangulation.
+    const OCCUPANCY_BYTES_PER_CELL: f64 = 40.0;
+    /// Deduplication, the Delaunay mesh, and the output surface with its BVH and
+    /// edges, per vertex.
+    const TIN_BYTES_PER_VERTEX: f64 = 370.0;
+    /// The ground-only filter's copy of the points it keeps.
+    const GROUND_COPY_BYTES_PER_POINT: f64 = 24.0;
+
+    let points = point_count as f64;
+    let target = terrain_budget_target(point_count, budget) as f64;
+    let triangulation = |cells: f64| OCCUPANCY_BYTES_PER_CELL * cells + TIN_BYTES_PER_VERTEX * target;
+    let peak = if target >= points {
+        // Nothing to subsample: every point is triangulated directly.
+        TIN_BYTES_PER_VERTEX * points
+    } else {
+        let requested = match sampler {
+            TerrainSampler::Grid => target,
+            TerrainSampler::Adaptive => target * f64::from(candidate_multiplier.max(1)),
+        };
+        // Cells are sized so `requested` of them cover the footprint, but only
+        // cells a point lands in exist: with points spread evenly that is the
+        // Poisson occupied share, which saturates at the point count rather
+        // than growing with the multiplier.
+        let cells = requested * (1.0 - (-points / requested).exp());
+        (BIN_BYTES_PER_CELL * cells).max(triangulation(cells))
+    };
+    let ground_copy = if ground_only { GROUND_COPY_BYTES_PER_POINT * points } else { 0.0 };
+    (peak + ground_copy) as u64
+}
+
 impl<'a> App<'a> {
     /// Build an open XY Delaunay terrain surface from a loaded point cloud on a
     /// background job and register it like any generated triangulation.
@@ -88,7 +131,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation(generated),
             Err(error) => {
-                userspace_warn!("{}", tr_format!(literal = "Point cloud TIN failed: %error%", error = format!("{error:#}")));
+                userspace_warn!("{}", tr!("cmd-point-cloud-tin-point-cloud-tin-failed-error", error = format!("{error:#}")));
             }
         };
         self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
@@ -117,11 +160,7 @@ fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>>
     }
     userspace_log!(
         "{}",
-        tr_format!(
-            literal = "Terrain TIN: filtered to %ground% ground points of %total%",
-            ground = ground.len(),
-            total = points.len()
-        )
+        tr!("cmd-point-cloud-tin-filtered-ground", ground = ground.len().to_string(), total = points.len().to_string())
     );
     Ok(ground)
 }
@@ -175,11 +214,7 @@ fn reconstruct_terrain_tin_from_point_cloud(
     if sampled.len() < points.len() {
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Terrain TIN: spatially subsampled %sampled% of %total% points",
-                sampled = sampled.len(),
-                total = points.len()
-            )
+            tr!("cmd-point-cloud-tin-subsampled", sampled = sampled.len().to_string(), total = points.len().to_string())
         );
     }
     let generated = reconstruct_terrain_tin(sampled, occupancy.as_ref(), params.name.clone(), params.max_edge, cancel)?;
@@ -233,17 +268,17 @@ fn reconstruct_terrain_tin(
     }
 
     let max_edge_suffix = if max_edge > 0.0 {
-        tr_format!(literal = " (max edge %max_edge%)", max_edge = format!("{max_edge:.3}"))
+        format!(" {}", tr!("cmd-point-cloud-tin-max-edge-max-edge", max_edge = format!("{max_edge:.3}")))
     } else {
-        tr!(literal = " (max edge disabled)")
+        format!(" {}", tr!("cmd-point-cloud-tin-max-edge-disabled"))
     };
     userspace_log!(
         "{}",
-        tr_format!(
-            literal = "Terrain TIN: triangulated %vertex_count% unique XY points into %face_count% faces%suffix%",
-            vertex_count = vertices.len(),
-            face_count = faces.len(),
-            suffix = max_edge_suffix
+        tr!(
+            "cmd-point-cloud-tin-triangulated",
+            vertex_count = vertices.len().to_string(),
+            face_count = faces.len().to_string(),
+            suffix = max_edge_suffix.to_string()
         )
     );
     session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
@@ -829,63 +864,98 @@ fn morton_code(kx: i64, ky: i64) -> u64 {
 
 /// Aggregate Morton-sorted leaf cells bottom-up into a quadtree, summing each
 /// node's moments from its children in code order for a reproducible result.
-/// Each leaf is `(morton, moments, rebased mean, is_boundary)`.
-fn build_quadtree(leaves: &[(u64, PlaneMoments, DVec3, bool)]) -> QuadTree {
-    let mut nodes: Vec<QuadNode> = Vec::with_capacity(leaves.len() * 2);
-    let mut moments: Vec<PlaneMoments> = Vec::with_capacity(leaves.len() * 2);
-    let mut current: Vec<(u64, u32)> = Vec::with_capacity(leaves.len());
-    for &(code, cell_moments, sum, boundary) in leaves {
-        let index = nodes.len() as u32;
-        nodes.push(QuadNode {
-            sum,
-            fine_count: 1,
-            children: [u32::MAX; 4],
-            residual_sq: cell_moments.residual_sq(),
-            contains_boundary: boundary,
-        });
-        moments.push(cell_moments);
-        current.push((code, index));
+/// Each leaf is `(morton, rebased mean, is_boundary)`; a leaf's moments are its
+/// one point's, so they are derived rather than stored. Moments are read only
+/// while their parents are built, so they live one level at a time instead of
+/// once per node - at candidate-grid scale that is the build's peak memory.
+fn build_quadtree(leaves: &[(u64, DVec3, bool)]) -> QuadTree {
+    let leaf_node = |&(_, sum, boundary): &(u64, DVec3, bool)| QuadNode {
+        sum,
+        fine_count: 1,
+        children: [u32::MAX; 4],
+        // A single point fits any plane exactly.
+        residual_sq: 0.0,
+        contains_boundary: boundary,
+    };
+    if leaves.len() <= 1 {
+        return QuadTree {
+            nodes: leaves.iter().map(leaf_node).collect(),
+            roots: (0..leaves.len() as u32).collect(),
+        };
     }
 
-    while current.len() > 1 {
-        let mut next: Vec<(u64, u32)> = Vec::new();
-        let mut start = 0;
-        while start < current.len() {
-            let parent_code = current[start].0 >> 2;
-            let mut child_indices = [u32::MAX; 4];
-            let mut occupied = 0;
-            let mut node_moments = PlaneMoments::default();
-            let mut sum = DVec3::ZERO;
-            let mut fine_count = 0u32;
-            let mut contains_boundary = false;
-            let mut end = start;
-            while end < current.len() && current[end].0 >> 2 == parent_code {
-                let child = current[end].1;
-                child_indices[occupied] = child;
-                occupied += 1;
-                node_moments.add(&moments[child as usize]);
-                sum += nodes[child as usize].sum;
-                fine_count += nodes[child as usize].fine_count;
-                contains_boundary |= nodes[child as usize].contains_boundary;
-                end += 1;
-            }
-            let index = nodes.len() as u32;
-            nodes.push(QuadNode {
-                sum,
-                fine_count,
-                children: child_indices,
-                residual_sq: node_moments.residual_sq(),
-                contains_boundary,
-            });
-            moments.push(node_moments);
-            next.push((parent_code, index));
-            start = end;
+    // Every level groups the same sorted codes at a coarser shift, so each
+    // level's size is a count of code changes, and `nodes` is sized once
+    // instead of reallocating (and briefly doubling) as it grows.
+    let level_len = |shift: u32| 1 + leaves.par_windows(2).filter(|pair| pair[0].0.checked_shr(shift) != pair[1].0.checked_shr(shift)).count();
+    let mut level_lens = Vec::new();
+    let mut shift = 2;
+    loop {
+        let len = level_len(shift);
+        level_lens.push(len);
+        if len <= 1 {
+            break;
         }
+        shift += 2;
+    }
+    let mut nodes: Vec<QuadNode> = Vec::with_capacity(leaves.len() + level_lens.iter().sum::<usize>());
+    nodes.extend(leaves.iter().map(leaf_node));
+
+    let mut level_lens = level_lens.into_iter();
+    let mut current = aggregate_quadtree_level(&mut nodes, leaves.len(), level_lens.next().unwrap_or(1), |index| {
+        let (code, point, _) = leaves[index];
+        (code, index as u32, PlaneMoments::from_point(point))
+    });
+    while current.len() > 1 {
+        let next = aggregate_quadtree_level(&mut nodes, current.len(), level_lens.next().unwrap_or(1), |index| current[index]);
         current = next;
     }
 
-    let roots = current.iter().map(|&(_, index)| index).collect();
+    let roots = current.iter().map(|&(_, index, _)| index).collect();
     QuadTree { nodes, roots }
+}
+
+/// Build one quadtree level from the Morton-sorted level below, `entry(i)`
+/// giving each child's `(code, node index, moments)`, and return the new level
+/// in the same form.
+fn aggregate_quadtree_level(nodes: &mut Vec<QuadNode>, len: usize, next_len: usize, entry: impl Fn(usize) -> (u64, u32, PlaneMoments)) -> Vec<(u64, u32, PlaneMoments)> {
+    let mut next = Vec::with_capacity(next_len);
+    let mut start = 0;
+    while start < len {
+        let parent_code = entry(start).0 >> 2;
+        let mut child_indices = [u32::MAX; 4];
+        let mut occupied = 0;
+        let mut node_moments = PlaneMoments::default();
+        let mut sum = DVec3::ZERO;
+        let mut fine_count = 0u32;
+        let mut contains_boundary = false;
+        let mut end = start;
+        while end < len {
+            let (code, child, child_moments) = entry(end);
+            if code >> 2 != parent_code {
+                break;
+            }
+            child_indices[occupied] = child;
+            occupied += 1;
+            node_moments.add(&child_moments);
+            let child = &nodes[child as usize];
+            sum += child.sum;
+            fine_count += child.fine_count;
+            contains_boundary |= child.contains_boundary;
+            end += 1;
+        }
+        let index = nodes.len() as u32;
+        nodes.push(QuadNode {
+            sum,
+            fine_count,
+            children: child_indices,
+            residual_sq: node_moments.residual_sq(),
+            contains_boundary,
+        });
+        next.push((parent_code, index, node_moments));
+        start = end;
+    }
+    next
 }
 
 /// Select at most `budget` quadtree nodes as output vertices, each becoming one
@@ -1024,12 +1094,12 @@ fn adaptive_quadtree_subsample_terrain(
     // for well-conditioned plane fits, and a boundary flag (adjacent to an empty
     // cell). Sort by Morton code so quadtree children are contiguous.
     let occupied = &occupancy.cells;
-    let mut leaves: Vec<(u64, PlaneMoments, DVec3, bool)> = cells
+    let mut leaves: Vec<(u64, DVec3, bool)> = cells
         .par_iter()
         .map(|(&key, &(sum, count))| {
             let rebased = grid.mean(key, &sum, count) - min;
             let boundary = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| !occupied.contains(&(key.0 + dx, key.1 + dy)));
-            (morton_code(key.0, key.1), PlaneMoments::from_point(rebased), rebased, boundary)
+            (morton_code(key.0, key.1), rebased, boundary)
         })
         .collect();
     drop(cells);
@@ -1037,7 +1107,7 @@ fn adaptive_quadtree_subsample_terrain(
 
     if leaves.len() <= max_points {
         // The candidate grid already fits the budget; keep every fine cell.
-        let vertices = leaves.into_iter().map(|(_, _, point, _)| point + min).collect();
+        let vertices = leaves.into_iter().map(|(_, point, _)| point + min).collect();
         return Ok((vertices, Some(occupancy)));
     }
 

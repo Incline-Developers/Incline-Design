@@ -7,7 +7,7 @@ use spade::Triangulation as SpadeTriangulation;
 use crate::app::file_name;
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         ItemRef, Layer, MemberKind, Object, ObjectId, SceneEntityId, SectionKind, formats,
         formats::mesh_data,
@@ -26,7 +26,8 @@ mod cuts;
 mod geometry;
 mod include;
 mod point_cloud_tin;
+pub(crate) mod reference_surface;
 pub(crate) mod session;
 
 use geometry::*;
-pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, terrain_budget_target};
+pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

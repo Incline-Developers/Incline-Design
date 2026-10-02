@@ -7,6 +7,7 @@ pub(crate) mod layer_residency;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
+pub(crate) mod blast;
 pub(crate) mod block_model;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
@@ -14,6 +15,7 @@ pub(crate) mod folders;
 pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
+pub(crate) mod geophysics;
 pub(crate) mod ground_filter;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod input;
@@ -32,7 +34,7 @@ pub(crate) mod triangulation;
 
 use std::{borrow::Cow, collections::HashMap};
 
-pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, SectionKind};
+pub(crate) use folders::{Folder, FolderId, FolderMember, FolderRegistry, MemberKind, MemberTarget, Placement, SectionKind};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
@@ -224,11 +226,11 @@ impl Object {
     /// polyline is a plain line and is named as one.
     pub(crate) fn kind_name(&self) -> String {
         match self {
-            Object::Point { .. } => crate::i18n::tr!(literal = "Point"),
-            Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!(literal = "Line"),
-            Object::Polyline { .. } => crate::i18n::tr!(literal = "Polyline"),
-            Object::Circle { .. } => crate::i18n::tr!(literal = "Circle"),
-            Object::Text { .. } => crate::i18n::tr!(literal = "Text"),
+            Object::Point { .. } => crate::i18n::tr!("common-point"),
+            Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!("common-line"),
+            Object::Polyline { .. } => crate::i18n::tr!("common-polyline"),
+            Object::Circle { .. } => crate::i18n::tr!("common-circle"),
+            Object::Text { .. } => crate::i18n::tr!("common-text"),
         }
     }
 
@@ -1437,6 +1439,16 @@ impl ItemStyle {
                             .iter()
                             .map(|category| size_of::<drill_hole::DrillCategoryColor>() + category.value.len())
                             .fold(0usize, usize::saturating_add)
+                        + color
+                            .working_sections
+                            .iter()
+                            .map(|section| {
+                                size_of::<drill_hole::WorkingSection>()
+                                    + section.name.len()
+                                    + section.field.len()
+                                    + section.codes.iter().map(|code| size_of::<String>() + code.len()).fold(0usize, usize::saturating_add)
+                            })
+                            .fold(0usize, usize::saturating_add)
                 }
                 _ => 0,
             }
@@ -1530,7 +1542,7 @@ pub(crate) struct EditTarget<'a> {
     pub(crate) document: &'a mut Document,
     /// Every explorer folder in the project. Borrowed here, beside the
     /// document and the item collections, so one undo timeline covers the
-    /// folders of all six sections and their members in the same step.
+    /// folders of every section and their members in the same step.
     pub(crate) folders: &'a mut FolderRegistry,
     pub(crate) content: &'a mut project::ProjectContentState,
     pub(crate) triangulations: &'a mut Vec<triangulation::OpenTriangulation>,
@@ -1601,17 +1613,35 @@ impl EditTarget<'_> {
         self.touch_item(item);
     }
 
-    /// The folder a layer may actually be put in, which is `None` unless the
-    /// section the layer is shown under still has it.
-    fn placeable_layer_folder(&self, id: LayerId, folder: Option<FolderId>) -> Option<FolderId> {
-        let section = self.document.layer(id)?.section;
-        folder.filter(|folder| self.folders.contains(section, *folder))
+    /// Put a layer where `placement` says, as far as the project can honour it:
+    /// the section first, because retagging clears the collection the old
+    /// section minted, then the collection within it.
+    fn place_layer(&mut self, id: LayerId, placement: Placement) {
+        let placement = placement.placeable(MemberKind::Layer, self.folders);
+        self.document.set_layer_section(id, placement.section);
+        self.document.set_layer_folder(id, placement.folder);
+        self.effects.document_changed = true;
     }
 
-    /// The same guard for a project item. See [`Self::placeable_layer_folder`].
-    fn placeable_item_folder(&self, item: ItemRef, folder: Option<FolderId>) -> Option<FolderId> {
-        let section = self.item_state(item)?.section;
-        folder.filter(|folder| self.folders.contains(section, *folder))
+    /// The same for a project item. Both halves go through `touch_item`, so a
+    /// move dirties the item as any other edit to it would - a section change
+    /// is unsaved work, since the file records it.
+    fn place_item(&mut self, item: ItemRef, placement: Placement) {
+        let placement = placement.placeable(item.kind(), self.folders);
+        self.set_item_section(item, placement.section);
+        self.set_item_folder(item, placement.folder);
+    }
+
+    /// Show a project item under `section`. Moving it clears the collection it
+    /// was in: an id belongs to the section that minted it.
+    fn set_item_section(&mut self, item: ItemRef, section: SectionKind) {
+        let Some(state) = self.item_state_mut(item) else { return };
+        if state.section == section {
+            return;
+        }
+        state.section = section;
+        state.folder = None;
+        self.touch_item(item);
     }
 
     fn item_state(&self, item: ItemRef) -> Option<&project::ProjectItemState> {
@@ -1631,26 +1661,25 @@ impl EditTarget<'_> {
         }
         for item in self.all_item_refs() {
             let Some(state) = self.item_state(item) else { continue };
-            let (was_section, was_folder) = (state.section, state.folder);
+            let was = Placement::new(state.section, state.folder);
             // Same two repairs the document's layers get, in the same order:
             // an unadmitted tag would leave the item under no heading, and a
             // retag leaves its folder behind because an id belongs to the
             // section that minted it.
-            let section = was_section.healed_for(item.kind());
-            let folder = was_folder.filter(|folder| section == was_section && self.folders.contains(section, *folder));
-            if (section, folder) == (was_section, was_folder) {
+            let placement = was.placeable(item.kind(), self.folders);
+            if placement == was {
                 continue;
             }
-            if section != was_section {
+            if placement.section != was.section {
                 log::warn!(
                     "an item is tagged for {}, which does not show items of its kind; showing it under {}",
-                    was_section.key(),
-                    section.key()
+                    was.section.key(),
+                    placement.section.key()
                 );
             }
             if let Some(state) = self.item_state_mut(item) {
-                state.section = section;
-                state.folder = folder;
+                state.section = placement.section;
+                state.folder = placement.folder;
             }
         }
     }
@@ -1881,13 +1910,13 @@ impl EditTarget<'_> {
 
     /// Clear every hole pair named by either side of a tie-in edit, then lay
     /// `insert` across them. One connector to a pair, so a pair is cleared
-    /// before it is written whichever direction the old one ran in.
+    /// before it is written, whichever order the old one named its holes in.
     fn write_tie_ins(&mut self, dataset: drill_hole::DrillHoleId, remove: &[drill_hole::TieIn], insert: &[drill_hole::TieIn]) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
             return;
         };
         let data = std::sync::Arc::make_mut(&mut entry.dataset);
-        data.ties.retain(|tie| !remove.iter().chain(insert).any(|touched| tie.joins(touched.from, touched.to)));
+        data.ties.retain(|tie| !remove.iter().chain(insert).any(|touched| tie.joins(touched.a, touched.b)));
         data.ties.extend(insert.iter().cloned());
         self.touch_item(ItemRef::DrillHole(dataset));
     }
@@ -1904,6 +1933,25 @@ impl EditTarget<'_> {
             .retain(|initiation| ![remove, insert].into_iter().flatten().any(|touched| touched.hole == initiation.hole));
         if let Some(initiation) = insert {
             data.initiations.push(initiation);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    /// Write each named hole's charge, emptying those given `None`.
+    fn write_charges(&mut self, dataset: drill_hole::DrillHoleId, charges: &[(usize, Option<blast::HoleCharge>)]) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        for (hole, charge) in charges {
+            match charge {
+                Some(charge) => {
+                    data.charges.insert(*hole, charge.clone());
+                }
+                None => {
+                    data.charges.remove(hole);
+                }
+            }
         }
         self.touch_item(ItemRef::DrillHole(dataset));
     }
@@ -2007,21 +2055,21 @@ pub(crate) enum Command {
         before: String,
         after: String,
     },
-    /// Move a design layer into a folder, or back to the root.
-    SetLayerFolder {
+    /// Move a design layer to a section and a folder within it, as one step.
+    SetLayerPlacement {
         id: LayerId,
-        before: Option<FolderId>,
-        after: Option<FolderId>,
+        before: Placement,
+        after: Placement,
     },
-    /// Move a project item into a folder of its own section, or back to the
-    /// root. Separate from [`Self::SetLayerFolder`] because the two halves
-    /// store membership in different places - a layer in the document, an item
-    /// in its [`project::ProjectItemState`] - and dirty differently for it.
+    /// Move a project item to a section and a folder within it, as one step.
+    /// Separate from [`Self::SetLayerPlacement`] because the two halves store
+    /// membership in different places - a layer in the document, an item in
+    /// its [`project::ProjectItemState`] - and dirty differently for it.
     #[serde(skip)]
-    SetItemFolder {
+    SetItemPlacement {
         item: ItemRef,
-        before: Option<FolderId>,
-        after: Option<FolderId>,
+        before: Placement,
+        after: Placement,
     },
     /// Show or hide a design layer.
     SetLayerLoaded {
@@ -2094,6 +2142,13 @@ pub(crate) enum Command {
         dataset: drill_hole::DrillHoleId,
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
+    },
+    /// Load, reload or unload holes. Each side names the same holes: `before`
+    /// is what they held (`None` for empty), `after` what they hold now.
+    SetCharges {
+        dataset: drill_hole::DrillHoleId,
+        before: Vec<(usize, Option<blast::HoleCharge>)>,
+        after: Vec<(usize, Option<blast::HoleCharge>)>,
     },
     /// Add a complete project item. While the item is present, `added` is
     /// `None`; undo lifts it back into the command so redo can restore the
@@ -2172,7 +2227,7 @@ impl Command {
                     .saturating_add(layers.len().saturating_mul(size_of::<LayerId>()))
                     .saturating_add(items.len().saturating_mul(size_of::<ItemRef>())),
                 Command::RenameFolder { before, after, .. } => before.len().saturating_add(after.len()),
-                Command::SetLayerFolder { .. } | Command::SetItemFolder { .. } => 0,
+                Command::SetLayerPlacement { .. } | Command::SetItemPlacement { .. } => 0,
                 Command::ReplaceItem { other, .. } => other.as_ref().map_or(0, OpenItem::estimated_bytes),
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
@@ -2182,6 +2237,11 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
+                Command::SetCharges { before, after, .. } => before
+                    .iter()
+                    .chain(after)
+                    .map(|(_, charge)| size_of::<usize>() + charge.as_ref().map_or(0, blast::HoleCharge::estimated_bytes))
+                    .fold(0usize, usize::saturating_add),
                 Command::MoveCollars { originals, .. } | Command::RotateCollars { originals, .. } => originals
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
@@ -2279,9 +2339,11 @@ impl Command {
         match self {
             Self::Archived { items, .. } => into.extend(items.iter().copied()),
             Self::SetItemStyle { item, before, after } if (if undo { before } else { after }).loaded() => into.push(*item),
-            Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::SetInitiation { dataset, .. } => {
-                into.push(ItemRef::DrillHole(*dataset))
-            }
+            Self::MoveCollars { dataset, .. }
+            | Self::RotateCollars { dataset, .. }
+            | Self::SetTieIns { dataset, .. }
+            | Self::SetInitiation { dataset, .. }
+            | Self::SetCharges { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
             Self::Batch(commands) => {
@@ -2307,7 +2369,7 @@ impl Command {
                     into.push(*item);
                 }
             }
-            Command::SetItemFolder { item, .. } => {
+            Command::SetItemPlacement { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
                 }
@@ -2319,7 +2381,11 @@ impl Command {
                     }
                 }
             }
-            Command::MoveCollars { dataset, .. } | Command::RotateCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
+            Command::MoveCollars { dataset, .. }
+            | Command::RotateCollars { dataset, .. }
+            | Command::SetTieIns { dataset, .. }
+            | Command::SetInitiation { dataset, .. }
+            | Command::SetCharges { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
                     into.push(item);
@@ -2341,7 +2407,7 @@ impl Command {
             | Command::SetObjectHidden { .. }
             | Command::AddFolder { .. }
             | Command::RenameFolder { .. }
-            | Command::SetLayerFolder { .. } => {}
+            | Command::SetLayerPlacement { .. } => {}
         }
     }
 
@@ -2452,14 +2518,11 @@ impl Command {
                     }
                 }
             }
-            Command::SetLayerFolder { id, after, .. } => {
-                let after = target.placeable_layer_folder(*id, *after);
-                target.document.set_layer_folder(*id, after);
-                target.effects.document_changed = true;
+            Command::SetLayerPlacement { id, after, .. } => {
+                target.place_layer(*id, *after);
             }
-            Command::SetItemFolder { item, after, .. } => {
-                let after = target.placeable_item_folder(*item, *after);
-                target.set_item_folder(*item, after);
+            Command::SetItemPlacement { item, after, .. } => {
+                target.place_item(*item, *after);
             }
             Command::SetLayerLoaded { id, after, .. } => {
                 target.document.set_layer_loaded(*id, *after);
@@ -2475,6 +2538,7 @@ impl Command {
             Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::SetCharges { dataset, after, .. } => target.write_charges(*dataset, after),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
                     debug_assert_eq!(added_item.item_ref(), *item);
@@ -2599,14 +2663,11 @@ impl Command {
                     }
                 }
             }
-            Command::SetLayerFolder { id, before, .. } => {
-                let before = target.placeable_layer_folder(*id, *before);
-                target.document.set_layer_folder(*id, before);
-                target.effects.document_changed = true;
+            Command::SetLayerPlacement { id, before, .. } => {
+                target.place_layer(*id, *before);
             }
-            Command::SetItemFolder { item, before, .. } => {
-                let before = target.placeable_item_folder(*item, *before);
-                target.set_item_folder(*item, before);
+            Command::SetItemPlacement { item, before, .. } => {
+                target.place_item(*item, *before);
             }
             Command::SetLayerLoaded { id, before, .. } => {
                 target.document.set_layer_loaded(*id, *before);
@@ -2626,6 +2687,7 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::SetCharges { dataset, before, .. } => target.write_charges(*dataset, before),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
                     *index = taken_index;

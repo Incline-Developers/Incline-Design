@@ -37,7 +37,7 @@ pub(crate) use unthemed_icon;
 use winit::{event::WindowEvent, window::Window};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Document, block_model::OpenBlockModel},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
@@ -172,6 +172,7 @@ impl Gui {
         project: &UiProjectView,
         block_models: &[OpenBlockModel],
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+        well_logs: &crate::model::geophysics::GeophysicsSession,
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
         rotation_centre: Option<(f32, f32)>,
@@ -231,6 +232,7 @@ impl Gui {
                 project,
                 block_models,
                 drill_holes,
+                well_logs,
                 &mut commands,
                 frame_context,
                 &mut canvas_rect_logical,
@@ -328,10 +330,7 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
         let write = clipboard.write_text(text);
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = wasm_bindgen_futures::JsFuture::from(write).await {
-                log::warn!(
-                    "{}",
-                    crate::i18n::tr_format!(literal = "Could not copy text to the browser clipboard: %error%", error = format!("{error:?}"))
-                );
+                log::warn!("{}", crate::i18n::tr!("ui-could-not-copy-text-browser", error = format!("{error:?}")));
             }
         });
     }
@@ -362,23 +361,20 @@ struct UiFrameContext<'a> {
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.drill_pattern_awaiting_shape_pick {
-        return Some(ViewportMessage::text(tr!(literal = "Click a closed polyline to use as the blast shape")).minor(tr!(literal = "Esc cancels")));
+        return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(ViewportMessage::text(if editor.slice_pending_start.is_none() {
-            tr!(literal = "Click the first point of the slice line")
+            tr!("ui-click-first-point-slice-line")
         } else {
-            tr!(literal = "Click the second point of the slice line")
+            tr!("ui-click-second-point-slice-line")
         }));
     }
 
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(ViewportMessage::text(tr_format!(
-            literal = "%distance% meters",
-            distance = format!("{:.3}", start.distance(end))
-        )));
+        return Some(ViewportMessage::text(tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)))));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
@@ -386,68 +382,68 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
             // A reading, not an instruction: both figures are the answer, so
             // the strike leads and the dip follows it rather than either being
             // dimmed as an aside.
-            let dip = tr_format!(literal = "%value%° dip", value = format!("{:.2}", measurement.dip_degrees));
+            let dip = tr!("ui-value-dip", value = format!("{:.2}", measurement.dip_degrees));
             return Some(match measurement.strike_degrees {
-                Some(strike) => ViewportMessage::text(tr_format!(literal = "%strike%° strike · %dip%", strike = format!("{strike:06.2}"), dip = dip)),
-                None => ViewportMessage::text(tr_format!(literal = "%dip% (horizontal, no strike)", dip = dip)),
+                Some(strike) => ViewportMessage::text(tr!("ui-strike-dip", strike = format!("{strike:06.2}"), dip = dip.to_string())),
+                None => ViewportMessage::text(tr!("ui-dip-horizontal-no-strike", dip = dip.to_string())),
             });
         }
         return Some(ViewportMessage::text(match editor.batter_angle_points.len() {
-            0 => tr!(literal = "Select first crest/toe point"),
-            1 => tr!(literal = "Select second crest/toe point"),
-            _ => tr!(literal = "Select opposite berm point"),
+            0 => tr!("ui-select-first-crest-toe-point"),
+            1 => tr!("ui-select-second-crest-toe-point"),
+            _ => tr!("ui-select-opposite-berm-point"),
         }));
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!("slice-viewport-gestures")));
+        return Some(ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures")));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
         return Some(match editor.circle_draft.as_ref() {
-            None => ViewportMessage::text(tr!(literal = "Click the circle centre")),
-            Some(draft) if draft.radius_text.is_empty() => ViewportMessage::text(tr!(literal = "Click a perimeter point or type a radius")),
-            Some(draft) if draft.typed_radius().is_some() => {
-                ViewportMessage::text(tr!(literal = "Press Enter to use the typed radius")).minor(tr!(literal = "or click to use the pointer radius"))
-            }
-            Some(_) => ViewportMessage::text(tr!(literal = "Enter a positive decimal radius")),
+            None => ViewportMessage::text(tr!("ui-click-circle-centre")),
+            Some(draft) if draft.radius_text.is_empty() => ViewportMessage::text(tr!("ui-click-perimeter-point-type-radius")),
+            Some(draft) if draft.typed_radius().is_some() => ViewportMessage::text(tr!("ui-press-enter-use-typed-radius")).minor(tr!("ui-click-use-pointer-radius")),
+            Some(_) => ViewportMessage::text(tr!("ui-enter-positive-decimal-radius")),
         });
     }
 
     let message = match editor.active_tool {
-        ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select an item")),
-        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
-        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
-        ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
-        ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
-        ActiveTool::PickRotationCentre => ViewportMessage::text(tr!(literal = "Click a point to fix the centre of rotation")),
+        ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-item")),
+        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-drill-hole")),
+        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!("ui-select-drill-hole")),
+        ActiveTool::RotateCollar => ViewportMessage::text(tr!("ui-drag-ring-type-azimuth-dip")).minor(tr!("ui-each-hole-turns-about-its")),
+        ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!("ui-click-collar-add-edit-initiation")),
+        ActiveTool::ChargeHoles => match editor.active_rule() {
+            Some(rule) => ViewportMessage::text(tr!("ui-click-drag-over-holes-load-them", rule = rule.name.to_string())).minor(tr!("ui-hold-shift-unload")),
+            None => ViewportMessage::text(tr!("ui-no-charge-rule-load")).minor(tr!("ui-right-click-charge-rules-heading-add")),
+        },
+        ActiveTool::PickRotationCentre => ViewportMessage::text(tr!("common-click-point-fix-centre-rotation")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
         // all. Say so up front rather than only in the console warning the
         // first click would earn - see `App::tie_holes_click`.
-        ActiveTool::TieHoles if editor.active_product().is_none() => {
-            ViewportMessage::text(tr!(literal = "No delay product to tie with")).minor(tr!(literal = "right-click the Delay Palette heading to add one"))
-        }
-        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => ViewportMessage::text(tr!(literal = "Choose offset side")),
-        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => ViewportMessage::text(tr!(literal = "Select a line or polyline")),
-        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!(literal = "Select designs")),
-        ActiveTool::DrapeToTopology => ViewportMessage::text(tr!(literal = "Select topologies")),
-        ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!(literal = "Choose relimit side")),
+        ActiveTool::TieHoles if editor.active_product().is_none() => ViewportMessage::text(tr!("ui-no-delay-product-tie")).minor(tr!("ui-right-click-delay-palette-heading")),
+        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => ViewportMessage::text(tr!("ui-choose-offset-side")),
+        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => ViewportMessage::text(tr!("ui-select-line-polyline")),
+        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!("ui-select-designs")),
+        ActiveTool::DrapeToTopology => ViewportMessage::text(tr!("ui-select-topologies")),
+        ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!("ui-choose-relimit-side")),
         ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
-        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!(literal = "Select line to relimit")),
-        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!(literal = "Select the endpoint to join")),
-        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!(literal = "Select the next line to fuse")),
-        ActiveTool::FuseIntoPolyline => ViewportMessage::text(tr!(literal = "Select a line to fuse")),
-        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline or open line")),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => ViewportMessage::text(tr!(literal = "Select a split point")),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => ViewportMessage::text(tr!(literal = "Select second split point")),
-        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline vertex")),
-        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline")),
-        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!(literal = "Click first vertex")),
-        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!(literal = "Click second vertex")),
-        ActiveTool::ExplodePolyline => ViewportMessage::text(tr!(literal = "Select a polyline")),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline")),
-        ActiveTool::DeletePoints => ViewportMessage::text(tr!(literal = "Select a point")),
+        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!("ui-select-line-relimit")),
+        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!("ui-select-endpoint-join")),
+        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!("ui-select-next-line-fuse")),
+        ActiveTool::FuseIntoPolyline => ViewportMessage::text(tr!("ui-select-line-fuse")),
+        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline-open-line")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-select-split-point")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-select-second-split-point")),
+        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
+        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-click-first-vertex")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
+        ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         _ => return None,
     };
     Some(message)
@@ -515,7 +511,7 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
                                 .hint_text(live_mouse_radius.as_str())
                                 .char_limit(32),
                         );
-                        ui.label(tr!(literal = "m"));
+                        ui.label(tr!("common-m"));
 
                         if draft.focus_requested || !response.has_focus() {
                             response.request_focus();
@@ -562,6 +558,7 @@ fn draw_ui(
     project: &UiProjectView,
     block_models: &[OpenBlockModel],
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+    well_logs: &crate::model::geophysics::GeophysicsSession,
     commands: &mut Vec<UiCommand>,
     frame_context: UiFrameContext<'_>,
     canvas_rect_out: &mut egui::Rect,
@@ -622,6 +619,19 @@ fn draw_ui(
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
 
+    // Down the right edge. Claimed after the two strips below it, so it stops
+    // at the bottom toolbar's top and they carry on underneath it, and after
+    // the viewport bar, so it starts directly under it. Geology's own panel:
+    // shown there on a per-session switch from its viewport bar run.
+    let borehole_inspector_rect = (editor.active_workspace == state::Workspace::Geology && editor.show_borehole_inspector)
+        .then(|| elements::borehole_inspector::draw_borehole_inspector(root_ui, editor, drill_holes, well_logs, commands));
+    if borehole_inspector_rect.is_none() {
+        // `Panel::show` creates one direct child of `root_ui`. Keep the root
+        // auto-id sequence identical when this panel is absent, or every
+        // panel drawn after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
+    }
+
     // The drawing tools are a docked column between the explorer and the
     // scene, so they are claimed before the scene's rect is worked out: what
     // they leave is where it starts. The column is one region the full height
@@ -654,6 +664,9 @@ fn draw_ui(
     // Draw first so later overlays paint above it.
     widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
+    // The reviews' fields and lines first, so the initiation cards - the
+    // points the whole round is read from - stay on top of them.
+    elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
     draw_initiation_cards(root_ui, editor, canvas_rect);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
@@ -941,7 +954,7 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, commands);
+    elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
@@ -1119,6 +1132,7 @@ fn draw_ui(
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
     let products_claimed = explorer.products.unwrap_or(egui::Rect::NOTHING);
+    let borehole_inspector_claimed = borehole_inspector_rect.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
         [
@@ -1128,6 +1142,7 @@ fn draw_ui(
             bottom_toolbar_rect,
             console_claimed,
             products_claimed,
+            borehole_inspector_claimed,
             scene_claimed,
         ],
     );
@@ -1138,6 +1153,7 @@ fn draw_ui(
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
             chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
+            chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
         ],
     );
 
@@ -1218,7 +1234,12 @@ fn draw_global_dialogs(
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
+    dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
+    dialogs::charging::draw_charge_rule_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::charging::draw_delete_blast_item_dialog(root_ui, editor, commands);
 
     // Exit confirmation
     if editor.exit_confirm_open {

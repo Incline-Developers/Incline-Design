@@ -14,12 +14,12 @@ use glam::DVec3;
 use strum::{Display, EnumIter};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Axis, FillStyle, FolderId, FolderMember, FolderRegistry, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillHoleStyle, DrillPatternLayout},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -42,6 +42,11 @@ pub(crate) struct PreferencesDraft {
     /// picker sends [`UiCommand::SetLanguage`], which comes through here so the
     /// language is saved with everything else - see [`crate::i18n`].
     pub(crate) language: crate::i18n::LanguageChoice,
+    /// Colours and scales for the borehole log's trace columns. Not edited in
+    /// the Preferences panel: the log's own colour pickers send
+    /// [`UiCommand::SetWellLogStyle`], which comes through here so a style
+    /// tweak is saved with everything else.
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
@@ -84,6 +89,7 @@ impl Default for PreferencesDraft {
     fn default() -> Self {
         Self {
             language: crate::app::io::default_language(),
+            well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -178,6 +184,8 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.reference_points_dialog.is_some()
+            || self.reference_surface_dialog.is_some()
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -296,6 +304,8 @@ pub(crate) struct SelectionCounts {
     /// Selected design objects that enclose an area, and so can serve as a
     /// clipping boundary.
     pub(crate) clip_boundaries: usize,
+    /// Selected design points, which a surface can be triangulated from.
+    pub(crate) surface_points: usize,
     /// Selected triangulations that are loaded, and so have a mesh to work on.
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
@@ -303,6 +313,9 @@ pub(crate) struct SelectionCounts {
     /// Selected drill-hole datasets that are loaded, and so have intervals to
     /// estimate from.
     pub(crate) drill_holes: usize,
+    /// Selected holes, a dataset taken whole standing for every hole in it,
+    /// which reference points are placed on.
+    pub(crate) reference_holes: usize,
     /// Selected block models that are loaded, and so have blocks to work on.
     pub(crate) block_models: usize,
 }
@@ -323,10 +336,10 @@ pub(crate) enum TriangulationPickTarget {
 impl TriangulationPickTarget {
     pub(crate) fn prompt(self) -> String {
         match self {
-            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!(literal = "Click the topology in the viewport."),
-            Self::CutPitShell => tr!(literal = "Click the pit shell in the viewport."),
-            Self::IncludeShape => tr!(literal = "Click the pit or stockpile solid in the viewport."),
-            Self::TrimSurface => tr!(literal = "Click the surface in the viewport."),
+            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!("state-click-topology-viewport"),
+            Self::CutPitShell => tr!("state-click-pit-shell-viewport"),
+            Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
+            Self::TrimSurface => tr!("state-click-surface-viewport"),
         }
     }
 }
@@ -434,8 +447,8 @@ pub(crate) fn fitted_slice_preview_zoom(slice_half_length: f64, viewport_height_
 impl TriPolylineClipMode {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::KeepInside => tr!(literal = "Keep inside"),
-            Self::KeepOutside => tr!(literal = "Keep outside"),
+            Self::KeepInside => tr!("state-keep-inside"),
+            Self::KeepOutside => tr!("state-keep-outside"),
         }
     }
 }
@@ -445,15 +458,15 @@ impl TriSurfaceCutSide {
     /// which is less ambiguous than the historical "cut top/bottom" wording.
     pub(crate) fn trim_label(self) -> String {
         match self {
-            Self::CutTop => tr!(literal = "Trim below"),
-            Self::CutBottom => tr!(literal = "Trim above"),
+            Self::CutTop => tr!("state-trim-below"),
+            Self::CutBottom => tr!("state-trim-above"),
         }
     }
 
     pub(crate) fn retained_relation(self) -> String {
         match self {
-            Self::CutTop => tr!(literal = "at or below"),
-            Self::CutBottom => tr!(literal = "at or above"),
+            Self::CutTop => tr!("state-below"),
+            Self::CutBottom => tr!("state-above"),
         }
     }
 }
@@ -556,12 +569,12 @@ impl StandardView {
     /// Localised name used in user-facing activity reports.
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Up => tr!(literal = "Up"),
-            Self::Down => tr!(literal = "Down"),
-            Self::North => tr!(literal = "North"),
-            Self::South => tr!(literal = "South"),
-            Self::West => tr!(literal = "West"),
-            Self::East => tr!(literal = "East"),
+            Self::Up => tr!("common-up"),
+            Self::Down => tr!("common-down"),
+            Self::North => tr!("state-north"),
+            Self::South => tr!("state-south"),
+            Self::West => tr!("state-west"),
+            Self::East => tr!("state-east"),
         }
     }
 }
@@ -760,16 +773,12 @@ impl CircleDraft {
 pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::CollarRotation) -> String {
     use crate::model::drill_hole::CollarRotation;
     match rotation {
-        CollarRotation::Absolute(orientation) => tr_format!(
-            literal = "to azimuth %azimuth%°, dip %dip%°",
+        CollarRotation::Absolute(orientation) => tr!(
+            "state-rotate-to-azimuth-dip",
             azimuth = format!("{:.1}", orientation.azimuth),
             dip = format!("{:.1}", orientation.dip)
         ),
-        CollarRotation::Delta { azimuth, dip } => tr_format!(
-            literal = "by azimuth %azimuth%°, dip %dip%°",
-            azimuth = format!("{azimuth:+.1}"),
-            dip = format!("{dip:+.1}")
-        ),
+        CollarRotation::Delta { azimuth, dip } => tr!("state-rotate-by-azimuth-dip", azimuth = format!("{azimuth:+.1}"), dip = format!("{dip:+.1}")),
     }
 }
 
@@ -1016,13 +1025,13 @@ pub(crate) enum RenameTarget {
 impl RenameTarget {
     pub(crate) fn kind_label(self) -> String {
         match self {
-            Self::Layer(_) => tr!(literal = "Layer"),
-            Self::Triangulation(_) => tr!(literal = "Triangulation"),
-            Self::Raster(_) => tr!(literal = "Raster"),
-            Self::PointCloud(_) => tr!(literal = "Point Cloud"),
-            Self::BlockModel(_) => tr!(literal = "Block Model"),
-            Self::DrillHole(_) => tr!(literal = "Drill Holes"),
-            Self::Folder(..) => tr!(literal = "Collection"),
+            Self::Layer(_) => tr!("common-layer"),
+            Self::Triangulation(_) => tr!("ws-menubar-triangulation"),
+            Self::Raster(_) => tr!("ws-menubar-raster"),
+            Self::PointCloud(_) => tr!("ws-menubar-point-cloud"),
+            Self::BlockModel(_) => tr!("ws-menubar-block-model"),
+            Self::DrillHole(_) => tr!("ws-menubar-drillholes"),
+            Self::Folder(..) => tr!("common-collection"),
         }
     }
 
@@ -1073,15 +1082,21 @@ pub(crate) struct EditorState {
     /// The row a Shift-click measures its run from: the last row clicked
     /// without Shift.
     pub(crate) explorer_anchor: Option<ExplorerRow>,
-    /// Individually selected drill holes, which the Drill & Blast workspace
-    /// works in place of whole datasets - see [`DrillHoleRef`]. Production
-    /// selects the dataset into [`Self::selected_handles`] and leaves this
-    /// empty; the two are never populated for the same drill hole at once.
+    /// Individually selected drill holes - see [`DrillHoleRef`]. A canvas
+    /// click lands here in every workspace; the explorer selects a dataset
+    /// whole into [`Self::selected_handles`] instead, which draws every hole
+    /// in it as selected whatever this holds.
     pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
     /// Surface connectors selected directly in Drill & Blast. They are not
     /// scene entities in their own right, so their stable dataset/hole pair
     /// lives beside the individual-hole selection.
     pub(crate) selected_tie_ins: HashSet<TieInRef>,
+    /// The hole the inspector reads, held while the panel is locked and kept
+    /// out of the selection so inspecting never changes what is selected.
+    pub(crate) inspected_hole: Option<DrillHoleRef>,
+    /// Holds the inspector on the hole it has, so the holes around it can be
+    /// picked and worked on without the panel following the cursor away.
+    pub(crate) borehole_inspector_locked: bool,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -1122,15 +1137,29 @@ pub(crate) struct EditorState {
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
     pub(crate) show_console: bool,
+    /// Show the Borehole Inspector panel. Only the Geology workspace draws it.
+    /// A per-session view switch like the others on the viewport bar: not
+    /// saved, and off at every launch.
+    pub(crate) show_borehole_inspector: bool,
+    /// Which tab of the Borehole Inspector panel is showing. Transient: not
+    /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
+    pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
+    /// The field the Log tab's strat column reads and the dataset it was
+    /// chosen for: a choice about one set's columns says nothing about
+    /// another's. `None` guesses by name. Transient, like the tab.
+    pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
+    /// Colours and scales for the borehole log's trace columns. App-wide,
+    /// saved with the preferences - see [`crate::ui::widgets::log_traces`].
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     /// Dress the panels as rounded regions parted by a gap of window
     /// background. Off, they sit flush and square: see `ui::chrome`.
     pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
-    /// Show the construction grid on the world XY plane at Z=0. Per-session
-    /// like the other view toggles above: shown at the start of every run and
-    /// never written to the config.
+    /// Show the construction grid on the world XY plane at Z=0. Never written
+    /// to the config; set as each project arrives instead - on for a new one,
+    /// off for one opened from storage.
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
@@ -1316,6 +1345,9 @@ pub(crate) struct EditorState {
     pub(crate) canvas_context_menu_open: bool,
     /// Physical-pixel position where the canvas context menu was opened.
     pub(crate) canvas_context_menu_px: Option<(f32, f32)>,
+    /// The drill hole under the cursor when the canvas context menu was
+    /// opened; its hole-specific rows act on this hole, not the selection.
+    pub(crate) canvas_context_menu_hole: Option<DrillHoleRef>,
     /// Selected polylines and the in-progress line-weight value for the
     /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
@@ -1677,6 +1709,9 @@ pub(crate) struct EditorState {
     /// default, and honoured only by a classified cloud: a delivery that has
     /// been through a ground filter is meant to be used through it.
     pub(crate) point_cloud_tin_ground_only: bool,
+    /// Ground points in the cloud the dialog opened on, counted then, so the
+    /// budget and memory estimate describe what a ground-only build surfaces.
+    pub(crate) point_cloud_tin_ground_count: Option<(PointCloudId, usize)>,
     pub(crate) point_cloud_join_open: bool,
     /// Clouds ticked for joining, in the order the explorer lists them.
     pub(crate) point_cloud_join_sources: Vec<PointCloudId>,
@@ -1705,6 +1740,10 @@ pub(crate) struct EditorState {
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
     pub(crate) drill_hole_color_dialog: Option<DrillHoleId>,
+    /// The reference points dialog's working choices while it is open.
+    pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
+    /// The build surface dialog's snapshot of its input while it is open.
+    pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -1795,6 +1834,8 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Selected Preferences section.
     pub(crate) active_property_tab: PropertyTab,
+    /// The drillhole dataset the Drillholes preferences page edits.
+    pub(crate) preferences_drill_hole: Option<DrillHoleId>,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
@@ -1834,6 +1875,31 @@ pub(crate) struct EditorState {
     pub(crate) initiation_cards: Vec<InitiationCard>,
     /// Product awaiting destructive deletion confirmation: (id, row label).
     pub(crate) pending_delete_delay_product: Option<(DelayProductId, String)>,
+    /// The charge products and loading rules. Configuration rather than
+    /// project data, like the delay palette.
+    pub(crate) blast_library: crate::model::blast::BlastLibrary,
+    /// Name of the rule the Charge Holes tool loads with. Falls back to the
+    /// first rule whenever it names none.
+    pub(crate) active_charge_rule: Option<String>,
+    pub(crate) charge_product_dialog: Option<ChargeProductDialog>,
+    pub(crate) charge_rule_dialog: Option<ChargeRuleDialog>,
+    /// Library entry awaiting deletion confirmation.
+    pub(crate) pending_delete_blast_item: Option<BlastLibraryItem>,
+    /// Which reviews of the fired pattern are showing, and the timeline's playhead.
+    pub(crate) blast_review: BlastReview,
+    /// The active dataset read back - see `App::refresh_blast_round`.
+    pub(crate) blast_analysis: Option<std::sync::Arc<crate::model::blast::BlastAnalysis>>,
+    /// Contours of equal time projected to the window, refreshed each frame
+    /// while they are showing.
+    pub(crate) blast_contours_px: Vec<ProjectedContour>,
+    /// The hole under the pointer, for the hole card.
+    pub(crate) blast_hover: Option<BlastHover>,
+    /// Every collar of the active dataset in window pixels, refreshed each
+    /// frame while a review is showing; `None` for one off screen.
+    pub(crate) blast_collars_px: Vec<Option<(f32, f32)>>,
+    /// Window pixels one world unit spans at the pattern, for sizing the
+    /// timeline's marks against the collars they sit on.
+    pub(crate) blast_px_per_world: f32,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -1857,6 +1923,7 @@ pub(crate) struct EditorState {
     pub(crate) export_layer: Option<LayerId>,
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
+    pub(crate) export_drill_hole: Option<DrillHoleId>,
     /// What the whole-project OMF export writes.
     pub(crate) export_omf: OmfExportSelection,
 }
@@ -2021,6 +2088,8 @@ impl EditorState {
             || self.show_import
             || self.show_export
             || self.drill_hole_color_dialog.is_some()
+            || self.reference_points_dialog.is_some()
+            || self.reference_surface_dialog.is_some()
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
@@ -2084,7 +2153,7 @@ impl EditorState {
         // rather than inheriting whatever the previous tool left standing.
         self.tool_highlight_id = None;
         if self.drill_pattern_name.trim().is_empty() {
-            self.drill_pattern_name = tr!(literal = "Drill Pattern");
+            self.drill_pattern_name = tr!("state-drill-pattern");
         }
         self.drill_pattern_open = true;
     }
@@ -2113,8 +2182,8 @@ impl EditorState {
             .filter(|value| !value.trim().is_empty())
             .map(str::trim)
             .map(str::to_owned)
-            .unwrap_or_else(|| tr!(literal = "Surface"));
-        self.tri_contour_layer_name_input = tr_format!(literal = "%stem% Contours", stem = stem);
+            .unwrap_or_else(|| tr!("tri-type-open-surface"));
+        self.tri_contour_layer_name_input = tr!("state-stem-contours", stem = stem.to_string());
     }
 
     /// Clear every project/object-owned interaction session in one lifecycle
@@ -2125,6 +2194,9 @@ impl EditorState {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
+        self.inspected_hole = None;
+        self.borehole_log_strat_field = None;
+        self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -2159,6 +2231,7 @@ impl EditorState {
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
+        self.canvas_context_menu_hole = None;
         self.design_line_weight_input = None;
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
@@ -2272,11 +2345,15 @@ impl EditorState {
         self.tri_cut_poly_open = false;
         self.tri_cut_poly_object_id = None;
         self.tri_cut_poly_object_name.clear();
+        // Snapshotted object ids, and a hold on the selection while it is up:
+        // neither can outlive the project they were taken from.
+        self.reference_surface_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
         PreferencesDraft {
             language: self.language,
+            well_log_style: self.well_log_style,
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
@@ -2322,6 +2399,8 @@ impl EditorState {
             explorer_anchor: None,
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
+            inspected_hole: None,
+            borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -2334,10 +2413,14 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            show_borehole_inspector: false,
+            borehole_inspector_tab: BoreholeInspectorTab::default(),
+            borehole_log_strat_field: None,
+            well_log_style: Default::default(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: true,
+            show_xy_grid: false,
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             show_preferences: false,
@@ -2392,7 +2475,7 @@ impl EditorState {
             drill_pattern_diameter_mm: 165.0,
             drill_pattern_depth: 10.0,
             drill_pattern_layout: DrillPatternLayout::Square,
-            drill_pattern_name: tr!(literal = "Drill Pattern"),
+            drill_pattern_name: tr!("state-drill-pattern"),
             drill_pattern_preview_collars: Vec::new(),
             drill_pattern_preview_depth: 10.0,
             drill_pattern_preview_diameter: 0.165,
@@ -2404,7 +2487,7 @@ impl EditorState {
             #[cfg(target_arch = "wasm32")]
             new_project_name: String::new(),
             new_layer_dialog_open: false,
-            new_layer_name: tr!(literal = "Design"),
+            new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
             pending_delete_layer: None,
             pending_delete_item: None,
@@ -2432,6 +2515,7 @@ impl EditorState {
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
+            canvas_context_menu_hole: None,
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
@@ -2609,11 +2693,11 @@ impl EditorState {
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
             tri_contour_target_layer: None,
-            tri_contour_layer_name_input: tr!(literal = "Surface Contours"),
+            tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
-            point_cloud_tin_name_input: tr!(literal = "Surface"),
+            point_cloud_tin_name_input: tr!("tri-type-open-surface"),
             point_cloud_tin_max_edge: 0.0,
             point_cloud_tin_budget_is_percent: true,
             point_cloud_tin_percent: 1.0,
@@ -2622,10 +2706,11 @@ impl EditorState {
             point_cloud_tin_candidate_mult: 2,
             point_cloud_tin_hole_fill: 0.0,
             point_cloud_tin_ground_only: true,
+            point_cloud_tin_ground_count: None,
             point_cloud_join_open: false,
             point_cloud_join_sources: Vec::new(),
-            point_cloud_join_name_input: tr!(literal = "Joined Cloud"),
-            point_cloud_join_remove_sources: false,
+            point_cloud_join_name_input: tr!("common-joined-cloud"),
+            point_cloud_join_remove_sources: true,
             point_cloud_classify_open: false,
             point_cloud_classify_sources: Vec::new(),
             point_cloud_classify_params: crate::model::ground_filter::GroundFilterParams::default(),
@@ -2637,10 +2722,12 @@ impl EditorState {
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
+            reference_points_dialog: None,
+            reference_surface_dialog: None,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
-            kriging_name_input: tr!(literal = "Kriged Block Model"),
+            kriging_name_input: tr!("state-kriged-block-model"),
             kriging_lower: DVec3::ZERO,
             kriging_upper: DVec3::splat(100.0),
             kriging_cell: DVec3::splat(10.0),
@@ -2691,6 +2778,7 @@ impl EditorState {
             bezier_hover_cp: None,
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
+            preferences_drill_hole: None,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             survey: Default::default(),
@@ -2706,6 +2794,17 @@ impl EditorState {
             initiation_dialog: None,
             initiation_cards: Vec::new(),
             pending_delete_delay_product: None,
+            blast_library: crate::model::blast::BlastLibrary::default(),
+            active_charge_rule: None,
+            charge_product_dialog: None,
+            charge_rule_dialog: None,
+            pending_delete_blast_item: None,
+            blast_review: BlastReview::default(),
+            blast_analysis: None,
+            blast_contours_px: Vec::new(),
+            blast_hover: None,
+            blast_collars_px: Vec::new(),
+            blast_px_per_world: 0.0,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2724,6 +2823,7 @@ impl EditorState {
             export_layer: None,
             export_triangulation: None,
             export_block_model: None,
+            export_drill_hole: None,
             export_omf: OmfExportSelection::default(),
         }
     }
@@ -2768,6 +2868,33 @@ impl EditorState {
         }
     }
 
+    /// The one place a pick moves the inspector: any pick, left or right,
+    /// unless the panel is locked. A pick with no hole leaves it alone.
+    pub(crate) fn show_picked_hole(&mut self, picked: Option<DrillHoleRef>) {
+        if let Some(hole) = picked
+            && self.inspector_follows_selection()
+        {
+            self.inspected_hole = Some(hole);
+        }
+    }
+
+    /// Whether a pick may move the inspector; false while it is locked.
+    pub(crate) const fn inspector_follows_selection(&self) -> bool {
+        !self.borehole_inspector_locked
+    }
+
+    /// Forget every hole `keep` no longer vouches for: what is selected,
+    /// what the inspector reads, the context menu's hole.
+    pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
+        if self.inspected_hole.is_some_and(|hole| !keep(hole.dataset)) {
+            self.borehole_log_strat_field = None;
+        }
+        self.selected_drill_holes.retain(|hole| keep(hole.dataset));
+        self.selected_tie_ins.retain(|tie| keep(tie.dataset));
+        self.inspected_hole = self.inspected_hole.filter(|hole| keep(hole.dataset));
+        self.canvas_context_menu_hole = self.canvas_context_menu_hole.filter(|hole| keep(hole.dataset));
+    }
+
     /// Put down whatever tie-in chain is running: the anchor it would carry
     /// on from and the preview of the leg it would lay. Report whether there
     /// was one, so a caller that has to redraw only does so when something
@@ -2785,6 +2912,34 @@ impl EditorState {
     pub(crate) fn active_product(&self) -> Option<&DelayProduct> {
         let id = self.active_delay_product?;
         self.delay_products.iter().find(|product| product.id == id)
+    }
+
+    /// The rule the Charge Holes tool loads with.
+    pub(crate) fn active_rule(&self) -> Option<&crate::model::blast::ChargeRule> {
+        let rules = &self.blast_library.rules;
+        self.active_charge_rule
+            .as_ref()
+            .and_then(|name| rules.iter().find(|rule| &rule.name == name))
+            .or_else(|| rules.first())
+    }
+
+    /// Whether a review of the fired pattern - timeline, heatmap or contours -
+    /// is showing over `dataset`. Its ties are muted while one is, so what the
+    /// review draws over them reads, and its collars are projected each
+    /// frame for that drawing.
+    pub(crate) fn review_showing_over(&self, dataset: DrillHoleId) -> bool {
+        let review = &self.blast_review;
+        (review.timeline || review.relief || review.contours) && self.reviewing(dataset) && self.blast_analysis.is_some()
+    }
+
+    fn reviewing(&self, dataset: DrillHoleId) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast && self.active_drill_hole == Some(dataset)
+    }
+
+    /// Whether loaded decks are drawn down the holes: charging is blasting
+    /// content, shown where it is worked on, as tie-ins are.
+    pub(crate) fn shows_charges(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast
     }
 
     /// Whether the Drill & Blast Tie Holes tool owns canvas clicks.
@@ -2847,8 +3002,8 @@ impl EditorState {
                 self.explicitly_frozen.extend(newly_frozen.iter().copied());
                 self.tri_selected_object_ids.retain(|object_id| !newly_frozen.contains(&SceneEntityId::Object(*object_id)));
                 crate::logging::report_completed_action(
-                    CommandReportSpec::new(tr!(literal = "Lock Selection"), tr_format!(literal = "%count% object(s)", count = count)),
-                    tr_format!(literal = "Locked %count% object(s)", count = count),
+                    CommandReportSpec::new(tr!("common-lock-selection"), tr!("common-count-object-s", count = count.to_string())),
+                    tr!("state-locked-count-object-s", count = count.to_string()),
                 );
                 // Deselecting removes selection highlights and can move a
                 // cached stroke between scene streams, so rebuild geometry.
@@ -2903,6 +3058,9 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's initiation tool: a click puts the point a round starts
     /// at on the hole under the cursor, at the delay the products panel holds.
     SetInitiationPoint,
+    /// Load holes with the active charge rule: click one, or drag a box over
+    /// several. Shift unloads instead.
+    ChargeHoles,
     /// One click fixes the centre both views orbit about.
     PickRotationCentre,
     Chamfer,
@@ -2934,6 +3092,14 @@ impl ActiveTool {
     /// translate ones, so the places that run that machinery ask this.
     pub(crate) fn rotates(self) -> bool {
         matches!(self, Self::RotateCollar)
+    }
+
+    /// Whether a press over open ground starts a box rather than reaching the
+    /// tool as a click: with no tool armed, under the transform tools, whose
+    /// targets are picked by box, and under Charge Holes, which loads every
+    /// hole a box takes.
+    pub(crate) fn box_selects_from_open_ground(self) -> bool {
+        self == Self::None || self == Self::ChargeHoles || self.translates() || self.rotates()
     }
 
     /// Either collar gesture. Both work on individually picked holes rather
@@ -3034,8 +3200,8 @@ impl ToolHatch {
 
 /// One of the view preferences the View menu switches on and off.
 ///
-/// The menu carries the few that are reached often enough to want a row of
-/// their own; the whole set stays in the Interface preferences tab.
+/// The View menu carries the few that are reached often enough to want a row
+/// of their own; the whole set stays in the Interface preferences tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewToggle {
     Console,
@@ -3045,8 +3211,8 @@ pub(crate) enum ViewToggle {
 impl ViewToggle {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Console => tr!(literal = "Show Console"),
-            Self::DarkMode => tr!(literal = "Dark Mode"),
+            Self::Console => tr!("state-show-console"),
+            Self::DarkMode => tr!("state-dark-mode"),
         }
     }
 
@@ -3059,6 +3225,14 @@ impl ViewToggle {
             Self::DarkMode => editor.dark_mode,
         }
     }
+}
+
+/// Which tab of the Borehole Inspector panel is showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BoreholeInspectorTab {
+    #[default]
+    Data,
+    Log,
 }
 
 /// Commands sent from the UI back to the application core.
@@ -3144,6 +3318,8 @@ pub(crate) enum UiCommand {
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    /// One drillhole dataset out as the three tables it was read from.
+    ExportDrillHoleCsv(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -3164,9 +3340,14 @@ pub(crate) enum UiCommand {
         section: SectionKind,
         folder: FolderId,
     },
-    /// Move an item into a folder, or back to the section root with `None`.
+    /// Move an item into a collection of `section`, or to that section's root
+    /// with `None`.
+    ///
+    /// `section` is where the item is going, which need not be where it is:
+    /// any section admitting the member's kind may hold it.
     MoveToFolder {
         member: FolderMember,
+        section: SectionKind,
         folder: Option<FolderId>,
     },
     /// Add a product to the Drill & Blast palette, as the New Product dialog
@@ -3182,6 +3363,24 @@ pub(crate) enum UiCommand {
     SetInitiation {
         target: DrillHoleRef,
         delay_ms: Option<u32>,
+    },
+    /// Add a charge product, or replace the one named `original`.
+    SaveChargeProduct {
+        original: Option<String>,
+        product: crate::model::blast::ChargeProduct,
+    },
+    /// Add a loading rule, or replace the one named `original`.
+    SaveChargeRule {
+        original: Option<String>,
+        rule: crate::model::blast::ChargeRule,
+        /// Also reload the active pattern's holes that were loaded with it.
+        reload: bool,
+    },
+    DeleteBlastLibraryItem(BlastLibraryItem),
+    /// Load the selected holes of the active dataset with the named rule, or
+    /// unload them with `None`.
+    ChargeSelectedHoles {
+        rule: Option<String>,
     },
     FinishPolyClose,
     CommitStrokeOpen,
@@ -3232,6 +3431,9 @@ pub(crate) enum UiCommand {
     /// Switch the UI language from the status bar's picker. Applied live and
     /// saved into the config, exactly as any other preference is.
     SetLanguage(crate::i18n::LanguageChoice),
+    /// Change the borehole log's trace colours or scales. Applied live and
+    /// saved into the config, exactly as any other preference is.
+    SetWellLogStyle(crate::ui::widgets::log_traces::WellLogStyle),
     /// Flip one view preference from the View menu. The application reads the
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
@@ -3329,6 +3531,36 @@ pub(crate) enum UiCommand {
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
+    /// Link a geophysics CSV to a loaded drillhole dataset, replacing any
+    /// link it has.
+    LinkGeophysics(DrillHoleId),
+    /// Read one hole's geophysics from its dataset's linked files, for
+    /// the log to draw.
+    ReadHoleGeophysics {
+        dataset: DrillHoleId,
+        dhid: String,
+    },
+    OpenReferencePoints,
+    OpenReferenceSurface,
+    /// A new triangulation from the selected points the command was opened
+    /// on, made to pass through the selected open strings, clipped to an
+    /// optional closed-string extent.
+    BuildReferenceSurface {
+        points: Vec<ObjectId>,
+        controls: Vec<ObjectId>,
+        extent: Option<ObjectId>,
+    },
+    /// One point per hole at the chosen boundary of a working section, as a
+    /// new layer, on the holes the command was opened on.
+    BuildReferencePoints {
+        holes: Vec<DrillHoleRef>,
+        field: String,
+        target: crate::model::drill_hole::ReferenceTarget,
+        side: crate::model::drill_hole::ReferenceSide,
+    },
+    /// Sends one named hole to the inspector and shows the panel, bypassing
+    /// the lock since this is an explicit request.
+    InspectDrillHole(DrillHoleRef),
     SetDrillHoleColorField {
         id: DrillHoleId,
         field: Option<String>,
@@ -3337,6 +3569,26 @@ pub(crate) enum UiCommand {
         id: DrillHoleId,
         preset: DrillColorPreset,
     },
+    /// How wide a dataset's holes are drawn: a multiple of the drilled
+    /// diameter, and the narrowest the eye is ever shown.
+    SetDrillHoleWidth {
+        id: DrillHoleId,
+        radius_scale: f64,
+        min_pixel_diameter: f32,
+    },
+    /// Switch a dataset between a true-diameter cylinder and a string with
+    /// discs.
+    SetDrillHoleStyle {
+        id: DrillHoleId,
+        style: DrillHoleStyle,
+    },
+    /// The disc diameter and string width used when a dataset is drawn as
+    /// string and discs.
+    SetDrillHoleDiscs {
+        id: DrillHoleId,
+        disc_diameter: f64,
+        string_pixel_width: f32,
+    },
     SetDrillHoleColorStops {
         id: DrillHoleId,
         stops: Vec<DrillColorStop>,
@@ -3344,6 +3596,16 @@ pub(crate) enum UiCommand {
     SetDrillHoleCategoryColors {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
+    },
+    /// Replace a dataset's working sections, every field's, as one undo step.
+    SetDrillHoleWorkingSections {
+        id: DrillHoleId,
+        sections: Vec<crate::model::drill_hole::WorkingSection>,
+    },
+    /// Colour a dataset by the working sections of one categorical field.
+    SetDrillHoleColorByWorkingSection {
+        id: DrillHoleId,
+        field: String,
     },
     /// Open Create Block Model on the selected drill holes. Like the other
     /// select-first tools it takes its input from the scene selection, so the
@@ -3580,6 +3842,7 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
+            | Self::SetWellLogStyle(_)
             | Self::OpenSurveyDefinitions
             | Self::OpenSurveyTransform
             | Self::SaveSurveyDefinition { .. }
@@ -3590,6 +3853,7 @@ impl UiCommand {
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SetInitiation { .. }
+            | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::PreviewCollarRotation(_)
@@ -3624,7 +3888,13 @@ impl UiCommand {
             | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
+            | Self::SetDrillHoleWorkingSections { .. }
             | Self::OpenDrillHoleColorDialog(_)
+            | Self::LinkGeophysics(_)
+            | Self::ReadHoleGeophysics { .. }
+            | Self::OpenReferencePoints
+            | Self::OpenReferenceSurface
+            | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
             | Self::RequestDeleteLayer(_)
@@ -3636,225 +3906,247 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestDiscardLayerChanges(_) => None,
 
-            Self::SetLanguage(choice) => report(tr!(literal = "Language"), choice.endonym().to_owned()),
-            Self::SetFlyModeEnabled(enabled) => report(tr!(literal = "Fly Mode"), if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") }),
-            Self::SetSliceModeEnabled(enabled) => report(tr!(literal = "Slice Mode"), if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") }),
+            Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
+            Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
+            Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SetSlicePreviewDetached(detached) => report(tr!(literal = "Slice Preview"), if *detached { tr!(literal = "Detached") } else { tr!(literal = "Docked") }),
-            Self::NewProject => report(tr!(literal = "Create Project"), tr!(literal = "Untitled project")),
+            Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
+            Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
-            Self::CreateBrowserProject { name } => report(tr!(literal = "Create Project"), name.clone()),
-            Self::OpenProject => report(tr!(literal = "Open Project"), tr!(literal = "Choose one or more files")),
+            Self::CreateBrowserProject { name } => report(tr!("state-create-project"), name.clone()),
+            Self::OpenProject => report(tr!("state-open-project"), tr!("state-choose-one-more-files")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ActivateTrackedProject(path) => report(tr!(literal = "Activate Project"), path.display().to_string()),
+            Self::ActivateTrackedProject(path) => report(tr!("state-activate-project"), path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
-            Self::ActivateTrackedProject(id) => report(tr!(literal = "Activate Project"), id.to_string()),
+            Self::ActivateTrackedProject(id) => report(tr!("state-activate-project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::RemoveTrackedProject(path) => report(tr!(literal = "Remove Project"), path.display().to_string()),
+            Self::RemoveTrackedProject(path) => report(tr!("common-remove-project"), path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
-            Self::RemoveTrackedProject(id) => report(tr!(literal = "Remove Project"), id.to_string()),
+            Self::RemoveTrackedProject(id) => report(tr!("common-remove-project"), id.to_string()),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ShowProjectInFileManager => report(tr!(literal = "Show Project"), tr!(literal = "Open the containing folder")),
+            Self::ShowProjectInFileManager => report(tr!("state-show-project"), tr!("state-open-containing-folder")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::ShowTrackedProjectInFileManager(path) => report(tr!(literal = "Show Project"), path.display().to_string()),
-            Self::ImportOmfPaths(paths) => report(tr!(literal = "Import OMF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportDxfPathsInto(paths) => report(tr!(literal = "Import DXF"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportTriangulationPaths(paths) => report(tr!(literal = "Import Triangulation"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportPointCloudPaths(paths) => report(tr!(literal = "Import Point Cloud"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::ImportRasterPaths(paths) => report(tr!(literal = "Import Raster"), tr_format!(literal = "%count% file(s)", count = paths.len())),
-            Self::LoadRaster(id) => report(tr!(literal = "Load Raster"), format!("{id:?}")),
-            Self::UnloadRaster(id) => report(tr!(literal = "Unload Raster"), format!("{id:?}")),
-            Self::ToggleRasterLocked(id) => report(tr!(literal = "Set Raster Lock"), format!("{id:?}")),
-            Self::RemoveRaster(id) => report(tr!(literal = "Remove Raster"), format!("{id:?}")),
-            Self::DrapeRaster(id) => report(tr!(literal = "Drape Raster"), format!("{id:?}")),
-            Self::UndrapeRaster(id) => report(tr!(literal = "Undrape Raster"), format!("{id:?}")),
-            Self::UndrapeAllRasters => report(tr!(literal = "Undrape Rasters"), tr!(literal = "Removed from every triangulation")),
-            Self::ClearActiveTriangulationRaster => report(tr!(literal = "Clear Raster"), tr!(literal = "Removed from active triangulation")),
-            Self::LoadPointCloud(id) => report(tr!(literal = "Load Point Cloud"), format!("{id:?}")),
-            Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
-            Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
-            Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
+            Self::ShowTrackedProjectInFileManager(path) => report(tr!("state-show-project"), path.display().to_string()),
+            Self::ImportOmfPaths(paths) => report(tr!("state-import-omf"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportDxfPathsInto(paths) => report(tr!("common-import-dxf"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportTriangulationPaths(paths) => report(tr!("state-import-triangulation"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportPointCloudPaths(paths) => report(tr!("state-import-point-cloud"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::ImportRasterPaths(paths) => report(tr!("state-import-raster"), tr!("state-count-file-s", count = paths.len().to_string())),
+            Self::LoadRaster(id) => report(tr!("state-load-raster"), format!("{id:?}")),
+            Self::UnloadRaster(id) => report(tr!("state-unload-raster"), format!("{id:?}")),
+            Self::ToggleRasterLocked(id) => report(tr!("state-set-raster-lock"), format!("{id:?}")),
+            Self::RemoveRaster(id) => report(tr!("state-remove-raster"), format!("{id:?}")),
+            Self::DrapeRaster(id) => report(tr!("state-drape-raster"), format!("{id:?}")),
+            Self::UndrapeRaster(id) => report(tr!("state-undrape-raster"), format!("{id:?}")),
+            Self::UndrapeAllRasters => report(tr!("state-undrape-rasters"), tr!("state-removed-from-every-triangulation")),
+            Self::ClearActiveTriangulationRaster => report(tr!("state-clear-raster"), tr!("state-removed-from-active-triangulation")),
+            Self::LoadPointCloud(id) => report(tr!("state-load-point-cloud"), format!("{id:?}")),
+            Self::ClosePointCloud(id) => report(tr!("state-unload-point-cloud"), format!("{id:?}")),
+            Self::RemovePointCloud(id) => report(tr!("state-remove-point-cloud"), format!("{id:?}")),
+            Self::ImportCsvBlockModel { path, .. } => report(tr!("common-import-csv-block-model"), path.display().to_string()),
             Self::ExportOmf(selection) => report(
-                tr!(literal = "Export OMF"),
+                tr!("state-export-omf"),
                 if *selection.as_ref() == OmfExportSelection::default() {
-                    tr!(literal = "All open Incline Design data")
+                    tr!("state-all-open-incline-design-data")
                 } else {
-                    tr!(literal = "The data ticked in the export checklist")
+                    tr!("state-data-ticked-export-checklist")
                 },
             ),
-            Self::ExportProjectDxf(id) => report(tr!(literal = "Export Project to DXF"), tr_format!(literal = "Project %id%", id = id)),
-            Self::ExportViewportImage => report(tr!(literal = "Export Viewport Image"), tr!(literal = "Choose a destination")),
-            Self::ExportLayerDxf(id) => report(tr!(literal = "Export Layer to DXF"), format!("{id:?}")),
-            Self::ExportTriangulationAs(id, format) => report(tr!(literal = "Export Triangulation"), format!("{id:?} · {format:?}")),
-            Self::ExportBlockModelCsv(id) => report(tr!(literal = "Export Block Model CSV"), format!("{id:?}")),
+            Self::ExportProjectDxf(id) => report(tr!("state-export-project-dxf"), tr!("state-project-id", id = id.to_string())),
+            Self::ExportViewportImage => report(tr!("state-export-viewport-image"), tr!("state-choose-destination")),
+            Self::ExportLayerDxf(id) => report(tr!("state-export-layer-dxf"), format!("{id:?}")),
+            Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
+            Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
+            Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::RequestExit => report(tr!(literal = "Exit Incline Design"), tr!(literal = "Checking unsaved work")),
-            Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
-            Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
-            Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
+            Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
+            Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
+            Self::ExitWithoutSaving => report(tr!("common-exit-without-saving"), tr!("state-discarding-unsaved-changes")),
+            Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
             Self::CreateFolder(section) => report(
-                tr!(literal = "Create Collection"),
-                tr_format!(literal = "New collection under %section%", section = ExplorerSection::from_kind(*section).label()),
+                tr!("state-create-collection"),
+                tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
             ),
             Self::DeleteFolder { section, folder } => report(
-                tr!(literal = "Delete Collection"),
-                tr_format!(
-                    literal = "%folder% in %section%",
+                tr!("common-delete-collection"),
+                tr!(
+                    "state-folder-section",
                     folder = format!("{folder:?}"),
-                    section = ExplorerSection::from_kind(*section).label()
+                    section = ExplorerSection::from_kind(*section).label().to_string()
                 ),
             ),
-            Self::MoveToFolder { member, folder } => report(
-                tr!(literal = "Move to Collection"),
+            Self::MoveToFolder { member, section, folder } => report(
+                tr!("common-move-collection"),
                 match folder {
-                    Some(folder) => tr_format!(literal = "%member% into %folder%", member = format!("{member:?}"), folder = format!("{folder:?}")),
-                    None => tr_format!(literal = "%member% to root", member = format!("{member:?}")),
+                    Some(folder) => tr!(
+                        "state-member-into-folder-section",
+                        member = format!("{member:?}"),
+                        folder = format!("{folder:?}"),
+                        section = ExplorerSection::from_kind(*section).label().to_string()
+                    ),
+                    None => tr!(
+                        "state-member-root-section",
+                        member = format!("{member:?}"),
+                        section = ExplorerSection::from_kind(*section).label().to_string()
+                    ),
                 },
             ),
-            Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
-            Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
-            Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
-            Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
-            Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
-            Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
-            Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
-            Self::SetTopologyWireframes(enabled) => report(
-                tr!(literal = "Set Topology Wireframes"),
-                if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
-            ),
-            Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
-            Self::SetPointCloudClassificationColors(enabled) => report(
-                tr!(literal = "Colour Points by Classification"),
-                if *enabled { tr!(literal = "On") } else { tr!(literal = "Off") },
-            ),
-            Self::SetShowPoints(enabled) => report(
-                tr!(literal = "Set Point Visibility"),
-                if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
-            ),
+            Self::AddDelayProduct { delay_ms, name, .. } => report(tr!("common-add-product"), format!("{delay_ms} ms · {name}")),
+            Self::DeleteDelayProduct(id) => report(tr!("common-delete-product"), format!("{id:?}")),
+            Self::SaveChargeProduct { product, .. } => report(tr!("state-save-charge-product"), product.name.clone()),
+            Self::SaveChargeRule { rule, .. } => report(tr!("state-save-charge-rule"), rule.name.clone()),
+            Self::DeleteBlastLibraryItem(item) => report(tr!("state-delete-charge-library-entry"), item.name().to_owned()),
+            Self::FinishPolyClose => report(tr!("common-create-polyline"), tr!("state-finish-closed-polyline")),
+            Self::CommitStrokeOpen => report(tr!("common-create-line"), tr!("state-finish-open-polyline")),
+            Self::CommitCircleTypedRadius => report(tr!("common-create-circle"), tr!("state-use-typed-radius")),
+            Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
+            Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
+            Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetPointCloudClassificationColors(enabled) => report(tr!("state-colour-points-classification"), if *enabled { tr!("state-on") } else { tr!("state-off") }),
+            Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SetCinematicEnabled(enabled) => report(
-                tr!(literal = "Set Cinematic View"),
-                if *enabled { tr!(literal = "Enabled") } else { tr!(literal = "Disabled") },
-            ),
-            Self::SetStandardView(view) => report(tr!(literal = "Set Standard View"), view.label()),
-            Self::SaveProject => report(tr!(literal = "Save Project"), tr!(literal = "Current project")),
-            Self::SaveAndReplaceProject => report(tr!(literal = "Save and Replace Project"), tr!(literal = "Current project")),
-            Self::DiscardAndReplaceProject => report(tr!(literal = "Discard and Replace Project"), tr!(literal = "Current project")),
-            Self::ConfirmLossyProjectSave => report(tr!(literal = "Confirm OMF Rewrite"), tr!(literal = "Save despite unsupported content")),
+            Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
+            Self::SetStandardView(view) => report(tr!("state-set-standard-view"), view.label()),
+            Self::SaveProject => report(tr!("menu-file-save-project"), tr!("state-current-project")),
+            Self::SaveAndReplaceProject => report(tr!("state-save-replace-project"), tr!("state-current-project")),
+            Self::DiscardAndReplaceProject => report(tr!("state-discard-replace-project"), tr!("state-current-project")),
+            Self::ConfirmLossyProjectSave => report(tr!("common-confirm-omf-rewrite"), tr!("state-save-despite-unsupported-content")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveProjectAs(id) => report(tr!(literal = "Save Project As"), tr_format!(literal = "Project %id%", id = id)),
-            Self::CloseProjectForce(id) => report(tr!(literal = "Close Project"), tr_format!(literal = "Project %id%", id = id)),
-            Self::SaveAndCloseProject(id) => report(tr!(literal = "Save and Close Project"), tr_format!(literal = "Project %id%", id = id)),
+            Self::SaveProjectAs(id) => report(tr!("state-save-project"), tr!("state-project-id", id = id.to_string())),
+            Self::CloseProjectForce(id) => report(tr!("state-close-project"), tr!("state-project-id", id = id.to_string())),
+            Self::SaveAndCloseProject(id) => report(tr!("state-save-close-project"), tr!("state-project-id", id = id.to_string())),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardProjectChanges(id) => report(tr!(literal = "Discard Project Changes"), tr_format!(literal = "Project %id%", id = id)),
+            Self::DiscardProjectChanges(id) => report(tr!("state-discard-project-changes"), tr!("state-project-id", id = id.to_string())),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardLayerChanges(id) => report(tr!(literal = "Discard Layer Changes"), format!("{id:?}")),
-            Self::DeleteLayer(id) => report(tr!(literal = "Delete Layer"), format!("{id:?}")),
-            Self::DuplicateLayer(id) => report(tr!(literal = "Duplicate Layer"), format!("{id:?}")),
+            Self::DiscardLayerChanges(id) => report(tr!("common-discard-layer-changes"), format!("{id:?}")),
+            Self::DeleteLayer(id) => report(tr!("common-delete-layer"), format!("{id:?}")),
+            Self::DuplicateLayer(id) => report(tr!("state-duplicate-layer"), format!("{id:?}")),
             Self::RenameItem { target, new_name } => report(
-                tr_format!(literal = "Rename %kind%", kind = target.kind_label()),
-                tr_format!(literal = "%target% to “%new_name%”", target = format!("{target:?}"), new_name = new_name),
+                tr!("state-rename-kind", kind = target.kind_label().to_string()),
+                tr!("state-target-new-name", target = format!("{target:?}"), new_name = new_name.to_string()),
             ),
-            Self::ApplyChamfer => report(tr!(literal = "Chamfer"), tr!(literal = "Apply to selection")),
-            Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
-            Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
-            Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
-            Self::LoadLayer(id) => report(tr!(literal = "Load Layer"), format!("{id:?}")),
-            Self::UnloadLayer(id) => report(tr!(literal = "Unload Layer"), format!("{id:?}")),
-            Self::ToggleLayerLocked(id) => report(tr!(literal = "Set Layer Lock"), format!("{id:?}")),
-            Self::ToggleEntityLocked(handle) => report(tr!(literal = "Set Entity Lock"), format!("{handle:?}")),
+            Self::ApplyChamfer => report(tr!("common-chamfer"), tr!("state-apply-selection")),
+            Self::ApplyBezier => report(tr!("common-create-bezier-curve"), tr!("state-apply-selection")),
+            Self::ApplyMoveDelta(delta) => report(tr!("common-move-selection"), format!("{delta}")),
+            Self::ApplyCollarRotation => report(tr!("common-rotate-collar"), tr!("state-apply-selection")),
+            Self::LoadLayer(id) => report(tr!("state-load-layer"), format!("{id:?}")),
+            Self::UnloadLayer(id) => report(tr!("state-unload-layer"), format!("{id:?}")),
+            Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
+            Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
-                if *visible { tr!(literal = "Reveal All") } else { tr!(literal = "Hide All") },
-                tr_format!(literal = "%section% section", section = section.label()),
+                if *visible { tr!("common-reveal-all") } else { tr!("common-hide-all") },
+                tr!("state-section-name", section = section.label().to_string()),
             ),
             Self::SetSectionLocked(section, locked) => report(
-                if *locked { tr!(literal = "Lock All") } else { tr!(literal = "Unlock All") },
-                tr_format!(literal = "%section% section", section = section.label()),
+                if *locked { tr!("common-lock-all") } else { tr!("common-unlock-all") },
+                tr!("state-section-name", section = section.label().to_string()),
             ),
-            Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
-            Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
-            Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
+            Self::SelectAllObjectsInLayer(id) => report(tr!("state-select-layer-objects"), format!("{id:?}")),
+            Self::CloseTriangulation(id) => report(tr!("state-unload-triangulation"), format!("{id:?}")),
+            Self::BatchSetObjectColor(ids, _) => report(tr!("state-set-object-colour"), tr!("common-count-object-s", count = ids.len().to_string())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
-                tr!(literal = "Set Polyline Closed"),
-                tr_format!(literal = "%count% object(s) · %closed%", count = ids.len(), closed = closed),
+                tr!("state-set-polyline-closed"),
+                tr!("state-count-object-s-closed", count = ids.len().to_string(), closed = closed.to_string()),
             ),
-            Self::BatchSetObjectFill(ids, _) => report(tr!(literal = "Set Object Fill"), tr_format!(literal = "%count% object(s)", count = ids.len())),
+            Self::BatchSetObjectFill(ids, _) => report(tr!("state-set-object-fill"), tr!("common-count-object-s", count = ids.len().to_string())),
             Self::BatchSetPolylineLineWeight(ids, weight) => report(
-                tr!(literal = "Set Line Weight"),
-                tr_format!(literal = "%count% object(s) · %weight%", count = ids.len(), weight = weight),
+                tr!("state-set-line-weight"),
+                tr!("state-count-object-s-weight", count = ids.len().to_string(), weight = weight.to_string()),
             ),
             Self::MoveObjectsToLayer { object_ids, target_layer, copy } => report(
-                if *copy {
-                    tr!(literal = "Copy Objects to Layer")
-                } else {
-                    tr!(literal = "Move Objects to Layer")
-                },
-                tr_format!(literal = "%count% object(s) · %layer%", count = object_ids.len(), layer = format!("{target_layer:?}")),
+                if *copy { tr!("state-copy-objects-layer") } else { tr!("state-move-objects-layer") },
+                tr!("state-count-object-s-layer", count = object_ids.len().to_string(), layer = format!("{target_layer:?}")),
             ),
             Self::BatchSetAxisValue(ids, axis, value) => report(
-                tr!(literal = "Move to Axis Value"),
-                tr_format!(literal = "%count% object(s) · %axis% %value%", count = ids.len(), axis = axis.label(), value = value),
+                tr!("state-move-axis-value"),
+                tr!(
+                    "state-count-object-s-axis-value",
+                    count = ids.len().to_string(),
+                    axis = axis.label().to_string(),
+                    value = value.to_string()
+                ),
             ),
-            Self::CommitTextEdit(id, _, _, _, _) => report(tr!(literal = "Edit Text"), format!("{id:?}")),
-            Self::SetTriangulationColor(id, _) => report(tr!(literal = "Set Triangulation Colour"), format!("{id:?}")),
-            Self::LoadTriangulation(id) => report(tr!(literal = "Load Triangulation"), format!("{id:?}")),
-            Self::LoadBlockModel(id) => report(tr!(literal = "Load Block Model"), format!("{id:?}")),
-            Self::CloseBlockModel(id) => report(tr!(literal = "Unload Block Model"), format!("{id:?}")),
-            Self::RemoveBlockModel(id) => report(tr!(literal = "Remove Block Model"), format!("{id:?}")),
-            Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
-            Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
+            Self::CommitTextEdit(id, _, _, _, _) => report(tr!("common-edit-text"), format!("{id:?}")),
+            Self::SetTriangulationColor(id, _) => report(tr!("state-set-triangulation-colour"), format!("{id:?}")),
+            Self::LoadTriangulation(id) => report(tr!("state-load-triangulation"), format!("{id:?}")),
+            Self::LoadBlockModel(id) => report(tr!("state-load-block-model"), format!("{id:?}")),
+            Self::CloseBlockModel(id) => report(tr!("state-unload-block-model"), format!("{id:?}")),
+            Self::RemoveBlockModel(id) => report(tr!("state-remove-block-model"), format!("{id:?}")),
+            Self::SetBlockModelColorVariable { variable, .. } => report(tr!("state-set-block-model-variable"), variable.clone()),
+            Self::ImportDrillHole(source) => report(tr!("state-import-drillholes"), source.display_name()),
             Self::CreateDrillPattern { name, collars, .. } => report(
-                tr!(literal = "Create Drill Pattern"),
-                tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
+                tr!("common-create-drill-pattern"),
+                tr!("state-name-count-holes", name = name.to_string(), count = collars.len().to_string()),
             ),
-            Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
-            Self::CloseDrillHole(id) => report(tr!(literal = "Unload Drillholes"), format!("{id:?}")),
-            Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
-            Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
-            Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
-            Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
-            Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!(literal = "Create Ore Triangulation"), name.clone()),
-            Self::ExportPlotSheet => report(tr!(literal = "Export Engineering Drawing"), tr!(literal = "Choose a destination")),
-            Self::RemoveTriangulation(id) => report(tr!(literal = "Remove Triangulation"), format!("{id:?}")),
-            Self::HideSelection => report(tr!(literal = "Hide Selection"), tr!(literal = "Selected scene elements")),
-            Self::ZoomToExtents => report(tr!(literal = "Zoom to Extents"), tr!(literal = "Preserve view angle")),
-            Self::BeginOffsetPick { object_ids, .. } => report(tr!(literal = "Offset"), tr_format!(literal = "%count% object(s)", count = object_ids.len())),
-            Self::RelimitLineResize { source_id, .. } => report(tr!(literal = "Relimit Line"), format!("{source_id:?}")),
-            Self::CommitBatterBerm => report(tr!(literal = "Create Batter Berm"), tr!(literal = "Apply generated rings")),
-            Self::InsertPointsAtIntersections => report(tr!(literal = "Insert Intersection Points"), tr!(literal = "Selected polylines")),
-            Self::ApplyObjectEdit { object, .. } => report(tr!(literal = "Edit Object"), object.kind_name()),
+            Self::LoadDrillHole(id) => report(tr!("state-load-drillholes"), format!("{id:?}")),
+            Self::CloseDrillHole(id) => report(tr!("state-unload-drillholes"), format!("{id:?}")),
+            Self::RemoveDrillHole(id) => report(tr!("state-remove-drillholes"), format!("{id:?}")),
+            Self::SetDrillHoleColorField { field, .. } => report(tr!("state-colour-drillholes"), field.clone().unwrap_or_else(|| tr!("common-uniform-white"))),
+            Self::SetDrillHoleColorByWorkingSection { field, .. } => report(tr!("state-colour-drillholes-working-section"), field.clone()),
+            Self::SetDrillHoleColorPreset { preset, .. } => report(tr!("state-set-drillhole-colour-preset"), preset.label()),
+            Self::SetDrillHoleWidth {
+                radius_scale, min_pixel_diameter, ..
+            } => report(tr!("state-set-drillhole-width"), format!("{radius_scale:.2}x, {min_pixel_diameter:.1} px")),
+            Self::SetDrillHoleStyle { style, .. } => report(tr!("state-set-drillhole-style"), style.label()),
+            Self::SetDrillHoleDiscs {
+                disc_diameter,
+                string_pixel_width,
+                ..
+            } => report(tr!("state-set-drillhole-discs"), format!("{disc_diameter:.2} m, {string_pixel_width:.1} px")),
+            Self::BuildReferencePoints { holes, target, side, .. } => {
+                report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
+            }
+            Self::BuildReferenceSurface { points, controls, extent } => report(
+                tr!("common-build-surface"),
+                match extent {
+                    Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                    None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                },
+            ),
+            Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
+            Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
+            Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
+            Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
+            Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
+            Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
+            Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
+            Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
+            Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
+            Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
+            Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
-                tr!(literal = "Insert Points at Elevation"),
-                tr_format!(literal = "%count% object(s) · Z %elevation%", count = object_ids.len(), elevation = elevation),
+                tr!("state-insert-points-elevation"),
+                tr!("state-count-object-s-z-elevation", count = object_ids.len().to_string(), elevation = elevation.to_string()),
             ),
             Self::ExecuteCreateTriangulation { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationWithWeld { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationUpperSurface { name, object_ids, .. } => report(
-                tr!(literal = "Create Triangulation"),
-                tr_format!(literal = "%name% · %count% object(s)", name = name, count = object_ids.len()),
+                tr!("tri-create-title"),
+                tr!("state-name-count-object-s", name = name.to_string(), count = object_ids.len().to_string()),
             ),
-            Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!(literal = "Create Point Cloud TIN"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!("state-create-point-cloud-tin"), format!("{cloud_id:?}")),
             Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
-                tr!(literal = "Join Point Clouds"),
-                tr_format!(literal = "%name% · %count% cloud(s)", name = name, count = cloud_ids.len()),
+                tr!("common-join-point-clouds"),
+                tr!("state-name-count-cloud-s", name = name.to_string(), count = cloud_ids.len().to_string()),
             ),
-            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!(literal = "Classify Point Clouds"), tr_format!(literal = "%count% cloud(s)", count = cloud_ids.len())),
-            Self::ConfirmDeleteSelection => report(tr!(literal = "Delete Selection"), tr!(literal = "Selected objects")),
-            Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!(literal = "Cut Triangulation by Polyline"), name.clone()),
+            Self::ExecutePointCloudClassify { cloud_ids, .. } => report(tr!("common-classify-point-clouds"), tr!("state-count-cloud-s", count = cloud_ids.len().to_string())),
+            Self::ConfirmDeleteSelection => report(tr!("common-delete-selection"), tr!("state-selected-objects")),
+            Self::ExecuteCutTriangulationByPolyline { name, .. } => report(tr!("state-cut-triangulation-polyline"), name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report(
-                tr!(literal = "Cut Triangulation by Z"),
-                tr_format!(literal = "%name% · %z_min% to %z_max%", name = name, z_min = z_min, z_max = z_max),
+                tr!("state-cut-triangulation-z"),
+                tr!("state-name-z-min-z-max", name = name.to_string(), z_min = z_min.to_string(), z_max = z_max.to_string()),
             ),
-            Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!(literal = "Trim Triangulation to Surface"), name.clone()),
-            Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!(literal = "Cut Topology to Pit Shell"), name.clone()),
-            Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!(literal = "Merge Shell into Topology"), name.clone()),
-            Self::Undo => report(tr!(literal = "Undo"), tr!(literal = "Previous edit")),
-            Self::Redo => report(tr!(literal = "Redo"), tr!(literal = "Next edit")),
+            Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
+            Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
+            Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
+            Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
                 major_interval, minor_interval, ..
             } => report(
-                tr!(literal = "Generate Contours"),
-                tr_format!(literal = "Major %major% · minor %minor%", major = major_interval, minor = minor_interval),
+                tr!("state-generate-contours"),
+                tr!("state-major-minor", major = major_interval.to_string(), minor = minor_interval.to_string()),
             ),
         }
     }
@@ -3976,18 +4268,20 @@ pub(crate) enum ExplorerSection {
     PointClouds,
     BlockModels,
     DrillHoles,
+    Modelling,
 }
 
 impl ExplorerSection {
     /// Heading text, used to name the section in console reports.
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Designs => tr!(literal = "Designs"),
-            Self::Triangulations => tr!(literal = "Triangulations"),
-            Self::Rasters => tr!(literal = "Rasters"),
-            Self::PointClouds => tr!(literal = "Point Clouds"),
-            Self::BlockModels => tr!(literal = "Block Models"),
-            Self::DrillHoles => tr!(literal = "Drill Holes"),
+            Self::Designs => tr!("common-designs"),
+            Self::Triangulations => tr!("common-triangulations"),
+            Self::Rasters => tr!("common-rasters"),
+            Self::PointClouds => tr!("common-point-clouds"),
+            Self::BlockModels => tr!("common-block-models"),
+            Self::DrillHoles => tr!("ws-menubar-drillholes"),
+            Self::Modelling => tr!("common-modelling"),
         }
     }
 
@@ -4001,6 +4295,7 @@ impl ExplorerSection {
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
             Self::DrillHoles => SectionKind::DrillHoles,
+            Self::Modelling => SectionKind::Modelling,
         }
     }
 
@@ -4014,6 +4309,7 @@ impl ExplorerSection {
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
             SectionKind::DrillHoles => Self::DrillHoles,
+            SectionKind::Modelling => Self::Modelling,
         }
     }
 }
@@ -4109,6 +4405,10 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
     pub(crate) triangulations_membership_dirty: bool,
+    /// Modelling's unsaved work that no Modelling row shows: its folders,
+    /// which triangulations it holds, and the layers tagged with it - a
+    /// deleted layer has no row left to carry a mark.
+    pub(crate) modelling_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,
@@ -4119,7 +4419,7 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
-    /// Every explorer folder, across all six sections.
+    /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
 }
 
@@ -4238,9 +4538,8 @@ pub(crate) struct BlastRoundSummary {
     pub(crate) unreached: usize,
 }
 
-/// One tie-in connector as selection state addresses it. Hole order is
-/// canonical here because selection is about the physical connector, while
-/// [`crate::model::drill_hole::TieIn`] retains direction for firing order.
+/// One tie-in connector as selection state addresses it, with its holes in
+/// canonical order so the same connector is always the same ref.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TieInRef {
     pub(crate) dataset: DrillHoleId,
@@ -4274,6 +4573,96 @@ pub(crate) struct InitiationCard {
     /// can be drawn at a world size instead of a fixed screen size. Measured
     /// per card because under perspective the scale falls off with depth.
     pub(crate) px_per_world: f32,
+}
+
+/// Draft held while a charge product is added or edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChargeProductDialog {
+    /// The product being edited, by its name before the edit; `None` adds one.
+    pub(crate) original: Option<String>,
+    pub(crate) product: crate::model::blast::ChargeProduct,
+}
+
+/// Draft held while a loading rule is added or edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChargeRuleDialog {
+    pub(crate) original: Option<String>,
+    pub(crate) rule: crate::model::blast::ChargeRule,
+    /// The hole the rule is previewed on, depth and diameter in metres.
+    /// Taken from the active pattern when the dialog first draws, then the
+    /// user's to change.
+    pub(crate) preview: Option<(f64, f64)>,
+}
+
+impl ChargeRuleDialog {
+    pub(crate) fn new(original: Option<String>, rule: crate::model::blast::ChargeRule) -> Self {
+        Self { original, rule, preview: None }
+    }
+}
+
+/// One entry of the charge library, by name.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BlastLibraryItem {
+    Product(String),
+    Rule(String),
+}
+
+impl BlastLibraryItem {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Product(name) | Self::Rule(name) => name,
+        }
+    }
+}
+
+/// Drill & Blast's reviews of the fired pattern: the three view toggles the
+/// viewport bar carries, and the timeline's transport.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastReview {
+    pub(crate) relief: bool,
+    pub(crate) contours: bool,
+    pub(crate) timeline: bool,
+    pub(crate) limits: crate::model::blast::ReliefLimits,
+    /// Where the timeline stands, in milliseconds from the shot.
+    pub(crate) playhead_ms: f64,
+    pub(crate) playing: bool,
+    /// Firing milliseconds played per real millisecond. A round is over in
+    /// a second or two, so playback starts well below real time.
+    pub(crate) speed: f64,
+    /// The site's maximum instantaneous charge, kilograms per 8 ms, when one
+    /// is being held to: windows over it are flagged on the timeline.
+    pub(crate) mic_limit_kg: Option<f64>,
+}
+
+impl Default for BlastReview {
+    fn default() -> Self {
+        Self {
+            relief: false,
+            contours: false,
+            timeline: false,
+            limits: Default::default(),
+            playhead_ms: 0.0,
+            playing: false,
+            speed: 0.1,
+            mic_limit_kg: None,
+        }
+    }
+}
+
+/// One line of equal time in window pixels; `None` marks a clipped point.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ProjectedContour {
+    pub(crate) time_ms: f64,
+    pub(crate) major: bool,
+    pub(crate) points: Vec<Option<(f32, f32)>>,
+    pub(crate) closed: bool,
+}
+
+/// The hole under the pointer and where its collar stands on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlastHover {
+    pub(crate) hole: DrillHoleRef,
+    pub(crate) screen_px: (f32, f32),
 }
 
 /// One leg of the tie-in a click would confirm: the two holes it joins, where
@@ -4324,6 +4713,7 @@ pub(crate) enum PropertyTab {
     Camera,
     Performance,
     Developer,
+    Drillholes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -4340,4 +4730,38 @@ pub(crate) enum DataMenu {
     CsvBlockModel,
     CsvDrillHole,
     Geotiff,
+}
+
+/// What the build surface dialog was opened on: the selected points, the
+/// open strings the surface passes through, the one closed string clipping
+/// them, and the text it reports each as.
+///
+/// Snapshotted when the command opens and never re-derived: the viewport and
+/// the tree stop taking selection while it is up, so what the dialog reports
+/// is what the build runs on. `None` extent means the whole triangulation.
+#[derive(Clone, Debug)]
+pub(crate) struct ReferenceSurfaceDraft {
+    pub(crate) points: Vec<ObjectId>,
+    pub(crate) controls: Vec<ObjectId>,
+    pub(crate) extent: Option<ObjectId>,
+    /// Rendered at open time rather than each frame, the same as the other
+    /// select-first tools' input labels.
+    pub(crate) points_label: String,
+    pub(crate) controls_label: String,
+    pub(crate) extent_label: String,
+}
+
+/// What the reference points dialog holds while open: the holes it was
+/// opened on, the categorical field standing in for the working section, its
+/// value, and the side. Transient, like every dialog draft.
+///
+/// The holes are snapshotted when the command opens and never re-derived:
+/// the viewport and the tree stop taking selection while it is up, so what
+/// the dialog reports is what the build runs on.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReferencePointsDraft {
+    pub(crate) holes: Vec<DrillHoleRef>,
+    pub(crate) field: Option<String>,
+    pub(crate) value: Option<crate::model::drill_hole::ReferenceTarget>,
+    pub(crate) side: crate::model::drill_hole::ReferenceSide,
 }

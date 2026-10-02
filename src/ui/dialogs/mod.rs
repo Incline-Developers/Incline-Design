@@ -6,6 +6,7 @@
 use crate::model::{Axis, ObjectId};
 
 pub(crate) mod about;
+pub(crate) mod charging;
 pub(crate) mod confirmations;
 pub(crate) mod drill_hole;
 pub(crate) mod drill_pattern;
@@ -16,6 +17,8 @@ pub(crate) mod object_edit;
 pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod products;
+pub(crate) mod reference_points;
+pub(crate) mod reference_surface;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
 

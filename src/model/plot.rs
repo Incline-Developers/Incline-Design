@@ -9,10 +9,7 @@
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 
-use crate::{
-    fonts::cosmic_text_font_system,
-    i18n::{tr, tr_format},
-};
+use crate::{fonts::cosmic_text_font_system, i18n::tr};
 
 const MM_PER_INCH: f64 = 25.4;
 
@@ -87,8 +84,8 @@ pub(crate) enum Orientation {
 impl Orientation {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Landscape => crate::i18n::tr!(literal = "Landscape"),
-            Self::Portrait => crate::i18n::tr!(literal = "Portrait"),
+            Self::Landscape => crate::i18n::tr!("plot-landscape"),
+            Self::Portrait => crate::i18n::tr!("plot-portrait"),
         }
     }
 }
@@ -211,10 +208,10 @@ pub(crate) fn layout(spec: &PlotSpec) -> Result<PlotLayout, String> {
         height: (height_mm - margin * 2.0) * px_per_mm,
     };
     if map.width < 1.0 || map.height < 1.0 {
-        return Err(tr!(literal = "The margins leave no room for the map"));
+        return Err(tr!("plot-margins-leave-no-room-map"));
     }
     if !(spec.scale.is_finite() && spec.scale > 0.0) {
-        return Err(tr!(literal = "The plot scale must be a positive number"));
+        return Err(tr!("plot-scale-must-be-positive"));
     }
 
     // One sheet millimetre is `scale` millimetres on the ground.
@@ -683,7 +680,7 @@ pub(crate) fn compose_sheet(input: SheetInput<'_>, painter: &mut TextPainter) ->
     let label_size = furniture::LEGEND_LABEL_MM * millimetre;
     let max_label_width = (layout.map.width * 0.25 - (furniture::LEGEND_SWATCH_MM + furniture::PADDING_MM * 3.0) * millimetre).max(20.0 * millimetre);
     let legend_labels: Vec<String> = spec.legend.iter().map(|entry| elide_to_width(painter, &entry.label, label_size, max_label_width)).collect();
-    let legend_title = tr!(literal = "Legend");
+    let legend_title = tr!("common-legend");
     let mut widest_label = painter.measure(&legend_title, furniture::LEGEND_TITLE_MM * millimetre);
     for label in &legend_labels {
         widest_label = widest_label.max(painter.measure(label, label_size));
@@ -849,7 +846,7 @@ fn draw_scale_bar(canvas: &mut Canvas, painter: &mut TextPainter, layout: &PlotL
     }
     painter.draw(
         canvas,
-        &tr_format!(literal = "metres    Scale 1:%scale%", scale = format_quantity(scale, 0)),
+        &tr!("plot-metres-scale-1-scale", scale = format_quantity(scale, 0).to_string()),
         bar_x,
         bar_y + bar_height + millimetre * 0.5,
         label_size,
@@ -868,15 +865,7 @@ fn draw_legend(canvas: &mut Canvas, painter: &mut TextPainter, box_rect: RectPx,
     canvas.fill_rect(box_rect, PAPER);
     canvas.stroke_rect(box_rect, (0.3 * millimetre).max(1.0), INK);
 
-    painter.draw(
-        canvas,
-        &tr!(literal = "Legend"),
-        box_rect.x + padding,
-        box_rect.y + padding,
-        title_size,
-        TextAlign::Left,
-        INK,
-    );
+    painter.draw(canvas, &tr!("common-legend"), box_rect.x + padding, box_rect.y + padding, title_size, TextAlign::Left, INK);
     for (index, entry) in entries.iter().enumerate() {
         let row_y = box_rect.y + padding + painter.line_height(title_size) + row_height * index as f64;
         let swatch_rect = RectPx {
@@ -928,11 +917,11 @@ fn draw_title_block(canvas: &mut Canvas, painter: &mut TextPainter, rect: RectPx
     canvas.draw_line((rect.x, strip_y), (rect.right(), strip_y), border, INK);
 
     let fields = [
-        (tr!(literal = "SCALE"), format!("1:{}", format_quantity(scale, 0))),
-        (tr!(literal = "DRAWN BY"), block.author.clone()),
-        (tr!(literal = "DATE"), block.date.clone()),
-        (tr!(literal = "DRAWING No."), block.drawing_number.clone()),
-        (tr!(literal = "REV"), block.revision.clone()),
+        (tr!("plot-scale"), format!("1:{}", format_quantity(scale, 0))),
+        (tr!("plot-drawn-by-caps"), block.author.clone()),
+        (tr!("plot-date-caps"), block.date.clone()),
+        (tr!("plot-drawing-no"), block.drawing_number.clone()),
+        (tr!("plot-rev"), block.revision.clone()),
     ];
     let column_width = rect.width / fields.len() as f64;
     for (index, (label, value)) in fields.iter().enumerate() {
