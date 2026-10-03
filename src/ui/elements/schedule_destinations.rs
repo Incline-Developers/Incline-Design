@@ -951,7 +951,7 @@ pub(crate) fn draw_condition_dialog(
             let selected = field.as_ref().map(|field| field.name.clone()).unwrap_or_else(|| tr!("destination-condition-pick-field"));
             MenuFieldCombo::new("destination_condition_field", tr!("destination-condition-field"), &mut draft.field, selected, options).show(ui);
             if categorical {
-                menu::menu_section(ui, tr!("destination-condition-values"));
+                menu::panel_section(ui, tr!("destination-condition-values"));
                 let known = draft.field.and_then(|id| categories.get(&id));
                 match known {
                     None => menu::menu_note(ui, tr!("destination-condition-no-values")),
@@ -986,7 +986,7 @@ pub(crate) fn draw_condition_dialog(
             } else {
                 // Both ends, each with its own inclusivity, so `60 < Fe < 70` is
                 // expressible exactly as it was written.
-                menu::menu_section(ui, tr!("destination-condition-range"));
+                menu::panel_section(ui, tr!("destination-condition-range"));
                 MenuFieldText::new(tr!("destination-condition-lower"), &mut draft.lower)
                     .hint_text(tr!("destination-condition-open"))
                     .show(ui);
@@ -1285,7 +1285,7 @@ pub(crate) fn movement_sources_row(
             });
         }
         context_menu_separator(ui);
-        menu::menu_section(ui, tr!("truck-rule-ground"));
+        menu::panel_section(ui, tr!("truck-rule-ground"));
         if sources.is_empty() {
             menu::menu_note(ui, tr!("destination-no-sources"));
         }
@@ -1316,7 +1316,7 @@ pub(crate) fn movement_sources_row(
             }
         }
         context_menu_separator(ui);
-        menu::menu_section(ui, tr!("truck-rule-stockpiles"));
+        menu::panel_section(ui, tr!("truck-rule-stockpiles"));
         if stockpiles.is_empty() {
             menu::menu_note(ui, tr!("destination-no-stockpiles"));
         }

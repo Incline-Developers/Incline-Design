@@ -484,7 +484,7 @@ pub(crate) fn draw_rule_editor(
                         });
                     }
                     context_menu_separator(ui);
-                    menu::menu_section(ui, tr!("truck-rule-ground"));
+                    menu::panel_section(ui, tr!("truck-rule-ground"));
                     if sources.is_empty() {
                         menu::menu_note(ui, tr!("destination-no-sources"));
                     }
@@ -521,7 +521,7 @@ pub(crate) fn draw_rule_editor(
                         }
                     }
                     context_menu_separator(ui);
-                    menu::menu_section(ui, tr!("truck-rule-stockpiles"));
+                    menu::panel_section(ui, tr!("truck-rule-stockpiles"));
                     if stockpiles.is_empty() {
                         menu::menu_note(ui, tr!("destination-no-stockpiles"));
                     }

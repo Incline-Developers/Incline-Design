@@ -714,15 +714,23 @@ pub(crate) fn committed(response: &egui::Response) -> bool {
 
 /// A heading that groups the rows under it.
 ///
-/// Weak, and followed by a hairline across the menu, so a long dialog reads as
-/// a few short lists rather than one run of fields. Body sized like everything
-/// else: a heading shrunk below the rows it heads is harder to read than the
-/// rows themselves.
+/// Small, weak, and followed by a hairline across the menu, so a long dialog
+/// reads as a few short lists rather than one run of fields.
 pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    section_heading(ui, heading.into(), egui::FontId::proportional(11.0));
+}
+
+/// A [`menu_section`] heading at body size, for the Planning pages and their
+/// dialogs, which set their text at body size throughout.
+pub(crate) fn panel_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    section_heading(ui, heading.into(), font);
+}
+
+fn section_heading(ui: &mut egui::Ui, heading: String, font: egui::FontId) {
     ui.add_space(4.0);
     let color = ui.visuals().weak_text_color();
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(heading.into(), font, color);
+    let galley = ui.painter().layout_no_wrap(heading, font, color);
     record_intrinsic_content_width(ui, galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y.max(14.0)), egui::Sense::hover());
     let text_end = rect.left() + galley.size().x;

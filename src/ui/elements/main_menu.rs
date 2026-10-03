@@ -479,6 +479,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         if ContextMenuAction::new(tr!("menu-file-import")).enabled(active_project.is_some()).show(ui).clicked() {
             editor.show_import = true;
             editor.show_export = false;
+            editor.import_as_haul_roads = false;
             ui.close();
         }
         if ContextMenuAction::new(tr!("menu-file-export")).enabled(active_project.is_some()).show(ui).clicked() {

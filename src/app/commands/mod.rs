@@ -1436,11 +1436,10 @@ impl<'a> App<'a> {
             UiCommand::OpenCutTriangulationBySurface => {
                 self.editor.tri_cut_surface_open = true;
                 self.editor.tri_cut_surface_name_auto = true;
-                // Match the other topology tools: the topology and the
-                // surface that will be changed, as the selection suggests.
-                let (topology, other) = self.topology_tool_inputs();
-                self.editor.tri_cut_surface_reference_id = topology;
-                self.editor.tri_cut_surface_target_id = other;
+                // Match the other topology tools: the selection is the
+                // surface that will be changed, and the topology is chosen.
+                self.editor.tri_cut_surface_reference_id = None;
+                self.editor.tri_cut_surface_target_id = self.topology_tool_surface();
                 self.editor.tri_cut_surface_side = crate::ui::state::TriSurfaceCutSide::CutTop;
                 self.editor.tri_cut_surface_name_input.clear();
                 self.editor.tri_cut_surface_unload_source = true;
@@ -1490,14 +1489,11 @@ impl<'a> App<'a> {
             UiCommand::OpenCutTopologyByPitShell => {
                 self.editor.tri_cut_pitshell_open = true;
                 self.editor.tri_cut_pitshell_name_auto = true;
-                let (topology, other) = self.topology_tool_inputs();
-                self.editor.tri_cut_pitshell_topology_id = topology;
-                self.editor.tri_cut_pitshell_pitshell_id = other;
+                // The name follows the topology once it is chosen.
+                self.editor.tri_cut_pitshell_topology_id = None;
+                self.editor.tri_cut_pitshell_pitshell_id = self.topology_tool_surface();
                 self.editor.tri_cut_pitshell_unload_source = true;
-                self.editor.tri_cut_pitshell_name_input = topology
-                    .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!("common-cut")))
-                    .unwrap_or_default();
+                self.editor.tri_cut_pitshell_name_input.clear();
                 Ok(())
             }
             UiCommand::ExecuteCutTopologyByPitShell {
@@ -1515,15 +1511,12 @@ impl<'a> App<'a> {
             UiCommand::OpenIncludeSolidInTopology => {
                 self.editor.tri_include_solid_open = true;
                 self.editor.tri_include_solid_name_auto = true;
-                let (topology, other) = self.topology_tool_inputs();
-                self.editor.tri_include_solid_topology_id = topology;
-                self.editor.tri_include_solid_shape_id = other;
+                // The name follows the topology once it is chosen.
+                self.editor.tri_include_solid_topology_id = None;
+                self.editor.tri_include_solid_shape_id = self.topology_tool_surface();
                 self.editor.tri_include_solid_save_as_two = false;
                 self.editor.tri_include_solid_hide_old = true;
-                self.editor.tri_include_solid_name_input = topology
-                    .and_then(|id| self.triangulations.iter().find(|triangulation| triangulation.id == id))
-                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, &tr!("common-shell")))
-                    .unwrap_or_default();
+                self.editor.tri_include_solid_name_input.clear();
                 Ok(())
             }
             UiCommand::ExecuteIncludeSolidInTopology {

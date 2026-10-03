@@ -1464,7 +1464,9 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn import_dxf_paths_into(&mut self, paths: Vec<PathBuf>) -> Result<()> {
-        let as_roads = self.editor.import_as_haul_roads;
+        // Haulage's own DXF button asks for roads; it lasts for that one
+        // import, so the next ordinary one brings in design geometry again.
+        let as_roads = std::mem::take(&mut self.editor.import_as_haul_roads);
         #[cfg(target_arch = "wasm32")]
         {
             let _ = paths;

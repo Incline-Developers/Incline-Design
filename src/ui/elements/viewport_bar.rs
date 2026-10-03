@@ -196,6 +196,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     if import.clicked() {
         editor.show_import = true;
         editor.show_export = false;
+        editor.import_as_haul_roads = false;
     }
     let export = ui.add_enabled(
         has_project,

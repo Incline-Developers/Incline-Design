@@ -435,8 +435,13 @@ fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
 }
 
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    ui.heading(tr!("common-import-dxf"));
-    ui.checkbox(&mut editor.import_as_haul_roads, tr!("haul-import"));
+    // Opened from Haulage, the lines become roads rather than design
+    // geometry; the heading says which, since nothing else on the page does.
+    ui.heading(if editor.import_as_haul_roads {
+        tr!("haul-import-heading")
+    } else {
+        tr!("common-import-dxf")
+    });
     draw_import_source_picker(ui, editor, commands, tr!("io-source-file"), tr!("io-no-dxf-chosen"));
 }
 

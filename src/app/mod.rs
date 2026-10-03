@@ -691,6 +691,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenImport => {
                 self.editor.show_import = true;
                 self.editor.show_export = false;
+                self.editor.import_as_haul_roads = false;
                 None
             }
             MacMenuAction::OpenExport => {

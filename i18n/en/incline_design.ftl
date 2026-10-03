@@ -96,8 +96,10 @@ tri-create-output-name = Output name
 tri-create-output-name-help = Name assigned to the generated triangulation.
 tri-create-output-name-hint = triangulation name
 tri-create-run = Triangulate
+
 tri-selection-none = The selected objects are no longer available.
 tri-selection-selected = { $summary } selected
+
 tri-type-open-surface = Surface
 tri-type-solid-closed = Solid
 
@@ -133,6 +135,7 @@ tri-count-objects =
         [one] { $count } object
        *[other] { $count } objects
     }
+
 about-read-full-licence = Read the full licence ↗
 about-source-code = Source Code
 about-website = Website
@@ -157,6 +160,7 @@ status-selected = Selected: { $count }
 status-faces = Faces: { $drawn } / { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
 status-points = Points: { $drawn } / { $target } of { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
+
 explorer-no-rasters = No rasters
 slice-viewport-gestures = middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Esc exit
 
@@ -174,6 +178,7 @@ color-opacity = Opacity
 color-edit = Click to edit colour
 color-saturation-value = Saturation and brightness
 color-hue = Hue
+
 asset-loading = Loading asset data
 asset-unloading = Unloading asset data
 asset-load-failed = Could not load asset data
@@ -207,7 +212,9 @@ planning-benching = Benching
 planning-blasting = Blasting
 planning-benches = Benches
 preferences-title = Preferences
+
 context-text-colour = Text colour
+
 context-polylines = Polylines
 context-points = Points
 planning-building-slabs = Building bench slabs…
@@ -578,11 +585,16 @@ survey-system-cycle = "{ $name }" is defined against itself, directly or through
 survey-system-missing = That coordinate system no longer exists. Select another definition.
 survey-same-system = Choose different source and destination systems.
 survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
+
 preferences-ui-size = UI size
 preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+
 relimit-select-boundary = Select polyline or circle to relimit to
+
 relimit-click-boundary = Click the polyline or circle to intersect with…
+
 relimit-mode-help = Intersect moves one endpoint to a polyline or circle. Absolute sets the final line length. Relative adds or subtracts length.
+
 browser-graphics-device-lost = The browser lost its graphics device. Reopen this page in a new tab. GPU details: { $message }
 
 # Soft grade targets
@@ -617,6 +629,7 @@ haul-finish = Finish road
 haul-draw-help = Click points in the viewport; they sit on the surface under the cursor. Click a road or node to join it. Backspace removes the last point; Enter, Escape or a double-click finishes.
 haul-convert = Convert selection to roads
 haul-import = Import DXF as roads…
+haul-import-heading = Import DXF as Haul Roads
 haul-export = Export roads as DXF…
 haul-summary =
     { $roads ->
@@ -2338,6 +2351,7 @@ csv-geophysics-run-count-mismatch = Read { $read } run(s) of { $hole }, the link
 csv-geophysics-rows-geophysics-row-s-count = { $rows } geophysics row(s) for { $count } hole(s) the dataset does not define are not linked: { $holes }
 csv-geophysics-rows-readings-would-need-samples = { $rows } readings would need { $samples } samples
 csv-geophysics-run-hole-curve-was-not = A run of { $hole } { $curve } was not kept ({ $reason })
+
 data-table-copy-selection = Copy selection
 data-table-copy-table = Copy table
 
@@ -2821,6 +2835,7 @@ menu-count-files-selected = { $count } files selected
 menu-build-solid-surfaces = Build Solid from Surfaces...
 
 ## Modelling strings
+
 
 ## Object strings
 

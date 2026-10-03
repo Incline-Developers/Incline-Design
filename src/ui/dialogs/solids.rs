@@ -187,7 +187,7 @@ pub(crate) fn draw_topography_update_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 triangulation_options(project).into_iter().map(|(id, name)| (id, name.into())),
             )
             .show(ui);
-            menu::menu_section(ui, tr!("planning-topography-update-solids"));
+            menu::panel_section(ui, tr!("planning-topography-update-solids"));
             for solid in solids {
                 let mut on = update.solids.contains(&solid.id);
                 let current = triangulation_label(project, solid.topography);
