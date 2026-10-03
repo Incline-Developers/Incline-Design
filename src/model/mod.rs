@@ -35,6 +35,7 @@ pub(crate) mod raster;
 pub(crate) mod rbf;
 pub(crate) mod rbf_spans;
 pub(crate) mod spatial;
+pub(crate) mod strat_order;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
 

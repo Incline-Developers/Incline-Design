@@ -16,6 +16,7 @@ pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
@@ -127,6 +128,7 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::RenameSeam { .. }
+                | UiCommand::ShiftStratColumn { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -716,6 +718,25 @@ impl<'a> App<'a> {
                 reason,
             } => {
                 self.rename_seam(dataset, field, from, to, scope, reason);
+                Ok(())
+            }
+            UiCommand::SetStratColumn { id, field, codes } => {
+                self.set_strat_column(id, field, codes);
+                Ok(())
+            }
+            UiCommand::CheckStratColumn { id, field } => {
+                self.check_strat_column(id, field);
+                Ok(())
+            }
+            UiCommand::ShiftStratColumn {
+                dataset,
+                hole,
+                field,
+                direction,
+                from,
+                reason,
+            } => {
+                self.shift_strat_column(dataset, hole, field, direction, from, reason);
                 Ok(())
             }
             UiCommand::SetDrillHoleWorkingSections { id, sections } => {

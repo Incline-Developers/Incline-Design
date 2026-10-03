@@ -1235,6 +1235,7 @@ fn draw_global_dialogs(
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
     dialogs::drill_hole::draw_seam_rename_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_name_shift_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
     dialogs::modelling_settings::draw_modelling_settings_dialog(root_ui, editor, project, commands);

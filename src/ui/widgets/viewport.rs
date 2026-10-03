@@ -2,12 +2,15 @@ use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     i18n::tr,
-    model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
+    model::{
+        block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
+        drill_hole::{OpenDrillHoleDataset, ShiftDirection, UNKNOWN_NAME},
+    },
     ui::{
         elements::properties::read_only_row,
         state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
         widgets::{
-            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields},
+            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields, context_menu_separator},
             data_table::DataTable,
             log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
             menu, toolbar,
@@ -1907,8 +1910,6 @@ const LOG_SPIN_PER_POINT: f32 = 0.5;
 const LOG_MIN_DEPTH_SPAN: f64 = 0.25;
 /// Wheel points to one e-fold of zoom.
 const LOG_ZOOM_PER_POINT: f64 = 0.004;
-/// Column keys a lithology is usually written under, tried in order.
-const LOG_LITHOLOGY_KEYS: [&str; 6] = ["lith", "litho", "lithology", "lithtype", "lith_1", "rock"];
 /// Size of the azimuth compass in the log's header.
 const LOG_COMPASS_SIZE: f32 = 54.0;
 /// Size of the compass once the panel is too narrow to spare the full dial.
@@ -2108,7 +2109,13 @@ impl<'a> BoreholeLog<'a> {
             let seam = pointer
                 .zip(lanes.strat.zip(strat_field))
                 .filter(|(pointer, (strat, _))| strat.contains(*pointer))
-                .and_then(|(pointer, (_, field))| self.seam_at(field, depth_at(plot, view, pointer.y)).map(|name| SeamMenu { field: field.key.clone(), name }));
+                .and_then(|(pointer, (_, field))| {
+                    self.seam_at(field, depth_at(plot, view, pointer.y)).map(|(interval, name)| SeamMenu {
+                        field: field.key.clone(),
+                        name,
+                        interval,
+                    })
+                });
             let menu = pointer
                 .filter(|_| seam.is_none())
                 .and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
@@ -2133,11 +2140,41 @@ impl<'a> BoreholeLog<'a> {
                         output.rename = Some(SeamRename {
                             field: seam.field.clone(),
                             name: seam.name.clone(),
+                            interval: seam.interval,
                             every_hole,
                         });
                         ui.close();
                     }
                 }
+                // The hole's names slide one run, all of them or from the
+                // clicked horizon; with no column there is nothing to slide
+                // along, and from a name outside it there is no horizon.
+                let column = self.dataset.color.strat_column(&seam.field);
+                let in_column = seam.name != UNKNOWN_NAME && column.contains(&seam.name);
+                context_menu_separator(ui);
+                for (label, direction, from) in [
+                    (tr!("viewport-move-up-from-here"), ShiftDirection::Up, Some(seam.interval)),
+                    (tr!("viewport-move-all-up"), ShiftDirection::Up, None),
+                    (tr!("viewport-move-all-down"), ShiftDirection::Down, None),
+                    (tr!("viewport-move-down-from-here"), ShiftDirection::Down, Some(seam.interval)),
+                ] {
+                    let enabled = !column.is_empty() && (from.is_none() || in_column);
+                    let response = ContextMenuAction::new(label).enabled(enabled).show(ui);
+                    let response = match (enabled, column.is_empty()) {
+                        (true, _) => response,
+                        (false, true) => response.on_disabled_hover_text(tr!("viewport-field-has-no-strat-column")),
+                        (false, false) => response.on_disabled_hover_text(tr!("viewport-name-not-in-strat-column")),
+                    };
+                    if response.clicked() {
+                        output.shift = Some(NameShift {
+                            field: seam.field.clone(),
+                            direction,
+                            from,
+                        });
+                        ui.close();
+                    }
+                }
+                context_menu_separator(ui);
             });
             None
         } else if let Some((mut menu, traces)) = open {
@@ -2410,36 +2447,21 @@ impl<'a> BoreholeLog<'a> {
     /// still categorical: the panel holds one choice while the inspection
     /// moves, and a numeric field here would draw a block per number.
     fn lithology_field(&self) -> Option<&crate::model::drill_hole::DrillField> {
-        let fields = &self.dataset.dataset.fields;
-        let chosen = self
-            .strat_field
-            .as_deref()
-            .and_then(|key| self.dataset.dataset.field(key))
-            .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }));
-        if chosen.is_some() {
-            return chosen;
-        }
-        fields
-            .iter()
-            .find(|field| LOG_LITHOLOGY_KEYS.contains(&field.key.to_ascii_lowercase().as_str()))
-            .or_else(|| {
-                fields
-                    .iter()
-                    .find(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
-            })
+        strat_field_of(self.dataset, self.strat_field.as_deref())
     }
 
     /// The seam name the strat column shows at `depth`, exactly as the
     /// interval holds it: the first interval down the hole covering the
     /// depth, as [`Self::lithology_runs`] draws it.
-    fn seam_at(&self, field: &crate::model::drill_hole::DrillField, depth: f64) -> Option<String> {
+    fn seam_at(&self, field: &crate::model::drill_hole::DrillField, depth: f64) -> Option<(usize, String)> {
         self.hole
             .intervals
             .iter()
-            .filter(|interval| interval.from <= depth && depth < interval.to)
-            .min_by(|a, b| a.from.total_cmp(&b.from))
-            .and_then(|interval| match interval.values.get(&field.key) {
-                Some(crate::model::drill_hole::DrillValue::Category(name)) if !name.trim().is_empty() => Some(name.clone()),
+            .enumerate()
+            .filter(|(_, interval)| interval.from <= depth && depth < interval.to)
+            .min_by(|a, b| a.1.from.total_cmp(&b.1.from))
+            .and_then(|(index, interval)| match interval.values.get(&field.key) {
+                Some(crate::model::drill_hole::DrillValue::Category(name)) if !name.trim().is_empty() => Some((index, name.clone())),
                 _ => None,
             })
     }
@@ -3069,6 +3091,58 @@ fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumn
     }
 }
 
+/// The field a hole's strat column reads in `dataset`: `chosen` while it is
+/// one of the dataset's and still categorical, else
+/// [`default_strat_field`]. The log and the strat column tab both read
+/// through here, so the two never disagree.
+pub(crate) fn strat_field_of<'a>(dataset: &'a OpenDrillHoleDataset, chosen: Option<&str>) -> Option<&'a crate::model::drill_hole::DrillField> {
+    chosen
+        .and_then(|key| dataset.dataset.field(key))
+        .filter(|field| is_categorical(field))
+        .or_else(|| default_strat_field(&dataset.dataset.fields, &dataset.color.working_sections, dataset.color.strat_field.as_deref()))
+}
+
+/// Parts of a key a stratigraphic field is usually written under, the most
+/// detailed first.
+const STRAT_KEY_HINTS: [&str; 3] = ["code", "seam", "ply"];
+
+fn is_categorical(field: &crate::model::drill_hole::DrillField) -> bool {
+    matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. })
+}
+
+/// The strat field when none is picked: `recorded`, the field an import
+/// noted (the parent, seam field when it found one); else the categorical
+/// field holding working sections; else the first whose key holds a part of
+/// [`STRAT_KEY_HINTS`], tried in order; else the first categorical field.
+/// A lithology field is never taken unless it holds sections: it is read
+/// only when picked by hand.
+pub(crate) fn default_strat_field<'a>(
+    fields: &'a [crate::model::drill_hole::DrillField],
+    sections: &[crate::model::drill_hole::WorkingSection],
+    recorded: Option<&str>,
+) -> Option<&'a crate::model::drill_hole::DrillField> {
+    let lithology = |field: &crate::model::drill_hole::DrillField| crate::model::strat_order::is_lithology_key(&field.key);
+    let mut candidates = fields.iter().filter(|field| is_categorical(field));
+    let noted = recorded.and_then(|key| fields.iter().find(|field| field.key == key && is_categorical(field) && !lithology(field)));
+    let sectioned = || {
+        fields
+            .iter()
+            .filter(|field| is_categorical(field))
+            .find(|field| sections.iter().any(|section| section.field == field.key))
+    };
+    noted
+        .or_else(sectioned)
+        .or_else(|| {
+            STRAT_KEY_HINTS.iter().find_map(|hint| {
+                fields
+                    .iter()
+                    .filter(|field| is_categorical(field) && !lithology(field))
+                    .find(|field| field.key.to_ascii_lowercase().contains(hint))
+            })
+        })
+        .or_else(|| candidates.find(|field| !lithology(field)))
+}
+
 /// What the reader asked of the log this frame.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LogOutput {
@@ -3076,14 +3150,28 @@ pub(crate) struct LogOutput {
     pub(crate) saved: Option<WellLogStyle>,
     /// A seam the reader chose to rename.
     pub(crate) rename: Option<SeamRename>,
+    /// The hole's names the reader chose to slide one run along the hole.
+    pub(crate) shift: Option<NameShift>,
+}
+
+/// A shift picked from the strat column's menu: the field read, which way
+/// its names move, and the interval clicked when only its run and those on
+/// that side move.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NameShift {
+    pub(crate) field: String,
+    pub(crate) direction: ShiftDirection,
+    pub(crate) from: Option<usize>,
 }
 
 /// A seam picked from the strat column's menu: the field and name it is
-/// read from, and whether every hole of the set is meant or only this one.
+/// read from, the interval clicked, and whether every hole of the set is
+/// meant or only the clicked horizon.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SeamRename {
     pub(crate) field: String,
     pub(crate) name: String,
+    pub(crate) interval: usize,
     pub(crate) every_hole: bool,
 }
 
@@ -3092,6 +3180,8 @@ pub(crate) struct SeamRename {
 struct SeamMenu {
     field: String,
     name: String,
+    /// The interval clicked, by index in the hole.
+    interval: usize,
 }
 
 /// A trace column's right-click menu while it is open: the column, the
@@ -3158,7 +3248,7 @@ fn column_traces<'a>(column: TraceColumn, density: Option<ColumnTraces<'a>>, gam
 /// Colour for one strat run, matched to the ribbon's own set: the ribbon's
 /// field reads through the same working-section mapping the ribbon does, so
 /// a code coloured by its section shows that colour in both.
-fn strat_run_color(color: &crate::model::drill_hole::DrillColorState, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
+pub(crate) fn strat_run_color(color: &crate::model::drill_hole::DrillColorState, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
     if color.active_field.as_deref() == Some(field.key.as_str()) {
         let value = crate::model::drill_hole::DrillValue::Category(code.to_owned());
         return crate::rendering::scene::drill_hole_cache::evaluate_color_for(&field.kind, &value, color);

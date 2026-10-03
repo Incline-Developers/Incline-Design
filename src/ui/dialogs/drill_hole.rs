@@ -2,11 +2,11 @@ use crate::{
     i18n::tr,
     model::drill_hole::{
         ColorRow, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, RenameScope, SectionProblem,
-        WorkingSection, default_category_colors, suggested_working_sections, working_section_name_problem,
+        ShiftDirection, WorkingSection, default_category_colors, suggested_working_sections, working_section_name_problem,
     },
     ui::{
         elements::properties::read_only_row,
-        state::{EditorState, UiCommand},
+        state::{EditorState, SeamRenameDraft, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldText},
     },
 };
@@ -74,8 +74,12 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     let Some(draft) = editor.seam_rename_dialog.as_mut() else {
         return;
     };
-    if !datasets.iter().any(|dataset| dataset.id == draft.dataset && dataset.state.loaded) {
+    let Some(dataset) = datasets.iter().find(|dataset| dataset.id == draft.dataset && dataset.state.loaded) else {
         editor.seam_rename_dialog = None;
+        return;
+    };
+    if let Some(holes) = draft.out_of_sequence {
+        draw_out_of_sequence_warning(ui, editor, holes, commands);
         return;
     }
     let mut open = true;
@@ -93,11 +97,15 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         .show(ui.ctx(), |ui| {
             read_only_row(ui, &tr!("drill-hole-rename-seam-seam"), &draft.from);
             let place = match draft.scope {
-                RenameScope::Hole(_) => tr!("drill-hole-rename-seam-hole"),
+                RenameScope::Horizon { .. } => tr!("drill-hole-rename-seam-hole"),
                 RenameScope::Set => tr!("drill-hole-rename-seam-every-hole-of"),
             };
             read_only_row(ui, &place, &draft.place);
-            read_only_row(ui, &tr!("drill-hole-rename-seam-intervals"), &draft.intervals.to_string());
+            let counted = match draft.scope {
+                RenameScope::Horizon { .. } => tr!("drill-hole-rename-seam-horizon-intervals"),
+                RenameScope::Set => tr!("drill-hole-rename-seam-intervals"),
+            };
+            read_only_row(ui, &counted, &draft.intervals.to_string());
             if draft.scope == RenameScope::Set {
                 read_only_row(ui, &tr!("drill-hole-rename-seam-holes"), &draft.holes.to_string());
             }
@@ -119,18 +127,144 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             });
         });
     if rename {
-        commands.push(UiCommand::RenameSeam {
+        // Out of the column's order is allowed, as overturned strata are,
+        // but only after a warning.
+        let column = dataset.color.strat_column(&draft.field);
+        let holes = dataset.dataset.rename_out_of_sequence(&draft.field, &draft.from, &to, draft.scope, column);
+        if holes > 0 {
+            draft.out_of_sequence = Some(holes);
+            return;
+        }
+        commands.push(seam_rename_command(draft));
+        open = false;
+    }
+    if !open || cancel {
+        editor.seam_rename_dialog = None;
+    }
+}
+
+/// The rename the dialog holds, as typed.
+fn seam_rename_command(draft: &SeamRenameDraft) -> UiCommand {
+    UiCommand::RenameSeam {
+        dataset: draft.dataset,
+        field: draft.field.clone(),
+        from: draft.from.clone(),
+        to: draft.to.trim().to_owned(),
+        scope: draft.scope,
+        reason: draft.reason.trim().to_owned(),
+    }
+}
+
+/// The warning a rename out of the strat column's order raises: OK renames
+/// anyway, Cancel goes back to the rename. Never a block, as overturned
+/// strata are out of order by nature.
+fn draw_out_of_sequence_warning(ui: &mut egui::Ui, editor: &mut EditorState, holes: usize, commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.seam_rename_dialog.as_mut() else {
+        return;
+    };
+    let mut open = true;
+    let mut proceed = false;
+    let mut cancel = false;
+    let to = draft.to.trim().to_owned();
+    DragableMenu::new("seam_rename_out_of_sequence", tr!("drill-hole-rename-out-of-sequence-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            let text = match draft.scope {
+                RenameScope::Horizon { .. } => tr!("drill-hole-rename-out-of-sequence-hole", from = draft.from.clone(), to = to.clone()),
+                RenameScope::Set => tr!(
+                    "drill-hole-rename-out-of-sequence-holes",
+                    from = draft.from.clone(),
+                    to = to.clone(),
+                    count = holes.to_string()
+                ),
+            };
+            menu::menu_note(ui, text);
+            menu::menu_note(ui, tr!("drill-hole-rename-out-of-sequence-note"));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(tr!("common-ok")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    proceed = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if proceed {
+        commands.push(seam_rename_command(draft));
+        editor.seam_rename_dialog = None;
+    } else if !open || cancel {
+        draft.out_of_sequence = None;
+    }
+}
+
+/// The shift names dialog: one hole's names slid one run along the hole,
+/// what that does, and why. Shifting proposes one value correction per
+/// interval whose name moves; depths never change.
+pub(crate) fn draw_name_shift_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.name_shift_dialog.as_mut() else {
+        return;
+    };
+    if !datasets.iter().any(|dataset| dataset.id == draft.dataset && dataset.state.loaded) {
+        editor.name_shift_dialog = None;
+        return;
+    }
+    let mut open = true;
+    let mut shift = false;
+    let mut cancel = false;
+    let reason = draft.reason.trim().to_owned();
+    let can_shift = draft.moved + draft.unknown > 0 && !reason.is_empty();
+    let title = match (draft.direction, draft.from) {
+        (ShiftDirection::Up, None) => tr!("drill-hole-shift-names-up-title"),
+        (ShiftDirection::Down, None) => tr!("drill-hole-shift-names-down-title"),
+        (ShiftDirection::Up, Some(_)) => tr!("drill-hole-shift-names-up-from-here-title"),
+        (ShiftDirection::Down, Some(_)) => tr!("drill-hole-shift-names-down-from-here-title"),
+    };
+    DragableMenu::new("name_shift_dialog", title)
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.dhid);
+            read_only_row(ui, &tr!("drill-hole-shift-names-field"), &draft.field);
+            read_only_row(ui, &tr!("drill-hole-shift-names-moved"), &draft.moved.to_string());
+            read_only_row(ui, &tr!("drill-hole-shift-names-unknown"), &draft.unknown.to_string());
+            read_only_row(ui, &tr!("drill-hole-shift-names-not-in-column"), &draft.untouched.to_string());
+            ui.add_space(4.0);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-shift-names-reason-hint"))
+                .show(ui);
+            menu::menu_note(ui, tr!("drill-hole-shift-names-depths-kept"));
+            if draft.from.is_some() {
+                menu::menu_note(ui, tr!("drill-hole-shift-names-from-here-note"));
+            } else if draft.unknown > 0 {
+                menu::menu_note(ui, tr!("drill-hole-shift-names-unknown-note"));
+            }
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-shift-names-submit")).primary().enabled(can_shift)).clicked() || confirm) && can_shift {
+                    shift = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if shift {
+        commands.push(UiCommand::ShiftStratColumn {
             dataset: draft.dataset,
+            hole: draft.hole,
             field: draft.field.clone(),
-            from: draft.from.clone(),
-            to,
-            scope: draft.scope,
+            direction: draft.direction,
+            from: draft.from,
             reason,
         });
         open = false;
     }
     if !open || cancel {
-        editor.seam_rename_dialog = None;
+        editor.name_shift_dialog = None;
     }
 }
 
