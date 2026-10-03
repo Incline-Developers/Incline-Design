@@ -455,9 +455,11 @@ impl EditorState {
         set_key(&self.tri_hover_handles).hash(&mut hasher);
         self.tool_highlight_id.hash(&mut hasher);
         self.editing_labels_id.hash(&mut hasher);
-        // Haul roads are left out of the scene on the Gantt, so arriving
-        // there or leaving has to redraw it.
-        self.is_schedule_gantt().hash(&mut hasher);
+        // Haul roads are in the scene only where the network is shown, so
+        // arriving at those pages or leaving them has to redraw it.
+        self.shows_haul_network().hash(&mut hasher);
+        // The route check overlay draws only beside the Layout panel.
+        self.is_haulage_page().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -3131,6 +3133,14 @@ impl EditorState {
     /// back to the section plane like any unsnapped pick.
     /// Whether the Haulage Layout - the road network over the viewport - is
     /// showing.
+    /// Whether the viewport shows the haul network: its roads, node pins and
+    /// route check belong to the Haulage pages and Animate, which draws what
+    /// travels on them. View → Haul roads shows them everywhere else.
+    pub(crate) fn shows_haul_network(&self) -> bool {
+        let planning = self.active_workspace == Workspace::Planning;
+        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation() || self.show_haul_roads
+    }
+
     pub(crate) fn is_haulage_page(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
     }

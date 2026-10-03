@@ -196,7 +196,8 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
         draw_screen_cross(&mut overlay, pos, 9.0, 2.0, PREVIEW_COLOR);
     }
-    if let Some(route) = &editor.haul_route {
+    // The route check is the Layout panel's, and draws only beside it.
+    if let Some(route) = editor.haul_route.as_ref().filter(|_| editor.is_haulage_page()) {
         // The return first, so the loaded haul draws over it where they share road.
         for (points, color, loaded) in [(&route.empty_path, [1.0, 0.85, 0.1, 1.0], false), (&route.loaded_path, [1.0, 0.2, 0.2, 1.0], true)] {
             for (i, pair) in points.windows(2).enumerate() {

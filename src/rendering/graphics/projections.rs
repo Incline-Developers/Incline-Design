@@ -526,7 +526,7 @@ impl<'a> Graphics<'a> {
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
         self.project_haul_flows(editor);
-        editor.haul_pins = if editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads {
+        editor.haul_pins = if editor.shows_haul_network() {
             document
                 .haulage()
                 .nodes

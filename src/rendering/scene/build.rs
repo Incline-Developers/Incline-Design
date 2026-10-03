@@ -60,8 +60,7 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     static_key.hash(&mut hasher);
     editor.active_workspace.hash(&mut hasher);
     editor.planning_page.hash(&mut hasher);
-    editor.is_schedule_gantt().hash(&mut hasher);
-    editor.show_haul_roads.hash(&mut hasher);
+    editor.shows_haul_network().hash(&mut hasher);
     editor.haul_view_revision.hash(&mut hasher);
     for id in editor
         .selected_handles
@@ -405,9 +404,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             });
         }
     }
-    // The Gantt's only 3D view is the sequence editors' preview, which shows
-    // ground to dig or blast; the roads there only cluttered it.
-    if (editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads) && !editor.is_schedule_gantt() {
+    if editor.shows_haul_network() {
         draw_ctx.style = STYLE_SLOT_NONE;
         let network = document.haulage();
         for road in &network.roads {

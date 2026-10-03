@@ -142,7 +142,7 @@ impl crate::app::App<'_> {
                 bench: block.bench,
                 flitch: block.flitch,
                 blast: block.blast,
-                name: format!("{} · {:.0} · {}", block.solid_name, block.flitch.base, block.name),
+                name: crate::app::commands::schedule_readiness::block_path(document, block),
                 anchor: block.anchor,
                 face: block.ground.clone(),
                 rings: block

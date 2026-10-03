@@ -39,7 +39,7 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.separator();
             ui.add_space(6.0);
 
-            ui.label(egui::RichText::new(tr!("about-copyright-c-2026-leo-timmins")));
+            ui.label(egui::RichText::new(tr!("about-copyright-c-2026-leo-timmins")).small());
             ui.add_space(4.0);
             ui.hyperlink_to(tr!("about-read-full-licence"), "https://opensource.org/license/mit");
 
