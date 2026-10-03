@@ -135,11 +135,6 @@ impl<'a> App<'a> {
         let value = !option.get(&self.editor);
         let mut preferences = self.editor.current_preferences();
         match option {
-            ViewToggle::HaulRoads => {
-                self.editor.show_haul_roads = value;
-                self.invalidate_geometry();
-                return Ok(());
-            }
             ViewToggle::Console => preferences.show_console = value,
             ViewToggle::DarkMode => preferences.dark_mode = value,
         }

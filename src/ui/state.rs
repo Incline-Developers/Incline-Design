@@ -2008,7 +2008,6 @@ pub(crate) struct EditorState {
     pub(crate) drill_pattern_preview_key: Option<crate::ui::dialogs::drill_pattern::PatternPreviewKey>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
-    pub(crate) show_haul_roads: bool,
     pub(crate) haul_draw: bool,
     pub(crate) haul_delete_node: Option<crate::model::haulage::NodeId>,
     pub(crate) import_as_haul_roads: bool,
@@ -3128,19 +3127,16 @@ impl EditorState {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
 
-    /// Whether a snap mode is up. The section snaps as the plan does: its
-    /// targets are the ones inside the slab, and off them the cursor falls
-    /// back to the section plane like any unsnapped pick.
-    /// Whether the Haulage Layout - the road network over the viewport - is
-    /// showing.
     /// Whether the viewport shows the haul network: its roads, node pins and
     /// route check belong to the Haulage pages and Animate, which draws what
-    /// travels on them. View → Haul roads shows them everywhere else.
+    /// travels on them, and nowhere else.
     pub(crate) fn shows_haul_network(&self) -> bool {
         let planning = self.active_workspace == Workspace::Planning;
-        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation() || self.show_haul_roads
+        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation()
     }
 
+    /// Whether the Haulage Layout - the road network over the viewport - is
+    /// showing.
     pub(crate) fn is_haulage_page(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
     }
@@ -3165,6 +3161,9 @@ impl EditorState {
         self.haul_draw || self.haul_drag.is_some_and(|drag| drag.pos.is_some())
     }
 
+    /// Whether a snap mode is up. The section snaps as the plan does: its
+    /// targets are the ones inside the slab, and off them the cursor falls
+    /// back to the section plane like any unsnapped pick.
     pub(crate) fn snapping_active(&self) -> bool {
         self.cursor_mode.snaps()
     }
@@ -3698,7 +3697,6 @@ impl EditorState {
             drill_pattern_preview_error: None,
             drill_pattern_preview_key: None,
             cursor_world: None,
-            show_haul_roads: false,
             haul_draw: false,
             haul_delete_node: None,
             import_as_haul_roads: false,
@@ -4589,7 +4587,6 @@ impl ToolHatch {
 /// of their own; the whole set stays in the Interface preferences tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewToggle {
-    HaulRoads,
     Console,
     DarkMode,
 }
@@ -4597,7 +4594,6 @@ pub(crate) enum ViewToggle {
 impl ViewToggle {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::HaulRoads => tr!("haul-roads"),
             Self::Console => tr!("state-show-console"),
             Self::DarkMode => tr!("state-dark-mode"),
         }
@@ -4608,7 +4604,6 @@ impl ViewToggle {
     /// [`PreferencesDraft`] built to read one bool out of.
     pub(crate) fn get(self, editor: &EditorState) -> bool {
         match self {
-            Self::HaulRoads => editor.show_haul_roads,
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
         }

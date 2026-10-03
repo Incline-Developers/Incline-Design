@@ -520,7 +520,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::HaulRoads] {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
