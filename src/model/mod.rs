@@ -28,7 +28,14 @@ pub(crate) mod point_features;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+// Build Surface grids through `rbf_spans`, so the spline's own grid
+// calls, the whole-box `Lattice` and `Dip` have no caller. rbf.rs allows
+// that itself outside test builds.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) mod rbf;
+pub(crate) mod rbf_spans;
 pub(crate) mod spatial;
+pub(crate) mod strat_order;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
 
@@ -1937,6 +1944,21 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// Apply a set of interval corrections, or withdraw them when `apply` is
+    /// false. The dataset's revision carries the new values to its colours.
+    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[(usize, usize)], records: &[drill_hole::Correction], apply: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        if apply {
+            data.apply_corrections(targets, records);
+        } else {
+            data.withdraw_corrections(targets, records);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     /// Write each named hole's charge, emptying those given `None`.
     fn write_charges(&mut self, dataset: drill_hole::DrillHoleId, charges: &[(usize, Option<blast::HoleCharge>)]) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
@@ -2143,6 +2165,15 @@ pub(crate) enum Command {
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
     },
+    /// Propose corrections to drill-hole intervals: applying writes each
+    /// interpreted value and appends its record, reverting puts the value
+    /// back and withdraws the record.
+    CorrectIntervals {
+        dataset: drill_hole::DrillHoleId,
+        /// Hole and interval index of each record's interval, in step.
+        targets: Vec<(usize, usize)>,
+        records: Vec<drill_hole::Correction>,
+    },
     /// Load, reload or unload holes. Each side names the same holes: `before`
     /// is what they held (`None` for empty), `after` what they hold now.
     SetCharges {
@@ -2237,6 +2268,15 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
+                Command::CorrectIntervals { targets, records, .. } => {
+                    targets.len() * size_of::<(usize, usize)>()
+                        + records
+                            .iter()
+                            .map(|record| {
+                                size_of::<drill_hole::Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len()
+                            })
+                            .fold(0usize, usize::saturating_add)
+                }
                 Command::SetCharges { before, after, .. } => before
                     .iter()
                     .chain(after)
@@ -2343,6 +2383,7 @@ impl Command {
             | Self::RotateCollars { dataset, .. }
             | Self::SetTieIns { dataset, .. }
             | Self::SetInitiation { dataset, .. }
+            | Self::CorrectIntervals { dataset, .. }
             | Self::SetCharges { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
@@ -2385,6 +2426,7 @@ impl Command {
             | Command::RotateCollars { dataset, .. }
             | Command::SetTieIns { dataset, .. }
             | Command::SetInitiation { dataset, .. }
+            | Command::CorrectIntervals { dataset, .. }
             | Command::SetCharges { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
@@ -2538,6 +2580,7 @@ impl Command {
             Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, true),
             Command::SetCharges { dataset, after, .. } => target.write_charges(*dataset, after),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
@@ -2687,6 +2730,7 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, false),
             Command::SetCharges { dataset, before, .. } => target.write_charges(*dataset, before),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {

@@ -1374,6 +1374,8 @@ pub(crate) struct MenuFieldCombo<'value, T> {
     value: &'value mut T,
     selected_text: egui::WidgetText,
     options: Vec<(T, egui::WidgetText)>,
+    /// Shown after the options, greyed out and never selectable.
+    unavailable: Vec<egui::WidgetText>,
     width: Option<f32>,
 }
 
@@ -1392,8 +1394,15 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             value,
             selected_text: selected_text.into(),
             options: options.into_iter().collect(),
+            unavailable: Vec::new(),
             width: None,
         }
+    }
+
+    /// An option listed but not offered, its text saying why.
+    pub(crate) fn unavailable(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.unavailable.push(text.into());
+        self
     }
 
     pub(crate) fn width(mut self, width: f32) -> Self {
@@ -1414,13 +1423,19 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             value,
             selected_text,
             options,
+            unavailable,
             width,
         } = self;
         let font_id = egui::TextStyle::Button.resolve(ui.style());
         let text_width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
         let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
         let selected_needs = text_width(selected_text.text()) + chrome;
-        let widest_text = options.iter().map(|(_, text)| text_width(text.text())).fold(0.0, f32::max);
+        let widest_text = options
+            .iter()
+            .map(|(_, text)| text.text())
+            .chain(unavailable.iter().map(egui::WidgetText::text))
+            .map(text_width)
+            .fold(0.0, f32::max);
         let natural_control_width = (widest_text + chrome).max(selected_needs).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
         menu_field_row(ui, label, help_text, |ui, _, column_width| {
             let width = width.unwrap_or(column_width).max(natural_control_width);
@@ -1433,6 +1448,9 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                 .show_ui(ui, |ui| {
                     for (option, text) in options {
                         selection_changed |= ui.selectable_value(value, option, text).changed();
+                    }
+                    for text in unavailable {
+                        ui.add_enabled(false, egui::Button::selectable(false, text));
                     }
                 })
                 .response;

@@ -1148,6 +1148,10 @@ pub(crate) struct EditorState {
     /// chosen for: a choice about one set's columns says nothing about
     /// another's. `None` guesses by name. Transient, like the tab.
     pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
+    /// The last strat column check of each set and field, for the Column
+    /// tab. Transient: an import or Check makes one; a project opened
+    /// starts with none.
+    pub(crate) strat_checks: Vec<StratCheckReport>,
     /// Colours and scales for the borehole log's trace columns. App-wide,
     /// saved with the preferences - see [`crate::ui::widgets::log_traces`].
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
@@ -1744,6 +1748,12 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    /// The rename seam dialog's seam and entries while it is open.
+    pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
+    /// The shift names dialog's hole, direction and reason while it is open.
+    pub(crate) name_shift_dialog: Option<NameShiftDraft>,
+    /// The Modelling branch's settings dialog: the datum the model is built in.
+    pub(crate) show_modelling_settings: bool,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -2090,6 +2100,7 @@ impl EditorState {
             || self.drill_hole_color_dialog.is_some()
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
+            || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
@@ -2101,6 +2112,8 @@ impl EditorState {
             || self.new_delay_product_open
             || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
+            || self.seam_rename_dialog.is_some()
+            || self.name_shift_dialog.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -2196,6 +2209,7 @@ impl EditorState {
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
         self.borehole_log_strat_field = None;
+        self.strat_checks.clear();
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
         self.frozen_handles.clear();
@@ -2348,6 +2362,8 @@ impl EditorState {
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
+        self.seam_rename_dialog = None;
+        self.name_shift_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -2416,6 +2432,7 @@ impl EditorState {
             show_borehole_inspector: false,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
+            strat_checks: Vec::new(),
             well_log_style: Default::default(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
@@ -2724,6 +2741,9 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            seam_rename_dialog: None,
+            name_shift_dialog: None,
+            show_modelling_settings: false,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -3233,6 +3253,8 @@ pub(crate) enum BoreholeInspectorTab {
     #[default]
     Data,
     Log,
+    /// The strat column of the field the log reads, for the whole set.
+    Column,
 }
 
 /// Commands sent from the UI back to the application core.
@@ -3550,6 +3572,10 @@ pub(crate) enum UiCommand {
         controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
     },
+    OpenModellingSettings,
+    /// The project's modelling settings, whole; the dialog sends them only
+    /// when valid.
+    SetModellingSettings(crate::model::project::ModellingSettings),
     /// One point per hole at the chosen boundary of a working section, as a
     /// new layer, on the holes the command was opened on.
     BuildReferencePoints {
@@ -3596,6 +3622,39 @@ pub(crate) enum UiCommand {
     SetDrillHoleCategoryColors {
         id: DrillHoleId,
         categories: Vec<DrillCategoryColor>,
+    },
+    /// Rename a seam, proposing one value correction per interval renamed.
+    RenameSeam {
+        dataset: DrillHoleId,
+        field: String,
+        from: String,
+        to: String,
+        scope: crate::model::drill_hole::RenameScope,
+        reason: String,
+    },
+    /// Replace one categorical field's strat column, top first, as one undo
+    /// step.
+    SetStratColumn {
+        id: DrillHoleId,
+        field: String,
+        codes: Vec<String>,
+    },
+    /// Work out the order most holes give one categorical field's codes and
+    /// the holes that disagree; an empty strat column is filled with it.
+    CheckStratColumn {
+        id: DrillHoleId,
+        field: String,
+    },
+    /// Slide one hole's names one run along the hole, every run or, with
+    /// `from`, the clicked interval's run and those on the side the names
+    /// move to, proposing one value correction per interval renamed.
+    ShiftStratColumn {
+        dataset: DrillHoleId,
+        hole: usize,
+        field: String,
+        direction: crate::model::drill_hole::ShiftDirection,
+        from: Option<usize>,
+        reason: String,
     },
     /// Replace a dataset's working sections, every field's, as one undo step.
     SetDrillHoleWorkingSections {
@@ -3889,11 +3948,14 @@ impl UiCommand {
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::SetDrillHoleWorkingSections { .. }
+            | Self::SetStratColumn { .. }
+            | Self::CheckStratColumn { .. }
             | Self::OpenDrillHoleColorDialog(_)
             | Self::LinkGeophysics(_)
             | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
+            | Self::OpenModellingSettings
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
@@ -4097,13 +4159,24 @@ impl UiCommand {
             Self::BuildReferencePoints { holes, target, side, .. } => {
                 report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
             }
+            Self::RenameSeam { from, to, .. } => report(tr!("state-rename-seam"), tr!("state-rename-seam-from-to", from = from.clone(), to = to.clone())),
+            Self::ShiftStratColumn { field, direction, from, .. } => report(
+                tr!("state-shift-names"),
+                match (direction, from) {
+                    (crate::model::drill_hole::ShiftDirection::Up, None) => tr!("state-shift-names-up", field = field.clone()),
+                    (crate::model::drill_hole::ShiftDirection::Down, None) => tr!("state-shift-names-down", field = field.clone()),
+                    (crate::model::drill_hole::ShiftDirection::Up, Some(_)) => tr!("state-shift-names-up-from-here", field = field.clone()),
+                    (crate::model::drill_hole::ShiftDirection::Down, Some(_)) => tr!("state-shift-names-down-from-here", field = field.clone()),
+                },
+            ),
             Self::BuildReferenceSurface { points, controls, extent } => report(
                 tr!("common-build-surface"),
                 match extent {
                     Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
-                    None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
+                    None => tr!("state-points-controls-outline", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
+            Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4417,6 +4490,8 @@ pub(crate) struct UiProjectView {
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
+    /// The active project's modelling settings; the defaults without one.
+    pub(crate) modelling: crate::model::project::ModellingSettings,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
     /// Every explorer folder, across every section.
@@ -4749,6 +4824,92 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points_label: String,
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
+}
+
+/// What the rename seam dialog holds while open: the seam, where it was
+/// picked, how widely it is renamed, and what has been typed. The counts are
+/// taken when it opens; the rename recounts when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct SeamRenameDraft {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) scope: crate::model::drill_hole::RenameScope,
+    pub(crate) field: String,
+    pub(crate) from: String,
+    /// The hole named in the dialog: the one picked, or the set's name.
+    pub(crate) place: String,
+    pub(crate) intervals: usize,
+    pub(crate) holes: usize,
+    pub(crate) to: String,
+    pub(crate) reason: String,
+    /// While the out of sequence warning is up, how many holes the rename
+    /// puts out of the strat column's order.
+    pub(crate) out_of_sequence: Option<usize>,
+}
+
+/// What the shift names dialog holds while open: the hole, the field and
+/// which way, what the shift would do, and the reason typed. The counts are
+/// taken when it opens; the shift recounts when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct NameShiftDraft {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) hole: usize,
+    /// The hole's name, for the dialog to show.
+    pub(crate) dhid: String,
+    pub(crate) field: String,
+    pub(crate) direction: crate::model::drill_hole::ShiftDirection,
+    /// The interval clicked, when only its run and those on one side move.
+    pub(crate) from: Option<usize>,
+    pub(crate) moved: usize,
+    /// Intervals the shift would name UNK.
+    pub(crate) unknown: usize,
+    pub(crate) untouched: usize,
+    pub(crate) reason: String,
+}
+
+/// One strat column check: the order most holes agree on, the column as it
+/// stood, and the holes that disagree with each. `checked` is the dataset the
+/// check read, so a result for holes since edited shows as stale.
+#[derive(Clone, Debug)]
+pub(crate) struct StratCheckReport {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) field: String,
+    pub(crate) checked: std::sync::Weak<crate::model::drill_hole::DrillHoleDataset>,
+    /// `None` when the field holds too many codes to order.
+    pub(crate) order: Option<Vec<String>>,
+    pub(crate) order_flags: Vec<crate::model::strat_order::HoleFlag>,
+    pub(crate) column: Vec<String>,
+    pub(crate) column_flags: Vec<crate::model::strat_order::HoleFlag>,
+    pub(crate) overruled: usize,
+    pub(crate) holes: usize,
+    /// The differences are on show, waiting on yes or no.
+    pub(crate) comparing: bool,
+}
+
+impl StratCheckReport {
+    /// The holes that disagree with `column`, when this check read them;
+    /// `None` when the column has changed since.
+    pub(crate) fn flags_for(&self, column: &[String]) -> Option<&[crate::model::strat_order::HoleFlag]> {
+        if self.order.as_deref() == Some(column) {
+            Some(&self.order_flags)
+        } else if self.column == column {
+            Some(&self.column_flags)
+        } else {
+            None
+        }
+    }
+}
+
+impl EditorState {
+    /// The last check of `field` in set `id`.
+    pub(crate) fn strat_check(&self, id: DrillHoleId, field: &str) -> Option<&StratCheckReport> {
+        self.strat_checks.iter().find(|report| report.dataset == id && report.field == field)
+    }
+
+    /// Keep `report`, in place of any earlier check of its set and field.
+    pub(crate) fn keep_strat_check(&mut self, report: StratCheckReport) {
+        self.strat_checks.retain(|held| !(held.dataset == report.dataset && held.field == report.field));
+        self.strat_checks.push(report);
+    }
 }
 
 /// What the reference points dialog holds while open: the holes it was

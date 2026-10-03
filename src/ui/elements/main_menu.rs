@@ -605,7 +605,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
             });
 
-            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+            MenuBarMenu::new(&tr!("ws-menubar-modelling")).show(ui, |ui| {
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
                 if ContextMenuAction::new(tr!("common-reference-points")).enabled(can_build_points).show(ui).clicked() {

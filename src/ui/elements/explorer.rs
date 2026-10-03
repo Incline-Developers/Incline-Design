@@ -1249,7 +1249,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                         // Modelling holds what the project derives from its data,
                         // such as reference points and the surfaces built from
-                        // them. It admits layers and triangulations because
+                        // them. Its settings leaf is always there, whether or not a
+                        // project is. It admits layers and triangulations because
                         // `SectionKind::admitted` says so; nothing here special-
                         // cases Modelling.
                         let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
@@ -1259,6 +1260,12 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             .color(HEADER_MODELLING)
                             .dirty(modelling_dirty)
                             .show(ui, |ui| {
+                                let settings = ExplorerEntry::new(egui::Id::new("explorer_modelling_settings"), tr!("explorer-settings"))
+                                    .selected(editor.show_modelling_settings)
+                                    .show(ui);
+                                if settings.response.clicked() {
+                                    commands.push(UiCommand::OpenModellingSettings);
+                                }
                                 // Triangulations live on `App` directly, not inside a
                                 // design project, so they draw here whether or not a
                                 // project is open - the same as under Triangulations.

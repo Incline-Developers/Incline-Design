@@ -20,13 +20,7 @@ fn main_scene_cache_key(
 ) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
-    // Every other item kind reaches the key above by the identity of the data
-    // it is holding, but a drill hole dataset is edited in place - laying a
-    // tie, turning a collar - so nothing about it here would change. Its
-    // instance cache has already been resynced by the time this runs, and it
-    // reports what it is holding: see `DrillHoleGpuCache::content_key`.
-    drill_hole_content_key.hash(&mut hasher);
+    slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters, drill_hole_content_key).hash(&mut hasher);
     EditorSceneState::of(editor).hash(&mut hasher);
     hasher.write(bytemuck::bytes_of(camera_uniform));
     hasher.finish()

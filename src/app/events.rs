@@ -1261,8 +1261,8 @@ impl<'a> App<'a> {
             return;
         };
         match state {
-            // A held C is one press: the toggle must not chatter with the key's auto-repeat.
-            ElementState::Pressed if *repeat && *key == KeyCode::KeyC => {}
+            // A held C or B is one press, so a toggle never chatters on repeat.
+            ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
             ElementState::Pressed => self.handle_key_code(*key),
             ElementState::Released => {
                 // Once the Enter that opened the polyline finish dialog is
@@ -1434,6 +1434,10 @@ impl<'a> App<'a> {
             // C: the centre of rotation, on and off, the same as its toolbar button.
             KeyCode::KeyC if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
                 self.toggle_rotation_centre();
+            }
+            // B: the borehole inspector, as its Geology viewport bar button.
+            KeyCode::KeyB if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
+                self.toggle_borehole_inspector();
             }
             KeyCode::Backquote => {
                 let picked = self.pick_under_cursor();

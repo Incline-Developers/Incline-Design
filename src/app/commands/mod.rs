@@ -16,6 +16,7 @@ pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
@@ -28,7 +29,7 @@ use crate::{
     i18n::tr,
     model::{Command, SceneEntityId},
     ui::state::{ActiveTool, TriCreatePhase, UiCommand},
-    userspace_error, userspace_warn,
+    userspace_error, userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -122,8 +123,12 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferencePoints
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::OpenModellingSettings
+                | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RenameSeam { .. }
+                | UiCommand::ShiftStratColumn { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -643,6 +648,26 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::OpenModellingSettings => {
+                self.editor.show_modelling_settings = true;
+                Ok(())
+            }
+            UiCommand::SetModellingSettings(settings) => {
+                if let Some(problem) = settings.problem() {
+                    anyhow::bail!("{problem}");
+                }
+                let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                    let metadata = &mut project.project.metadata;
+                    let changed = metadata.modelling != settings;
+                    metadata.modelling = settings;
+                    changed
+                });
+                if changed {
+                    self.touch_active_project_content();
+                    userspace_log!("{}", tr!("cmd-commands-modelling-settings-set-settings", settings = settings.summary()));
+                }
+                Ok(())
+            }
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
                 self.build_reference_points(holes, field, target, side);
                 Ok(())
@@ -682,6 +707,36 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleCategoryColors { id, categories } => {
                 self.set_drill_hole_category_colors(id, categories);
+                Ok(())
+            }
+            UiCommand::RenameSeam {
+                dataset,
+                field,
+                from,
+                to,
+                scope,
+                reason,
+            } => {
+                self.rename_seam(dataset, field, from, to, scope, reason);
+                Ok(())
+            }
+            UiCommand::SetStratColumn { id, field, codes } => {
+                self.set_strat_column(id, field, codes);
+                Ok(())
+            }
+            UiCommand::CheckStratColumn { id, field } => {
+                self.check_strat_column(id, field);
+                Ok(())
+            }
+            UiCommand::ShiftStratColumn {
+                dataset,
+                hole,
+                field,
+                direction,
+                from,
+                reason,
+            } => {
+                self.shift_strat_column(dataset, hole, field, direction, from, reason);
                 Ok(())
             }
             UiCommand::SetDrillHoleWorkingSections { id, sections } => {

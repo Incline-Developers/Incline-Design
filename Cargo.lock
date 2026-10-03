@@ -1687,6 +1687,7 @@ dependencies = [
  "i18n-embed-fl",
  "js-sys",
  "laz",
+ "libm",
  "log",
  "lyon",
  "memmap2",

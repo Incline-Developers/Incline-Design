@@ -417,9 +417,9 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("borehole_inspector.svg")),
             if shown {
-                tr!("viewport-bar-hide-borehole-inspector")
+                format!("{} (B)", tr!("viewport-bar-hide-borehole-inspector"))
             } else {
-                tr!("viewport-bar-show-borehole-inspector")
+                format!("{} (B)", tr!("viewport-bar-show-borehole-inspector"))
             },
         )
         .id_salt("borehole_inspector")

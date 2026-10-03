@@ -247,7 +247,7 @@ pub(crate) enum ProjectPersistence {
     BrowserRecord(ProjectId),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectMetadata {
     pub(crate) name: String,
@@ -255,6 +255,115 @@ pub(crate) struct ProjectMetadata {
     pub(crate) coordinate_reference_system: String,
     #[serde(default)]
     pub(crate) units: String,
+    /// Left out while it holds the defaults, so a project that never changed
+    /// them writes and reads as it did before they existed.
+    #[serde(default, skip_serializing_if = "ModellingSettings::is_default")]
+    pub(crate) modelling: ModellingSettings,
+}
+
+/// How Build Surface draws its grid through the points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SurfaceMethod {
+    /// The thin plate spline, exact through every point.
+    #[default]
+    ThinPlateSpline,
+}
+
+/// The Modelling branch's project-level settings for Build Surface. The
+/// defaults build the exact spline.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ModellingSettings {
+    pub(crate) surface_method: SurfaceMethod,
+    /// Pairs of points closer than this in plan, in metres, and steeper than
+    /// `steep_degrees` are named in a build's warning; by default the grid
+    /// spacing.
+    pub(crate) steep_distance: f64,
+    pub(crate) steep_degrees: f64,
+}
+
+impl ModellingSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub(crate) fn hash_into(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.surface_method.hash(hasher);
+        for value in [self.steep_distance, self.steep_degrees] {
+            value.to_bits().hash(hasher);
+        }
+    }
+
+    /// Why these settings cannot be built with, or `None` when they can.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !(self.steep_distance.is_finite() && self.steep_distance > 0.0) {
+            return Some(tr!("project-steep-pair-distance-positive"));
+        }
+        if !(self.steep_degrees.is_finite() && self.steep_degrees > 0.0 && self.steep_degrees <= 90.0) {
+            return Some(tr!("project-steep-pair-angle-range"));
+        }
+        None
+    }
+
+    /// The settings as a project stored them. A method Build Surface no
+    /// longer has, and the settings only it read, quietly give way to the
+    /// exact spline, so an older project still opens.
+    pub(crate) fn read(stored: &serde_json::Value) -> Option<Self> {
+        let mut stored = stored.clone();
+        if let Some(fields) = stored.as_object_mut() {
+            let removed = fields
+                .get("surface_method")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|method| ["anisotropic_thin_plate_spline", "auto_axis"].contains(&method));
+            if removed {
+                fields.remove("surface_method");
+            }
+            fields.remove("axis_azimuth");
+            fields.remove("axis_ratio");
+        }
+        Self::deserialize(&stored).ok()
+    }
+}
+
+impl ModellingSettings {
+    /// The method as the run record and the Build Surface dialog name it.
+    pub(crate) fn method_description(&self) -> String {
+        match self.surface_method {
+            SurfaceMethod::ThinPlateSpline => tr!("project-thin-plate-spline-exact"),
+        }
+    }
+
+    /// Every setting in one line, for the Build Surface dialog and the log.
+    pub(crate) fn summary(&self) -> String {
+        tr!(
+            "project-method-steep-pairs-under",
+            method = self.method_description(),
+            distance = trimmed(self.steep_distance, 2),
+            degrees = trimmed(self.steep_degrees, 1)
+        )
+    }
+}
+
+/// `value` to at most `decimals` places, without trailing zeros.
+fn trimmed(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
+}
+
+impl Default for ModellingSettings {
+    fn default() -> Self {
+        Self {
+            surface_method: SurfaceMethod::ThinPlateSpline,
+            steep_distance: 5.0,
+            steep_degrees: 80.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -363,6 +472,7 @@ impl OpenProject {
         self.project.metadata.name.hash(&mut hasher);
         self.project.metadata.coordinate_reference_system.hash(&mut hasher);
         self.project.metadata.units.hash(&mut hasher);
+        self.project.metadata.modelling.hash_into(&mut hasher);
         self.content.epoch().hash(&mut hasher);
         // Folder names, so an empty folder still counts as unsaved work.
         self.project.folders.hash_into(&mut hasher);
