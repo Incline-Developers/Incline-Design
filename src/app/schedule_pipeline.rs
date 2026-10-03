@@ -395,6 +395,13 @@ impl crate::app::App<'_> {
             }
             pipeline.fingerprints = fingerprints;
         }
+        // A change that reaches only Readiness is the Solids run moving on.
+        // A running Readiness waits on that run and re-reads it every frame,
+        // and settles against the inputs current then, so it is not stopped:
+        // stopping it reported an edit that nobody made each time a project
+        // opened.
+        let pipeline = self.schedule_pipeline.as_ref().expect("just ensured");
+        let earliest_change = earliest_change.filter(|&step| !(step == ScheduleStep::Readiness && pipeline.running == Some(ScheduleStep::Readiness)));
         if let Some(step) = earliest_change {
             let stopped = self.schedule_pipeline.as_mut().expect("just ensured").invalidate_from(step);
             if stopped {

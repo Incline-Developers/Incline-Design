@@ -358,6 +358,25 @@ pub(crate) fn exceeds_bound(published: f64, bound: f64) -> Option<String> {
 }
 
 pub(crate) fn log_outcome(out: &ScheduleCompletion) {
+    // No SCIP solve ran: the hourly dispatch has no solver limit, gap target
+    // or SCIP diagnostics to report, only what it published.
+    if out.backend_status.is_none() {
+        let outcome = match out.termination {
+            SolveTermination::Optimal => "first schedule published, proven within the gap target".to_owned(),
+            SolveTermination::FeasibleLimit => "first schedule published".to_owned(),
+            other => format!("no schedule published ({other:?})"),
+        };
+        log::info!(
+            "schedule run {}: {outcome}; objective {:?}, bound {:?}; solve {:?}, replay {:?}; reason {:?}",
+            out.identity.run_id,
+            out.published_objective,
+            out.primary_bound,
+            out.timings.solver,
+            out.timings.replay,
+            out.diagnostic
+        );
+        return;
+    }
     log::info!(
         "schedule run {} diagnostics: {:?}; posted linear coefficient entries {}; objective {:?}, bound {:?}, gap {:?}",
         out.identity.run_id,
