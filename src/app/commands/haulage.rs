@@ -1,0 +1,541 @@
+use glam::DVec3;
+
+use crate::{
+    app::PICK_THRESHOLD_PX,
+    i18n::tr,
+    model::{
+        Command, Object, SceneEntityId,
+        haulage::{NodeId, NodeRole},
+        schedule::{DestinationId, DestinationKind},
+    },
+    ui::state::{HaulDrag, HaulDragTarget, HaulEdit},
+};
+
+impl crate::app::App<'_> {
+    pub(crate) fn haul_destination_points(&self, document: &crate::model::Document) -> std::collections::BTreeMap<DestinationId, DVec3> {
+        let mut points = std::collections::BTreeMap::new();
+        for solid in document.solids().iter().filter(|s| s.kind != crate::model::SolidKind::Pit) {
+            let Some(surface) = solid.surface.and_then(|id| self.triangulations.iter().find(|t| t.id == id)) else {
+                continue;
+            };
+            let mut area = 0.0;
+            let mut center = DVec3::ZERO;
+            for triangle in surface.mesh.triangles() {
+                let p = triangle.vertices.map(|v| DVec3::new(v.x, v.y, v.z));
+                let weight = (p[1] - p[0]).truncate().perp_dot((p[2] - p[0]).truncate()).abs();
+                center += (p[0] + p[1] + p[2]) / 3.0 * weight;
+                area += weight;
+            }
+            if area <= 0.0 {
+                continue;
+            }
+            center /= area;
+            let top = surface.mesh.vertices().iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+            center.z = surface
+                .mesh
+                .triangles()
+                .filter_map(|triangle| {
+                    let p = triangle.vertices.map(|v| DVec3::new(v.x, v.y, v.z));
+                    let a = p[0].truncate();
+                    let b = p[1].truncate();
+                    let c = p[2].truncate();
+                    let q = center.truncate();
+                    let denominator = (b - a).perp_dot(c - a);
+                    if denominator.abs() < 1e-9 {
+                        return None;
+                    }
+                    let v = (q - a).perp_dot(c - a) / denominator;
+                    let w = (b - a).perp_dot(q - a) / denominator;
+                    (v >= -1e-9 && w >= -1e-9 && v + w <= 1.0 + 1e-9).then_some(p[0].z * (1.0 - v - w) + p[1].z * v + p[2].z * w)
+                })
+                .reduce(f64::max)
+                .unwrap_or(top);
+            points.insert(DestinationId::Solid(solid.id), center);
+        }
+        points
+    }
+    /// The loaded path of every route the shown schedule hauls by, for
+    /// Animate to draw its flows along. Rebuilt only when the schedule or the
+    /// project changes: one search per destination and truck class serves
+    /// every block, as it does in capture.
+    pub(crate) fn sync_animation_routes(&mut self) {
+        let Some(schedule) = self.editor.schedule_result.clone() else {
+            self.editor.animation_routes.clear();
+            self.editor.animation_routes_key = None;
+            return;
+        };
+        let Some(document) = self.workspace.active_document() else { return };
+        let key = (std::sync::Arc::as_ptr(&schedule) as usize, document.revision());
+        if self.editor.animation_routes_key == Some(key) {
+            return;
+        }
+        self.editor.animation_routes_key = Some(key);
+        let mut routes = std::collections::HashMap::new();
+        let network = document.haulage();
+        if !network.roads.is_empty() {
+            let centroids = self.haul_destination_points(document);
+            let blocks: std::collections::HashMap<_, _> = self
+                .planning_snapshot()
+                .map(|snapshot| {
+                    snapshot
+                        .blocks
+                        .iter()
+                        .map(|b| {
+                            let point = DVec3::new(b.anchor[0], b.anchor[1], b.flitch.base);
+                            (b.id, (point, network.block_link(b.solid, b.flitch.base, &b.ground)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let index = crate::model::haulage::network::RoadIndex::new(network);
+            let trucks = document.schedule().trucks();
+            let mut searches = std::collections::HashMap::new();
+            let wanted: std::collections::HashSet<_> = schedule.deliveries.iter().map(|d| (d.destination, d.truck, d.source)).collect();
+            for (destination, truck, source) in wanted {
+                let (Some(class), Some(target)) = (trucks.class(truck), network.destination_point(destination, false, centroids.get(&destination).copied())) else {
+                    continue;
+                };
+                let (from, link, bench) = match source {
+                    crate::model::schedule::result::WorkSource::Block(id) => match blocks.get(&id) {
+                        Some((point, link)) => (*point, *link, true),
+                        None => continue,
+                    },
+                    crate::model::schedule::result::WorkSource::Stockpile(pile) => match network.destination_point(pile, true, centroids.get(&pile).copied()) {
+                        Some(point) => (point, None, false),
+                        None => continue,
+                    },
+                };
+                let search = searches
+                    .entry((destination, truck))
+                    .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(network, &index, class, target));
+                if let Some(route) = search.as_ref().and_then(|s| s.route(&index, from, link, bench, 0.0, 0.0, None))
+                    && route.loaded_path.len() >= 2
+                {
+                    routes.insert((source, destination, truck), route.loaded_path);
+                }
+            }
+        }
+        self.editor.animation_routes = routes;
+    }
+    pub(crate) fn refresh_haulage_view(&mut self) {
+        if self.editor.planning_page != crate::ui::state::PlanningPage::Haulage {
+            return;
+        }
+        self.editor.haul_view_revision = self.editor.haul_view_revision.wrapping_add(1);
+        self.editor.haul_blocks.clear();
+        self.editor.haul_issues.clear();
+        let snapshot = self.planning_snapshot().ok();
+        let Some(document) = self.workspace.active_document() else { return };
+        let network = document.haulage();
+        let index = crate::model::haulage::network::RoadIndex::new(network);
+        let max_grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
+        let reach = network.settings.auto_join_m;
+        for block in snapshot.iter().flat_map(|s| &s.blocks) {
+            let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
+            let link = network.block_link(block.solid, block.flitch.base, &block.ground);
+            let join = index.joins(point, link, reach, max_grade).first().map(|j| j.2);
+            let access_m = join.map_or(f64::INFINITY, |j| crate::model::haulage::network::access_length(point, j, max_grade));
+            let linked = link.is_some() && join.is_some();
+            self.editor.haul_blocks.push(crate::ui::state::HaulBlock {
+                id: block.id,
+                solid: block.solid,
+                bench: block.bench,
+                flitch: block.flitch,
+                blast: block.blast,
+                name: crate::app::commands::schedule_readiness::block_path(document, block),
+                anchor: block.anchor,
+                face: block.ground.clone(),
+                rings: block
+                    .ground
+                    .iter()
+                    .map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, block.flitch.base)).collect())
+                    .collect(),
+                link: link.filter(|_| linked),
+                join,
+                access_m,
+                connected: linked || access_m <= reach,
+            });
+        }
+        if self.editor.haul_selected_block.is_some_and(|id| !self.editor.haul_blocks.iter().any(|b| b.id == id)) {
+            self.editor.haul_selected_block = None;
+        }
+        let destinations: Vec<_> = document
+            .schedule()
+            .routing()
+            .standalone
+            .iter()
+            .map(|d| DestinationId::Standalone(d.id))
+            .chain(
+                document
+                    .solids()
+                    .iter()
+                    .filter(|s| s.kind != crate::model::SolidKind::Pit)
+                    .map(|s| DestinationId::Solid(s.id)),
+            )
+            .collect();
+        let anchors: Vec<_> = self.editor.haul_blocks.iter().map(crate::ui::state::HaulBlock::point).collect();
+        self.editor.haul_issues = network.issues(&destinations, max_grade, &anchors);
+        self.invalidate_overlay();
+    }
+    pub(crate) fn edit_haulage(&mut self, project: u32, edit: HaulEdit) -> anyhow::Result<()> {
+        self.editor.canvas_context_menu_open = false;
+        let Some(active) = self.workspace.active_project() else { return Ok(()) };
+        anyhow::ensure!(active.runtime_id == project, "{}", tr!("schedule-stale-edit"));
+        let before = active.project.document.haulage().clone();
+        let mut after = before.clone();
+        self.apply_haul_edit(&mut after, edit)?;
+        after.validate()?;
+        if before != after {
+            self.execute_edit(Command::SetHaulNetwork {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+            self.editor.haul_route = None;
+            self.refresh_haulage_view();
+        }
+        Ok(())
+    }
+    fn apply_haul_edit(&self, after: &mut crate::model::haulage::HaulNetwork, edit: HaulEdit) -> anyhow::Result<()> {
+        let Some(active) = self.workspace.active_project() else { return Ok(()) };
+        match edit {
+            HaulEdit::Many(edits) => {
+                for edit in edits {
+                    self.apply_haul_edit(after, edit)?;
+                }
+            }
+            HaulEdit::Draw(points) => {
+                let name = crate::model::schedule::suggested_name(&tr!("haul-road"), after.roads.iter().map(|r| r.name.clone()));
+                after.convert(&[(name, points)])?;
+            }
+            HaulEdit::ConvertSelection => {
+                let strings: Vec<_> = active
+                    .project
+                    .document
+                    .objects()
+                    .iter()
+                    .filter(|o| self.editor.selected_handles.contains(&SceneEntityId::Object(o.id())))
+                    .filter_map(|o| match o {
+                        Object::Polyline { verts, closed, .. } => {
+                            let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
+                            if *closed && let Some(&first) = points.first() {
+                                points.push(first);
+                            }
+                            Some(points)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let mut names: Vec<String> = after.roads.iter().map(|r| r.name.clone()).collect();
+                let strings: Vec<_> = strings
+                    .into_iter()
+                    .map(|points| {
+                        let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
+                        names.push(name.clone());
+                        (name, points)
+                    })
+                    .collect();
+                after.convert(&strings)?;
+            }
+            HaulEdit::MoveNode(id, pos) => after.move_node(id, pos)?,
+            HaulEdit::MoveShape(id, index, pos) => {
+                anyhow::ensure!(pos.is_finite(), "{}", tr!("haul-invalid-position"));
+                *after
+                    .roads
+                    .iter_mut()
+                    .find(|r| r.id == id)
+                    .and_then(|r| r.verts.get_mut(index))
+                    .ok_or_else(|| anyhow::anyhow!(tr!("haul-missing-road")))? = pos;
+            }
+            HaulEdit::DeleteRoad(id) => after.delete_road(id),
+            HaulEdit::DeleteNode(id) => after.delete_node(id),
+            HaulEdit::Join(keep, remove) => after.join(keep, remove)?,
+            HaulEdit::Split(id, pos) => {
+                let r = after.road(id).ok_or_else(|| anyhow::anyhow!(tr!("haul-missing-road")))?;
+                let (segment, point) = after
+                    .points(r)
+                    .windows(2)
+                    .enumerate()
+                    .map(|(i, p)| (i, crate::model::haulage::network::project(pos, p[0], p[1])))
+                    .min_by(|a, b| a.1.distance_squared(pos).total_cmp(&b.1.distance_squared(pos)))
+                    .ok_or_else(|| anyhow::anyhow!(tr!("haul-missing-road")))?;
+                after.split(id, segment, point)?;
+            }
+            HaulEdit::Role(id, role) => after.set_role(id, role)?,
+            HaulEdit::RoadProperties(ids, name, speed) => {
+                for road in &mut after.roads {
+                    if ids.contains(&road.id) {
+                        if let Some(name) = &name {
+                            road.name = name.trim().to_owned();
+                        }
+                        road.speed_limit_kph = speed;
+                    }
+                }
+            }
+            HaulEdit::Settings(settings) => after.settings = settings,
+            HaulEdit::Fixed(destination, fixed) => {
+                after.fixed_destinations.retain(|id| *id != destination);
+                if fixed {
+                    after.fixed_destinations.push(destination);
+                }
+            }
+            HaulEdit::Pin(role, pos) => {
+                let id = after.join_point(pos)?;
+                after.set_role(id, Some(role))?;
+                after.fixed_destinations.retain(|id| *id != role.destination());
+            }
+            HaulEdit::LinkBlock {
+                solid,
+                flitch_base,
+                face,
+                probe,
+                at,
+            } => {
+                let node = at.map(|p| after.join_point(p)).transpose()?;
+                after.set_block_link(solid, flitch_base, &face, probe, node)?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn start_haul_road(&mut self) {
+        self.editor.active_workspace = crate::ui::state::Workspace::Planning;
+        self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+        self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+        self.refresh_haulage_view();
+        self.editor.haul_draw = true;
+        self.editor.haul_points.clear();
+        self.editor.haul_cursor = None;
+        self.editor.active_tool = crate::ui::state::ActiveTool::None;
+        self.editor.canvas_context_menu_open = false;
+        self.invalidate_overlay();
+    }
+    pub(crate) fn finish_haul_road(&mut self) {
+        self.editor.haul_draw = false;
+        self.editor.haul_cursor = None;
+        let points = std::mem::take(&mut self.editor.haul_points);
+        if points.len() < 2 {
+            self.invalidate_overlay();
+            return;
+        }
+        if let Some(project) = self.workspace.active_project() {
+            let runtime = project.runtime_id;
+            if let Err(error) = self.edit_haulage(runtime, HaulEdit::Draw(points)) {
+                crate::userspace_warn!("{error:#}");
+            }
+        }
+        self.invalidate_overlay();
+    }
+    /// Where a road point under the cursor lands. A road or node within pick
+    /// reach wins when `join` is set, so drawn roads connect; then a snap the
+    /// user turned on; then the surface under the cursor, so roads drape on
+    /// the pit; and otherwise the level of `fallback_z`.
+    fn haul_cursor_point(&self, fallback_z: f64, join: bool) -> Option<DVec3> {
+        let graphics = self.graphics.as_ref()?;
+        if join
+            && let Some((_, point)) = graphics
+                .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
+                .filter(|(h, _)| matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
+        {
+            return Some(point);
+        }
+        if self.editor.cursor_snapped {
+            return self.editor.cursor_world;
+        }
+        graphics
+            .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles)
+            .map(|(_, point)| point)
+            .or_else(|| graphics.cursor_world(fallback_z))
+    }
+    /// The click that ends picking a node for the selected block: a node, or
+    /// a point on a road, which is split there to make one.
+    pub(crate) fn pick_haul_link(&mut self) {
+        self.editor.haul_link_pick = false;
+        let Some(graphics) = self.graphics.as_ref() else { return };
+        let Some(document) = self.workspace.active_document() else { return };
+        let at = match graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled) {
+            Some((SceneEntityId::HaulNode(id), _)) => document.haulage().node(id).map(|n| n.pos),
+            Some((SceneEntityId::HaulRoad(_), point)) => Some(point),
+            _ => None,
+        };
+        let Some(at) = at else {
+            crate::userspace_log!("{}", tr!("haul-link-missed"));
+            return;
+        };
+        let Some(block) = self.editor.haul_selected_block.and_then(|id| self.editor.haul_blocks.iter().find(|b| b.id == id)).cloned() else {
+            return;
+        };
+        let Some(runtime) = self.workspace.active_project().map(|p| p.runtime_id) else { return };
+        let edit = HaulEdit::LinkBlock {
+            solid: block.solid,
+            flitch_base: block.flitch.base,
+            face: block.face.clone(),
+            probe: block.anchor,
+            at: Some(at),
+        };
+        if let Err(error) = self.edit_haulage(runtime, edit) {
+            crate::userspace_warn!("{error:#}");
+        }
+    }
+    pub(crate) fn place_haul_point(&mut self) {
+        let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
+        if let Some(point) = self.haul_cursor_point(z, true)
+            && self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6)
+        {
+            self.editor.haul_points.push(point);
+        }
+        self.invalidate_overlay();
+    }
+    /// A press on a node or shape point may become a drag. Selection still
+    /// runs, so a press that never moves selects as before.
+    pub(crate) fn begin_haul_drag(&mut self) {
+        self.editor.haul_drag = None;
+        let Some(graphics) = self.graphics.as_ref() else { return };
+        let Some(cursor) = self.editor.cursor_screen_px else { return };
+        let Some(document) = self.workspace.active_document() else { return };
+        let network = document.haulage();
+        let hit = graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled);
+        let target = match hit {
+            Some((SceneEntityId::HaulNode(id), _)) => network.node(id).map(|n| (HaulDragTarget::Node(id), n.pos)),
+            Some((SceneEntityId::HaulRoad(id), _)) => {
+                let view_proj = graphics.view_proj();
+                let reach = self.points_to_px(8.0);
+                network.road(id).and_then(|road| {
+                    road.verts
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| graphics.world_to_window_px(&view_proj, *p).map(|s| (i, *p, (s.0 - cursor.0).hypot(s.1 - cursor.1))))
+                        .filter(|(_, _, d)| *d <= reach)
+                        .min_by(|a, b| a.2.total_cmp(&b.2))
+                        .map(|(i, p, _)| (HaulDragTarget::Shape(id, i), p))
+                })
+            }
+            _ => None,
+        };
+        if let Some((target, origin)) = target {
+            self.editor.haul_drag = Some(HaulDrag {
+                target,
+                origin,
+                start_px: cursor,
+                pos: None,
+            });
+        }
+    }
+    pub(crate) fn track_haul_cursor(&mut self) {
+        if let Some(drag) = self.editor.haul_drag {
+            if drag.pos.is_none() {
+                let Some(now) = self.editor.cursor_screen_px else { return };
+                if (now.0 - drag.start_px.0).hypot(now.1 - drag.start_px.1) < self.points_to_px(4.0) {
+                    return;
+                }
+                // Moving: the press was a drag, not a click or a box.
+                self.editor.selection_box_start_px = None;
+                self.editor.selection_box_current_px = None;
+                self.pending_selection_click = None;
+            }
+            let pos = self.haul_cursor_point(drag.origin.z, false).or(drag.pos).or(Some(drag.origin));
+            if let Some(drag) = self.editor.haul_drag.as_mut() {
+                drag.pos = pos;
+            }
+            self.invalidate_overlay();
+        } else if self.editor.haul_draw {
+            let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
+            self.editor.haul_cursor = self.haul_cursor_point(z, true);
+            self.invalidate_overlay();
+        }
+    }
+    pub(crate) fn finish_haul_drag(&mut self) {
+        let Some(HaulDrag { target, pos: Some(pos), .. }) = self.editor.haul_drag.take() else {
+            return;
+        };
+        let Some(project) = self.workspace.active_project() else { return };
+        let runtime = project.runtime_id;
+        let edit = match target {
+            HaulDragTarget::Node(id) => HaulEdit::MoveNode(id, pos),
+            HaulDragTarget::Shape(id, index) => HaulEdit::MoveShape(id, index, pos),
+        };
+        if let Err(error) = self.edit_haulage(runtime, edit) {
+            crate::userspace_warn!("{error:#}");
+        }
+        self.invalidate_overlay();
+    }
+    /// Delete key on the Haulage page. Roads go at once; a destination's node
+    /// asks first, because it carries a role. Returns whether it acted.
+    pub(crate) fn delete_selected_haulage(&mut self) -> bool {
+        let Some(project) = self.workspace.active_project() else { return false };
+        let runtime = project.runtime_id;
+        let network = project.project.document.haulage();
+        let mut edits = Vec::new();
+        for handle in &self.editor.selected_handles {
+            match *handle {
+                SceneEntityId::HaulRoad(id) => edits.push(HaulEdit::DeleteRoad(id)),
+                SceneEntityId::HaulNode(id) if network.node(id).is_some_and(|n| n.role.is_some()) => self.editor.haul_delete_node = Some(id),
+                SceneEntityId::HaulNode(id) => edits.push(HaulEdit::DeleteNode(id)),
+                _ => {}
+            }
+        }
+        if edits.is_empty() {
+            return self.editor.haul_delete_node.is_some();
+        }
+        if let Err(error) = self.edit_haulage(runtime, HaulEdit::Many(edits)) {
+            crate::userspace_warn!("{error:#}");
+        }
+        true
+    }
+    pub(crate) fn frame_haul(&mut self, min: DVec3, max: DVec3) {
+        // Padded so a lone node or short road shows its surroundings.
+        let pad = DVec3::splat(30.0).max((max - min) * 0.15);
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.frame_bounds(
+                min - pad,
+                max + pad,
+                &self.scene_document,
+                &self.triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+        }
+        self.redraw_requested = true;
+    }
+    pub(crate) fn new_haul_destination(&mut self, node: NodeId, kind: DestinationKind) -> anyhow::Result<()> {
+        self.editor.canvas_context_menu_open = false;
+        let Some(project) = self.workspace.active_project() else { return Ok(()) };
+        let before = project.project.document.schedule().clone();
+        let mut after = before.clone();
+        let network = project.project.document.haulage().clone();
+        anyhow::ensure!(network.node(node).is_some(), "{}", tr!("haul-invalid-position"));
+        let name = crate::model::schedule::suggested_name(&kind.label(), after.routing().standalone.iter().map(|d| d.name.clone()));
+        let added = after.routing_mut().add_standalone(&name, kind).map_err(|e| anyhow::anyhow!(e.message()))?;
+        let destination = DestinationId::Standalone(added);
+        let mut next = network.clone();
+        // A new pile is tipped and loaded at the node it was made from until
+        // a separate reclaim point is chosen.
+        next.set_role(
+            node,
+            Some(if kind == DestinationKind::Stockpile {
+                NodeRole::DumpAndReclaim(destination)
+            } else {
+                NodeRole::Dump(destination)
+            }),
+        )?;
+        self.execute_edit(Command::Batch(vec![
+            Command::SetSchedulePlan {
+                before: Box::new(before),
+                after: Box::new(after),
+            },
+            Command::SetHaulNetwork {
+                before: Box::new(network),
+                after: Box::new(next),
+            },
+        ]));
+        self.editor.schedule_selected_destination = Some(destination);
+        self.editor.planning_page = crate::ui::state::PlanningPage::Schedule;
+        self.editor.schedule_subpage = crate::ui::state::PlanningSubpage::Setup;
+        self.editor.schedule_setup_step = match kind {
+            DestinationKind::Stockpile => crate::ui::state::ScheduleStep::Stockpiles,
+            DestinationKind::Dump => crate::ui::state::ScheduleStep::Dumps,
+            DestinationKind::Crusher => crate::ui::state::ScheduleStep::Crushers,
+        };
+        Ok(())
+    }
+}

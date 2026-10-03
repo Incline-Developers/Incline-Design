@@ -11,6 +11,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
             explorer::{EntryToggles, ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            island::{Island, Side},
         },
     },
 };
@@ -517,817 +518,1022 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, ite
     });
 }
 
-/// Id of the explorer's column panel. Shared with [`crate::ui::chrome`],
-/// which reads the panel's resize interaction to light up its grip.
-pub(crate) const PANEL_ID: &str = "explorer_panel";
+/// Id of the explorer's column panel. It keys the column's persisted width,
+/// whether it is open, and the grip [`ExplorerLayout`] hands back.
+const PANEL_ID: &str = "explorer_panel";
 
-/// The explorer column and its separate island surfaces.
+/// Id of the step-list pane the cut steps put above the bench tree.
+const CUT_STEPS_PANEL_ID: &str = "planning_cut_steps";
+
+/// Id of the pane a Solids Setup step's own list takes under the step list.
+const STEP_LIST_PANEL_ID: &str = "planning_step_list";
+
+/// Least height a pane in the column may be dragged to. Two rows and a title
+/// strip: below that a list says nothing.
+const MIN_COLUMN_PANE: f32 = 96.0;
+
+/// What the column stacks under its tree, when it stacks anything.
+#[derive(Clone, Copy)]
+enum LowerPane {
+    StepList(super::planning_setup::StepList),
+    Objects,
+}
+
+impl LowerPane {
+    fn of(editor: &EditorState) -> Option<Self> {
+        if editor.is_solids_view() {
+            return Some(Self::Objects);
+        }
+        super::planning_setup::step_list(editor).map(Self::StepList)
+    }
+}
+
+/// A pane's own heading, so the column says what each of its lists is.
+fn heading(ui: &mut egui::Ui, label: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(ui.spacing().indent);
+        ui.label(crate::ui::fonts::bold(label));
+    });
+}
+
+/// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
-    /// The whole column, gaps included: what the panels drawn after it lay out
-    /// against.
-    pub(crate) column: egui::Rect,
-    /// What the data tree claimed.
-    pub(crate) tree: egui::Rect,
-    /// What the products island claimed, when the workspace uses it.
-    pub(crate) products: Option<egui::Rect>,
+    /// The regions to round off: the run controls, the step list and the tree.
+    pub(crate) regions: Vec<egui::Rect>,
+    /// The seam down the column's side, which drags it narrower, and the seam
+    /// above each pane inside it that can be resized.
+    pub(crate) grips: Vec<crate::ui::chrome::Grip>,
+}
+
+impl ExplorerLayout {
+    pub(crate) fn empty() -> Self {
+        Self {
+            regions: Vec::new(),
+            grips: Vec::new(),
+        }
+    }
 }
 
 /// Draw the full-height project explorer.
-pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> ExplorerLayout {
-    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    let (_, max_width) = crate::ui::chrome::panel_size_limits(ui.ctx(), ui.available_width());
-    let column = egui::Panel::left(PANEL_ID)
-        .resizable(true)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .default_size(280.0_f32.min(max_width))
-        .min_size(220.0_f32.min(max_width))
-        .max_size(max_width)
-        .frame(egui::Frame::NONE)
-        .show(ui, |ui| {
-            // Prevent content from forcing the panel wider than the user has dragged it.
-            ui.set_max_width(ui.available_width());
-
-            let products = (editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast).then(|| super::products::draw_products_panel(ui, editor, commands));
-            if products.is_none() {
+pub(crate) fn draw_explorer(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+) -> ExplorerLayout {
+    let (surface, _) = crate::ui::widgets::tree_row_colors(ui);
+    // The column arranges panes rather than being one, so it takes no frame of
+    // its own; the panes below are its regions. Dragging its seam past the
+    // minimum closes the lot, the way every other island closes.
+    let column = Island::new(PANEL_ID, Side::Left)
+        .fill(surface)
+        .default_width(280.0)
+        .min_width(220.0)
+        .bare()
+        .show(ui, |ui, _| {
+            // Drill & Blast's products sit under the tree, a pane of the
+            // column like the planning lists.
+            let products = if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
+                super::products::draw_products_panel(ui, editor, commands)
+            } else {
                 ui.skip_ahead_auto_ids(1);
-            }
+                egui::Rect::NOTHING
+            };
 
-            // Every row records itself here as it is drawn, so a Shift-click
-            // can be resolved against the rows the user is looking at: see
-            // `EditorState::explorer_rows`.
-            let mut rows: Vec<ExplorerRow> = Vec::new();
+            // Each Setup page's controls drive that page's own pipeline. The
+            // Schedule page has a pipeline of its own, so its island carries
+            // its own Run, Run All and Cancel rather than borrowing the Solids
+            // ones - a Cancel that stopped whichever run the page had last
+            // shown would be a button nobody could predict.
+            let schedule_controls = editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Schedule;
+            let show_run_controls = editor.is_solids_view()
+                || editor.is_planning_cut_step()
+                || schedule_controls
+                || (editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Solids);
+            let run_controls = if show_run_controls {
+                egui::Panel::top("planning_run_controls")
+                    .resizable(false)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
+                    .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| {
+                        if schedule_controls {
+                            super::planning_setup::draw_schedule_run_controls(ui, editor, commands);
+                        } else {
+                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
+                        }
+                    })
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            // Blasting and Dig Strips frame the viewport, so their step tree
+            // shares the column with the benches it divides. The two are
+            // separate panes, halving between them whatever the run controls
+            // left.
+            let steps = if editor.is_planning_cut_step() {
+                egui::Panel::top(CUT_STEPS_PANEL_ID)
+                    .resizable(true)
+                    .default_size(ui.available_height() * 0.5)
+                    .min_size(MIN_COLUMN_PANE)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            // Animate and the Haulage Layout each keep a Solids Navigation of
+            // their own: hiding ground to see a block, or to click the right
+            // one, belongs to that page alone.
+            let navigation = if editor.is_schedule_animation() {
+                Some(super::solids_view::NavigationTree::Animation)
+            } else if editor.is_haulage_page() {
+                Some(super::solids_view::NavigationTree::Haulage)
+            } else {
+                None
+            };
+            let animation_solids = if let Some(tree) = navigation {
+                egui::Panel::top(match tree {
+                    super::solids_view::NavigationTree::Animation => "schedule_animation_solids_navigation",
+                    super::solids_view::NavigationTree::Haulage => "haulage_solids_navigation",
+                })
+                .resizable(true)
+                .default_size((ui.available_height() * 0.5).max(120.0))
+                .min_size(90.0)
+                .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                .show(ui, |ui| {
+                    heading(ui, &crate::i18n::tr!("sequence-solids-navigation"));
+                    super::solids_view::draw_animation_tree(ui, editor, document, tree, commands);
+                })
+                .response
+                .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            // A pane under the tree above it: the list the selected step
+            // reads, or - on the View page, which has no step list - the
+            // project's own objects, so the surfaces the inspector draws can
+            // be loaded and hidden without leaving the page.
+            //
+            // These live in the column rather than taking one of their own:
+            // they are navigation, the same as the tree above them, and a
+            // column each left the workspace they drive with a third of the
+            // window.
+            let lower = LowerPane::of(editor);
+            let list = match lower {
+                Some(lower) => {
+                    egui::Panel::bottom(STEP_LIST_PANEL_ID)
+                        .resizable(true)
+                        .default_size((ui.available_height() * 0.55).max(MIN_COLUMN_PANE))
+                        .min_size(MIN_COLUMN_PANE)
+                        .max_size((ui.available_height() - MIN_COLUMN_PANE).max(MIN_COLUMN_PANE))
+                        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                        .show(ui, |ui| {
+                            let rect = ui.available_rect_before_wrap();
+                            ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                            match lower {
+                                LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project, document, commands),
+                                LowerPane::Objects => {
+                                    heading(ui, &crate::i18n::tr!("sequence-objects"));
+                                    draw_object_tree(ui, editor, project, commands);
+                                }
+                            }
+                        })
+                        .response
+                        .rect
+                }
+                None => {
+                    // `Panel::show` creates one direct child, so the column's
+                    // auto-id sequence has to be the same with and without it.
+                    ui.skip_ahead_auto_ids(1);
+                    egui::Rect::NOTHING
+                }
+            };
+
             let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
-                    // The tree only reads editor state. Destructuring here keeps the
-                    // row closures below from capturing `editor` mutably, which the
-                    // borrow checker would otherwise reject against these shared reads.
-                    let EditorState {
-                        active_layer,
-                        selected_handles,
-                        locked_layers,
-                        locked_rasters,
-                        frozen_handles,
-                        ..
-                    } = &*editor;
+                    // The Solids View lists what the setup produced; every
+                    // other full-window planning page lists its own steps.
+                    if editor.is_solids_view() {
+                        super::solids_view::tree_heading(ui);
+                        super::solids_view::draw_tree(ui, editor, document, commands);
+                        return;
+                    }
+                    // The Gantt is not a setup step, so the column stays the
+                    // project tree there: its own rows already name the fleet.
+                    if editor.is_planning_setup() && !editor.is_schedule_pane() {
+                        let page = editor.planning_page;
+                        super::planning_setup::draw_steps(ui, editor, page, commands);
+                        return;
+                    }
+                    if editor.is_planning_cut_step() {
+                        super::solids_view::bench_tree_heading(ui);
+                        if editor.is_dig_strips_step() {
+                            super::solids_view::draw_flitch_tree(ui, editor, document);
+                        } else {
+                            super::solids_view::draw_bench_tree(ui, editor, document, commands);
+                        }
+                        return;
+                    }
 
-                    // Keep the scroll area's contents as wide as the side panel even
-                    // when every section is collapsed. `ScrollArea` otherwise shrinks
-                    // horizontally to the headers' intrinsic width; a visible
-                    // `ExplorerEntry` masks that by requesting all available width,
-                    // which made panel resizing depend on whether an entry existed.
-                    //
-                    // Vertical shrinking is off so the banding below the last row has
-                    // the full panel height to run into: see `paint_fixed_stripes`.
-                    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
-                        // Empty-state messages should behave like explorer entries at
-                        // narrow widths: stay on one line and end with an ellipsis.
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                        // Rows carry their own height and butt up against each other,
-                        // so the stripes tile the list without gaps.
-                        ui.spacing_mut().item_spacing.y = 0.0;
-
-                        // Reserved before any row is laid out, and filled once the
-                        // tree's final height is known below: see `paint_fixed_stripes`.
-                        let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-
-                        // A row drag and a list drag are one gesture under a
-                        // finger, so rows offer a drag to a pointer only;
-                        // touch moves an item with Move to Folder.
-                        let rows_draggable = !ui.ctx().input(|input| input.any_touches());
-
-                        let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
-                        let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::new("designs_collapse"), tr!("common-designs"))
-                            .icon(unthemed_icon!("layer.svg"))
-                            .color(HEADER_DESIGNS)
-                            .dirty(designs_dirty)
-                            .show(ui, |ui| {
-                                let Some(entry) = project.projects.first() else {
-                                    explorer_note(ui, tr!("common-no-open-project"));
-                                    return;
-                                };
-                                let design_folders = project.folders.folders(SectionKind::Designs);
-                                if tagged_count(&entry.layers, SectionKind::Designs) == 0 && design_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-design-layers"));
-                                }
-                                let design_row_context = LayerRowContext {
-                                    entry,
-                                    active_layer: *active_layer,
-                                    locked_layers,
-                                    draggable: rows_draggable,
-                                    folders: &project.folders,
-                                };
-                                let mut design_layers = Rows {
-                                    items: &entry.layers,
-                                    // Typed, so the closure stays generic
-                                    // over the lifetime `RowSource` picks
-                                    // per call; inferred, it would pin one.
-                                    draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
-                                        layer_row(ui, commands, layer, rows, &design_row_context)
-                                    },
-                                };
-                                draw_section_body::<(LayerDrag,)>(ui, SectionKind::Designs, design_folders, commands, &mut rows, &mut [&mut design_layers]);
-                            });
-                        let designs_row = designs_header_toggle.union(designs_header.inner);
-                        attach_header_drop::<(LayerDrag,)>(ui, &designs_row, SectionKind::Designs, commands);
-                        section_heading_menu(
-                            &designs_row,
-                            ExplorerSection::Designs,
-                            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Designs)),
-                            commands,
-                        );
-
-                        // Hoisted above Triangulations and Modelling, which draw
-                        // the same row. `mut` so the two `.show()` calls below can
-                        // each borrow it as `&mut`; they run one after the other,
-                        // so the borrows never overlap.
-                        let mut render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, tri: &crate::ui::UiTriangulationEntry| {
-                            rows.push(ExplorerRow::Entity(SceneEntityId::Triangulation(tri.id)));
-                            let source_suffix = tri
-                                .source_name
-                                .as_deref()
-                                .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
-                                .unwrap_or_default();
-                            let tri_path = tr!("explorer-id-triangulation-id-source", id = tri.id.0.to_string(), source = source_suffix.to_string());
-                            let tri_id = tri.id;
-
-                            let dirty_marker = if tri.dirty { " *" } else { "" };
-                            let stats = format!("{}{}", tri.name, dirty_marker);
-                            let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
-
-                            let tri_handle = SceneEntityId::Triangulation(tri_id);
-                            let tri_locked = frozen_handles.contains(&tri_handle);
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
-                                .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
-                                .draggable(rows_draggable)
-                                .toggles(EntryToggles {
-                                    visible: tri.is_loaded,
-                                    locked: tri_locked,
-                                });
-                            let row = with_kind_badge(row, tri.section, MemberKind::Triangulation).show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if tri.is_loaded {
-                                    UiCommand::CloseTriangulation(tri_id)
-                                } else {
-                                    UiCommand::LoadTriangulation(tri_id)
-                                });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
-                            }
-                            let response = row.response.on_hover_text(&tri_path);
-                            response.dnd_set_drag_payload(TriangulationDrag(FolderMember::item(tri.section, ItemRef::Triangulation(tri_id))));
-                            if response.dragged() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                            }
-
-                            if response.clicked() {
-                                commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(tri_handle)));
-                            }
-
-                            let tri_loaded = tri.is_loaded;
-                            context_menu_popup(&response, tri.name.as_str(), |ui| {
-                                if tri_loaded {
-                                    let mut color = crate::rendering::color::rgba_to_color32(tri.color);
-                                    if crate::ui::widgets::menu::MenuFieldColor32::new(tr!("explorer-face-colour"), &mut color).show(ui).changed() {
-                                        let targets: Vec<_> = if selected_handles.contains(&SceneEntityId::Triangulation(tri_id)) {
-                                            project
-                                                .triangulations
-                                                .iter()
-                                                .filter(|item| item.is_loaded && selected_handles.contains(&SceneEntityId::Triangulation(item.id)))
-                                                .map(|item| item.id)
-                                                .collect()
-                                        } else {
-                                            vec![tri_id]
-                                        };
-                                        for id in targets {
-                                            commands.push(UiCommand::SetTriangulationColor(id, crate::rendering::color::color32_to_rgba(color)));
-                                        }
-                                    }
-                                    context_menu_separator(ui);
-                                }
-                                if ContextMenuAction::new(if tri_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                    .show(ui)
-                                    .clicked()
-                                {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                                if tri_loaded {
-                                    if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::CloseTriangulation(tri_id));
-                                        ui.close();
-                                    }
-                                } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadTriangulation(tri_id));
-                                    ui.close();
-                                }
-                                #[cfg(target_arch = "wasm32")]
-                                if ContextMenuAction::new(tr!("explorer-download")).show(ui).clicked() {
-                                    commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                                move_to_folder_submenu(ui, &project.folders, tri.folder, FolderMember::item(tri.section, ItemRef::Triangulation(tri_id)), commands);
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                            });
-                        };
-
-                        let triangulations_dirty =
-                            project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Triangulations && item.dirty);
-                        let (triangulations_header_toggle, triangulations_header, _) = ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!("common-triangulations"))
-                            .icon(unthemed_icon!("triangulation.svg"))
-                            .color(HEADER_TRIANGULATIONS)
-                            .dirty(triangulations_dirty)
-                            .show(ui, |ui| {
-                                let triangulation_folders = project.folders.folders(SectionKind::Triangulations);
-                                if tagged_count(&project.triangulations, SectionKind::Triangulations) == 0 && triangulation_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-triangulations"));
-                                }
-                                let mut triangulations_source = Rows {
-                                    items: &project.triangulations,
-                                    draw: &mut render_tri_entry,
-                                };
-                                draw_section_body::<(TriangulationDrag,)>(
-                                    ui,
-                                    SectionKind::Triangulations,
-                                    triangulation_folders,
-                                    commands,
-                                    &mut rows,
-                                    &mut [&mut triangulations_source],
-                                );
-                            });
-                        let triangulations_row = triangulations_header_toggle.union(triangulations_header.inner);
-                        attach_header_drop::<(TriangulationDrag,)>(ui, &triangulations_row, SectionKind::Triangulations, commands);
-                        section_heading_menu(
-                            &triangulations_row,
-                            ExplorerSection::Triangulations,
-                            tagged_count(&project.triangulations, SectionKind::Triangulations),
-                            commands,
-                        );
-
-                        let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
-                        let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!("common-rasters"))
-                            .icon(unthemed_icon!("raster.svg"))
-                            .color(HEADER_RASTERS)
-                            .dirty(rasters_dirty)
-                            .show(ui, |ui| {
-                                let raster_folders = project.folders.folders(SectionKind::Rasters);
-                                if tagged_count(&project.raster_textures, SectionKind::Rasters) == 0 && raster_folders.is_empty() {
-                                    explorer_note(ui, tr!("explorer-no-rasters"));
-                                }
-                                let render_raster_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, raster: &UiRasterTextureEntry| {
-                                    let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
-                                    let label = if raster.is_loaded {
-                                        bold(&raster_label)
-                                    } else {
-                                        bold(&raster_label).color(INACTIVE_TEXT_COLOR)
-                                    };
-                                    let source_suffix = raster
-                                        .source_name
-                                        .as_deref()
-                                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
-                                        .unwrap_or_default();
-                                    let details = tr!(
-                                        "explorer-raster-id",
-                                        id = raster.id.0.to_string(),
-                                        source = source_suffix.to_string(),
-                                        driver = raster.driver_name.to_string(),
-                                        width = raster.source_size[0].to_string(),
-                                        height = raster.source_size[1].to_string(),
-                                        projection = raster.projection.to_string()
-                                    );
-                                    let details = if raster.is_draped {
-                                        format!("{details}\n{}", tr!("explorer-draped-over-surface"))
-                                    } else {
-                                        details
-                                    };
-                                    let raster_handle = SceneEntityId::Raster(raster.id);
-                                    rows.push(ExplorerRow::Entity(raster_handle));
-                                    let raster_locked = locked_rasters.contains(&raster.id);
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
-                                        .selected(selected_handles.contains(&raster_handle))
-                                        .draggable(rows_draggable)
-                                        .toggles(EntryToggles {
-                                            visible: raster.is_loaded,
-                                            locked: raster_locked,
-                                        });
-                                    let row = with_kind_badge(row, raster.section, MemberKind::Raster).show(ui);
-                                    if row.visibility_clicked {
-                                        commands.push(if raster.is_loaded {
-                                            UiCommand::UnloadRaster(raster.id)
-                                        } else {
-                                            UiCommand::LoadRaster(raster.id)
-                                        });
-                                    }
-                                    if row.lock_clicked {
-                                        commands.push(UiCommand::ToggleRasterLocked(raster.id));
-                                    }
-                                    let response = row.response.on_hover_text(&details);
-                                    response.dnd_set_drag_payload(RasterDrag(FolderMember::item(raster.section, ItemRef::Raster(raster.id))));
-                                    if response.dragged() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    }
-                                    if response.clicked() {
-                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(raster_handle)));
-                                    }
-
-                                    context_menu_popup(&response, raster.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if raster_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleRasterLocked(raster.id));
-                                            ui.close();
-                                        }
-                                        if raster.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::UnloadRaster(raster.id));
-                                                ui.close();
-                                            }
-                                            if ContextMenuAction::new(tr!("explorer-drape-over-surface")).enabled(!raster_locked).show(ui).clicked() {
-                                                commands.push(UiCommand::DrapeRaster(raster.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadRaster(raster.id));
-                                            ui.close();
-                                        }
-                                        // Unloading a raster keeps its drape, so offer the undrape in both states.
-                                        if raster.is_draped && ContextMenuAction::new(tr!("common-undrape-all")).enabled(!raster_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::UndrapeRaster(raster.id));
-                                            ui.close();
-                                        }
-                                        if project.active_triangulation_for_menu.is_some()
-                                            && ContextMenuAction::new(tr!("explorer-clear-active-triangulation-texture")).show(ui).clicked()
-                                        {
-                                            commands.push(UiCommand::ClearActiveTriangulationRaster);
-                                            ui.close();
-                                        }
-                                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!raster_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::Raster(raster.id)));
-                                            ui.close();
-                                        }
-                                        move_to_folder_submenu(
-                                            ui,
-                                            &project.folders,
-                                            raster.folder,
-                                            FolderMember::item(raster.section, ItemRef::Raster(raster.id)),
-                                            commands,
-                                        );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!raster_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
-                                            ui.close();
-                                        }
-                                    });
-                                };
-                                let mut rasters_source = Rows {
-                                    items: &project.raster_textures,
-                                    draw: render_raster_entry,
-                                };
-                                draw_section_body::<(RasterDrag,)>(ui, SectionKind::Rasters, raster_folders, commands, &mut rows, &mut [&mut rasters_source]);
-                            });
-                        let rasters_row = rasters_header_toggle.union(rasters_header.inner);
-                        attach_header_drop::<(RasterDrag,)>(ui, &rasters_row, SectionKind::Rasters, commands);
-                        section_heading_menu(
-                            &rasters_row,
-                            ExplorerSection::Rasters,
-                            tagged_count(&project.raster_textures, SectionKind::Rasters),
-                            commands,
-                        );
-
-                        let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
-                        let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!("common-point-clouds"))
-                            .icon(unthemed_icon!("section_point_clouds.svg"))
-                            .color(HEADER_POINT_CLOUDS)
-                            .dirty(point_clouds_dirty)
-                            .show(ui, |ui| {
-                                let point_cloud_folders = project.folders.folders(SectionKind::PointClouds);
-                                if tagged_count(&project.point_clouds, SectionKind::PointClouds) == 0 && point_cloud_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-point-clouds"));
-                                }
-                                let render_point_cloud_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, point_cloud: &UiPointCloudEntry| {
-                                    let dirty_marker = if point_cloud.dirty { " *" } else { "" };
-                                    let label_text = format!("{}{dirty_marker}", point_cloud.name);
-                                    let label = if point_cloud.is_loaded {
-                                        bold(&label_text)
-                                    } else {
-                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                                    };
-                                    let source_suffix = point_cloud
-                                        .source_name
-                                        .as_deref()
-                                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
-                                        .unwrap_or_default();
-                                    let tooltip = tr!(
-                                        "explorer-id-point-cloud-id-source",
-                                        id = point_cloud.id.0.to_string(),
-                                        source = source_suffix.to_string(),
-                                        count = point_cloud.point_count.to_string()
-                                    );
-                                    let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
-                                    let cloud_handle = SceneEntityId::PointCloud(point_cloud.id);
-                                    rows.push(ExplorerRow::Entity(cloud_handle));
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
-                                        .draggable(rows_draggable)
-                                        .selected(selected_handles.contains(&cloud_handle))
-                                        .toggles(EntryToggles {
-                                            visible: point_cloud.is_loaded,
-                                            locked: cloud_locked,
-                                        });
-                                    let row = with_kind_badge(row, point_cloud.section, MemberKind::PointCloud).show(ui);
-                                    if row.visibility_clicked {
-                                        commands.push(if point_cloud.is_loaded {
-                                            UiCommand::ClosePointCloud(point_cloud.id)
-                                        } else {
-                                            UiCommand::LoadPointCloud(point_cloud.id)
-                                        });
-                                    }
-                                    if row.lock_clicked {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
-                                    }
-                                    let response = row.response.on_hover_text(&tooltip);
-                                    response.dnd_set_drag_payload(PointCloudDrag(FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id))));
-                                    if response.dragged() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    }
-                                    // A cloud has no handles to click in the
-                                    // viewport at this zoom, so the tree is the
-                                    // practical way to select one for the tools
-                                    // that run on a selected cloud.
-                                    if response.clicked() {
-                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(cloud_handle)));
-                                    }
-
-                                    context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if cloud_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
-                                            ui.close();
-                                        }
-                                        if point_cloud.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::ClosePointCloud(point_cloud.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadPointCloud(point_cloud.id));
-                                            ui.close();
-                                        }
-                                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!cloud_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
-                                            ui.close();
-                                        }
-                                        move_to_folder_submenu(
-                                            ui,
-                                            &project.folders,
-                                            point_cloud.folder,
-                                            FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id)),
-                                            commands,
-                                        );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!cloud_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
-                                            ui.close();
-                                        }
-                                    });
-                                };
-                                let mut point_clouds_source = Rows {
-                                    items: &project.point_clouds,
-                                    draw: render_point_cloud_entry,
-                                };
-                                draw_section_body::<(PointCloudDrag,)>(ui, SectionKind::PointClouds, point_cloud_folders, commands, &mut rows, &mut [&mut point_clouds_source]);
-                            });
-                        let point_clouds_row = point_clouds_header_toggle.union(point_clouds_header.inner);
-                        attach_header_drop::<(PointCloudDrag,)>(ui, &point_clouds_row, SectionKind::PointClouds, commands);
-                        section_heading_menu(
-                            &point_clouds_row,
-                            ExplorerSection::PointClouds,
-                            tagged_count(&project.point_clouds, SectionKind::PointClouds),
-                            commands,
-                        );
-
-                        let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
-                        let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!("common-block-models"))
-                            .icon(unthemed_icon!("section_block_models.svg"))
-                            .color(HEADER_BLOCK_MODELS)
-                            .dirty(block_models_dirty)
-                            .show(ui, |ui| {
-                                let block_model_folders = project.folders.folders(SectionKind::BlockModels);
-                                if tagged_count(&project.block_models, SectionKind::BlockModels) == 0 && block_model_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-block-models"));
-                                }
-                                let render_block_model_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, block_model: &UiBlockModelEntry| {
-                                    let block_model_handle = SceneEntityId::BlockModel(block_model.id);
-                                    rows.push(ExplorerRow::Entity(block_model_handle));
-                                    let is_selected = selected_handles.contains(&block_model_handle);
-                                    let dirty_marker = if block_model.dirty { " *" } else { "" };
-                                    let label_text = format!("{}{dirty_marker}", block_model.name);
-                                    let label = if block_model.is_loaded {
-                                        bold(&label_text)
-                                    } else {
-                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                                    };
-                                    let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
-                                        .selected(is_selected)
-                                        .draggable(rows_draggable)
-                                        .toggles(EntryToggles {
-                                            visible: block_model.is_loaded,
-                                            locked: model_locked,
-                                        });
-                                    let row = with_kind_badge(row, block_model.section, MemberKind::BlockModel).show(ui);
-                                    if row.visibility_clicked {
-                                        commands.push(if block_model.is_loaded {
-                                            UiCommand::CloseBlockModel(block_model.id)
-                                        } else {
-                                            UiCommand::LoadBlockModel(block_model.id)
-                                        });
-                                    }
-                                    if row.lock_clicked {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
-                                    }
-                                    let block_model_source_suffix = block_model
-                                        .source_name
-                                        .as_deref()
-                                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
-                                        .unwrap_or_default();
-                                    let response = row.response.on_hover_text(tr!(
-                                        "explorer-id-block-model-id-source",
-                                        id = block_model.id.0.to_string(),
-                                        source = block_model_source_suffix.to_string(),
-                                        count = block_model.variable_count.to_string()
-                                    ));
-                                    response.dnd_set_drag_payload(BlockModelDrag(FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id))));
-                                    if response.dragged() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    }
-                                    if response.clicked() {
-                                        // Selecting here is what reveals the model's
-                                        // viewport controls, the same as picking it in
-                                        // the viewport does.
-                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(block_model_handle)));
-                                    }
-
-                                    context_menu_popup(&response, block_model.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if model_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
-                                            ui.close();
-                                        }
-                                        if block_model.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::CloseBlockModel(block_model.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadBlockModel(block_model.id));
-                                            ui.close();
-                                        }
-                                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!model_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
-                                            ui.close();
-                                        }
-                                        move_to_folder_submenu(
-                                            ui,
-                                            &project.folders,
-                                            block_model.folder,
-                                            FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id)),
-                                            commands,
-                                        );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!model_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
-                                            ui.close();
-                                        }
-                                    });
-                                };
-                                let mut block_models_source = Rows {
-                                    items: &project.block_models,
-                                    draw: render_block_model_entry,
-                                };
-                                draw_section_body::<(BlockModelDrag,)>(ui, SectionKind::BlockModels, block_model_folders, commands, &mut rows, &mut [&mut block_models_source]);
-                            });
-                        let block_models_row = block_models_header_toggle.union(block_models_header.inner);
-                        attach_header_drop::<(BlockModelDrag,)>(ui, &block_models_row, SectionKind::BlockModels, commands);
-                        section_heading_menu(
-                            &block_models_row,
-                            ExplorerSection::BlockModels,
-                            tagged_count(&project.block_models, SectionKind::BlockModels),
-                            commands,
-                        );
-
-                        let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
-                        let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!("ws-menubar-drillholes"))
-                            .icon(unthemed_icon!("drill_hole.svg"))
-                            .color(HEADER_DRILL_HOLES)
-                            .dirty(drill_holes_dirty)
-                            .show(ui, |ui| {
-                                let drill_hole_folders = project.folders.folders(SectionKind::DrillHoles);
-                                if tagged_count(&project.drill_holes, SectionKind::DrillHoles) == 0 && drill_hole_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-drill-holes"));
-                                }
-                                let render_drill_hole_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, dataset: &UiDrillHoleEntry| {
-                                    let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
-                                    let label = if dataset.is_loaded {
-                                        bold(&dataset_label)
-                                    } else {
-                                        bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
-                                    };
-                                    let source_suffix = dataset
-                                        .source_name
-                                        .as_deref()
-                                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
-                                        .unwrap_or_default();
-                                    let tooltip = tr!(
-                                        "explorer-id-drill-holes-id-source",
-                                        id = dataset.id.0.to_string(),
-                                        source = source_suffix.to_string(),
-                                        holes = dataset.hole_count.to_string(),
-                                        fields = dataset.field_count.to_string()
-                                    );
-                                    let dataset_handle = SceneEntityId::DrillHole(dataset.id);
-                                    rows.push(ExplorerRow::Entity(dataset_handle));
-                                    let dataset_locked = frozen_handles.contains(&dataset_handle);
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
-                                        .draggable(rows_draggable)
-                                        .selected(selected_handles.contains(&dataset_handle))
-                                        .toggles(EntryToggles {
-                                            visible: dataset.is_loaded,
-                                            locked: dataset_locked,
-                                        });
-                                    let row = with_kind_badge(row, dataset.section, MemberKind::DrillHole).show(ui);
-                                    if row.visibility_clicked {
-                                        commands.push(if dataset.is_loaded {
-                                            UiCommand::CloseDrillHole(dataset.id)
-                                        } else {
-                                            UiCommand::LoadDrillHole(dataset.id)
-                                        });
-                                    }
-                                    if row.lock_clicked {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
-                                    }
-                                    let response = row.response.on_hover_text(&tooltip);
-                                    response.dnd_set_drag_payload(DrillHoleDrag(FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id))));
-                                    if response.dragged() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    }
-                                    if response.clicked() {
-                                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(dataset_handle)));
-                                    }
-
-                                    context_menu_popup(&response, dataset.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if dataset_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
-                                            ui.close();
-                                        }
-                                        if dataset.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::CloseDrillHole(dataset.id));
-                                                ui.close();
-                                            }
-                                            if ContextMenuAction::new(tr!("common-appearance")).show(ui).clicked() {
-                                                commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
-                                                ui.close();
-                                            }
-                                            if ContextMenuAction::new(tr!("common-link-geophysics")).show(ui).clicked() {
-                                                commands.push(UiCommand::LinkGeophysics(dataset.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadDrillHole(dataset.id));
-                                            ui.close();
-                                        }
-                                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!dataset_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
-                                            ui.close();
-                                        }
-                                        move_to_folder_submenu(
-                                            ui,
-                                            &project.folders,
-                                            dataset.folder,
-                                            FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id)),
-                                            commands,
-                                        );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!dataset_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
-                                            ui.close();
-                                        }
-                                    });
-                                };
-                                let mut drill_holes_source = Rows {
-                                    items: &project.drill_holes,
-                                    draw: render_drill_hole_entry,
-                                };
-                                draw_section_body::<(DrillHoleDrag,)>(ui, SectionKind::DrillHoles, drill_hole_folders, commands, &mut rows, &mut [&mut drill_holes_source]);
-                            });
-                        let drill_holes_row = drill_holes_header_toggle.union(drill_holes_header.inner);
-                        attach_header_drop::<(DrillHoleDrag,)>(ui, &drill_holes_row, SectionKind::DrillHoles, commands);
-                        section_heading_menu(
-                            &drill_holes_row,
-                            ExplorerSection::DrillHoles,
-                            tagged_count(&project.drill_holes, SectionKind::DrillHoles),
-                            commands,
-                        );
-
-                        // Modelling holds what the project derives from its data,
-                        // such as reference points and the surfaces built from
-                        // them. It admits layers and triangulations because
-                        // `SectionKind::admitted` says so; nothing here special-
-                        // cases Modelling.
-                        let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
-                        let modelling_folders = project.folders.folders(SectionKind::Modelling);
-                        let (modelling_header_toggle, modelling_header, _) = ExplorerHeader::new(egui::Id::new("modelling_collapse"), tr!("common-modelling"))
-                            .icon(unthemed_icon!("modelling.svg"))
-                            .color(HEADER_MODELLING)
-                            .dirty(modelling_dirty)
-                            .show(ui, |ui| {
-                                // Triangulations live on `App` directly, not inside a
-                                // design project, so they draw here whether or not a
-                                // project is open - the same as under Triangulations.
-                                let mut triangulations_source = Rows {
-                                    items: &project.triangulations,
-                                    draw: &mut render_tri_entry,
-                                };
-                                match project.projects.first() {
-                                    Some(entry) => {
-                                        // The same row Designs draws, from the same
-                                        // builder: what puts a layer here is its tag,
-                                        // not anything about the layer itself.
-                                        let modelling_row_context = LayerRowContext {
-                                            entry,
-                                            active_layer: *active_layer,
-                                            locked_layers,
-                                            draggable: rows_draggable,
-                                            folders: &project.folders,
-                                        };
-                                        let mut layers_source = Rows {
-                                            items: &entry.layers,
-                                            draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
-                                                layer_row(ui, commands, layer, rows, &modelling_row_context)
-                                            },
-                                        };
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut layers_source, &mut triangulations_source],
-                                        );
-                                    }
-                                    None => {
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut triangulations_source],
-                                        );
-                                    }
-                                }
-                            });
-                        let modelling_row = modelling_header_toggle.union(modelling_header.inner);
-                        attach_header_drop::<(LayerDrag, TriangulationDrag)>(ui, &modelling_row, SectionKind::Modelling, commands);
-                        section_heading_menu(
-                            &modelling_row,
-                            ExplorerSection::Modelling,
-                            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Modelling))
-                                + tagged_count(&project.triangulations, SectionKind::Modelling),
-                            commands,
-                        );
-
-                        paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
-                    });
+                    draw_object_tree(ui, editor, project, commands);
                 })
                 .response
                 .rect;
-            editor.explorer_rows = rows;
-            (tree, products)
+            (vec![products, run_controls, steps, animation_solids, list, tree], [steps, animation_solids, list, products])
         });
 
-    let (tree, products) = column.inner;
+    // The panes are the regions; the column itself carries no frame. Every
+    // pane that can be dragged taller says so with a seam of its own, so no
+    // resizable edge in the column is left unmarked.
+    let (panes, seams) = column.inner;
+    let grips = std::iter::once(column.grip)
+        .chain(
+            [
+                (seams[0], CUT_STEPS_PANEL_ID, crate::ui::chrome::Edge::Bottom),
+                (seams[1], "schedule_animation_solids_navigation", crate::ui::chrome::Edge::Bottom),
+                (seams[2], STEP_LIST_PANEL_ID, crate::ui::chrome::Edge::Top),
+                (seams[3], super::products::PANEL_ID, crate::ui::chrome::Edge::Top),
+            ]
+            .into_iter()
+            .filter(|(rect, _, _)| rect.is_positive())
+            .map(|(rect, id, edge)| crate::ui::chrome::Grip::new(rect, edge, id)),
+        )
+        .collect();
     ExplorerLayout {
-        column: column.response.rect,
-        tree,
-        products,
+        regions: panes.into_iter().chain(column.regions).collect(),
+        grips,
     }
+}
+
+/// Draw the project data tree - the explorer column's own contents.
+///
+/// Extracted so the Solids Setup page can offer the same tree beside its
+/// preview: that page replaces the explorer column with its step tree, which
+/// otherwise leaves no way to see or load the surfaces and design strings the
+/// preview draws.
+pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let (_, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    // Every row records itself here as it is drawn, so a Shift-click can be
+    // resolved against the rows the user is looking at: see
+    // `EditorState::explorer_rows`.
+    let mut rows: Vec<ExplorerRow> = Vec::new();
+    // The tree only reads editor state. Destructuring here keeps the
+    // row closures below from capturing `editor` mutably, which the
+    // borrow checker would otherwise reject against these shared reads.
+    let EditorState {
+        active_layer,
+        selected_handles,
+        locked_layers,
+        locked_rasters,
+        frozen_handles,
+        ..
+    } = &*editor;
+
+    // Keep the scroll area's contents as wide as the side panel even
+    // when every section is collapsed. `ScrollArea` otherwise shrinks
+    // horizontally to the headers' intrinsic width; a visible
+    // `ExplorerEntry` masks that by requesting all available width,
+    // which made panel resizing depend on whether an entry existed.
+    //
+    // Vertical shrinking is off so the banding below the last row has
+    // the full panel height to run into: see `paint_fixed_stripes`.
+    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+        // Empty-state messages should behave like explorer entries at
+        // narrow widths: stay on one line and end with an ellipsis.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        // Rows carry their own height and butt up against each other,
+        // so the stripes tile the list without gaps.
+        ui.spacing_mut().item_spacing.y = 0.0;
+
+        // Reserved before any row is laid out, and filled once the
+        // tree's final height is known below: see `paint_fixed_stripes`.
+        let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
+
+        // A row drag and a list drag are one gesture under a
+        // finger, so rows offer a drag to a pointer only;
+        // touch moves an item with Move to Folder.
+        let rows_draggable = !ui.ctx().input(|input| input.any_touches());
+
+        let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
+        let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::new("designs_collapse"), tr!("common-designs"))
+            .icon(unthemed_icon!("layer.svg"))
+            .color(HEADER_DESIGNS)
+            .dirty(designs_dirty)
+            .show(ui, |ui| {
+                let Some(entry) = project.projects.first() else {
+                    explorer_note(ui, tr!("common-no-open-project"));
+                    return;
+                };
+                let design_folders = project.folders.folders(SectionKind::Designs);
+                if tagged_count(&entry.layers, SectionKind::Designs) == 0 && design_folders.is_empty() {
+                    explorer_note(ui, tr!("common-no-design-layers"));
+                }
+                let design_row_context = LayerRowContext {
+                    entry,
+                    active_layer: *active_layer,
+                    locked_layers,
+                    draggable: rows_draggable,
+                    folders: &project.folders,
+                };
+                let mut design_layers = Rows {
+                    items: &entry.layers,
+                    // Typed, so the closure stays generic
+                    // over the lifetime `RowSource` picks
+                    // per call; inferred, it would pin one.
+                    draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
+                        layer_row(ui, commands, layer, rows, &design_row_context)
+                    },
+                };
+                draw_section_body::<(LayerDrag,)>(ui, SectionKind::Designs, design_folders, commands, &mut rows, &mut [&mut design_layers]);
+            });
+        let designs_row = designs_header_toggle.union(designs_header.inner);
+        attach_header_drop::<(LayerDrag,)>(ui, &designs_row, SectionKind::Designs, commands);
+        section_heading_menu(
+            &designs_row,
+            ExplorerSection::Designs,
+            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Designs)),
+            commands,
+        );
+
+        // Hoisted above Triangulations and Modelling, which draw
+        // the same row. `mut` so the two `.show()` calls below can
+        // each borrow it as `&mut`; they run one after the other,
+        // so the borrows never overlap.
+        let mut render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, tri: &crate::ui::UiTriangulationEntry| {
+            rows.push(ExplorerRow::Entity(SceneEntityId::Triangulation(tri.id)));
+            let source_suffix = tri
+                .source_name
+                .as_deref()
+                .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                .unwrap_or_default();
+            let tri_path = tr!("explorer-id-triangulation-id-source", id = tri.id.0.to_string(), source = source_suffix.to_string());
+            let tri_id = tri.id;
+
+            let dirty_marker = if tri.dirty { " *" } else { "" };
+            let stats = format!("{}{}", tri.name, dirty_marker);
+            let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
+
+            let tri_handle = SceneEntityId::Triangulation(tri_id);
+            let tri_locked = frozen_handles.contains(&tri_handle);
+            let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
+                .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
+                .draggable(rows_draggable)
+                .toggles(EntryToggles {
+                    visible: tri.is_loaded,
+                    locked: tri_locked,
+                });
+            let row = with_kind_badge(row, tri.section, MemberKind::Triangulation).show(ui);
+            if row.visibility_clicked {
+                commands.push(if tri.is_loaded {
+                    UiCommand::CloseTriangulation(tri_id)
+                } else {
+                    UiCommand::LoadTriangulation(tri_id)
+                });
+            }
+            if row.lock_clicked {
+                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
+            }
+            let response = row.response.on_hover_text(&tri_path);
+            response.dnd_set_drag_payload(TriangulationDrag(FolderMember::item(tri.section, ItemRef::Triangulation(tri_id))));
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+
+            if response.clicked() {
+                commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(tri_handle)));
+            }
+
+            let tri_loaded = tri.is_loaded;
+            context_menu_popup(&response, tri.name.as_str(), |ui| {
+                if tri_loaded {
+                    let mut color = crate::rendering::color::rgba_to_color32(tri.color);
+                    if crate::ui::widgets::menu::MenuFieldColor32::new(tr!("explorer-face-colour"), &mut color).show(ui).changed() {
+                        let targets: Vec<_> = if selected_handles.contains(&SceneEntityId::Triangulation(tri_id)) {
+                            project
+                                .triangulations
+                                .iter()
+                                .filter(|item| item.is_loaded && selected_handles.contains(&SceneEntityId::Triangulation(item.id)))
+                                .map(|item| item.id)
+                                .collect()
+                        } else {
+                            vec![tri_id]
+                        };
+                        for id in targets {
+                            commands.push(UiCommand::SetTriangulationColor(id, crate::rendering::color::color32_to_rgba(color)));
+                        }
+                    }
+                    context_menu_separator(ui);
+                }
+                if ContextMenuAction::new(if tri_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
+                    ui.close();
+                }
+                if tri_loaded {
+                    if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
+                        commands.push(UiCommand::CloseTriangulation(tri_id));
+                        ui.close();
+                    }
+                } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
+                    commands.push(UiCommand::LoadTriangulation(tri_id));
+                    ui.close();
+                }
+                #[cfg(target_arch = "wasm32")]
+                if ContextMenuAction::new(tr!("explorer-download")).show(ui).clicked() {
+                    commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!tri_locked).show(ui).clicked() {
+                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Triangulation(tri_id)));
+                    ui.close();
+                }
+                move_to_folder_submenu(ui, &project.folders, tri.folder, FolderMember::item(tri.section, ItemRef::Triangulation(tri_id)), commands);
+                context_menu_separator(ui);
+                if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!tri_locked).show(ui).clicked() {
+                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
+                    ui.close();
+                }
+            });
+        };
+
+        let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Triangulations && item.dirty);
+        let (triangulations_header_toggle, triangulations_header, _) = ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!("common-triangulations"))
+            .icon(unthemed_icon!("triangulation.svg"))
+            .color(HEADER_TRIANGULATIONS)
+            .dirty(triangulations_dirty)
+            .show(ui, |ui| {
+                let triangulation_folders = project.folders.folders(SectionKind::Triangulations);
+                if tagged_count(&project.triangulations, SectionKind::Triangulations) == 0 && triangulation_folders.is_empty() {
+                    explorer_note(ui, tr!("common-no-triangulations"));
+                }
+                let mut triangulations_source = Rows {
+                    items: &project.triangulations,
+                    draw: &mut render_tri_entry,
+                };
+                draw_section_body::<(TriangulationDrag,)>(
+                    ui,
+                    SectionKind::Triangulations,
+                    triangulation_folders,
+                    commands,
+                    &mut rows,
+                    &mut [&mut triangulations_source],
+                );
+            });
+        let triangulations_row = triangulations_header_toggle.union(triangulations_header.inner);
+        attach_header_drop::<(TriangulationDrag,)>(ui, &triangulations_row, SectionKind::Triangulations, commands);
+        section_heading_menu(
+            &triangulations_row,
+            ExplorerSection::Triangulations,
+            tagged_count(&project.triangulations, SectionKind::Triangulations),
+            commands,
+        );
+
+        let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
+        let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!("common-rasters"))
+            .icon(unthemed_icon!("raster.svg"))
+            .color(HEADER_RASTERS)
+            .dirty(rasters_dirty)
+            .show(ui, |ui| {
+                let raster_folders = project.folders.folders(SectionKind::Rasters);
+                if tagged_count(&project.raster_textures, SectionKind::Rasters) == 0 && raster_folders.is_empty() {
+                    explorer_note(ui, tr!("explorer-no-rasters"));
+                }
+                let render_raster_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, raster: &UiRasterTextureEntry| {
+                    let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
+                    let label = if raster.is_loaded {
+                        bold(&raster_label)
+                    } else {
+                        bold(&raster_label).color(INACTIVE_TEXT_COLOR)
+                    };
+                    let source_suffix = raster
+                        .source_name
+                        .as_deref()
+                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                        .unwrap_or_default();
+                    let details = tr!(
+                        "explorer-raster-id",
+                        id = raster.id.0.to_string(),
+                        source = source_suffix.to_string(),
+                        driver = raster.driver_name.to_string(),
+                        width = raster.source_size[0].to_string(),
+                        height = raster.source_size[1].to_string(),
+                        projection = raster.projection.to_string()
+                    );
+                    let details = if raster.is_draped {
+                        format!("{details}\n{}", tr!("explorer-draped-over-surface"))
+                    } else {
+                        details
+                    };
+                    let raster_handle = SceneEntityId::Raster(raster.id);
+                    rows.push(ExplorerRow::Entity(raster_handle));
+                    let raster_locked = locked_rasters.contains(&raster.id);
+                    let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
+                        .selected(selected_handles.contains(&raster_handle))
+                        .draggable(rows_draggable)
+                        .toggles(EntryToggles {
+                            visible: raster.is_loaded,
+                            locked: raster_locked,
+                        });
+                    let row = with_kind_badge(row, raster.section, MemberKind::Raster).show(ui);
+                    if row.visibility_clicked {
+                        commands.push(if raster.is_loaded {
+                            UiCommand::UnloadRaster(raster.id)
+                        } else {
+                            UiCommand::LoadRaster(raster.id)
+                        });
+                    }
+                    if row.lock_clicked {
+                        commands.push(UiCommand::ToggleRasterLocked(raster.id));
+                    }
+                    let response = row.response.on_hover_text(&details);
+                    response.dnd_set_drag_payload(RasterDrag(FolderMember::item(raster.section, ItemRef::Raster(raster.id))));
+                    if response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    if response.clicked() {
+                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(raster_handle)));
+                    }
+
+                    context_menu_popup(&response, raster.name.as_str(), |ui| {
+                        if ContextMenuAction::new(if raster_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
+                            .show(ui)
+                            .clicked()
+                        {
+                            commands.push(UiCommand::ToggleRasterLocked(raster.id));
+                            ui.close();
+                        }
+                        if raster.is_loaded {
+                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
+                                commands.push(UiCommand::UnloadRaster(raster.id));
+                                ui.close();
+                            }
+                            if ContextMenuAction::new(tr!("explorer-drape-over-surface")).enabled(!raster_locked).show(ui).clicked() {
+                                commands.push(UiCommand::DrapeRaster(raster.id));
+                                ui.close();
+                            }
+                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
+                            commands.push(UiCommand::LoadRaster(raster.id));
+                            ui.close();
+                        }
+                        // Unloading a raster keeps its drape, so offer the undrape in both states.
+                        if raster.is_draped && ContextMenuAction::new(tr!("common-undrape-all")).enabled(!raster_locked).show(ui).clicked() {
+                            commands.push(UiCommand::UndrapeRaster(raster.id));
+                            ui.close();
+                        }
+                        if project.active_triangulation_for_menu.is_some() && ContextMenuAction::new(tr!("explorer-clear-active-triangulation-texture")).show(ui).clicked() {
+                            commands.push(UiCommand::ClearActiveTriangulationRaster);
+                            ui.close();
+                        }
+                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!raster_locked).show(ui).clicked() {
+                            commands.push(UiCommand::BeginRenameItem(RenameTarget::Raster(raster.id)));
+                            ui.close();
+                        }
+                        move_to_folder_submenu(
+                            ui,
+                            &project.folders,
+                            raster.folder,
+                            FolderMember::item(raster.section, ItemRef::Raster(raster.id)),
+                            commands,
+                        );
+                        context_menu_separator(ui);
+                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!raster_locked).show(ui).clicked() {
+                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
+                            ui.close();
+                        }
+                    });
+                };
+                let mut rasters_source = Rows {
+                    items: &project.raster_textures,
+                    draw: render_raster_entry,
+                };
+                draw_section_body::<(RasterDrag,)>(ui, SectionKind::Rasters, raster_folders, commands, &mut rows, &mut [&mut rasters_source]);
+            });
+        let rasters_row = rasters_header_toggle.union(rasters_header.inner);
+        attach_header_drop::<(RasterDrag,)>(ui, &rasters_row, SectionKind::Rasters, commands);
+        section_heading_menu(
+            &rasters_row,
+            ExplorerSection::Rasters,
+            tagged_count(&project.raster_textures, SectionKind::Rasters),
+            commands,
+        );
+
+        let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
+        let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!("common-point-clouds"))
+            .icon(unthemed_icon!("section_point_clouds.svg"))
+            .color(HEADER_POINT_CLOUDS)
+            .dirty(point_clouds_dirty)
+            .show(ui, |ui| {
+                let point_cloud_folders = project.folders.folders(SectionKind::PointClouds);
+                if tagged_count(&project.point_clouds, SectionKind::PointClouds) == 0 && point_cloud_folders.is_empty() {
+                    explorer_note(ui, tr!("common-no-point-clouds"));
+                }
+                let render_point_cloud_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, point_cloud: &UiPointCloudEntry| {
+                    let dirty_marker = if point_cloud.dirty { " *" } else { "" };
+                    let label_text = format!("{}{dirty_marker}", point_cloud.name);
+                    let label = if point_cloud.is_loaded {
+                        bold(&label_text)
+                    } else {
+                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
+                    };
+                    let source_suffix = point_cloud
+                        .source_name
+                        .as_deref()
+                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                        .unwrap_or_default();
+                    let tooltip = tr!(
+                        "explorer-id-point-cloud-id-source",
+                        id = point_cloud.id.0.to_string(),
+                        source = source_suffix.to_string(),
+                        count = point_cloud.point_count.to_string()
+                    );
+                    let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
+                    let cloud_handle = SceneEntityId::PointCloud(point_cloud.id);
+                    rows.push(ExplorerRow::Entity(cloud_handle));
+                    let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
+                        .draggable(rows_draggable)
+                        .selected(selected_handles.contains(&cloud_handle))
+                        .toggles(EntryToggles {
+                            visible: point_cloud.is_loaded,
+                            locked: cloud_locked,
+                        });
+                    let row = with_kind_badge(row, point_cloud.section, MemberKind::PointCloud).show(ui);
+                    if row.visibility_clicked {
+                        commands.push(if point_cloud.is_loaded {
+                            UiCommand::ClosePointCloud(point_cloud.id)
+                        } else {
+                            UiCommand::LoadPointCloud(point_cloud.id)
+                        });
+                    }
+                    if row.lock_clicked {
+                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
+                    }
+                    let response = row.response.on_hover_text(&tooltip);
+                    response.dnd_set_drag_payload(PointCloudDrag(FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id))));
+                    if response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    // A cloud has no handles to click in the
+                    // viewport at this zoom, so the tree is the
+                    // practical way to select one for the tools
+                    // that run on a selected cloud.
+                    if response.clicked() {
+                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(cloud_handle)));
+                    }
+
+                    context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
+                        if ContextMenuAction::new(if cloud_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
+                            .show(ui)
+                            .clicked()
+                        {
+                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
+                            ui.close();
+                        }
+                        if point_cloud.is_loaded {
+                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
+                                commands.push(UiCommand::ClosePointCloud(point_cloud.id));
+                                ui.close();
+                            }
+                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
+                            commands.push(UiCommand::LoadPointCloud(point_cloud.id));
+                            ui.close();
+                        }
+                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!cloud_locked).show(ui).clicked() {
+                            commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
+                            ui.close();
+                        }
+                        move_to_folder_submenu(
+                            ui,
+                            &project.folders,
+                            point_cloud.folder,
+                            FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id)),
+                            commands,
+                        );
+                        context_menu_separator(ui);
+                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!cloud_locked).show(ui).clicked() {
+                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
+                            ui.close();
+                        }
+                    });
+                };
+                let mut point_clouds_source = Rows {
+                    items: &project.point_clouds,
+                    draw: render_point_cloud_entry,
+                };
+                draw_section_body::<(PointCloudDrag,)>(ui, SectionKind::PointClouds, point_cloud_folders, commands, &mut rows, &mut [&mut point_clouds_source]);
+            });
+        let point_clouds_row = point_clouds_header_toggle.union(point_clouds_header.inner);
+        attach_header_drop::<(PointCloudDrag,)>(ui, &point_clouds_row, SectionKind::PointClouds, commands);
+        section_heading_menu(
+            &point_clouds_row,
+            ExplorerSection::PointClouds,
+            tagged_count(&project.point_clouds, SectionKind::PointClouds),
+            commands,
+        );
+
+        let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
+        let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!("common-block-models"))
+            .icon(unthemed_icon!("section_block_models.svg"))
+            .color(HEADER_BLOCK_MODELS)
+            .dirty(block_models_dirty)
+            .show(ui, |ui| {
+                let block_model_folders = project.folders.folders(SectionKind::BlockModels);
+                if tagged_count(&project.block_models, SectionKind::BlockModels) == 0 && block_model_folders.is_empty() {
+                    explorer_note(ui, tr!("common-no-block-models"));
+                }
+                let render_block_model_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, block_model: &UiBlockModelEntry| {
+                    let block_model_handle = SceneEntityId::BlockModel(block_model.id);
+                    rows.push(ExplorerRow::Entity(block_model_handle));
+                    let is_selected = selected_handles.contains(&block_model_handle);
+                    let dirty_marker = if block_model.dirty { " *" } else { "" };
+                    let label_text = format!("{}{dirty_marker}", block_model.name);
+                    let label = if block_model.is_loaded {
+                        bold(&label_text)
+                    } else {
+                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
+                    };
+                    let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
+                    let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
+                        .selected(is_selected)
+                        .draggable(rows_draggable)
+                        .toggles(EntryToggles {
+                            visible: block_model.is_loaded,
+                            locked: model_locked,
+                        });
+                    let row = with_kind_badge(row, block_model.section, MemberKind::BlockModel).show(ui);
+                    if row.visibility_clicked {
+                        commands.push(if block_model.is_loaded {
+                            UiCommand::CloseBlockModel(block_model.id)
+                        } else {
+                            UiCommand::LoadBlockModel(block_model.id)
+                        });
+                    }
+                    if row.lock_clicked {
+                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
+                    }
+                    let block_model_source_suffix = block_model
+                        .source_name
+                        .as_deref()
+                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                        .unwrap_or_default();
+                    let response = row.response.on_hover_text(tr!(
+                        "explorer-id-block-model-id-source",
+                        id = block_model.id.0.to_string(),
+                        source = block_model_source_suffix.to_string(),
+                        count = block_model.variable_count.to_string()
+                    ));
+                    response.dnd_set_drag_payload(BlockModelDrag(FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id))));
+                    if response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    if response.clicked() {
+                        // Selecting here is what reveals the model's
+                        // viewport controls, the same as picking it in
+                        // the viewport does.
+                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(block_model_handle)));
+                    }
+
+                    context_menu_popup(&response, block_model.name.as_str(), |ui| {
+                        if ContextMenuAction::new(if model_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
+                            .show(ui)
+                            .clicked()
+                        {
+                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
+                            ui.close();
+                        }
+                        if block_model.is_loaded {
+                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
+                                commands.push(UiCommand::CloseBlockModel(block_model.id));
+                                ui.close();
+                            }
+                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
+                            commands.push(UiCommand::LoadBlockModel(block_model.id));
+                            ui.close();
+                        }
+                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!model_locked).show(ui).clicked() {
+                            commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
+                            ui.close();
+                        }
+                        move_to_folder_submenu(
+                            ui,
+                            &project.folders,
+                            block_model.folder,
+                            FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id)),
+                            commands,
+                        );
+                        context_menu_separator(ui);
+                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!model_locked).show(ui).clicked() {
+                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
+                            ui.close();
+                        }
+                    });
+                };
+                let mut block_models_source = Rows {
+                    items: &project.block_models,
+                    draw: render_block_model_entry,
+                };
+                draw_section_body::<(BlockModelDrag,)>(ui, SectionKind::BlockModels, block_model_folders, commands, &mut rows, &mut [&mut block_models_source]);
+            });
+        let block_models_row = block_models_header_toggle.union(block_models_header.inner);
+        attach_header_drop::<(BlockModelDrag,)>(ui, &block_models_row, SectionKind::BlockModels, commands);
+        section_heading_menu(
+            &block_models_row,
+            ExplorerSection::BlockModels,
+            tagged_count(&project.block_models, SectionKind::BlockModels),
+            commands,
+        );
+
+        let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
+        let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!("ws-menubar-drillholes"))
+            .icon(unthemed_icon!("drill_hole.svg"))
+            .color(HEADER_DRILL_HOLES)
+            .dirty(drill_holes_dirty)
+            .show(ui, |ui| {
+                let drill_hole_folders = project.folders.folders(SectionKind::DrillHoles);
+                if tagged_count(&project.drill_holes, SectionKind::DrillHoles) == 0 && drill_hole_folders.is_empty() {
+                    explorer_note(ui, tr!("common-no-drill-holes"));
+                }
+                let render_drill_hole_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, dataset: &UiDrillHoleEntry| {
+                    let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
+                    let label = if dataset.is_loaded {
+                        bold(&dataset_label)
+                    } else {
+                        bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
+                    };
+                    let source_suffix = dataset
+                        .source_name
+                        .as_deref()
+                        .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                        .unwrap_or_default();
+                    let tooltip = tr!(
+                        "explorer-id-drill-holes-id-source",
+                        id = dataset.id.0.to_string(),
+                        source = source_suffix.to_string(),
+                        holes = dataset.hole_count.to_string(),
+                        fields = dataset.field_count.to_string()
+                    );
+                    let dataset_handle = SceneEntityId::DrillHole(dataset.id);
+                    rows.push(ExplorerRow::Entity(dataset_handle));
+                    let dataset_locked = frozen_handles.contains(&dataset_handle);
+                    let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
+                        .draggable(rows_draggable)
+                        .selected(selected_handles.contains(&dataset_handle))
+                        .toggles(EntryToggles {
+                            visible: dataset.is_loaded,
+                            locked: dataset_locked,
+                        });
+                    let row = with_kind_badge(row, dataset.section, MemberKind::DrillHole).show(ui);
+                    if row.visibility_clicked {
+                        commands.push(if dataset.is_loaded {
+                            UiCommand::CloseDrillHole(dataset.id)
+                        } else {
+                            UiCommand::LoadDrillHole(dataset.id)
+                        });
+                    }
+                    if row.lock_clicked {
+                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
+                    }
+                    let response = row.response.on_hover_text(&tooltip);
+                    response.dnd_set_drag_payload(DrillHoleDrag(FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id))));
+                    if response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    if response.clicked() {
+                        commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(dataset_handle)));
+                    }
+
+                    context_menu_popup(&response, dataset.name.as_str(), |ui| {
+                        if ContextMenuAction::new(if dataset_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
+                            .show(ui)
+                            .clicked()
+                        {
+                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
+                            ui.close();
+                        }
+                        if dataset.is_loaded {
+                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
+                                commands.push(UiCommand::CloseDrillHole(dataset.id));
+                                ui.close();
+                            }
+                            if ContextMenuAction::new(tr!("common-appearance")).show(ui).clicked() {
+                                commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
+                                ui.close();
+                            }
+                            if ContextMenuAction::new(tr!("common-link-geophysics")).show(ui).clicked() {
+                                commands.push(UiCommand::LinkGeophysics(dataset.id));
+                                ui.close();
+                            }
+                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
+                            commands.push(UiCommand::LoadDrillHole(dataset.id));
+                            ui.close();
+                        }
+                        if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!dataset_locked).show(ui).clicked() {
+                            commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
+                            ui.close();
+                        }
+                        move_to_folder_submenu(
+                            ui,
+                            &project.folders,
+                            dataset.folder,
+                            FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id)),
+                            commands,
+                        );
+                        context_menu_separator(ui);
+                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!dataset_locked).show(ui).clicked() {
+                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
+                            ui.close();
+                        }
+                    });
+                };
+                let mut drill_holes_source = Rows {
+                    items: &project.drill_holes,
+                    draw: render_drill_hole_entry,
+                };
+                draw_section_body::<(DrillHoleDrag,)>(ui, SectionKind::DrillHoles, drill_hole_folders, commands, &mut rows, &mut [&mut drill_holes_source]);
+            });
+        let drill_holes_row = drill_holes_header_toggle.union(drill_holes_header.inner);
+        attach_header_drop::<(DrillHoleDrag,)>(ui, &drill_holes_row, SectionKind::DrillHoles, commands);
+        section_heading_menu(
+            &drill_holes_row,
+            ExplorerSection::DrillHoles,
+            tagged_count(&project.drill_holes, SectionKind::DrillHoles),
+            commands,
+        );
+
+        // Modelling holds what the project derives from its data,
+        // such as reference points and the surfaces built from
+        // them. It admits layers and triangulations because
+        // `SectionKind::admitted` says so; nothing here special-
+        // cases Modelling.
+        let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
+        let modelling_folders = project.folders.folders(SectionKind::Modelling);
+        let (modelling_header_toggle, modelling_header, _) = ExplorerHeader::new(egui::Id::new("modelling_collapse"), tr!("common-modelling"))
+            .icon(unthemed_icon!("modelling.svg"))
+            .color(HEADER_MODELLING)
+            .dirty(modelling_dirty)
+            .show(ui, |ui| {
+                // Triangulations live on `App` directly, not inside a
+                // design project, so they draw here whether or not a
+                // project is open - the same as under Triangulations.
+                let mut triangulations_source = Rows {
+                    items: &project.triangulations,
+                    draw: &mut render_tri_entry,
+                };
+                match project.projects.first() {
+                    Some(entry) => {
+                        // The same row Designs draws, from the same
+                        // builder: what puts a layer here is its tag,
+                        // not anything about the layer itself.
+                        let modelling_row_context = LayerRowContext {
+                            entry,
+                            active_layer: *active_layer,
+                            locked_layers,
+                            draggable: rows_draggable,
+                            folders: &project.folders,
+                        };
+                        let mut layers_source = Rows {
+                            items: &entry.layers,
+                            draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
+                                layer_row(ui, commands, layer, rows, &modelling_row_context)
+                            },
+                        };
+                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
+                            ui,
+                            SectionKind::Modelling,
+                            modelling_folders,
+                            commands,
+                            &mut rows,
+                            &mut [&mut layers_source, &mut triangulations_source],
+                        );
+                    }
+                    None => {
+                        draw_section_body::<(LayerDrag, TriangulationDrag)>(ui, SectionKind::Modelling, modelling_folders, commands, &mut rows, &mut [&mut triangulations_source]);
+                    }
+                }
+            });
+        let modelling_row = modelling_header_toggle.union(modelling_header.inner);
+        attach_header_drop::<(LayerDrag, TriangulationDrag)>(ui, &modelling_row, SectionKind::Modelling, commands);
+        section_heading_menu(
+            &modelling_row,
+            ExplorerSection::Modelling,
+            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Modelling)) + tagged_count(&project.triangulations, SectionKind::Modelling),
+            commands,
+        );
+
+        paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
+    });
+    editor.explorer_rows = rows;
 }

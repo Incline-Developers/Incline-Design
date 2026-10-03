@@ -8,6 +8,16 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
+pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
+pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
+pub(crate) mod schedule_publish; // A validated solution, translated into the shared calculated schedule
+pub(crate) mod schedule_run; // Run Period / Run All Periods: capture, solve, publish, currentness
+pub(crate) mod schedule_solve; // One schedule run: validation, the hourly dispatch, and Improve where built
+#[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
+pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, run inside the solver process
+#[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
+pub(crate) mod solver_process; // The schedule solve in a child process, so a native fault ends one run, not the app
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -215,6 +225,11 @@ struct BackgroundTaskState {
     /// Tickets that carry a status-bar label, oldest first: the bar reports
     /// the longest-running task rather than flickering between concurrent ones.
     reported: Vec<ReportedTask>,
+    /// Tickets that asked not to announce themselves: no status-bar row and no
+    /// busy pointer. Work that reruns on every drag of a slider is reported
+    /// where the user is already looking, not by a readout and a cursor
+    /// blinking on and off several times a second.
+    quiet: HashSet<BackgroundTaskTicket>,
 }
 
 impl BackgroundTaskState {
@@ -260,25 +275,35 @@ impl BackgroundTaskState {
         if needs_gpu {
             let inserted = self.gpu_pending.insert(ticket);
             debug_assert!(inserted, "background ticket was already pending GPU upload");
+        } else {
+            self.quiet.remove(&ticket);
         }
     }
 
     fn cancel(&mut self, ticket: BackgroundTaskTicket) {
         self.stop_reporting(ticket);
+        self.quiet.remove(&ticket);
         let removed = self.cpu_pending.remove(&ticket) || self.awaiting_apply.remove(&ticket) || self.gpu_pending.remove(&ticket);
         debug_assert!(removed, "unknown or double-cancelled background ticket {ticket:?}");
     }
 
     fn finish_gpu_uploads(&mut self) {
-        self.gpu_pending.clear();
+        for ticket in std::mem::take(&mut self.gpu_pending) {
+            self.quiet.remove(&ticket);
+        }
     }
 
     fn has_gpu_uploads(&self) -> bool {
         !self.gpu_pending.is_empty()
     }
 
+    /// Whether the pointer should say the app is working. A quiet task is
+    /// still running; it is just not something the user is waiting on.
     fn is_busy(&self) -> bool {
-        !self.cpu_pending.is_empty() || !self.awaiting_apply.is_empty() || !self.gpu_pending.is_empty()
+        [&self.cpu_pending, &self.awaiting_apply, &self.gpu_pending]
+            .into_iter()
+            .flatten()
+            .any(|ticket| !self.quiet.contains(ticket))
     }
 }
 
@@ -402,6 +427,79 @@ pub(crate) struct App<'a> {
     /// Pointer state owned by the detached slice-preview window. Kept out of
     /// `EditorState` because it is transient native-window input, not project
     /// or tool state.
+    /// The Solids Setup page's inspection mesh, kept only while that page is
+    /// showing it; see `App::sync_solid_preview`.
+    pub(crate) solid_preview: Option<crate::app::commands::solids::SolidPreview>,
+    /// The solid whose surfaces have already been asked back from storage, so
+    /// a restore that fails is not retried every frame.
+    pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
+    pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
+    pub(crate) solid_view_body_key: Option<u64>,
+    /// Dig block identities, per solid, remembered across geometry rebuilds.
+    ///
+    /// Deliberately not inside `solid_view_cache`: that cache is thrown away
+    /// whenever a solid's body is rebuilt, and ground that did not move must
+    /// not be renamed underneath a schedule because of it.
+    pub(crate) dig_block_identities: std::collections::HashMap<crate::model::SolidId, Vec<crate::app::commands::solids_view::DigBlockIdentity>>,
+    /// The six-stage Solids pipeline's state for the active project; see
+    /// [`crate::app::planning_pipeline`]. `None` until a project is open.
+    pub(crate) planning_pipeline: Option<crate::app::planning_pipeline::PlanningPipeline>,
+    /// The Schedule Setup pipeline's state for the active project; see
+    /// [`crate::app::schedule_pipeline`]. `None` until a project is open.
+    pub(crate) schedule_pipeline: Option<crate::app::schedule_pipeline::SchedulePipeline>,
+    /// The step a Run Step started from, so the step list moves on to the
+    /// next one once it succeeds. Cleared when that step settles either way.
+    pub(crate) planning_advance_after: Option<crate::ui::state::SolidsStep>,
+    pub(crate) schedule_advance_after: Option<crate::ui::state::ScheduleStep>,
+    /// Set on opening a cut step, until it has picked ground to open on or
+    /// found the user already had some.
+    pub(crate) planning_entry_pending: bool,
+    /// The cut step last opened - `Some(true)` for Dig Strips - so moving
+    /// between Blasting and Dig Strips picks ground for the new one too.
+    pub(crate) planning_entry_step: Option<bool>,
+    /// What the last accepted Run Period or Run All Periods calculated. Kept
+    /// across edits and failed runs - an edit marks it stale, nothing but a
+    /// newer accepted run or the project closing replaces it - so the pages
+    /// can always say what was true when it was last run. Its indexes are
+    /// built once, when it is published. See [`crate::app::schedule_run`].
+    pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// A run in flight on the bounded worker pool. Dropping it and cancelling
+    /// its job publishes nothing.
+    pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
+    /// Why the last run published nothing, owned by the semantic inputs it
+    /// was made against.
+    pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleAttempt>,
+    pub(crate) schedule_report_cache: Option<crate::app::commands::schedule_readiness::ScheduleReportCache>,
+    pub(crate) schedule_plan_revision_cache: std::cell::Cell<Option<(u32, u64, u64)>>,
+    /// [`Self::schedule_semantic_key`], keyed by project, document revision
+    /// and the Setup gate, because currentness is asked every frame.
+    pub(crate) schedule_semantic_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
+    pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
+    /// [`App::planning_fingerprints`], with the key it was computed for.
+    pub(crate) planning_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::SolidsStep::ALL.len()])>>,
+    /// Numbers the runs, so a result can be named rather than merely dated.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
+    pub(crate) schedule_run_serial: u64,
+    /// The inputs a recalculation was last started (or a run last failed or
+    /// was stopped) for, so one that cannot succeed is not retried until
+    /// something changes. See [`Self::auto_recalculate_schedule`].
+    pub(crate) schedule_auto_attempted: Option<u64>,
+    /// The inputs last seen while waiting for edits to settle, and since when.
+    pub(crate) schedule_auto_settle: Option<(u64, Instant)>,
+    /// When the settled inputs are due a recalculation, so the event loop
+    /// wakes for it with no further input.
+    pub(crate) schedule_auto_deadline: Option<Instant>,
+    /// The planning inputs Auto last started a run for (or found nothing
+    /// to run), so a failed or cancelled run is not retried until they
+    /// change. See [`Self::auto_run_planning`].
+    pub(crate) planning_auto_attempted: Option<[u64; crate::ui::state::SolidsStep::ALL.len()]>,
+    /// The planning inputs last seen while waiting for edits to settle, and since when.
+    pub(crate) planning_auto_settle: Option<([u64; crate::ui::state::SolidsStep::ALL.len()], Instant)>,
+    /// When the settled planning inputs are due a run, so the event loop
+    /// wakes for it with no further input.
+    pub(crate) planning_auto_deadline: Option<Instant>,
+    pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
+    pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
     pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
@@ -529,6 +627,34 @@ impl<'a> Default for App<'a> {
             gizmo_drag: None,
             right_press_px: None,
             right_orbit_active: false,
+            solid_preview: None,
+            solid_view_cache: Default::default(),
+            solid_view_body: Vec::new(),
+            solid_view_body_key: None,
+            dig_block_identities: Default::default(),
+            planning_pipeline: None,
+            schedule_pipeline: None,
+            planning_advance_after: None,
+            schedule_advance_after: None,
+            planning_entry_pending: false,
+            planning_entry_step: None,
+            schedule_calculation: None,
+            pending_schedule_run: None,
+            schedule_run_diagnostics: None,
+            schedule_report_cache: None,
+            schedule_plan_revision_cache: std::cell::Cell::new(None),
+            schedule_semantic_cache: std::cell::Cell::new(None),
+            schedule_report_key_cache: std::cell::Cell::new(None),
+            planning_fingerprint_cache: std::cell::Cell::new(None),
+            schedule_run_serial: 0,
+            schedule_auto_attempted: None,
+            schedule_auto_settle: None,
+            schedule_auto_deadline: None,
+            planning_auto_attempted: None,
+            planning_auto_settle: None,
+            planning_auto_deadline: None,
+            schedule_animation: Default::default(),
+            solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
             pending_selection_click: None,
@@ -579,6 +705,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenImport => {
                 self.editor.show_import = true;
                 self.editor.show_export = false;
+                self.editor.import_as_haul_roads = false;
                 None
             }
             MacMenuAction::OpenExport => {
@@ -586,6 +713,11 @@ impl<'a> App<'a> {
                 self.editor.show_export = true;
                 None
             }
+            MacMenuAction::DrawHaulRoad => Some(UiCommand::StartHaulRoad),
+            MacMenuAction::ConvertHaulSelection => Some(UiCommand::ConvertHaulSelection),
+            MacMenuAction::ImportHaulRoads => Some(UiCommand::OpenHaulImport),
+            MacMenuAction::ExportHaulRoads => Some(UiCommand::ExportHaulRoads),
+            MacMenuAction::EditHaulProperties => Some(UiCommand::EditHaulProperties),
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
             MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
@@ -1036,6 +1168,8 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         let exists = |entity: &SceneEntityId| match entity {
+            SceneEntityId::HaulRoad(id) => self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
+            SceneEntityId::HaulNode(id) => self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
             SceneEntityId::Object(id) => self.workspace.active_document().is_some_and(|document| {
                 document
                     .get_object(*id)
@@ -1224,6 +1358,11 @@ impl<'a> App<'a> {
         self.cancel_jobs(|key| !matches!(key, jobs::JobKey::BrowserProjectSave { .. }));
         #[cfg(not(target_arch = "wasm32"))]
         self.cancel_jobs(|_| true);
+        // A calculated schedule describes one project's ground and does not
+        // outlive it; a run in flight was cancelled with every other job above.
+        self.pending_schedule_run = None;
+        self.schedule_calculation = None;
+        self.schedule_run_diagnostics = None;
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
@@ -1432,7 +1571,30 @@ impl<'a> App<'a> {
         // workspace contents actually changed.
         let composite_key = self.workspace.composite_key();
         if Some(composite_key) != self.scene_document_key {
-            self.scene_document = self.workspace.scene_document();
+            self.scene_document = if self.editor.is_planning_cut_step() {
+                let mut scene = Document::new();
+                if let Some(document) = self.workspace.active_document() {
+                    scene.clone_reserve_fields_from(document);
+                    scene.clone_solids_from(document);
+                }
+                scene
+            } else {
+                self.workspace.scene_document()
+            };
+            if let Some((solid, band)) = self.editor.planning_cut_target()
+                && let Some(bench) = self
+                    .workspace
+                    .active_document()
+                    .and_then(|doc| doc.solid(solid))
+                    .and_then(|solid| solid.blasting.drawing(band.base, self.editor.is_dig_strips_step()))
+                && let Some(layer) = &bench.planning_layer
+            {
+                self.scene_document.append_layer_snapshot_unindexed(
+                    layer,
+                    bench.cuts.iter().map(|cut| (cut, self.workspace.active_document().unwrap().object_revision(cut.id()))),
+                );
+                self.scene_document.rebuild_object_index();
+            }
             self.scene_document_key = Some(composite_key);
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
@@ -1515,7 +1677,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn invalidate_overlay(&mut self) {
+    pub(crate) fn invalidate_overlay(&mut self) {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.invalidate_overlay();
         }
@@ -1538,6 +1700,17 @@ impl<'a> App<'a> {
         let progress = crate::model::progress::Progress::new();
         self.background_tasks.report(ticket, label.into(), progress.clone());
         (ticket, progress)
+    }
+
+    /// Begin a background task that says nothing about itself: no status-bar
+    /// row, no busy pointer, and no frame held open on its behalf. For work
+    /// whose progress the page it belongs to already shows, and for work that
+    /// reruns often enough that a readout would be a flicker rather than a
+    /// report.
+    pub(crate) fn begin_quiet_task(&mut self) -> (BackgroundTaskTicket, crate::model::progress::Progress) {
+        let ticket = self.begin_topology_load();
+        self.background_tasks.quiet.insert(ticket);
+        (ticket, crate::model::progress::Progress::new())
     }
 
     /// Point the status bar at the longest-running reported task (or clear it
@@ -1846,12 +2019,14 @@ impl<'a> App<'a> {
                 source_name: model.state.source_name.clone(),
                 is_loaded: model.state.loaded,
                 dirty: model.state.is_dirty(),
-                _block_count: model
+                block_count: model
                     .state
                     .summary
                     .as_ref()
                     .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                lower: model.world_bounds.map_or(model.model.metadata.lower, |(lower, _)| lower),
+                upper: model.world_bounds.map_or(model.model.metadata.upper, |(_, upper)| upper),
                 folder: model.state.folder,
                 section: model.state.section,
             })
@@ -1995,6 +2170,15 @@ impl<'a> App<'a> {
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
+            schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
+            haulage: self.workspace.active_document().map(|document| document.haulage().clone()).unwrap_or_default(),
+            haul_points: self.workspace.active_document().map(|document| self.haul_destination_points(document)).unwrap_or_default(),
+            haul_destinations: self
+                .workspace
+                .active_document()
+                .map(|d| crate::model::schedule::destinations::available(d.solids(), d.schedule().routing()))
+                .unwrap_or_default(),
+            active_session: self.workspace.active_project().map_or(0, |project| project.runtime_id),
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
@@ -2157,6 +2341,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
             self.redraw_requested = true;
         }
+        // A schedule recalculation waits for edits to settle and then needs a
+        // frame to start in: asked for here, before the frame request below,
+        // or the loop goes back to sleep with the frame still owed.
+        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.schedule_auto_deadline = None;
+            self.redraw_requested = true;
+        }
+        if self.planning_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.planning_auto_deadline = None;
+            self.redraw_requested = true;
+        }
         if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
             self.slice_surface_retry_deadline = None;
             if let Some(graphics) = self.graphics.as_ref() {
@@ -2190,7 +2385,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
+        let wake_deadline = wake_deadline
+            .into_iter()
+            .chain(self.slice_surface_retry_deadline)
+            .chain(resize_settle_deadline)
+            .chain(self.schedule_auto_deadline)
+            .chain(self.planning_auto_deadline)
+            .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -2199,6 +2400,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        // SCIP polls this flag from its own thread; cancelling here lets a
+        // solve in flight stop at its next callback instead of holding exit.
+        self.cancel_schedule_run_calculation_quietly();
         self.teardown_window();
     }
 

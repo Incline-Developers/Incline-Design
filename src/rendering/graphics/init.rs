@@ -756,6 +756,7 @@ impl<'a> Graphics<'a> {
         let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let flow_stroke_gpu = Self::create_stream_buffer(&device, "Haul Flow Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
 
@@ -790,6 +791,7 @@ impl<'a> Graphics<'a> {
             stroke_gpu,
             overlay_stroke_gpu,
             dynamic_stroke_gpu,
+            flow_stroke_gpu,
             text_vertex_gpu,
             text_index_gpu,
             camera_buffer,
@@ -842,6 +844,10 @@ impl<'a> Graphics<'a> {
             overlay_stroke_capacity: 1,
             dynamic_strokes: Vec::new(),
             dynamic_stroke_capacity: 1,
+            flow_strokes: Vec::new(),
+            flow_stroke_capacity: 1,
+            flow_underlay: 0,
+            flow_clock: web_time::Instant::now(),
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,
@@ -861,6 +867,8 @@ impl<'a> Graphics<'a> {
             document_style,
             document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
+            cached_bounds_surface_key: None,
+            haul_roads_in_bounds: false,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),
             overlay_dirty: true,
@@ -889,6 +897,9 @@ impl<'a> Graphics<'a> {
             slice_preview: None,
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,
+            solid_preview: None,
+            solid_preview_key: None,
+            solid_preview_framing: None,
             detached_preview_scene_key: None,
             #[cfg(not(target_arch = "wasm32"))]
             cinematic: None,

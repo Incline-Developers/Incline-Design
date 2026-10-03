@@ -439,6 +439,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             SceneEntityId::PointCloud(_) => 3,
             SceneEntityId::DrillHole(_) => 4,
             SceneEntityId::Raster(_) => 5,
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => continue,
         }] += 1;
     }
     let state = &mut editor.survey;

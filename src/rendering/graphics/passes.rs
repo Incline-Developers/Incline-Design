@@ -863,6 +863,12 @@ impl<'a> Graphics<'a> {
                 if cached.color[3] < 0.999 {
                     continue;
                 }
+                let pipes = self.pipes();
+                render_pass.set_pipeline(if triangulation.cull_back_faces {
+                    &pipes.solid_surface_render_pipeline
+                } else {
+                    &pipes.surface_render_pipeline
+                });
                 surface_stats.total_chunks += cached.surface_chunks.len() as u32;
                 surface_stats.total_faces += cached.surface_chunks.iter().map(|chunk| u64::from(chunk.index_count / 3)).sum::<u64>();
                 // Cheap whole-mesh reject before touching individual chunks.
@@ -971,6 +977,12 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
                     continue;
                 };
+                let pipes = self.pipes();
+                render_pass.set_pipeline(if triangulation.cull_back_faces {
+                    &pipes.transparent_solid_surface_render_pipeline
+                } else {
+                    &pipes.transparent_surface_render_pipeline
+                });
                 surface_stats.total_chunks += cached.surface_chunks.len() as u32;
                 surface_stats.total_faces += cached.surface_chunks.iter().map(|chunk| u64::from(chunk.index_count / 3)).sum::<u64>();
                 let (aabb_min, aabb_max) = self.mesh_scene_aabb(&triangulation.mesh);
@@ -1322,6 +1334,19 @@ impl<'a> Graphics<'a> {
             render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.dynamic_stroke_gpu.slice(..));
             render_pass.draw(0..6, 0..self.dynamic_strokes.len() as u32);
+        }
+
+        // The faint underlay first, through anything in front of it, then
+        // the depth-tested band and stripes over it.
+        let flows = self.flow_strokes.len() as u32;
+        if flows > 0 {
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.flow_stroke_gpu.slice(..));
+            render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
+            render_pass.draw(0..6, 0..self.flow_underlay);
+            render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
+            render_pass.draw(0..6, self.flow_underlay..flows);
         }
 
         if !self.overlay_strokes.is_empty() {

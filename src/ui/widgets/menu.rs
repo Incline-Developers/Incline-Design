@@ -306,6 +306,7 @@ pub(crate) struct DragableMenu<'open> {
     inner_margin: egui::Margin,
     default_pos: Option<egui::Pos2>,
     current_pos: Option<egui::Pos2>,
+    movable: bool,
 }
 
 impl<'open> DragableMenu<'open> {
@@ -325,6 +326,7 @@ impl<'open> DragableMenu<'open> {
             inner_margin: egui::Margin::symmetric(8, 6),
             default_pos: None,
             current_pos: None,
+            movable: true,
         }
     }
 
@@ -369,6 +371,18 @@ impl<'open> DragableMenu<'open> {
         self
     }
 
+    /// Nail the menu to `pos` and take its drag away.
+    ///
+    /// For the one dialog that is not a tool window: it fills the application
+    /// window, so there is nowhere to move it to and no edge to resize from,
+    /// and a title bar that still answered the pointer would only let it be
+    /// dragged half off the screen.
+    pub(crate) fn pinned(mut self, pos: egui::Pos2) -> Self {
+        self.current_pos = Some(pos);
+        self.movable = false;
+        self
+    }
+
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
         let Self {
             id,
@@ -381,13 +395,14 @@ impl<'open> DragableMenu<'open> {
             inner_margin,
             default_pos,
             current_pos,
+            movable,
         } = self;
 
         if open.as_deref().is_some_and(|open| !open) {
             return None;
         }
 
-        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(true).constrain(true).fade_in(false);
+        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(movable).constrain(true).fade_in(false);
         area = if let Some(current_pos) = current_pos {
             area.pivot(egui::Align2::LEFT_TOP).current_pos(current_pos)
         } else if let Some(default_pos) = default_pos {
@@ -439,13 +454,20 @@ impl<'open> DragableMenu<'open> {
                         rect
                     });
 
+                    // What the title bar and the gap under it actually took,
+                    // measured rather than assumed. `fixed_size` is the size of
+                    // the whole card: a body sized from a nominal title height
+                    // misses the spacing under it, and a card asked for the
+                    // height of the screen then stands that much taller than
+                    // the screen with its foot - and its buttons - underneath.
+                    let consumed = ui.cursor().top() - ui.max_rect().top();
                     let inner = egui::Frame::NONE
                         .inner_margin(inner_margin)
                         .show(ui, |ui| {
                             if let Some(fixed_size) = fixed_size {
-                                let body_height = fixed_size.y - if title_bar { TITLE_BAR_HEIGHT } else { 0.0 } - inner_margin.sum().y;
-                                ui.set_min_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
-                                ui.set_max_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
+                                let body = egui::vec2(fixed_size.x - inner_margin.sum().x, (fixed_size.y - consumed - inner_margin.sum().y).max(0.0));
+                                ui.set_min_size(body);
+                                ui.set_max_size(body);
                             }
                             add_contents(ui)
                         })
@@ -496,26 +518,31 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
 /// The close cross in the right-hand slot of a title bar `rect`, for cards
 /// that paint their own bar. Returns whether it was clicked.
 pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
-    let dark_mode = ui.visuals().dark_mode;
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-    let response = ui
-        .interact(close_rect, ui.id().with("close"), egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(tr!("survey-close"));
+    close_cross(ui, close_rect, ui.id().with("close"), surface).on_hover_text(tr!("survey-close")).clicked()
+}
+
+/// The small cross that dismisses whatever it sits on, drawn and interacted
+/// with in one call, over a card of colour `surface`.
+///
+/// One mark in one place: a floating menu's own close button and a list row's
+/// remove control are the same gesture at two sizes, and drawing them twice is
+/// how they end up looking like two different controls.
+pub(crate) fn close_cross(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, surface: egui::Color32) -> egui::Response {
+    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let visuals = ui.visuals();
+    let dark_mode = visuals.dark_mode;
+    let color = if response.hovered() { visuals.text_color() } else { visuals.weak_text_color() };
     if response.hovered() {
-        ui.painter()
-            .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
+        ui.painter().rect_filled(rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
     }
-    let color = if response.hovered() {
-        ui.visuals().text_color()
-    } else {
-        ui.visuals().weak_text_color()
-    };
+    // Three tenths in from each side, so the cross keeps its proportions at
+    // the row-sized version as well as the title-bar one.
+    let icon_rect = rect.shrink(rect.width() * 0.3);
     let stroke = egui::Stroke::new(1.3, color);
-    let icon_rect = close_rect.shrink(6.0);
     ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
     ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
-    response.clicked()
+    response
 }
 
 /// How much weight a [`MenuButton`] carries in its row.
@@ -690,9 +717,20 @@ pub(crate) fn committed(response: &egui::Response) -> bool {
 /// Small, weak, and followed by a hairline across the menu, so a long dialog
 /// reads as a few short lists rather than one run of fields.
 pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    section_heading(ui, heading.into(), egui::FontId::proportional(11.0));
+}
+
+/// A [`menu_section`] heading at body size, for the Planning pages and their
+/// dialogs, which set their text at body size throughout.
+pub(crate) fn panel_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    section_heading(ui, heading.into(), font);
+}
+
+fn section_heading(ui: &mut egui::Ui, heading: String, font: egui::FontId) {
     ui.add_space(4.0);
     let color = ui.visuals().weak_text_color();
-    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), color);
+    let galley = ui.painter().layout_no_wrap(heading, font, color);
     record_intrinsic_content_width(ui, galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y.max(14.0)), egui::Sense::hover());
     let text_end = rect.left() + galley.size().x;
@@ -1312,7 +1350,18 @@ impl<'value> MenuFieldText<'value> {
             hint,
         } = self;
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
-            ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint))
+            let response = ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint));
+            // These fields mostly arrive pre-filled with a suggested name.
+            // Selecting it on focus lets typing replace the suggestion rather
+            // than append to it ("Shell_trimmedShell_trimmed").
+            if response.gained_focus()
+                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id)
+            {
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(value.chars().count()));
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), response.id);
+            }
+            response
         })
     }
 }

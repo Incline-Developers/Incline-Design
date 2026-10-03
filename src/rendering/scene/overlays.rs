@@ -24,6 +24,15 @@ pub(crate) struct OverlaySceneBuildInput<'a> {
     pub(crate) scale_factor: f32,
 }
 
+/// Blast outlines sit under the cut lines that will divide them, so they are
+/// drawn a shade heavier than ordinary design geometry to read as a boundary
+/// rather than as one more line on the bench.
+const BLAST_OUTLINE_WIDTH: f32 = 2.5;
+
+/// The Haulage Layout's selected dig block, and the line to where it joins
+/// the roads: the selection orange the rest of the scene uses.
+pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
+
 /// How many pieces a leg replacing an existing connector is broken into. Odd,
 /// so a dashed run starts and ends on a mark rather than on a gap.
 const TIE_OVERWRITE_DASHES: usize = 9;
@@ -86,11 +95,128 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     let mut unused_fill_indices = Vec::new();
     let mut overlay = DrawContext::unstyled(overlay_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
 
+    // Blast outlines are derived from the bench, not stored objects, so they
+    // are drawn here rather than through the scene's document geometry.
+    for outline in editor.blasting_outlines.iter().filter(|_| editor.is_blasting_step()) {
+        let selected = editor.selected_blast == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+        for ring in &outline.rings {
+            let verts: Vec<crate::model::PolyVertex> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
+            tessellate_polyline_stroke(
+                &mut overlay,
+                &verts,
+                true,
+                if selected { BLAST_OUTLINE_WIDTH * 2.5 } else { BLAST_OUTLINE_WIDTH },
+                if selected { [1.0, 0.7, 0.1, 1.0] } else { PREVIEW_COLOR },
+            );
+        }
+    }
+
+    // Dig blocks belong to the step that draws them; the Blasting step before
+    // it shows its benches undivided.
+    if editor.is_dig_strips_step() {
+        for outline in &editor.dig_outlines {
+            let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+            for ring in &outline.rings {
+                let verts: Vec<_> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
+                tessellate_polyline_stroke(
+                    &mut overlay,
+                    &verts,
+                    true,
+                    if selected { 4.0 } else { 1.5 },
+                    if selected { [1.0, 0.7, 0.1, 1.0] } else { [0.2, 0.9, 0.8, 1.0] },
+                );
+            }
+        }
+    }
+
     let stroke_preview = editor.pending_stroke.clone();
     for pair in stroke_preview.windows(2) {
         draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
 
+    if editor.is_haulage_page() {
+        for issue in &editor.haul_issues {
+            draw_screen_cross(&mut overlay, issue.pos, 9.0, 2.0, [1.0, 0.65, 0.15, 1.0]);
+        }
+        for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
+            let selected = editor.haul_selected_block == Some(block.id);
+            let (color, width) = if selected {
+                (HAUL_SELECTED_BLOCK, 3.5)
+            } else if block.connected {
+                ([0.25, 0.85, 0.4, 0.45], 1.5)
+            } else {
+                ([0.95, 0.25, 0.25, 0.55], 1.5)
+            };
+            for ring in &block.rings {
+                let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
+            }
+            // Where it meets the roads: always for the selected block, and
+            // for any held to a chosen node, so a link is never invisible.
+            if let Some(join) = block.join
+                && (selected || block.link.is_some())
+            {
+                let color = if selected { HAUL_SELECTED_BLOCK } else { [0.35, 0.75, 0.95, 0.8] };
+                draw_line(&mut overlay, block.point(), join, if selected { 2.5 } else { 1.5 }, color);
+                draw_screen_cross(&mut overlay, block.point(), 6.0, 2.0, color);
+            }
+        }
+    }
+    for pair in editor.haul_points.windows(2) {
+        draw_line(&mut overlay, pair[0], pair[1], 3.0, PREVIEW_COLOR);
+    }
+    for &point in &editor.haul_points {
+        draw_screen_cross(&mut overlay, point, 7.0, 2.0, PREVIEW_COLOR);
+    }
+    if editor.haul_draw
+        && let Some(cursor) = editor.haul_cursor
+    {
+        if let Some(&last) = editor.haul_points.last() {
+            draw_line(&mut overlay, last, cursor, 3.0, PREVIEW_COLOR);
+        }
+        draw_screen_cross(&mut overlay, cursor, 7.0, 2.0, PREVIEW_COLOR);
+    }
+    // A dragged node or bend point: its roads, redrawn through where it
+    // would land.
+    if let Some(crate::ui::state::HaulDrag { target, pos: Some(pos), .. }) = editor.haul_drag {
+        let network = input.document.haulage();
+        for road in &network.roads {
+            let mut points = network.points(road);
+            let moved = match target {
+                crate::ui::state::HaulDragTarget::Node(id) if road.from == id => points.first_mut(),
+                crate::ui::state::HaulDragTarget::Node(id) if road.to == id => points.last_mut(),
+                crate::ui::state::HaulDragTarget::Shape(id, index) if road.id == id => points.get_mut(index + 1),
+                _ => None,
+            };
+            let Some(point) = moved else { continue };
+            *point = pos;
+            for pair in points.windows(2) {
+                draw_line(&mut overlay, pair[0], pair[1], 3.0, PREVIEW_COLOR);
+            }
+        }
+        draw_screen_cross(&mut overlay, pos, 9.0, 2.0, PREVIEW_COLOR);
+    }
+    // The route check is the Layout panel's, and draws only beside it.
+    if let Some(route) = editor.haul_route.as_ref().filter(|_| editor.is_haulage_page()) {
+        // The return first, so the loaded haul draws over it where they share road.
+        for (points, color, loaded) in [(&route.empty_path, [1.0, 0.85, 0.1, 1.0], false), (&route.loaded_path, [1.0, 0.2, 0.2, 1.0], true)] {
+            for (i, pair) in points.windows(2).enumerate() {
+                if route.grade_lengthened && ((loaded && i == 0) || (!loaded && i + 2 == points.len())) {
+                    for step in (0..20).step_by(2) {
+                        draw_line(
+                            &mut overlay,
+                            pair[0].lerp(pair[1], f64::from(step) / 20.0),
+                            pair[0].lerp(pair[1], f64::from(step + 1) / 20.0),
+                            4.0,
+                            color,
+                        );
+                    }
+                } else {
+                    draw_line(&mut overlay, pair[0], pair[1], 4.0, color);
+                }
+            }
+        }
+    }
     draw_tie_preview(&mut overlay, editor);
     if editor.poly_finish_dialog {
         // Dialog is open: draw a dashed closing line from last point to first point.

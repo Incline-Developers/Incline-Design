@@ -34,13 +34,22 @@ impl<'a> App<'a> {
             centre
         } else {
             self.refresh_snap_index();
+            let drawn = crate::app::events::drawn_surfaces(
+                &self.editor,
+                self.showing_solid_preview(),
+                &self.triangulations,
+                &self.solid_view_body,
+                &self.schedule_animation,
+                self.solid_preview.as_ref(),
+            );
             let Some(graphics) = self.graphics.as_mut() else {
                 return;
             };
             // No snap caught: one rule for every object, the closest point on
             // it to the cursor.
             let Some(centre) = graphics.pick_rotation_centre(
-                &self.triangulations,
+                drawn.0,
+                drawn.1,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
                 &self.editor.frozen_handles,
@@ -291,12 +300,28 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The surfaces framing must measure: whatever the viewport is actually
+    /// drawing.
+    ///
+    /// On the Animate page that is the project's own surfaces *and* the
+    /// calculated solids for the instant on screen. Measuring only the
+    /// project's own there framed nothing at all when the solids were the
+    /// only thing visible, and the camera reset to the world origin.
+    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+        if self.editor.is_schedule_animation() {
+            self.schedule_animation.scene()
+        } else {
+            &self.triangulations
+        }
+    }
+
     /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
+        let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.fit_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                &triangulations,
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -309,10 +334,11 @@ impl<'a> App<'a> {
 
     /// Fit all visible content while preserving the current orbit angle.
     pub(crate) fn zoom_to_extents(&mut self) {
+        let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                &triangulations,
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,

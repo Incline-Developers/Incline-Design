@@ -133,7 +133,7 @@ pub(crate) enum FileDialogAction {
     WebNewProject(String),
     /// Import DXF files into the active project.
     #[cfg(not(target_arch = "wasm32"))]
-    ImportDxfInto { paths: Vec<PathBuf> },
+    ImportDxfInto { paths: Vec<PathBuf>, as_roads: bool },
     #[cfg(not(target_arch = "wasm32"))]
     ImportTriangulation(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
@@ -164,9 +164,14 @@ pub(crate) enum FileDialogAction {
     #[cfg(not(target_arch = "wasm32"))]
     ExportProjectDxf { project_runtime_id: u32, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
+    ExportHaulRoads { project: Box<crate::model::project::ProjectFile>, path: PathBuf },
+    #[cfg(not(target_arch = "wasm32"))]
     ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportTriangulation { id: TriangulationId, path: PathBuf },
+    /// Write a schedule report, built when it was asked for, to `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportScheduleReport { path: PathBuf, text: String },
     #[cfg(not(target_arch = "wasm32"))]
     ExportBlockModelCsv { id: BlockModelId, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -299,7 +304,7 @@ fn folders_diverge_from_file(live: &crate::model::FolderRegistry, from_file: &cr
 impl<'a> App<'a> {
     /// Restore matching unloaded layers before merging into them, so incoming
     /// objects cannot shadow or bypass a layer's backed payload.
-    fn apply_dxf_imports(&mut self, runtime_id: u32, parsed: Vec<(String, crate::model::Document)>) {
+    fn apply_dxf_imports(&mut self, runtime_id: u32, parsed: Vec<(String, crate::model::Document)>, as_roads: bool) {
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
             return;
         };
@@ -311,9 +316,28 @@ impl<'a> App<'a> {
             .filter(|id| document.deferred_layers.contains_key(id))
             .collect();
         if !needed.is_empty() {
-            self.restore_layers_for(needed, move |app| app.apply_dxf_imports(runtime_id, parsed));
+            self.restore_layers_for(needed, move |app| app.apply_dxf_imports(runtime_id, parsed, as_roads));
             return;
         }
+        let strings: Vec<_> = if as_roads {
+            parsed
+                .iter()
+                .flat_map(|(name, doc)| {
+                    doc.objects().iter().filter_map(|o| match o {
+                        crate::model::Object::Polyline { verts, closed, .. } => {
+                            let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
+                            if *closed && let Some(&first) = points.first() {
+                                points.push(first);
+                            }
+                            Some((name.clone(), points))
+                        }
+                        _ => None,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let project = &mut self.workspace.projects[index];
         let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
         let mut total = 0;
@@ -327,6 +351,20 @@ impl<'a> App<'a> {
         }
         if let Some(layer) = project.project.document.layers().iter().find(|layer| layer.loaded && !existing.contains(&layer.id)) {
             self.editor.active_layer = Some(layer.id);
+        }
+        if as_roads && let Some(document) = self.workspace.projects.get(index).map(|p| &p.project.document) {
+            let before = document.haulage().clone();
+            let mut after = before.clone();
+            match after.convert(&strings).and_then(|()| after.validate()) {
+                Ok(()) => self.execute_edit_for(
+                    runtime_id,
+                    crate::model::Command::SetHaulNetwork {
+                        before: Box::new(before),
+                        after: Box::new(after),
+                    },
+                ),
+                Err(error) => userspace_warn!("{error:#}"),
+            }
         }
         self.evict_unloaded_layers();
         self.invalidate_geometry();
@@ -530,7 +568,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ImportDxfInto { paths } => {
+            FileDialogAction::ImportDxfInto { paths, as_roads } => {
                 let project = self.workspace.active_project().context("No active .omf to import into")?;
                 let runtime_id = project.runtime_id;
                 let document_revision = project.project.document.revision();
@@ -553,7 +591,11 @@ impl<'a> App<'a> {
                             return;
                         }
                     };
-                    app.apply_dxf_imports(runtime_id, parsed.into_iter().map(|(path, document)| (path.display().to_string(), document)).collect());
+                    app.apply_dxf_imports(
+                        runtime_id,
+                        parsed.into_iter().map(|(path, document)| (path.display().to_string(), document)).collect(),
+                        as_roads,
+                    );
                 };
                 self.spawn_job(
                     tr!("cmd-file-parsing-dxf-import"),
@@ -703,6 +745,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportHaulRoads { project, path } => {
+                self.spawn_dxf_write(*project, None, path, tr!("haul-roads"));
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportProjectDxf { project_runtime_id, path } => {
                 self.commit_export_move_if_needed(project_runtime_id);
                 self.ensure_save_path_not_pending(&path)?;
@@ -742,6 +789,19 @@ impl<'a> App<'a> {
             FileDialogAction::ExportBlockModelCsv { id, path } => self.export_block_model_csv_to_path(id, path),
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportDrillHoleCsv { id, path } => self.export_drill_hole_csv_to_path(id, path),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportScheduleReport { mut path, text } => {
+                if path.extension().is_none() {
+                    path.set_extension("csv");
+                }
+                crate::model::atomic_file::write_atomic(&path, |file| {
+                    use std::io::Write;
+                    file.write_all(text.as_bytes())?;
+                    Ok(())
+                })?;
+                userspace_log!("{}", tr!("report-saved", path = path.display().to_string()));
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::SaveProjectAs { project_runtime_id, path } => {
                 if self.project_revert_is_pending(project_runtime_id) {
@@ -1404,6 +1464,9 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn import_dxf_paths_into(&mut self, paths: Vec<PathBuf>) -> Result<()> {
+        // Haulage's own DXF button asks for roads; it lasts for that one
+        // import, so the next ordinary one brings in design geometry again.
+        let as_roads = std::mem::take(&mut self.editor.import_as_haul_roads);
         #[cfg(target_arch = "wasm32")]
         {
             let _ = paths;
@@ -1429,7 +1492,7 @@ impl<'a> App<'a> {
                         return;
                     }
                 };
-                app.apply_dxf_imports(runtime_id, parsed);
+                app.apply_dxf_imports(runtime_id, parsed, as_roads);
             };
             self.spawn_job(
                 tr!("cmd-file-parsing-browser-dxf-import"),
@@ -1440,7 +1503,7 @@ impl<'a> App<'a> {
             Ok(())
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.execute_file_dialog_action(FileDialogAction::ImportDxfInto { paths })
+        self.execute_file_dialog_action(FileDialogAction::ImportDxfInto { paths, as_roads })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1633,6 +1696,40 @@ impl<'a> App<'a> {
         self.open_block_model_input(file, crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
     }
 
+    pub(crate) fn choose_export_haul_roads(&mut self) {
+        let Some(document) = self.workspace.active_document() else { return };
+        let mut project = crate::model::project::new_empty(None);
+        let layer = project.document.add_layer(tr!("haul-roads"), None, [0.7, 0.8, 0.9, 1.0], true, 0.0);
+        for road in &document.haulage().roads {
+            let id = project.document.allocate_object_id();
+            let verts = document.haulage().points(road).into_iter().map(crate::model::PolyVertex::straight).collect();
+            project.document.insert_object(crate::model::Object::Polyline {
+                id,
+                layer,
+                verts,
+                closed: false,
+                color: crate::model::ObjectColor::ByLayer,
+                fill: crate::model::FillStyle::Clear,
+                line_weight: 3.0,
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        match crate::model::formats::dxf::export_bytes(&project, None) {
+            Ok(bytes) => Self::trigger_browser_download("haul-roads.dxf".to_owned(), bytes, "application/dxf", "haul roads"),
+            Err(error) => userspace_warn!("{error:#}"),
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let path = AsyncFileDialog::new()
+                .add_filter("DXF", &["dxf"])
+                .set_file_name("haul-roads.dxf")
+                .save_file()
+                .await?
+                .into_path();
+            Some(FileDialogAction::ExportHaulRoads { project: Box::new(project), path })
+        });
+    }
+
     pub(crate) fn choose_export_project_dxf(&mut self, project_runtime_id: u32) {
         self.commit_export_move_if_needed(project_runtime_id);
         if self.workspace.project_index_for_runtime_id(project_runtime_id).is_none() {
@@ -1653,6 +1750,18 @@ impl<'a> App<'a> {
                 .await?
                 .into_path();
             Some(FileDialogAction::ExportProjectDxf { project_runtime_id, path })
+        });
+    }
+
+    /// Save a schedule report the Calendar built: a save dialog on the
+    /// desktop, a download in the browser.
+    pub(crate) fn choose_export_schedule_report(&mut self, file_name: String, text: String) {
+        #[cfg(target_arch = "wasm32")]
+        Self::trigger_browser_download(file_name, text.into_bytes(), "text/csv", "schedule report");
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let path = AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(&file_name).save_file().await?.into_path();
+            Some(FileDialogAction::ExportScheduleReport { path, text })
         });
     }
 
@@ -2632,6 +2741,12 @@ impl<'a> App<'a> {
             // though the file on disk still names it.
             design.folders = live_folders;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);
+            for imported in &bundle.designs {
+                design.document.merge_reserve_fields_from(&imported.document);
+                design.document.merge_solids_from(&imported.document);
+                design.document.merge_schedule_from(&imported.document);
+                design.document.merge_haulage_from(&imported.document);
+            }
             for imported in bundle.designs {
                 project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
             }

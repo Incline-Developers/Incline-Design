@@ -55,6 +55,7 @@ mod readback;
 pub(crate) mod scene_pipelines;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
+pub(crate) mod solid_preview;
 pub(crate) mod targets;
 mod touch;
 
@@ -343,6 +344,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) stroke_gpu: wgpu::Buffer,
     pub(super) overlay_stroke_gpu: wgpu::Buffer,
     pub(super) dynamic_stroke_gpu: wgpu::Buffer,
+    pub(super) flow_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
     pub(super) camera_buffer: wgpu::Buffer,
@@ -374,6 +376,12 @@ pub(crate) struct Graphics<'a> {
     /// re-renders when its key (or its own view state) changes.
     embedded_preview_scene_key: Option<u64>,
     detached_preview_scene_key: Option<u64>,
+    /// The Solids Setup page's offscreen orbit view, and the fingerprint of
+    /// what it last drew.
+    solid_preview: Option<solid_preview::SolidPreviewTarget>,
+    solid_preview_key: Option<u64>,
+    /// The framing the preview is being held at, while a pane is holding it.
+    solid_preview_framing: Option<solid_preview::HeldFraming>,
     pub(super) surface: wgpu::Surface<'a>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) adapter: wgpu::Adapter,
@@ -407,6 +415,14 @@ pub(crate) struct Graphics<'a> {
     /// preview); see `rebuild_dynamic_scene`.
     pub(super) dynamic_strokes: Vec<StrokeInstance>,
     pub(super) dynamic_stroke_capacity: usize,
+    /// Per-frame strokes for Animate's moving haul flows; the first
+    /// `flow_underlay` are drawn without a depth test. See
+    /// `rebuild_flow_scene`.
+    pub(super) flow_strokes: Vec<StrokeInstance>,
+    pub(super) flow_stroke_capacity: usize,
+    pub(super) flow_underlay: u32,
+    /// The clock the flow stripes move by.
+    pub(super) flow_clock: web_time::Instant,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,
@@ -448,6 +464,10 @@ pub(crate) struct Graphics<'a> {
     /// Each stream object's ranges, restaged by `restyle_document_scene`.
     pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
+    pub(super) cached_bounds_surface_key: Option<u64>,
+    /// Whether the haul network counts towards the scene's extents: only
+    /// where it is drawn. Taken from the editor at the start of each frame.
+    pub(super) haul_roads_in_bounds: bool,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
     /// `cached_scene_bounds`. Depth-range fitting needs them individually so a
@@ -796,6 +816,7 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn invalidate_scene_bounds(&mut self) {
         self.cached_bounds_document_revision = u64::MAX;
+        self.cached_bounds_surface_key = None;
         self.cached_scene_bounds = None;
         self.cached_object_aabbs.clear();
     }

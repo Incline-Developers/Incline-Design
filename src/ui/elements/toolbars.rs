@@ -97,6 +97,39 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
     ]
 }
 
+/// The Blasting step's tools, in the order they are drawn: the two that draw
+/// a cut, then the ones that adjust one already drawn.
+///
+/// A subset of production's run rather than a run of its own - these are the
+/// same tools drawing the same polylines, and what makes one of them a cut is
+/// only the layer it lands on. What is left out is left out because it has no
+/// meaning against a bench outline: points, text, circles, draping, and the
+/// bench generators the Benching step already ran.
+///
+/// They need a bench to draw on. Selecting a whole solid, or several benches,
+/// is a way of looking at the outlines rather than editing them - see
+/// [`EditorState::planning_cut_target`] - so it leaves the run standing but greyed.
+fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) -> Vec<LeftTool> {
+    let enabled = editing_enabled && editor.planning_cut_target().is_some();
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action: LeftToolAction::Tool(tool),
+        enabled,
+        hint: None,
+    };
+    vec![
+        tool(themed_icon!(ui, "create_line.svg"), tr!("common-create-line"), ActiveTool::MakeLine),
+        tool(themed_icon!(ui, "create_polyline.svg"), tr!("common-create-polyline"), ActiveTool::MakePoly),
+        tool(themed_icon!(ui, "move_element.svg"), tr!("common-move-design"), ActiveTool::Move),
+        tool(themed_icon!(ui, "offset_element.svg"), tr!("common-offset"), ActiveTool::OffsetElement),
+        tool(themed_icon!(ui, "relimit_line.svg"), tr!("common-relimit-line"), ActiveTool::RelimitLine),
+        tool(themed_icon!(ui, "split_at_points.svg"), tr!("toolbars-split-polyline-points"), ActiveTool::SplitAtPoints),
+        tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
+        tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
+    ]
+}
+
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
 /// nudge its holes, re-aim them, tie them together, say where it starts,
 /// then load it.
@@ -217,6 +250,10 @@ pub(crate) fn draw_left_toolbar(
     commands: &mut Vec<UiCommand>,
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
+        // Planning's Blasting step is the one page outside production that
+        // draws design geometry, so its run is asked for before the workspace
+        // is: everywhere else in Planning the column stands empty.
+        _ if editor.is_planning_cut_step() => blasting_tools(ui, editor, editing_enabled),
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),

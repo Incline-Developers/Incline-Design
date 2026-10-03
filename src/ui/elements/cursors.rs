@@ -24,30 +24,43 @@ pub(crate) fn orientation_gizmo_rect(canvas_rect: egui::Rect) -> egui::Rect {
     )
 }
 
-/// Draw the world-axis gizmo in the viewport's top-right corner.
+/// What one frame of the orientation gizmo did: where it landed, and the view
+/// an axis click asked for.
+pub(crate) struct OrientationGizmo {
+    #[allow(dead_code)] // The main viewport lays the slice minimap out against it.
+    pub(crate) rect: egui::Rect,
+    pub(crate) clicked: Option<crate::ui::state::StandardView>,
+}
+
+/// Draw the world-axis gizmo in the top-right corner of `canvas_rect`.
+///
+/// `id` separates instances: the main viewport draws one, and the Solids Setup
+/// page's preview draws another over its own image. The caller decides what a
+/// click means, because the two drive different cameras.
 ///
 /// `horizontal_only` drops the Z arms: a vertical section can be turned to
 /// face any compass axis, but never straight up or down, and an arm that
 /// cannot be honoured is better not drawn than drawn dead.
-///
-/// Returns the rect it occupies, or [`egui::Rect::NOTHING`] when the viewport
-/// is too small to draw it.
 pub(crate) fn draw_orientation_gizmo(
     ui: &mut egui::Ui,
+    id: egui::Id,
     canvas_rect: egui::Rect,
     camera_forward: [f32; 3],
     camera_up: [f32; 3],
     horizontal_only: bool,
-    commands: &mut Vec<crate::ui::state::UiCommand>,
-) -> egui::Rect {
+) -> OrientationGizmo {
     let gizmo_rect = orientation_gizmo_rect(canvas_rect);
     if !gizmo_rect.is_positive() {
-        return egui::Rect::NOTHING;
+        return OrientationGizmo {
+            rect: egui::Rect::NOTHING,
+            clicked: None,
+        };
     }
 
     const SIZE: f32 = GIZMO_SIZE;
 
-    egui::Area::new(egui::Id::new("world_orientation_gizmo"))
+    let mut clicked = None;
+    let rect = egui::Area::new(id)
         .order(egui::Order::Middle)
         .fixed_pos(gizmo_rect.min)
         .show(ui.ctx(), |ui| {
@@ -149,11 +162,12 @@ pub(crate) fn draw_orientation_gizmo(
                 && let Some(pos) = response.hover_pos()
                 && let Some(axis) = nearest_axis_node(pos, &nodes)
             {
-                commands.push(crate::ui::state::UiCommand::SetStandardView(standard_view_for_axis(axis)));
+                clicked = Some(standard_view_for_axis(axis));
             }
         })
         .response
-        .rect
+        .rect;
+    OrientationGizmo { rect, clicked }
 }
 
 /// A foreground painter for a marker at window pixel (`x`, `y`), clipped to the
@@ -178,7 +192,7 @@ fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str
 /// the cursor, and the fixed centre the C tool pins - because they mean the
 /// same thing to the eye. What separates them is how long they stay: the
 /// transient one lives only for the drag, the fixed one stays up between drags.
-fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
+pub(crate) fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
     let halo = egui::Stroke::new(3.2, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140));
     let core = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 235));
     let r = 6.0;

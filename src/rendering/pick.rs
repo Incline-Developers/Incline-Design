@@ -426,7 +426,11 @@ pub(crate) fn pick_nearest(
                         let dist = (sa + (sb - sa) * t).distance(cursor);
                         let world = perspective_correct_segment_point(view_proj, wa, wb, t);
                         let depth = projected_depth(view_proj, world);
-                        if screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
+                        let node_over_road = matches!(rec.entity, SceneEntityId::HaulNode(_))
+                            && best_stroke_hit.is_some_and(|hit| matches!(hit.entity, SceneEntityId::HaulRoad(_)))
+                            && dist <= 6.0
+                            && (depth - best_stroke_depth).abs() <= 1e-6;
+                        if node_over_road || screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
                             best_dist = dist;
                             best_stroke_depth = depth;
                             best_stroke_hit = Some(PickHit { entity: rec.entity, world });
@@ -589,6 +593,9 @@ pub(crate) enum VertexPickFilter {
     AnyEditable,
     /// Vertices that can be removed without invalidating a polyline.
     DeletablePolyline,
+    /// Every stored polyline vertex, including those a stored shape could not
+    /// lose. Planning cuts open or retire instead of refusing the edit.
+    PlanningPolyline,
 }
 
 /// Spatially accelerated design-vertex pick. The index must have been built
@@ -651,7 +658,7 @@ fn pick_nearest_vertex_from_indices(
                     }
                 }
             }
-            Object::Polyline { verts, closed, .. } if filter == VertexPickFilter::AnyEditable || verts.len() > if *closed { 3 } else { 2 } => {
+            Object::Polyline { verts, closed, .. } if filter != VertexPickFilter::DeletablePolyline || verts.len() > if *closed { 3 } else { 2 } => {
                 for (i, vert) in verts.iter().enumerate() {
                     if let Some(sp) = slab_screen_point(slab, view_proj, screen, vert.pos) {
                         let d = sp.distance(cursor);

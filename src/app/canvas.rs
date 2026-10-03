@@ -212,6 +212,19 @@ impl<'a> App<'a> {
                     &tr!("canvas-trimmed"),
                 );
             }
+            TriangulationPickTarget::SolidDesign => {
+                self.editor.tri_solid_design_id = Some(id);
+                if self.editor.tri_solid_topography_id == Some(id) {
+                    self.editor.tri_solid_topography_id = None;
+                }
+                update_auto_derived_name(&mut self.editor.tri_solid_name_input, self.editor.tri_solid_name_auto, name, &tr!("tri-type-solid-closed"));
+            }
+            TriangulationPickTarget::SolidTopography => {
+                self.editor.tri_solid_topography_id = Some(id);
+                if self.editor.tri_solid_design_id == Some(id) {
+                    self.editor.tri_solid_design_id = None;
+                }
+            }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
@@ -306,6 +319,70 @@ impl<'a> App<'a> {
             return;
         }
 
+        if !dragged && self.editor.is_haulage_page() && self.editor.haul_link_pick {
+            self.pick_haul_link();
+            self.invalidate_overlay();
+            return;
+        }
+        if !dragged && self.editor.is_haulage_page() && self.editor.active_tool == ActiveTool::None && !self.editor.haul_draw {
+            let on_network = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+            // Only blocks left visible in Solids Navigation can be clicked,
+            // and of those under the cursor the highest - the one on top.
+            let hidden = &self.editor.haul_hidden;
+            let block = (!on_network)
+                .then(|| {
+                    self.editor
+                        .haul_blocks
+                        .iter()
+                        .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+                        .filter(|b| {
+                            self.graphics
+                                .as_ref()
+                                .and_then(|g| g.cursor_world(b.flitch.base))
+                                .is_some_and(|world| crate::model::arrangement::point_in_face(&b.face, world.truncate()))
+                        })
+                        .max_by(|a, b| a.flitch.base.total_cmp(&b.flitch.base))
+                        .map(|b| b.id)
+                })
+                .flatten();
+            if let Some(id) = block {
+                self.editor.haul_selected_block = Some(id);
+                self.editor
+                    .selected_handles
+                    .retain(|h| !matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+                self.invalidate_overlay();
+                return;
+            }
+            self.editor.haul_selected_block = None;
+            self.invalidate_overlay();
+        }
+        if !dragged
+            && self.editor.is_dig_strips_step()
+            && self.editor.active_tool == ActiveTool::None
+            && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
+        {
+            self.editor.selected_dig_block = self.editor.dig_outlines.iter().find_map(|outline| {
+                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
+                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
+                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            });
+            self.invalidate_overlay();
+            return;
+        }
+        if !dragged
+            && self.editor.is_blasting_step()
+            && self.editor.active_tool == ActiveTool::None
+            && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
+        {
+            self.editor.scroll_to_blast = true;
+            self.editor.selected_blast = self.editor.blasting_outlines.iter().rev().find_map(|outline| {
+                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
+                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|point| point.truncate()).collect()).collect();
+                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            });
+            self.invalidate_overlay();
+            return;
+        }
         if !dragged {
             if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
                 return;
@@ -319,8 +396,21 @@ impl<'a> App<'a> {
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
-                if let SceneEntityId::Object(object_id) = handle {
-                    self.activate_project_for_object(object_id);
+                match handle {
+                    SceneEntityId::Object(object_id) => {
+                        self.activate_project_for_object(object_id);
+                    }
+                    SceneEntityId::HaulRoad(id) => {
+                        if let Some(index) = self.workspace.projects.iter().position(|p| p.project.document.haulage().road(id).is_some()) {
+                            self.activate_project_index(index);
+                        }
+                    }
+                    SceneEntityId::HaulNode(id) => {
+                        if let Some(index) = self.workspace.projects.iter().position(|p| p.project.document.haulage().node(id).is_some()) {
+                            self.activate_project_index(index);
+                        }
+                    }
+                    _ => {}
                 }
                 // Clicking what is already selected takes it back out of the
                 // selection, so any scene entity can be dropped without
@@ -425,6 +515,8 @@ impl<'a> App<'a> {
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
+            SceneEntityId::HaulRoad(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
+            SceneEntityId::HaulNode(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
         });
         // Holes ride the same box, taken by their collars: they are not
         // rendered geometry the picker walks, so `enclosed` never holds one,
@@ -640,6 +732,9 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {
+        if self.editor.is_planning_cut_step() {
+            return self.scene_document.objects().iter().map(Object::id).collect();
+        }
         self.workspace
             .active_project()
             .map(|project| project.project.document.objects().iter().map(Object::id).collect())

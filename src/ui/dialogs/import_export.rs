@@ -8,7 +8,7 @@ use crate::{
         drill_hole::DrillHoleId,
         formats::{
             MeshFormat,
-            csv_block_model::{CsvColumnRole, validate_mapping},
+            csv_block_model::{CsvColumnRole, FixedDimension, validate_mapping},
             csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
         },
         triangulation::TriangulationId,
@@ -18,7 +18,7 @@ use crate::{
         state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
         widgets::{
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
-            menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+            menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldFilePicker},
             toolbar::GROUP_CORNER_RADIUS,
             tree_row_colors,
         },
@@ -435,7 +435,13 @@ fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
 }
 
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    ui.heading(tr!("common-import-dxf"));
+    // Opened from Haulage, the lines become roads rather than design
+    // geometry; the heading says which, since nothing else on the page does.
+    ui.heading(if editor.import_as_haul_roads {
+        tr!("haul-import-heading")
+    } else {
+        tr!("common-import-dxf")
+    });
     draw_import_source_picker(ui, editor, commands, tr!("io-source-file"), tr!("io-no-dxf-chosen"));
 }
 
@@ -503,6 +509,29 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
             }
         });
     });
+    let unmapped_dimensions: Vec<CsvColumnRole> = [CsvColumnRole::Dx, CsvColumnRole::Dy, CsvColumnRole::Dz]
+        .into_iter()
+        .filter(|role| !preview.mapping.roles.contains(role))
+        .collect();
+    if !unmapped_dimensions.is_empty() {
+        menu::menu_section(ui, tr!("io-fixed-block-size"));
+        ui.small(tr!("io-no-column-mapped-these"));
+        egui::Grid::new("csv_fixed_dimensions").min_col_width(110.0).show(ui, |ui| {
+            for role in unmapped_dimensions {
+                let fixed = match role {
+                    CsvColumnRole::Dx => &mut preview.mapping.fixed_dx,
+                    CsvColumnRole::Dy => &mut preview.mapping.fixed_dy,
+                    CsvColumnRole::Dz => &mut preview.mapping.fixed_dz,
+                    _ => unreachable!("filtered to Dx/Dy/Dz above"),
+                };
+                let mut value = fixed.map_or(1.0, |fixed| fixed.0);
+                if MenuFieldF64::new(role.label(), &mut value, 0.0..=1.0e9).suffix("m".to_owned()).show_inline(ui).changed() || fixed.is_none() {
+                    *fixed = Some(FixedDimension(value));
+                }
+                ui.end_row();
+            }
+        });
+    }
     if let Err(error) = validate_mapping(&preview.mapping, preview.headers.len()) {
         ui.colored_label(ui.visuals().error_fg_color, error.to_string());
     }

@@ -124,6 +124,210 @@ impl Default for PreferencesDraft {
 }
 
 impl EditorState {
+    pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
+        match self.planning_page {
+            PlanningPage::Solids => self.solids_subpage,
+            PlanningPage::Haulage => self.haulage_subpage,
+            PlanningPage::Schedule => self.schedule_subpage,
+        }
+    }
+
+    /// Whether the Solids Setup page is on its Blasting step.
+    ///
+    /// Blasting is the one Setup step that needs the viewport: its shapes are
+    /// drawn with the same tools as any other design geometry, which pick,
+    /// snap and orbit against the real scene. So it reverses both of the
+    /// predicates below rather than adding a layout branch of its own.
+    pub(crate) fn is_blasting_step(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Solids
+            && self.solids_subpage == PlanningSubpage::Setup
+            && self.planning_solids_step == SolidsStep::Blasting
+    }
+
+    pub(crate) fn is_dig_strips_step(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Solids
+            && self.solids_subpage == PlanningSubpage::Setup
+            && self.planning_solids_step == SolidsStep::DigStrips
+    }
+    pub(crate) fn is_planning_cut_step(&self) -> bool {
+        self.is_blasting_step() || self.is_dig_strips_step()
+    }
+
+    pub(crate) fn planning_cut_target(&self) -> Option<(crate::model::SolidId, BenchSelection)> {
+        if !self.is_planning_cut_step() {
+            return None;
+        }
+        match self.solids_view_selection.as_slice() {
+            [row] => row.band.filter(|band| band.is_flitch == self.is_dig_strips_step()).map(|band| (row.solid, band)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_planning_viewport(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && (!matches!(
+                self.planning_subpage(),
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
+            ) || self.is_planning_cut_step())
+    }
+
+    /// Whether a Planning page that owns the whole window - rather than
+    /// framing the 3D viewport - is on screen. Both the Solids setup and the
+    /// view of what it produced are laid out that way.
+    pub(crate) fn is_planning_setup(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && matches!(
+                self.planning_subpage(),
+                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
+            )
+            && !self.is_planning_cut_step()
+    }
+
+    /// Whether the Schedule page is showing its Gantt subpage.
+    pub(crate) fn is_schedule_gantt(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
+    }
+
+    /// Whether the Schedule page is showing its Charts subpage.
+    pub(crate) fn is_schedule_charts(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Charts
+    }
+
+    /// Whether a Schedule page that lays out its own whole pane - the
+    /// Calendar, the Gantt or the Charts - is showing.
+    pub(crate) fn is_schedule_pane(&self) -> bool {
+        self.is_schedule_gantt() || self.is_schedule_calendar() || self.is_schedule_charts()
+    }
+
+    pub(crate) fn is_schedule_calendar(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
+    }
+
+    /// Whether the Schedule Setup page is showing the Destinations step, the
+    /// one page whose choices are drawn from the Solids run's own bands.
+    pub(crate) fn is_schedule_destinations(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Schedule
+            && self.schedule_subpage == PlanningSubpage::Setup
+            && self.schedule_setup_step == ScheduleStep::Destinations
+    }
+
+    pub(crate) fn is_schedule_animation(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Animate
+    }
+
+    /// Whether the floating sequence editor is on screen.
+    ///
+    /// It is the Gantt's own editor, so it is shown - and owns the shared
+    /// preview camera, the pick and the display list - only while the Gantt
+    /// is the page being drawn. Navigating away leaves the draft alone and
+    /// hands the Solids pages their preview back untouched; coming back shows
+    /// the same draft again.
+    pub(crate) fn blast_sequence_active(&self) -> bool {
+        self.blast_bar_dialog.is_some() && self.is_schedule_gantt()
+    }
+
+    pub(crate) fn sequence_editor_active(&self) -> bool {
+        self.sequence_editor.is_some() && self.is_schedule_gantt()
+    }
+
+    /// What the offscreen preview's framing is being held still for, if
+    /// anything is holding it.
+    ///
+    /// Framing is measured from the meshes on screen, and digging a block
+    /// takes its mesh out of them. Measured afresh every frame, the camera
+    /// would creep in towards whatever ground was left each time a block was
+    /// clicked or the order preview moved - which reads as the view wandering
+    /// off on its own. So while the sequence editor owns the preview the
+    /// framing is pinned to one editing session against one run, and only a
+    /// reload or a rerun starts it over. The Solids pages keep re-fitting
+    /// theirs: there the display list *is* the tree selection, and following
+    /// it is the whole point.
+    pub(crate) fn preview_framing_hold(&self) -> Option<PreviewFramingHold> {
+        if let Some(draft) = self.blast_bar_dialog.as_ref().filter(|_| self.is_schedule_gantt()) {
+            return Some(PreviewFramingHold {
+                // Held across bench changes too: the framing only grows, so
+                // stepping down the pit keeps the camera where it was.
+                edition: draft.edition,
+                generation: self.blast_sequence_generation,
+            });
+        }
+        self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()).map(|draft| PreviewFramingHold {
+            edition: draft.edition,
+            generation: self.sequence_generation,
+        })
+    }
+
+    /// The orbit the offscreen preview is drawn with.
+    ///
+    /// One image, and whichever pane is showing it owns the camera. The
+    /// sequence editor keeps its own, so opening it moves nothing on the
+    /// Solids pages and closing it hands them back exactly the view they had.
+    pub(crate) fn preview_camera(&self) -> SolidPreviewView {
+        if let Some(draft) = self.blast_bar_dialog.as_ref().filter(|_| self.is_schedule_gantt()) {
+            return draft.view;
+        }
+        match self.sequence_editor.as_ref().filter(|_| self.is_schedule_gantt()) {
+            Some(draft) => draft.view,
+            None => self.solid_preview_view,
+        }
+    }
+
+    /// Discard the draft and everything mirrored for it.
+    pub(crate) fn close_sequence_editor(&mut self) {
+        self.sequence_editor = None;
+        self.sequence_members.clear();
+        self.sequence_generation = None;
+        self.sequence_unavailable = None;
+        self.sequence_list_drag = None;
+        self.sequence_paint = None;
+        // A click made in the session being closed is nobody's: left pending,
+        // it could only be answered into whatever is drawn over the Gantt next.
+        if matches!(self.solid_preview_pick.map(|pick| pick.owner), Some(SolidPreviewPickOwner::SequenceEditor { .. })) {
+            self.solid_preview_pick = None;
+        }
+        if matches!(
+            self.solid_preview_pick_result.map(|result| result.request.owner),
+            Some(SolidPreviewPickOwner::SequenceEditor { .. })
+        ) {
+            self.solid_preview_pick_result = None;
+        }
+    }
+
+    /// The draft a completed sequence-editor pick still belongs to, if any.
+    ///
+    /// Every refusal here is a click that outlived its context: the project it
+    /// was made in, the Gantt it was made on, the draft instance it was made
+    /// in, or a discard question now standing between the user and the draft.
+    /// Such a pick is dropped - never reinterpreted against the editor that
+    /// happens to be open now, and never allowed to edit a draft the user is
+    /// being asked whether to keep.
+    pub(crate) fn sequence_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> Option<&SequenceDraft> {
+        let draft = self.sequence_editor.as_ref()?;
+        if !self.is_schedule_gantt() || draft.session != session || request.session != session {
+            return None;
+        }
+        match request.owner {
+            SolidPreviewPickOwner::SequenceEditor { bar, edition } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
+            SolidPreviewPickOwner::SolidsView | SolidPreviewPickOwner::BlastSequence { .. } => None,
+        }
+    }
+
+    /// Whether a completed Solids View pick may still move that page's
+    /// selection. The same refusal as [`Self::sequence_pick_target`], for the
+    /// pane that selects rather than edits: the pick belongs to the View page,
+    /// and only while it is the page on screen.
+    pub(crate) fn solids_view_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> bool {
+        request.owner == SolidPreviewPickOwner::SolidsView && request.session == session && self.is_solids_view()
+    }
+
+    /// Whether the Solids page is showing its View subpage.
+    pub(crate) fn is_solids_view(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Solids && self.solids_subpage == PlanningSubpage::View
+    }
+
     /// Set (or clear) the status-bar message. Whenever the displayed task
     /// changes, the outgoing one is remembered as `last_finished_task` so the
     /// idle bar keeps reading "<task>: Finished" at 100%.
@@ -234,6 +438,11 @@ impl EditorState {
         set_key(&self.tri_hover_handles).hash(&mut hasher);
         self.tool_highlight_id.hash(&mut hasher);
         self.editing_labels_id.hash(&mut hasher);
+        // Haul roads are in the scene only where the network is shown, so
+        // arriving at those pages or leaving them has to redraw it.
+        self.shows_haul_network().hash(&mut hasher);
+        // The route check overlay draws only beside the Layout panel.
+        self.is_haulage_page().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -263,6 +472,484 @@ pub(crate) enum TriSurfaceType {
     Surface,
     /// Fully closed solid
     SolidClosed,
+}
+
+/// The Solids Setup subpage's steps, in the order the step tree lists them:
+/// the project-wide Field List, each block model's mapping onto it, then the
+/// solids those reserves are computed over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidsStep {
+    FieldList,
+    BlockModels,
+    Solids,
+    Benching,
+    /// Dividing each bench into the shapes it is blasted in. Unlike the other
+    /// steps this one frames the 3D viewport rather than owning the window,
+    /// because the blast outlines are drawn with the ordinary design tools.
+    Blasting,
+    DigStrips,
+}
+
+impl SolidsStep {
+    /// Every step, in the order the step tree lists them.
+    pub(crate) const ALL: [Self; 6] = [Self::FieldList, Self::BlockModels, Self::Solids, Self::Benching, Self::Blasting, Self::DigStrips];
+}
+
+/// One derived blast shape, ready to draw and to list.
+///
+/// The rings are the face's own boundary: `rings[0]` is its outer ring and
+/// any that follow are holes through it. Derived from the bench outline each
+/// time it changes, so nothing here is the source of truth except the name.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastOutline {
+    pub(crate) solid: crate::model::SolidId,
+    /// RL at the bottom of the bench this blast divides.
+    pub(crate) bench_base: f64,
+    /// The elevation the outline was traced at - the bench crest, which is
+    /// the surface its holes would be collared on.
+    pub(crate) plane: f64,
+    pub(crate) name: String,
+    /// The point the name was matched on, carried so the panel addresses the
+    /// stored blast by exactly the value the derivation stored.
+    pub(crate) anchor: [f64; 2],
+    pub(crate) rings: Vec<Vec<glam::DVec3>>,
+    /// Plan area, outer ring less its holes.
+    pub(crate) area: f64,
+    /// The blast a dig block lies in, by name; `None` for a blast itself.
+    pub(crate) blast: Option<String>,
+}
+
+/// What the Blasting step borrows from the rest of the editor while it is
+/// open: the camera, the drawing target and the working elevation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlastingRestore {
+    pub(crate) forward: glam::DVec3,
+    pub(crate) up: glam::DVec3,
+    pub(crate) layer: Option<crate::model::LayerId>,
+    pub(crate) z_level: f64,
+    pub(crate) z_input: f64,
+}
+
+/// What the properties panel says about a selected dig block.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DigBlockInfo {
+    pub(crate) id: crate::model::DigBlockId,
+    pub(crate) name: String,
+    pub(crate) plan_area: f64,
+    /// The bench and flitch it belongs to, named rather than re-derived.
+    pub(crate) bench: BenchSelection,
+    pub(crate) flitch: BenchSelection,
+    pub(crate) blast: Option<BlastShapeRef>,
+    pub(crate) volume: Option<f64>,
+    /// Identities this block's ground used to be held under.
+    pub(crate) replaces: Vec<crate::model::DigBlockId>,
+}
+
+/// One stage's status as the step tree reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PlanningStageView {
+    pub(crate) state: crate::app::planning_pipeline::StageState,
+    pub(crate) message: Option<String>,
+    pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
+    pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// The earlier stage that has to run first, when this one cannot.
+    pub(crate) blocked_by: Option<SolidsStep>,
+}
+
+/// The outcome of one resolved click on a planning preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidPick {
+    Hit(crate::model::triangulation::TriangulationId),
+    /// The ray reached nothing. Distinct from "no pick has been resolved yet".
+    Miss,
+}
+
+/// Which pane a click on the shared solid preview belongs to.
+///
+/// The Solids View page and the sequence editor draw through the same offscreen
+/// image, so the click alone cannot say who made it - and a click one pane
+/// made must never be answered into the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidPreviewPickOwner {
+    /// The Solids View page's inspector pane, selecting a dig block.
+    SolidsView,
+    BlastSequence {
+        edition: u64,
+    },
+    /// The floating sequence editor, building one bar's dig order.
+    SequenceEditor {
+        bar: crate::model::schedule::BarId,
+        /// The draft instance the click was made in. Each opened draft gets a
+        /// fresh one, so a click from a closed editor - or from the same bar
+        /// reopened, or a reloaded draft - cannot land in the one on screen now.
+        edition: u64,
+    },
+}
+
+/// A click on the solid preview, addressed from the moment it is made.
+///
+/// The click is resolved frames later, by the renderer, against the caches and
+/// camera of a frame the user has never seen. Carrying the click's own context
+/// with it - rather than reading whatever is current at each later stage - is
+/// what keeps an old click from being reinterpreted as a new one: every gate
+/// along the way compares against *these* values, and a mismatched result is
+/// dropped rather than relabelled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewPickRequest {
+    /// The project session the click happened in.
+    pub(crate) session: u32,
+    pub(crate) owner: SolidPreviewPickOwner,
+    /// The run generation the clicked image depicted. `None` where the pane
+    /// picks displayed geometry without a scheduling gate (the Solids View
+    /// page may pick out benches before any dig-block run exists).
+    pub(crate) generation: Option<u64>,
+    /// The revision of the displayed image the click was made on. The renderer
+    /// re-numbers the image whenever its content changes - geometry, scene or
+    /// camera - so a click naming an image that is no longer on screen is
+    /// rejected instead of resolved against the new one.
+    pub(crate) image: u64,
+    /// Where in the image the click landed, as a fraction of it. The renderer
+    /// sizes its target within limits of its own, so a fraction - not pane
+    /// pixels - is what survives between the two.
+    pub(crate) uv: [f32; 2],
+}
+
+/// A completed pick, still carrying the request that produced it.
+///
+/// The provenance travels with the outcome because the outcome alone cannot be
+/// checked afterwards: a block id that exists in the current run proves the
+/// block exists *now*, not that the click came from this run, this project or
+/// this editor instance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewPickResult {
+    pub(crate) request: SolidPreviewPickRequest,
+    pub(crate) outcome: SolidPick,
+}
+
+/// A row of the Solids View tree: a solid, one of its benches, or one flitch
+/// inside a bench. The kind heading a group is not itself selectable - it
+/// stands for every solid under it, which selecting those says better.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidsViewRow {
+    pub(crate) solid: crate::model::SolidId,
+    /// The slice of that solid, or `None` for the solid as a whole.
+    pub(crate) band: Option<BenchSelection>,
+}
+
+/// What a Solids Navigation tree has hidden: whole solids, bench or flitch
+/// rows, and blasts. Session-only, and separate per page, so hiding ground to
+/// pick a block on Haulage leaves Animate showing it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SolidsVisibility {
+    pub(crate) solids: HashSet<crate::model::SolidId>,
+    pub(crate) rows: Vec<SolidsViewRow>,
+    pub(crate) blasts: HashSet<BlastShapeRef>,
+}
+
+impl SolidsVisibility {
+    pub(crate) fn hides(&self, solid: crate::model::SolidId, bench: BenchSelection, flitch: BenchSelection, blast: Option<BlastShapeRef>) -> bool {
+        self.solids.contains(&solid)
+            || self.rows.contains(&SolidsViewRow { solid, band: Some(bench) })
+            || self.rows.contains(&SolidsViewRow { solid, band: Some(flitch) })
+            || blast.is_some_and(|blast| self.blasts.contains(&blast))
+    }
+}
+
+/// What a schedule hauls along one route: where from, where to, in what.
+pub(crate) type HaulFlowKey = (
+    crate::model::schedule::result::WorkSource,
+    crate::model::schedule::DestinationId,
+    crate::model::schedule::TruckClassId,
+);
+
+/// One straight piece of a loaded haul, from `from` to `to` in the world
+/// and `a` to `b` on screen in window pixels, with the tonnes per hour
+/// crossing it. `offset` is how far along its route it starts on screen, so
+/// the stripes run on unbroken from one piece to the next.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HaulFlowSegment {
+    pub(crate) from: DVec3,
+    pub(crate) to: DVec3,
+    pub(crate) a: (f32, f32),
+    pub(crate) b: (f32, f32),
+    pub(crate) offset: f32,
+    pub(crate) tph: f64,
+}
+
+/// One dig block as the Haulage layout shows it: its outline, and how it
+/// meets the road network.
+#[derive(Clone, Debug)]
+pub(crate) struct HaulBlock {
+    pub(crate) id: crate::model::DigBlockId,
+    pub(crate) solid: crate::model::SolidId,
+    pub(crate) bench: BenchSelection,
+    pub(crate) flitch: BenchSelection,
+    pub(crate) blast: Option<BlastShapeRef>,
+    pub(crate) name: String,
+    pub(crate) anchor: [f64; 2],
+    /// The footprint in plan, which a block link is matched against.
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+    /// The footprint at the flitch base, for drawing.
+    pub(crate) rings: Vec<Vec<glam::DVec3>>,
+    /// The node it is held to, when it is not left to the nearest road.
+    pub(crate) link: Option<crate::model::haulage::NodeId>,
+    /// Where it meets the network, and the grade-limited drive there.
+    pub(crate) join: Option<glam::DVec3>,
+    pub(crate) access_m: f64,
+    pub(crate) connected: bool,
+}
+
+impl HaulBlock {
+    /// Where trucks load: the anchor, at the flitch base.
+    pub(crate) fn point(&self) -> glam::DVec3 {
+        glam::DVec3::new(self.anchor[0], self.anchor[1], self.flitch.base)
+    }
+}
+
+/// A row of the Benching step's results: one bench, or one flitch inside it.
+/// Selecting a row picks that slice of the solid out in the preview.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BenchSelection {
+    /// RL at the bottom of the slice, which is also what names it.
+    pub(crate) base: f64,
+    pub(crate) top: f64,
+    /// Whether the row is a flitch rather than a whole bench.
+    pub(crate) is_flitch: bool,
+}
+
+/// What the Solids Setup page has to say about its preview, mirrored out of
+/// `App` each frame so the page - which only ever reads editor state - can
+/// caption the render window without reaching into the preview itself.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SolidPreviewSummary {
+    /// No run has produced geometry for this solid yet. Distinct from Empty,
+    /// which means a completed run found nothing.
+    NotRun,
+    /// Nothing to show: no solid selected, or it has no surfaces yet.
+    Empty,
+    /// The solid names surfaces, but none of them are loaded - unloading an
+    /// item frees its geometry, so there is nothing to draw until it is
+    /// loaded again.
+    Unloaded,
+    /// A build is running. `showing_previous` means the solid it is replacing
+    /// is still on screen, so the caption should read as an update rather than
+    /// as an empty pane.
+    Building {
+        showing_previous: bool,
+    },
+    /// A surface the solid needs is being read back from storage before the
+    /// build can start.
+    LoadingInputs {
+        showing_previous: bool,
+    },
+    /// Ready to inspect. `volume` is present only for a built solid; a lone
+    /// design surface encloses nothing. `waiting_on_unloaded` marks the
+    /// half-built case: one of the two surfaces is loaded and the other is
+    /// not, so this shows the design on its own rather than the volume.
+    Ready {
+        volume: Option<f64>,
+        faces: usize,
+        waiting_on_unloaded: bool,
+    },
+    Failed(String),
+}
+
+/// How the Solids Setup page's preview is looking at its solid: an orbit
+/// around the mesh's own centre, plus a zoom multiplier on the framing that
+/// fits it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewView {
+    /// Rotation about the vertical axis, in radians.
+    pub(crate) yaw: f64,
+    /// Elevation above the horizon, in radians, clamped short of the poles so
+    /// the view never gimbals onto its up vector.
+    pub(crate) pitch: f64,
+    /// 1.0 frames the whole mesh; larger moves in.
+    pub(crate) zoom_multiplier: f64,
+    /// Offset of the framed centre from the mesh's own centre, in screen
+    /// right/up units of the orbit's own basis, as a fraction of the framing
+    /// radius - so a pan holds its place on screen as the view is zoomed.
+    pub(crate) pan: [f64; 2],
+}
+
+impl Default for SolidPreviewView {
+    fn default() -> Self {
+        // A raised three-quarter view: a pit reads as a pit at a glance,
+        // which a plan or elevation view of the same mesh does not.
+        Self {
+            yaw: -std::f64::consts::FRAC_PI_4,
+            pitch: std::f64::consts::FRAC_PI_6,
+            zoom_multiplier: 1.0,
+            pan: [0.0; 2],
+        }
+    }
+}
+
+impl SolidPreviewView {
+    /// Widest elevation either side of the horizon. Stopping short of
+    /// straight down keeps the camera's up vector well defined.
+    const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+    /// Room left round the mesh at a zoom of one: the image's half-height is
+    /// this many framing radii.
+    pub(crate) const FRAMING_MARGIN: f64 = 1.15;
+
+    fn orbit_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
+        // A drag across the full frame is half a turn, so the whole solid can
+        // be walked around without the pointer leaving the panel.
+        let scale = std::f64::consts::PI / frame_height.max(1.0);
+        self.yaw -= delta[0] * scale;
+        self.pitch = (self.pitch + delta[1] * scale).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+    }
+
+    pub(crate) fn zoom_by_scroll(&mut self, scroll: f64) {
+        self.zoom_multiplier = (self.zoom_multiplier * (scroll / 400.0).exp()).clamp(0.1, 40.0);
+    }
+
+    /// Orbit as the main viewport does: about `pivot`, a point given in
+    /// framing radii from the mesh's centre, which holds its place on screen
+    /// while the view turns round it. Without one, about the framed centre.
+    pub(crate) fn orbit_about(&mut self, delta: [f64; 2], frame_height: f64, pivot: Option<glam::DVec3>) {
+        // Where the pivot sits on screen, in framing radii from the image's
+        // centre: its offset along the view's right and up axes, less the pan.
+        let held = pivot.map(|pivot| {
+            let (right, up) = self.screen_basis();
+            (pivot, [pivot.dot(right) - self.pan[0], pivot.dot(up) - self.pan[1]])
+        });
+        self.orbit_by_pixels(delta, frame_height);
+        if let Some((pivot, screen)) = held {
+            let (right, up) = self.screen_basis();
+            self.pan = [pivot.dot(right) - screen[0], pivot.dot(up) - screen[1]];
+        }
+    }
+
+    /// Zoom with the point under `anchor` held still, as the main viewport's
+    /// zoom towards the cursor does. `anchor` is the pointer's place in the
+    /// image, `0..1` across and down, and `aspect` the image's width over its
+    /// height.
+    pub(crate) fn zoom_at(&mut self, scroll: f64, anchor: [f64; 2], aspect: f64) {
+        // The pointer's offset from the image's centre, in framing radii:
+        // the image is `FRAMING_MARGIN / zoom` radii from its centre to its top.
+        let offset = |zoom: f64| {
+            let half_height = Self::FRAMING_MARGIN / zoom.max(0.05);
+            [(anchor[0] - 0.5) * 2.0 * half_height * aspect, (0.5 - anchor[1]) * 2.0 * half_height]
+        };
+        let before = offset(self.zoom_multiplier);
+        self.zoom_by_scroll(scroll);
+        let after = offset(self.zoom_multiplier);
+        self.pan[0] += before[0] - after[0];
+        self.pan[1] += before[1] - after[1];
+    }
+
+    /// Slide the view across the frame. The drag is divided by the zoom, so
+    /// the point under the pointer stays under it at any magnification.
+    pub(crate) fn pan_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
+        let scale = 2.0 / (frame_height.max(1.0) * self.zoom_multiplier.max(0.05));
+        self.pan[0] -= delta[0] * scale;
+        self.pan[1] += delta[1] * scale;
+    }
+
+    /// The framed point, given the mesh's own centre and framing radius.
+    pub(crate) fn framed_center(self, center: glam::DVec3, radius: f64) -> glam::DVec3 {
+        let (right, up) = self.screen_basis();
+        center + (right * self.pan[0] + up * self.pan[1]) * radius
+    }
+
+    /// The view direction this orbit looks along, matching the one the
+    /// renderer builds from the same angles.
+    pub(crate) fn forward(self) -> glam::DVec3 {
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        glam::DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch).normalize()
+    }
+
+    /// Screen right and up vectors of this view, for projecting world axes
+    /// onto the preview image.
+    pub(crate) fn screen_basis(self) -> (glam::DVec3, glam::DVec3) {
+        let forward = self.forward();
+        let right = forward.cross(glam::DVec3::Z).normalize_or_zero();
+        let right = if right == glam::DVec3::ZERO { glam::DVec3::X } else { right };
+        (right, right.cross(forward))
+    }
+
+    /// Swing the orbit round to one of the gizmo's named directions, matching
+    /// the view directions `Graphics::set_standard_view` gives the main
+    /// camera so both cameras answer a gizmo click the same way.
+    pub(crate) fn face(&mut self, view: StandardView) {
+        let (yaw, pitch) = match view {
+            StandardView::Up => (self.yaw, Self::MAX_PITCH),
+            StandardView::Down => (self.yaw, -Self::MAX_PITCH),
+            StandardView::North => (-std::f64::consts::FRAC_PI_2, 0.0),
+            StandardView::South => (std::f64::consts::FRAC_PI_2, 0.0),
+            StandardView::West => (0.0, 0.0),
+            StandardView::East => (std::f64::consts::PI, 0.0),
+        };
+        self.yaw = yaw;
+        self.pitch = pitch;
+    }
+
+    pub(crate) fn hash_into(self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.yaw.to_bits().hash(hasher);
+        self.pitch.to_bits().hash(hasher);
+        self.zoom_multiplier.to_bits().hash(hasher);
+        self.pan[0].to_bits().hash(hasher);
+        self.pan[1].to_bits().hash(hasher);
+    }
+}
+
+/// What a held preview framing is held for: one editing session of the
+/// sequence editor, measured against one Solids run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreviewFramingHold {
+    pub(crate) edition: u64,
+    pub(crate) generation: Option<u64>,
+}
+
+/// Which of the two volumes a design surface and a topography enclose is
+/// wanted, when they cross each other.
+///
+/// A design surface rarely stays on one side of the ground: a pit shell
+/// carries a crest that runs out over natural surface, a dump design toes out
+/// into a hillside. Where it crosses, the two surfaces bound *two* volumes -
+/// the ground cut away below the design, and the material placed above it -
+/// and a solid is one or the other, never both. Taking both is what merges
+/// the two surfaces into an unusable shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidRegion {
+    /// Where the design lies below the topography: the excavated volume of a
+    /// pit or a cut.
+    Cut,
+    /// Where the design lies above the topography: the placed volume of a
+    /// dump or a stockpile.
+    Fill,
+}
+
+impl SolidRegion {
+    pub(crate) const ALL: [Self; 2] = [Self::Cut, Self::Fill];
+
+    /// The region a solid of this kind is made of: ground taken out for a pit,
+    /// material placed on top for a dump or stockpile.
+    pub(crate) fn of_solid(kind: crate::model::SolidKind) -> Self {
+        match kind {
+            crate::model::SolidKind::Pit => Self::Cut,
+            crate::model::SolidKind::Dump | crate::model::SolidKind::Stockpile => Self::Fill,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Cut => tr!("common-cut"),
+            Self::Fill => tr!("common-fill"),
+        }
+    }
+
+    /// One line describing what the region covers, for the tool's help panel.
+    pub(crate) fn description(self) -> String {
+        match self {
+            Self::Cut => tr!("state-volume-below-design-surface"),
+            Self::Fill => tr!("state-volume-above-design-surface"),
+        }
+    }
 }
 
 /// Which side of a reference topology to remove from a surface being trimmed.
@@ -331,6 +1018,10 @@ pub(crate) enum TriangulationPickTarget {
     CutPitShell,
     IncludeTopology,
     IncludeShape,
+    /// The design surface half of the Build Solid tool.
+    SolidDesign,
+    /// The topography half of the Build Solid tool.
+    SolidTopography,
 }
 
 impl TriangulationPickTarget {
@@ -339,6 +1030,8 @@ impl TriangulationPickTarget {
             Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!("state-click-topology-viewport"),
             Self::CutPitShell => tr!("state-click-pit-shell-viewport"),
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
+            Self::SolidDesign => tr!("state-click-design-surface-viewport"),
+            Self::SolidTopography => tr!("state-click-topography-viewport"),
             Self::TrimSurface => tr!("state-click-surface-viewport"),
         }
     }
@@ -1019,7 +1712,47 @@ pub(crate) enum RenameTarget {
     PointCloud(PointCloudId),
     BlockModel(BlockModelId),
     DrillHole(DrillHoleId),
+    /// A Solids Reserves setup Field List entry. Not undoable, like the rest
+    /// of that config - see `App::rename_reserve_field`.
+    ReserveField(crate::model::ReserveFieldId),
+    /// A Solids setup solid, renamed in place like the Field List beside it.
+    Solid(crate::model::SolidId),
+    /// One blast shape of one bench. Blasts are derived from geometry, so
+    /// what is renamed is the stored name held against the face's anchor.
+    BlastShape(BlastShapeRef),
     Folder(SectionKind, FolderId),
+}
+
+/// A stable, copyable reference to one stored blast name.
+///
+/// Keyed by the anchor rather than a list index: the list is rewritten
+/// whenever a face gains or loses a name, and an index would then point at a
+/// different blast than the one the dialog was opened on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BlastShapeRef {
+    pub(crate) solid: crate::model::SolidId,
+    /// Bit pattern of the bench's base RL, so the reference stays `Copy` and
+    /// compares exactly against the value it was taken from.
+    pub(crate) bench: u64,
+    pub(crate) anchor: [u64; 2],
+}
+
+impl BlastShapeRef {
+    pub(crate) fn new(solid: crate::model::SolidId, bench_base: f64, anchor: [f64; 2]) -> Self {
+        Self {
+            solid,
+            bench: bench_base.to_bits(),
+            anchor: [anchor[0].to_bits(), anchor[1].to_bits()],
+        }
+    }
+
+    pub(crate) fn bench_base(self) -> f64 {
+        f64::from_bits(self.bench)
+    }
+
+    pub(crate) fn anchor(self) -> [f64; 2] {
+        [f64::from_bits(self.anchor[0]), f64::from_bits(self.anchor[1])]
+    }
 }
 
 impl RenameTarget {
@@ -1031,6 +1764,9 @@ impl RenameTarget {
             Self::PointCloud(_) => tr!("ws-menubar-point-cloud"),
             Self::BlockModel(_) => tr!("ws-menubar-block-model"),
             Self::DrillHole(_) => tr!("ws-menubar-drillholes"),
+            Self::ReserveField(_) => tr!("destination-condition-field"),
+            Self::Solid(_) => tr!("tri-type-solid-closed"),
+            Self::BlastShape(_) => tr!("solids-blast"),
             Self::Folder(..) => tr!("common-collection"),
         }
     }
@@ -1045,9 +1781,26 @@ impl RenameTarget {
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
+            Self::ReserveField(id) => UiCommand::DeleteReserveField(id),
+            Self::Solid(id) => UiCommand::DeleteSolid(id),
+            // A blast cannot be deleted - it is ground, and it exists as long
+            // as the lines around it do. Clearing its name is the nearest
+            // thing: it goes back to being numbered automatically.
+            Self::BlastShape(blast) => UiCommand::ResetBlastName(blast),
             Self::Folder(section, id) => UiCommand::DeleteFolder { section, folder: id },
         }
     }
+}
+
+/// Draft "type" choice in the Solids Setup's New Field dialog - the UI-only
+/// counterpart of [`crate::model::ReserveAggregation`], which additionally
+/// carries a `Sum` field's own id once "Weighted Average" is picked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReserveFieldKind {
+    Sum,
+    WeightedAverage,
+    /// A grouping label, e.g. "Rock Type" - see [`crate::model::ReserveAggregation::Category`].
+    Category,
 }
 
 /// One selectable row in the explorer tree.
@@ -1278,6 +2031,44 @@ pub(crate) struct EditorState {
     pub(crate) drill_pattern_preview_key: Option<crate::ui::dialogs::drill_pattern::PatternPreviewKey>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
+    pub(crate) haul_draw: bool,
+    pub(crate) haul_delete_node: Option<crate::model::haulage::NodeId>,
+    pub(crate) import_as_haul_roads: bool,
+    pub(crate) haul_points: Vec<DVec3>,
+    pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>, u64)>,
+    pub(crate) haul_view_revision: u64,
+    pub(crate) haul_issues: Vec<crate::model::haulage::network::NetworkIssue>,
+    pub(crate) haul_blocks: Vec<HaulBlock>,
+    /// The dig block clicked on the Layout, which the route check starts from.
+    pub(crate) haul_selected_block: Option<crate::model::DigBlockId>,
+    /// While set, the next node clicked is the one the selected block is held to.
+    pub(crate) haul_link_pick: bool,
+    /// What the block tint was last drawn for: the hidden ground and the
+    /// selected block. Compared each frame so a change redraws it.
+    pub(crate) haul_display_drawn: (SolidsVisibility, Option<crate::model::DigBlockId>),
+    /// Whether the scene was last built showing the Layout's block tint, so
+    /// leaving the page by any route clears it.
+    pub(crate) haul_page_drawn: bool,
+    /// The Layout's own Solids Navigation.
+    pub(crate) haul_hidden: SolidsVisibility,
+    pub(crate) haul_navigation_selection: Vec<SolidsViewRow>,
+    /// Where the next road point would land: on a road or node to join it,
+    /// on the surface under the cursor, or level with the previous point.
+    pub(crate) haul_cursor: Option<DVec3>,
+    pub(crate) haul_drag: Option<HaulDrag>,
+    /// The road point right-clicked to open the canvas menu, where Split
+    /// cuts. The live cursor has moved onto the menu by then.
+    pub(crate) haul_menu_point: Option<DVec3>,
+    pub(crate) haul_pins: Vec<((f32, f32), crate::model::haulage::NodeRole)>,
+    /// Animate's haul routes: the loaded path of each source, destination
+    /// and truck class the schedule moves material by, worked out once per
+    /// schedule and network rather than per frame.
+    pub(crate) animation_routes: HashMap<HaulFlowKey, Vec<DVec3>>,
+    pub(crate) animation_routes_key: Option<(usize, u64)>,
+    /// The road segments trucks are loaded on at the shown instant, projected
+    /// to the window each frame like the other tool overlays.
+    pub(crate) animation_flows: Vec<HaulFlowSegment>,
+    pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
     pub(crate) new_project_dialog_open: bool,
@@ -1391,6 +2182,88 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_detached: bool,
     /// GPU texture rendered with the normal shaded plan-view scene pass.
     pub(crate) slice_preview_texture: Option<egui::TextureId>,
+    /// Offscreen image of the solid being inspected on the Solids Setup page,
+    /// the frame size it is asked to fill, and how it is being orbited.
+    pub(crate) solid_preview_texture: Option<egui::TextureId>,
+    pub(crate) solid_preview_size_px: [u32; 2],
+    pub(crate) solid_preview_view: SolidPreviewView,
+    pub(crate) solid_preview_summary: SolidPreviewSummary,
+    /// Lowest and highest RL the previewed solid reaches, mirrored out of
+    /// `App` so the Benching step can leave out benches the solid never
+    /// occupies.
+    /// The blast outlines currently derived for the Blasting step, in the
+    /// order the panel lists them. Rebuilt only when the geometry, the
+    /// selection or the stored names change - never per frame.
+    pub(crate) blasting_outlines: Vec<BlastOutline>,
+    pub(crate) dig_outlines: Vec<BlastOutline>,
+    pub(crate) dig_outlines_key: Option<u64>,
+    pub(crate) selected_dig_block: Option<BlastShapeRef>,
+    /// A click on the solid preview, waiting for the renderer to say what it
+    /// landed on - addressed, so it can only ever be answered as the click it
+    /// was (see [`SolidPreviewPickRequest`]).
+    pub(crate) solid_preview_pick: Option<SolidPreviewPickRequest>,
+    /// The completed result of that click, echoing its request's provenance.
+    /// A miss is a result, not an absence: it clears the selection the way
+    /// clicking empty space in the viewport does, which an
+    /// `Option<TriangulationId>` could not express.
+    pub(crate) solid_preview_pick_result: Option<SolidPreviewPickResult>,
+    /// Where a right-drag on the solid preview started, `0..1` across and
+    /// down the image, waiting for the renderer to find the ground under it.
+    pub(crate) solid_preview_pivot_request: Option<[f32; 2]>,
+    /// The point that drag orbits about, in framing radii from the mesh's
+    /// centre - see [`SolidPreviewView::orbit_about`].
+    pub(crate) solid_preview_pivot: Option<glam::DVec3>,
+    /// The content revision of the image currently in the preview texture.
+    /// Incremented by the renderer whenever it actually redraws to new content
+    /// (geometry, surrounding scene or camera), so a click can name the exact
+    /// image it was made on, and a click on a superseded image can be told
+    /// apart from one on the image being drawn now.
+    pub(crate) solid_preview_image_revision: u64,
+    /// The selected dig block as the figures panel reports it: identity,
+    /// parents and what it is worth. Mirrored out of the committed artifacts.
+    pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
+    pub(crate) dig_clipboard: Vec<crate::model::Object>,
+    pub(crate) selected_blast: Option<BlastShapeRef>,
+    pub(crate) scroll_to_blast: bool,
+    pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
+    pub(crate) blasting_outlines_key: Option<u64>,
+    /// The bench selection the view was last framed on, so picking a bench
+    /// zooms to it once rather than fighting the user's pan every frame.
+    pub(crate) blasting_framed_key: Option<u64>,
+    /// What the Blasting step took over on entry and puts back on leaving, so
+    /// popping in to check a bench costs the user neither the view nor the
+    /// drawing settings they had set up.
+    pub(crate) blasting_restore: Option<BlastingRestore>,
+    /// The bench the active layer and working elevation were last pointed at,
+    /// so they follow the selection without being reapplied every frame.
+    pub(crate) blasting_bench_key: Option<u64>,
+    /// The bench or flitch a cut step is drawing on, named by its ground
+    /// path, for the viewport bar, which has no document to name it from.
+    pub(crate) planning_cut_name: Option<String>,
+    /// Open the Benches tree down to the selection on its next draw: set when
+    /// a cut step picks ground itself, which may be under closed rows.
+    pub(crate) solids_tree_reveal: bool,
+    /// The six-stage pipeline's status, mirrored out of `App` each frame so
+    /// the step tree can mark each step without reaching into the pipeline.
+    /// Indexed by [`SolidsStep::index`].
+    pub(crate) planning_stages: [PlanningStageView; SolidsStep::ALL.len()],
+    /// Whether a run is queued or in flight, so the controls can offer Cancel.
+    pub(crate) planning_run_active: bool,
+    /// What a scheduler asking for a snapshot right now would be told.
+    pub(crate) planning_snapshot_status: String,
+    pub(crate) solid_view_reserves: Option<crate::model::solid_reserves::ReserveTotals>,
+    pub(crate) solid_view_reserve_status: Option<String>,
+    /// Why each absent reserve field is absent, so every dash in the figures
+    /// panel can say what is wrong with it rather than looking like a zero.
+    pub(crate) solid_view_reserve_issues: std::collections::HashMap<crate::model::ReserveFieldId, String>,
+    /// How much of the shown geometric volume the block model actually covers,
+    /// 0..1. A partly covered solid must not read as fully measured.
+    pub(crate) solid_view_coverage: Option<f64>,
+    pub(crate) solid_view_bands: std::collections::HashMap<crate::model::SolidId, Vec<BenchSelection>>,
+    pub(crate) solid_preview_z_range: Option<(f64, f64)>,
+    /// The bench or flitch picked out in the Benching step's results, and so
+    /// highlighted in the preview.
+    pub(crate) planning_selected_bench: Option<BenchSelection>,
     /// Physical pixel size requested by the embedded preview on its last UI frame.
     pub(crate) slice_preview_size_px: [u32; 2],
     /// Pan/zoom of the plan preview only; independent of the slice geometry.
@@ -1654,6 +2527,13 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_surface_side: TriSurfaceCutSide,
     pub(crate) tri_cut_surface_name_input: String,
     pub(crate) tri_cut_surface_name_auto: bool,
+    /// Build Solid from Surfaces: the two inputs and the output name.
+    pub(crate) tri_solid_open: bool,
+    pub(crate) tri_solid_design_id: Option<TriangulationId>,
+    pub(crate) tri_solid_topography_id: Option<TriangulationId>,
+    pub(crate) tri_solid_region: SolidRegion,
+    pub(crate) tri_solid_name_input: String,
+    pub(crate) tri_solid_name_auto: bool,
     pub(crate) tri_cut_surface_unload_source: bool,
 
     // Cut Topology to Pit Shell
@@ -1838,6 +2718,265 @@ pub(crate) struct EditorState {
     pub(crate) preferences_drill_hole: Option<DrillHoleId>,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) planning_page: PlanningPage,
+    pub(crate) schedule_subpage: PlanningSubpage,
+    pub(crate) haulage_subpage: PlanningSubpage,
+    pub(crate) haulage_setup_step: HaulageStep,
+    /// Which Solids subpage is showing: its setup, or the view of what that
+    /// setup produced.
+    pub(crate) solids_subpage: PlanningSubpage,
+    /// Rows picked out in the Solids View tree.
+    pub(crate) solids_view_selection: Vec<SolidsViewRow>,
+    /// Selected row in the Solids Setup subpage's Block Models step.
+    pub(crate) planning_selected_block_model: Option<BlockModelId>,
+    /// Whether the New Field dialog (Solids Setup's Field List step) is open,
+    /// and its draft contents.
+    pub(crate) new_reserve_field_open: bool,
+    pub(crate) new_reserve_field_name: String,
+    pub(crate) new_reserve_field_kind: ReserveFieldKind,
+    pub(crate) new_reserve_field_weight_field: Option<crate::model::ReserveFieldId>,
+    /// Selected step in the Solids Setup subpage's step tree. Held here
+    /// rather than in egui's temporary data because `App` reads it too: the
+    /// solid preview is only built while the Solids step is on screen.
+    pub(crate) planning_solids_step: SolidsStep,
+    /// Selected row in the Solids Setup subpage's Solids step.
+    pub(crate) planning_selected_solid: Option<crate::model::SolidId>,
+    /// Whether the New Solid dialog (Solids Setup's Solids step) is open, and
+    /// its draft contents.
+    pub(crate) new_solid_open: bool,
+    /// The Update Topography dialog, while it is open.
+    pub(crate) topography_update: Option<TopographyUpdate>,
+    pub(crate) new_solid_name: String,
+    pub(crate) new_solid_kind: crate::model::SolidKind,
+    pub(crate) new_solid_surface: Option<TriangulationId>,
+    pub(crate) new_solid_topography: Option<TriangulationId>,
+    pub(crate) new_solid_block_model: Option<BlockModelId>,
+    /// Which entry of the Schedule Setup tree is selected.
+    pub(crate) schedule_setup_step: ScheduleStep,
+    /// The Schedule Setup pipeline's status, mirrored out of `App` each frame
+    /// so the step tree can mark each step without reaching into the pipeline.
+    /// Indexed by [`ScheduleStep::index`].
+    pub(crate) schedule_stages: [ScheduleStageView; ScheduleStep::ALL.len()],
+    /// Whether a Schedule Setup run is queued or in flight, so the controls
+    /// can offer Cancel.
+    pub(crate) schedule_run_active: bool,
+    /// What the Gantt would be told if it asked to calculate right now: empty
+    /// while a current Schedule Setup run stands, and otherwise the one unmet
+    /// prerequisite, named. Inspection never consults it - only calculation is
+    /// gated.
+    pub(crate) schedule_calculation_status: String,
+    /// Typed text for the Optimisation settings, so a partly typed number is
+    /// not committed and not lost.
+    pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
+    /// Typed chunk capacities for one stockpile, as `(destination, source, text)`.
+    pub(crate) schedule_chunk_draft: Option<(crate::model::schedule::DestinationId, String, String)>,
+    /// Selected rows in the two loader editors, and the drafts of the cells
+    /// being typed into. Drafts are held rather than rebuilt each frame so an
+    /// invalid entry stays on screen with its error instead of snapping back
+    /// to the last committed value.
+    pub(crate) schedule_selected_class: Option<crate::model::schedule::LoaderClassId>,
+    pub(crate) schedule_selected_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
+    pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
+    pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
+    pub(crate) schedule_bar_height_draft: Option<ScheduleBarHeightDraft>,
+    /// The selected row on the Stockpiles, Dumps and Crushers pages, and the
+    /// capacity being typed into it. One selection across the three pages: a
+    /// destination is one thing whichever page it is listed on.
+    pub(crate) schedule_selected_destination: Option<crate::model::schedule::DestinationId>,
+    pub(crate) schedule_destination_draft: Option<ScheduleDestinationDraft>,
+    /// The selected truck class and the cells being typed into it.
+    pub(crate) schedule_selected_truck_class: Option<crate::model::schedule::TruckClassId>,
+    pub(crate) schedule_truck_class_draft: Option<ScheduleTruckClassDraft>,
+    /// The selected trucking rule and the name being typed into it.
+    pub(crate) schedule_selected_truck_rule: Option<crate::model::schedule::TruckingRuleId>,
+    pub(crate) schedule_truck_rule_draft: Option<ScheduleRuleNameDraft>,
+    /// The selected cashflow rule and the cells being typed into its editor.
+    pub(crate) schedule_selected_cashflow_rule: Option<crate::model::schedule::CashflowRuleId>,
+    pub(crate) schedule_cashflow_draft: Option<ScheduleCashflowDraft>,
+    /// The selected opening-inventory lot on the Stockpiles page, and the cells
+    /// being typed into it. One selection, like the destination one: a lot
+    /// belongs to whichever stockpile is selected beside it.
+    pub(crate) schedule_selected_lot: Option<crate::model::schedule::OpeningLotId>,
+    pub(crate) schedule_lot_draft: Option<ScheduleLotDraft>,
+    /// The selected routing rule and the cells being typed into its editor.
+    pub(crate) schedule_selected_rule: Option<crate::model::schedule::RuleId>,
+    pub(crate) schedule_rule_draft: Option<ScheduleRuleDraft>,
+    /// The condition being added or edited in the rule editor, while one is
+    /// being edited. Held apart from the rule's committed conditions so a
+    /// half-typed bound is never a routing decision.
+    pub(crate) schedule_condition_draft: Option<ScheduleConditionDraft>,
+    /// Which groups of the source picker are folded shut, keyed by the band
+    /// itself rather than by its row: the list is rebuilt from the run every
+    /// time it opens, and a row index would fold a different bench each time
+    /// the ground changed.
+    pub(crate) schedule_source_collapsed: Vec<(u64, u64, u64)>,
+    /// The source scopes a rule can name, as the last completed Solids run
+    /// describes them: every pit, its benches, and their flitches. Mirrored
+    /// out of the run rather than read from the document, because which bands
+    /// exist is the run's answer and not the benching plan's.
+    pub(crate) schedule_routing_sources: std::sync::Arc<Vec<SourceScopeView>>,
+    /// The category values each categorical field was actually measured
+    /// holding, per field, so a condition offers what the models map rather
+    /// than free text. A saved selection that no longer occurs is still shown -
+    /// see [`crate::model::schedule::ConditionTest::Category`].
+    pub(crate) schedule_category_values: std::sync::Arc<std::collections::BTreeMap<crate::model::ReserveFieldId, Vec<String>>>,
+    /// The selected Gantt bars: one from a click, several from a drag box or
+    /// a Ctrl-click. The selected member is a position rather than a block
+    /// reference: the order is what is being edited, and two positions can
+    /// hold ground that resolves to nothing at all.
+    pub(crate) schedule_selected_bars: std::collections::BTreeSet<crate::model::schedule::BarId>,
+    /// The delay type, list or roster open on the Delays page.
+    pub(crate) schedule_selected_delay: Option<DelaySelection>,
+    /// What is being typed on the Delays page, until it is committed.
+    pub(crate) schedule_delay_draft: Option<DelayDraft>,
+    pub(crate) schedule_selected_member: Option<usize>,
+    /// The New Bar / Rename Bar dialog, while one is open. One dialog serves
+    /// both: they ask the same question, and the target is what says which.
+    pub(crate) bar_name_dialog: Option<BarNameDialog>,
+    /// Add or edit a reclaim bar. The draft stays outside the project until
+    /// Apply, so a half-typed limit or cancelled dialog changes nothing.
+    pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
+    /// The Add / Edit blast bar dialog, while open.
+    pub(crate) blast_bar_dialog: Option<BlastBarDialog>,
+    pub(crate) blast_window_dialog: Option<BlastWindowDialog>,
+    pub(crate) blast_sequence_generation: Option<u64>,
+    /// Every blast of the Solids run, for the Drill & Blast page and the
+    /// blast bar dialog; refreshed by the app when the run or project moves.
+    pub(crate) schedule_blasts: Vec<BlastListEntry>,
+    pub(crate) schedule_blasts_key: Option<(u32, u64, Option<u64>, u64)>,
+    /// The blast selected on the Drill & Blast page.
+    pub(crate) schedule_selected_blast: Option<crate::model::schedule::BlastRef>,
+    /// The Drill & Blast settings as typed.
+    pub(crate) drill_blast_draft: Option<DrillBlastDraft>,
+    /// The selected blast's own pattern as typed.
+    pub(crate) blast_pattern_draft: Option<BlastPatternDraft>,
+    /// The numeric work-window dialog, while one is open. Dragging an edge is
+    /// quick and imprecise; this is the same edit said exactly.
+    pub(crate) bar_window_dialog: Option<BarWindowDialog>,
+    /// The bar being dragged along the Gantt, and where its earliest start
+    /// stood when the drag began. Held so a drag reads as one continuous
+    /// movement from a fixed origin rather than accumulating rounding at every
+    /// frame, and so releasing outside the canvas leaves the bar where the
+    /// last committed edit put it.
+    pub(crate) gantt_drag: Option<GanttDrag>,
+    /// A palette chip being dragged onto the Gantt to make a bar.
+    pub(crate) gantt_palette_drag: Option<GanttPaletteItem>,
+    /// A delay bar dropped on the Gantt, waiting for its type to be chosen.
+    pub(crate) gantt_delay_drop: Option<DelayDrop>,
+    /// A follow bar dropped on the Gantt, waiting for its leader.
+    pub(crate) gantt_follow_drop: Option<DelayDrop>,
+    /// A drag box being drawn over the Gantt's empty space to select bars:
+    /// where it started, in screen points.
+    pub(crate) gantt_marquee: Option<egui::Pos2>,
+    /// Every bar's readiness against the current run, mirrored from
+    /// [`crate::app::commands::schedule_readiness`] while the Gantt is on
+    /// screen and empty otherwise. Read where the bars and their diagnostics
+    /// are drawn, so the Gantt never holds a report that outlived the run it
+    /// was measured against.
+    pub(crate) schedule_bar_reports: Vec<ScheduleBarView>,
+    /// What the last accepted run calculated, mirrored only while it is
+    /// still current. One shared, immutable result: the Gantt and the
+    /// Calendar read the same figures, and its per-period aggregates were
+    /// built once when it was published. Authored bars remain separate and
+    /// editable; an edit that changes what the run read takes this off the
+    /// pages until the schedule is run again, while the held result itself is
+    /// kept and labelled rather than destroyed.
+    pub(crate) schedule_result: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// What the run controls say: which run is on screen and how it was
+    /// solved, that it is out of date, or why one cannot be started.
+    pub(crate) schedule_run_status: String,
+    /// The on-demand detail behind the status: value, bound and gap, timings,
+    /// and the approximations the result rests on.
+    pub(crate) schedule_run_details: Vec<String>,
+    /// Whether a held result exists but no longer describes the project. The
+    /// calculated bands are hidden while this is set.
+    pub(crate) schedule_run_stale: bool,
+    /// Whether a schedule run is in flight, so the controls can offer Cancel.
+    pub(crate) schedule_run_working: bool,
+    /// Whether the run in flight is showing its day-by-day schedule while
+    /// the whole-horizon solve looks for a better one, so Cancel keeps it.
+    pub(crate) schedule_run_improving: bool,
+    /// Whether the run in flight is an Improve run, so its control shows it.
+    pub(crate) schedule_run_improve: bool,
+    /// Whether the schedule recalculates on its own once edits settle. On by
+    /// default: the first schedule takes a fraction of a second.
+    pub(crate) schedule_auto_recalculate: bool,
+    /// Whether the Planning steps rerun on their own once edits settle. On
+    /// by default, like the schedule's: only the stale steps run, and an
+    /// edit made meanwhile restarts them.
+    pub(crate) planning_auto_run: bool,
+    /// Whether Blasting and Dig Strips name their blasts and dig blocks over
+    /// the viewport. On by default; one switch serves both steps.
+    pub(crate) planning_cut_labels: bool,
+    /// Where the current Run prerequisite can be repaired, including the
+    /// exact selected step on the Schedule or Solids setup page.
+    pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
+    /// Schedule Animate is session-only: selection and visibility here never
+    /// move the Solids View page or alter saved project item visibility.
+    pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
+    pub(crate) schedule_animation_hidden: SolidsVisibility,
+    /// The schedule's time slider, in hours from the origin: one instant
+    /// shared by the Gantt's slider, the Inspector beside it and Animate's
+    /// scrubber, so moving any of them moves the others. Session-only, and
+    /// kept across recalculations - a planner inspecting day 3 who edits a
+    /// bar is still looking at day 3 when the new schedule lands.
+    pub(crate) schedule_time_h: f64,
+    /// The instant the geometry on screen was actually cut for, which trails
+    /// the cursor while a batch is in flight.  The readout names this rather
+    /// than the cursor, so the number never claims ground the view is not
+    /// showing yet.
+    pub(crate) schedule_animation_shown_h: f64,
+    /// How Animate draws each drill and blast blast, by its position in the
+    /// run's blasts: the ground its marks lie on.
+    pub(crate) schedule_animation_blasts: Vec<crate::model::schedule::animation::AnimatedBlast>,
+    pub(crate) schedule_animation_horizon_h: f64,
+    pub(crate) schedule_animation_enabled: bool,
+    pub(crate) schedule_animation_pending: bool,
+    /// Set while a block that would not cut is on screen holding an older cut.
+    /// The view is then not the instant it names, and says so, for as long as
+    /// that stands.
+    pub(crate) schedule_animation_degraded: bool,
+    pub(crate) schedule_animation_status: String,
+    /// The floating 3D sequence editor's draft, while one is open.
+    pub(crate) sequence_editor: Option<SequenceDraft>,
+    /// What the current run says about each draft member, in draft order.
+    /// Mirrored while the editor is open and empty otherwise.
+    pub(crate) sequence_members: Vec<SequenceMemberView>,
+    /// The run generation the mirror above was measured against, and why
+    /// there is not one. The editor states this rather than picking against a
+    /// run it cannot name.
+    pub(crate) sequence_generation: Option<u64>,
+    pub(crate) sequence_unavailable: Option<String>,
+    /// The press being held in the sequence editor's dig order, while one is.
+    pub(crate) sequence_list_drag: Option<SequenceListDrag>,
+    /// The stroke being drawn across the sequence editor's 3D pane, while one
+    /// is being drawn.
+    pub(crate) sequence_paint: Option<SequencePaint>,
+    /// Whether the New Loader Class / New Loader Agent dialogs are open, and
+    /// their draft contents. A draft is not in the project until it is valid
+    /// and committed, so cancelling one leaves nothing behind.
+    pub(crate) new_loader_class_open: bool,
+    pub(crate) new_loader_class_name: String,
+    pub(crate) new_loader_class_rate: String,
+    pub(crate) new_loader_class_kind: crate::model::schedule::MachineKind,
+    pub(crate) new_loader_agent_open: bool,
+    pub(crate) new_loader_agent_name: String,
+    pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
+    /// The New Destination dialog: whether it is open, and its draft. The kind
+    /// comes from the page it was opened on, so there is no kind to choose.
+    pub(crate) new_destination_open: bool,
+    pub(crate) new_destination_name: String,
+    pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
+    /// Where the Gantt is looking: see [`GanttView`].
+    pub(crate) gantt: GanttView,
+    /// Whether the Inspector is open beside the Gantt and the Charts.
+    pub(crate) gantt_inspector_open: bool,
+    /// Downward scroll of the Charts page's rows, in points.
+    pub(crate) schedule_charts_scroll: f32,
+    /// How the Calendar's report export groups its rows.
+    pub(crate) schedule_report_grouping: crate::ui::elements::schedule_report::ReportGrouping,
+    pub(crate) schedule_calendar: ScheduleCalendarView,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
     /// The Drill & Blast workspace's stored products, in the order the palette
@@ -2026,6 +3165,52 @@ impl EditorState {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
 
+    /// Whether the viewport shows the haul network: its roads, node pins and
+    /// route check belong to the Haulage pages and Animate, which draws what
+    /// travels on them, and nowhere else.
+    pub(crate) fn shows_haul_network(&self) -> bool {
+        let planning = self.active_workspace == Workspace::Planning;
+        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation()
+    }
+
+    /// Whether the Haulage Layout - the road network over the viewport - is
+    /// showing.
+    pub(crate) fn is_haulage_page(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
+    }
+
+    /// Open a Schedule Setup step, wherever it lives: truck classes are set
+    /// up on the Haulage page, beside the roads they drive.
+    pub(crate) fn open_schedule_step(&mut self, step: ScheduleStep) {
+        if step == ScheduleStep::TruckClasses {
+            self.planning_page = PlanningPage::Haulage;
+            self.haulage_subpage = PlanningSubpage::Setup;
+            self.haulage_setup_step = HaulageStep::TruckClasses;
+        } else {
+            self.planning_page = PlanningPage::Schedule;
+            self.schedule_subpage = PlanningSubpage::Setup;
+            self.schedule_setup_step = step;
+        }
+    }
+
+    /// Put down whatever road edit is in progress. A road is drawn over the
+    /// Haulage Layout's viewport, so leaving it must not leave the next click
+    /// in another workspace placing road points.
+    pub(crate) fn cancel_haul_edit(&mut self) {
+        self.haul_draw = false;
+        self.haul_points.clear();
+        self.haul_cursor = None;
+        self.haul_drag = None;
+        self.haul_link_pick = false;
+        self.haul_route = None;
+    }
+
+    /// Placing a road point or dragging one: the cursor snaps as a drawing
+    /// tool's does.
+    pub(crate) fn haul_placing(&self) -> bool {
+        self.haul_draw || self.haul_drag.is_some_and(|drag| drag.pos.is_some())
+    }
+
     /// Whether a snap mode is up. The section snaps as the plan does: its
     /// targets are the ones inside the slab, and off them the cursor falls
     /// back to the section plane like any unsnapped pick.
@@ -2106,6 +3291,7 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
+            || self.tri_solid_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
             || self.tri_contour_open
@@ -2191,6 +3377,15 @@ impl EditorState {
     /// preview geometry, projected handle, or modal draft can refer to the
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
+        self.selected_blast = None;
+        self.selected_dig_block = None;
+        self.dig_outlines.clear();
+        self.dig_outlines_key = None;
+        self.blasting_outlines.clear();
+        self.blast_labels.clear();
+        self.blasting_outlines_key = None;
+        self.blasting_bench_key = None;
+        self.blasting_framed_key = None;
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
@@ -2225,6 +3420,21 @@ impl EditorState {
         self.drape_phase = DrapePhase::Designs;
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
+        self.haul_draw = false;
+        self.haul_points.clear();
+        self.haul_route = None;
+        self.haul_block_cache_key = None;
+        self.haul_issues.clear();
+        self.haul_blocks.clear();
+        self.haul_cursor = None;
+        self.haul_drag = None;
+        self.haul_menu_point = None;
+        self.haul_delete_node = None;
+        self.haul_selected_block = None;
+        self.haul_link_pick = false;
+        self.haul_hidden = SolidsVisibility::default();
+        self.haul_navigation_selection.clear();
+        self.haul_pins.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
         self.poly_finish_dialog_confirm_armed = false;
@@ -2249,6 +3459,61 @@ impl EditorState {
         self.text_edit_created = false;
         self.slice_pending_start = None;
         self.slice_preview_navigation.reset();
+
+        // Schedule setup selections and drafts name ids of the project that
+        // is going away, and the Gantt is looking at its timeline.
+        self.schedule_selected_class = None;
+        self.schedule_selected_agent = None;
+        self.schedule_class_draft = None;
+        self.schedule_agent_draft = None;
+        self.schedule_name_draft = None;
+        self.schedule_bar_height_draft = None;
+        self.schedule_selected_destination = None;
+        self.schedule_destination_draft = None;
+        self.schedule_selected_truck_class = None;
+        self.schedule_truck_class_draft = None;
+        self.schedule_selected_truck_rule = None;
+        self.schedule_truck_rule_draft = None;
+        self.schedule_selected_cashflow_rule = None;
+        self.schedule_cashflow_draft = None;
+        self.schedule_selected_lot = None;
+        self.schedule_lot_draft = None;
+        self.schedule_selected_delay = None;
+        self.schedule_delay_draft = None;
+        self.schedule_selected_rule = None;
+        self.schedule_rule_draft = None;
+        self.schedule_condition_draft = None;
+        self.schedule_source_collapsed.clear();
+        self.schedule_routing_sources = Default::default();
+        self.schedule_category_values = Default::default();
+        self.new_destination_open = false;
+        self.new_destination_name.clear();
+        self.schedule_selected_bars.clear();
+        self.schedule_selected_member = None;
+        self.bar_name_dialog = None;
+        self.reclaim_bar_dialog = None;
+        self.bar_window_dialog = None;
+        self.blast_window_dialog = None;
+        self.blast_bar_dialog = None;
+        self.gantt_drag = None;
+        self.schedule_bar_reports.clear();
+        self.schedule_result = None;
+        self.schedule_run_status.clear();
+        self.schedule_run_details.clear();
+        self.schedule_run_stale = false;
+        self.schedule_run_working = false;
+        self.schedule_run_improving = false;
+        self.schedule_run_improve = false;
+        self.schedule_run_repair = None;
+        self.close_sequence_editor();
+        self.new_loader_class_open = false;
+        self.new_loader_class_name.clear();
+        self.new_loader_class_rate.clear();
+        self.new_loader_agent_open = false;
+        self.new_loader_agent_class = None;
+        self.new_loader_agent_name.clear();
+        self.gantt = GanttView::default();
+        self.schedule_calendar = ScheduleCalendarView::default();
 
         self.offset_dialog_open = false;
         self.offset_target_id = None;
@@ -2482,6 +3747,28 @@ impl EditorState {
             drill_pattern_preview_error: None,
             drill_pattern_preview_key: None,
             cursor_world: None,
+            haul_draw: false,
+            haul_delete_node: None,
+            import_as_haul_roads: false,
+            haul_points: Vec::new(),
+            haul_block_cache_key: None,
+            haul_view_revision: 0,
+            haul_issues: Vec::new(),
+            haul_blocks: Vec::new(),
+            haul_selected_block: None,
+            haul_link_pick: false,
+            haul_display_drawn: Default::default(),
+            haul_page_drawn: false,
+            haul_hidden: SolidsVisibility::default(),
+            haul_navigation_selection: Vec::new(),
+            haul_cursor: None,
+            haul_drag: None,
+            haul_menu_point: None,
+            haul_pins: Vec::new(),
+            animation_routes: HashMap::new(),
+            animation_routes_key: None,
+            animation_flows: Vec::new(),
+            haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
             #[cfg(target_arch = "wasm32")]
@@ -2534,6 +3821,40 @@ impl EditorState {
             slice_mode_enabled: false,
             slice_preview_detached: false,
             slice_preview_texture: None,
+            solid_preview_texture: None,
+            solid_preview_size_px: [420, 420],
+            solid_preview_view: SolidPreviewView::default(),
+            solid_preview_summary: SolidPreviewSummary::Empty,
+            blasting_outlines: Vec::new(),
+            dig_outlines: Vec::new(),
+            dig_outlines_key: None,
+            selected_dig_block: None,
+            solid_preview_pick: None,
+            solid_preview_pick_result: None,
+            solid_preview_pivot_request: None,
+            solid_preview_pivot: None,
+            solid_preview_image_revision: 0,
+            selected_dig_block_info: None,
+            dig_clipboard: Vec::new(),
+            selected_blast: None,
+            scroll_to_blast: false,
+            blast_labels: Vec::new(),
+            blasting_outlines_key: None,
+            blasting_framed_key: None,
+            blasting_restore: None,
+            blasting_bench_key: None,
+            planning_cut_name: None,
+            solids_tree_reveal: false,
+            planning_stages: Default::default(),
+            planning_run_active: false,
+            planning_snapshot_status: String::new(),
+            solid_view_reserves: None,
+            solid_view_reserve_issues: Default::default(),
+            solid_view_coverage: None,
+            solid_view_reserve_status: None,
+            solid_view_bands: Default::default(),
+            solid_preview_z_range: None,
+            planning_selected_bench: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
             slice_width_input: 25.0,
@@ -2669,6 +3990,12 @@ impl EditorState {
             tri_cut_surface_side: TriSurfaceCutSide::CutTop,
             tri_cut_surface_name_input: String::new(),
             tri_cut_surface_name_auto: true,
+            tri_solid_open: false,
+            tri_solid_design_id: None,
+            tri_solid_topography_id: None,
+            tri_solid_region: SolidRegion::Cut,
+            tri_solid_name_input: String::new(),
+            tri_solid_name_auto: true,
             tri_cut_surface_unload_source: true,
             tri_cut_pitshell_open: false,
             tri_cut_pitshell_topology_id: None,
@@ -2780,6 +4107,117 @@ impl EditorState {
             active_property_tab: PropertyTab::Interface,
             preferences_drill_hole: None,
             active_workspace: Workspace::Production,
+            planning_page: PlanningPage::Solids,
+            schedule_subpage: PlanningSubpage::Setup,
+            haulage_subpage: PlanningSubpage::Layout,
+            haulage_setup_step: HaulageStep::Network,
+            solids_subpage: PlanningSubpage::Setup,
+            solids_view_selection: Vec::new(),
+            planning_selected_block_model: None,
+            new_reserve_field_open: false,
+            new_reserve_field_name: String::new(),
+            new_reserve_field_kind: ReserveFieldKind::Sum,
+            new_reserve_field_weight_field: None,
+            planning_solids_step: SolidsStep::FieldList,
+            planning_selected_solid: None,
+            new_solid_open: false,
+            topography_update: None,
+            new_solid_name: String::new(),
+            new_solid_kind: crate::model::SolidKind::Pit,
+            new_solid_surface: None,
+            new_solid_topography: None,
+            new_solid_block_model: None,
+            schedule_setup_step: ScheduleStep::Configuration,
+            schedule_stages: Default::default(),
+            schedule_run_active: false,
+            schedule_calculation_status: String::new(),
+            schedule_experiment_draft: None,
+            schedule_chunk_draft: None,
+            schedule_selected_class: None,
+            schedule_selected_agent: None,
+            schedule_class_draft: None,
+            schedule_selected_destination: None,
+            schedule_destination_draft: None,
+            schedule_selected_truck_class: None,
+            schedule_truck_class_draft: None,
+            schedule_selected_truck_rule: None,
+            schedule_truck_rule_draft: None,
+            schedule_selected_cashflow_rule: None,
+            schedule_cashflow_draft: None,
+            schedule_selected_lot: None,
+            schedule_lot_draft: None,
+            schedule_selected_rule: None,
+            schedule_rule_draft: None,
+            schedule_condition_draft: None,
+            schedule_source_collapsed: Vec::new(),
+            schedule_routing_sources: Default::default(),
+            schedule_category_values: Default::default(),
+            schedule_agent_draft: None,
+            schedule_name_draft: None,
+            schedule_bar_height_draft: None,
+            schedule_selected_bars: Default::default(),
+            schedule_selected_delay: None,
+            schedule_delay_draft: None,
+            schedule_selected_member: None,
+            bar_name_dialog: None,
+            reclaim_bar_dialog: None,
+            blast_bar_dialog: None,
+            blast_window_dialog: None,
+            blast_sequence_generation: None,
+            schedule_blasts: Vec::new(),
+            schedule_blasts_key: None,
+            schedule_selected_blast: None,
+            drill_blast_draft: None,
+            blast_pattern_draft: None,
+            bar_window_dialog: None,
+            gantt_drag: None,
+            gantt_palette_drag: None,
+            gantt_delay_drop: None,
+            gantt_follow_drop: None,
+            gantt_marquee: None,
+            schedule_bar_reports: Vec::new(),
+            schedule_result: None,
+            schedule_run_status: String::new(),
+            schedule_run_details: Vec::new(),
+            schedule_run_stale: false,
+            schedule_run_working: false,
+            schedule_run_improving: false,
+            schedule_run_improve: false,
+            schedule_auto_recalculate: true,
+            planning_auto_run: true,
+            planning_cut_labels: true,
+            schedule_run_repair: None,
+            schedule_animation_selection: Vec::new(),
+            schedule_animation_hidden: SolidsVisibility::default(),
+            schedule_time_h: 0.0,
+            schedule_animation_shown_h: 0.0,
+            schedule_animation_blasts: Vec::new(),
+            schedule_animation_horizon_h: 0.0,
+            schedule_animation_enabled: false,
+            schedule_animation_pending: false,
+            schedule_animation_degraded: false,
+            schedule_animation_status: String::new(),
+            sequence_editor: None,
+            sequence_members: Vec::new(),
+            sequence_generation: None,
+            sequence_unavailable: None,
+            sequence_list_drag: None,
+            sequence_paint: None,
+            new_loader_class_open: false,
+            new_loader_class_name: String::new(),
+            new_loader_class_rate: String::new(),
+            new_loader_class_kind: crate::model::schedule::MachineKind::Loader,
+            new_loader_agent_open: false,
+            new_loader_agent_name: String::new(),
+            new_loader_agent_class: None,
+            new_destination_open: false,
+            new_destination_name: String::new(),
+            new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
+            gantt: GanttView::default(),
+            gantt_inspector_open: true,
+            schedule_charts_scroll: 0.0,
+            schedule_report_grouping: Default::default(),
+            schedule_calendar: ScheduleCalendarView::default(),
             workspace_order: Workspace::ALL,
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -3240,8 +4678,71 @@ pub(crate) enum BoreholeInspectorTab {
 /// Each variant represents an action the user triggered through the UI
 /// (button clicks, menu selections, dialog confirmations).  The app layer
 /// matches on these in its event loop.
+/// What a press on a road node or shape point grabbed. It becomes a move
+/// only once the pointer travels; a still press stays an ordinary selection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HaulDragTarget {
+    Node(crate::model::haulage::NodeId),
+    Shape(crate::model::haulage::RoadId, usize),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HaulDrag {
+    pub(crate) target: HaulDragTarget,
+    pub(crate) origin: DVec3,
+    pub(crate) start_px: (f32, f32),
+    /// `None` until the pointer has moved far enough to count as a drag.
+    pub(crate) pos: Option<DVec3>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum HaulEdit {
+    /// Several edits as one undo step.
+    Many(Vec<HaulEdit>),
+    Draw(Vec<DVec3>),
+    ConvertSelection,
+    MoveNode(crate::model::haulage::NodeId, DVec3),
+    MoveShape(crate::model::haulage::RoadId, usize, DVec3),
+    DeleteRoad(crate::model::haulage::RoadId),
+    DeleteNode(crate::model::haulage::NodeId),
+    Join(crate::model::haulage::NodeId, crate::model::haulage::NodeId),
+    Split(crate::model::haulage::RoadId, DVec3),
+    Role(crate::model::haulage::NodeId, Option<crate::model::haulage::NodeRole>),
+    RoadProperties(Vec<crate::model::haulage::RoadId>, Option<String>, Option<f64>),
+    Settings(crate::model::haulage::network::HaulSettings),
+    Fixed(crate::model::schedule::DestinationId, bool),
+    /// Add a node where a destination meets the road, giving it that role.
+    Pin(crate::model::haulage::NodeRole, DVec3),
+    /// Hold a dig block to a node, or (`None`) leave it to the nearest road.
+    /// `at` is a node's position or a point on a road, which becomes a node.
+    LinkBlock {
+        solid: crate::model::SolidId,
+        flitch_base: f64,
+        face: std::sync::Arc<crate::model::arrangement::Face>,
+        probe: [f64; 2],
+        at: Option<DVec3>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
+    Haulage {
+        project: u32,
+        edit: HaulEdit,
+    },
+    RefreshHaulOverlay,
+    StartHaulRoad,
+    OpenHaulImport,
+    EditHaulProperties,
+    FinishHaulRoad,
+    ConvertHaulSelection,
+    /// Frame a haul feature: the box from `min` to `max`, padded.
+    FrameHaul(DVec3, DVec3),
+    NewHaulDestination {
+        node: crate::model::haulage::NodeId,
+        kind: crate::model::schedule::DestinationKind,
+    },
+    ExportHaulRoads,
+
     SetActiveTool(ActiveTool),
     /// Open/close the Drill & Blast pattern builder from its toolbar cell.
     ToggleCreateDrillPattern,
@@ -3318,6 +4819,9 @@ pub(crate) enum UiCommand {
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
+    /// Save the schedule report the Calendar built, as CSV, under a suggested
+    /// file name. Boxed: the report text is the payload.
+    ExportScheduleReport(Box<(String, String)>),
     /// One drillhole dataset out as the three tables it was read from.
     ExportDrillHoleCsv(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
@@ -3359,6 +4863,103 @@ pub(crate) enum UiCommand {
     },
     /// Drop one stored product from that palette.
     DeleteDelayProduct(DelayProductId),
+    /// Add a field to the Solids Reserves setup's Field List, as the New
+    /// Field dialog filled it in.
+    AddReserveField {
+        name: String,
+        aggregation: crate::model::ReserveAggregation,
+    },
+    DeleteReserveField(crate::model::ReserveFieldId),
+    /// Add a field named after a block model column, mapped onto that column
+    /// in every block model that has one by that name.
+    AddReserveFieldFromColumn {
+        column: String,
+        categorical: bool,
+    },
+    /// Change how a field combines: summed, or averaged by a Sum field.
+    SetReserveFieldAggregation {
+        field: crate::model::ReserveFieldId,
+        aggregation: crate::model::ReserveAggregation,
+    },
+    /// Map one block model's own column, or a constant, onto one Reserves
+    /// field. `None` clears an existing mapping.
+    SetReserveMapping {
+        block_model: BlockModelId,
+        field: crate::model::ReserveFieldId,
+        source: Option<crate::model::block_model::ReserveMappingSource>,
+    },
+    /// Opt one block model in or out of the project's Reserves.
+    SetReserveModelIncluded {
+        block_model: BlockModelId,
+        included: bool,
+    },
+    /// Add a solid to the Solids setup, as the New Solid dialog filled it in.
+    AddSolid {
+        name: String,
+        kind: crate::model::SolidKind,
+        surface: Option<TriangulationId>,
+        topography: Option<TriangulationId>,
+        block_model: Option<BlockModelId>,
+    },
+    /// Clear a blast's stored name so it is numbered automatically again.
+    ResetBlastName(BlastShapeRef),
+    SelectBlast(Option<BlastShapeRef>),
+    SelectDigBlock(BlastShapeRef),
+    DeleteSolid(crate::model::SolidId),
+    /// Add the solid currently being previewed to the project as a
+    /// triangulation, so it can be rendered, edited and saved like any other.
+    SaveSolidPreviewToProject,
+    /// Return the Solids preview to the orbit it opens at.
+    ResetSolidPreviewView,
+    /// Ask for one block model's whole-model reserve statistics again, after
+    /// a scan that failed or could not load its inputs.
+    RecomputeReserveStats(BlockModelId),
+    /// Reset pipeline status and rerun from the first step through this stage.
+    RunPlanningStage(SolidsStep),
+    /// Reset pipeline status and rerun all six stages.
+    RunAllPlanningStages,
+    /// Stop a run in flight, leaving completed stages alone.
+    CancelPlanningRun,
+    /// Reset the Schedule Setup pipeline and rerun from its first step through
+    /// this one.
+    RunScheduleStage(ScheduleStep),
+    /// Solve from hour zero through one more day than the held current
+    /// result, or through day one when there is none.
+    RunSchedulePeriod,
+    /// Solve from hour zero through the planning end day.
+    RunAllSchedulePeriods,
+    /// Look for a better schedule than the hourly one over the held
+    /// result's horizon, with the whole-horizon optimiser.
+    ImproveSchedule,
+    /// Stop a schedule run in flight. The held result is untouched.
+    CancelScheduleCalculation,
+    /// Reset the Schedule Setup pipeline and rerun every step.
+    RunAllScheduleStages,
+    /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
+    /// whatever result the last completed run left stands untouched.
+    CancelScheduleRun,
+    /// One edit to a project's loader fleet.
+    ///
+    /// Addressed rather than implicit: `project` is the runtime id of the
+    /// project whose fleet the UI drew this from, and the handler refuses it
+    /// if that is no longer the project being edited. Ids alone could not
+    /// tell the two apart - a fresh project numbers its first class `0` as
+    /// well.
+    Schedule {
+        project: u32,
+        edit: ScheduleEdit,
+    },
+    /// Change one field of a solid from its property table.
+    UpdateSolid {
+        solid: crate::model::SolidId,
+        edit: crate::model::SolidEdit,
+    },
+    /// Measure several solids against one topography at once: a new survey
+    /// replacing the surface they were cut from.
+    SetSolidsTopography {
+        solids: Vec<crate::model::SolidId>,
+        topography: Option<crate::model::triangulation::TriangulationId>,
+    },
     /// Apply or remove one collar's initiation delay after its dialog closes.
     SetInitiation {
         target: DrillHoleRef,
@@ -3404,6 +5005,9 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
+    SetPlanningPage(PlanningPage),
+    SetPlanningSubpage(PlanningSubpage),
+    FocusScheduleAnimationSolid(crate::model::SolidId),
     OpenSurveyDefinitions,
     OpenSurveyTransform,
     TransformSurveySelection,
@@ -3751,6 +5355,15 @@ pub(crate) enum UiCommand {
     },
     /// Open the "Trim to Topology" dialog.
     OpenCutTriangulationBySurface,
+    /// Open the Build Solid from Surfaces tool.
+    OpenBuildSolidFromSurfaces,
+    /// Build a closed solid from a design surface and the topography it meets.
+    ExecuteBuildSolidFromSurfaces {
+        design_id: TriangulationId,
+        topography_id: TriangulationId,
+        region: SolidRegion,
+        name: String,
+    },
     /// Trim one surface against a topology in the vertical direction.
     ExecuteCutTriangulationBySurface {
         target_id: TriangulationId,
@@ -3817,6 +5430,11 @@ pub(crate) enum UiCommand {
 }
 
 impl UiCommand {
+    /// One fleet edit, addressed to the project session it was drawn from.
+    pub(crate) fn schedule(project: u32, edit: ScheduleEdit) -> Self {
+        Self::Schedule { project, edit }
+    }
+
     /// Friendly activity-console metadata for meaningful user actions.
     ///
     /// This match is deliberately exhaustive: adding a command requires an
@@ -3842,6 +5460,9 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
+            | Self::SetPlanningPage(_)
+            | Self::SetPlanningSubpage(_)
+            | Self::FocusScheduleAnimationSolid(_)
             | Self::SetWellLogStyle(_)
             | Self::OpenSurveyDefinitions
             | Self::OpenSurveyTransform
@@ -3879,6 +5500,7 @@ impl UiCommand {
             | Self::OpenCutTriangulationByPolyline
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
+            | Self::OpenBuildSolidFromSurfaces
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -3898,7 +5520,34 @@ impl UiCommand {
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
             | Self::RequestDeleteLayer(_)
-            | Self::RequestDeleteItem(_) => None,
+            | Self::RequestDeleteItem(_)
+            | Self::SetReserveMapping { .. }
+            | Self::SetReserveFieldAggregation { .. }
+            | Self::SetReserveModelIncluded { .. }
+            | Self::SetSolidsTopography { .. }
+            | Self::UpdateSolid { .. }
+            | Self::Haulage { .. }
+            | Self::RefreshHaulOverlay
+            | Self::StartHaulRoad
+            | Self::OpenHaulImport
+            | Self::EditHaulProperties
+            | Self::FinishHaulRoad
+            | Self::ConvertHaulSelection
+            | Self::FrameHaul(..)
+            | Self::NewHaulDestination { .. }
+            | Self::ExportHaulRoads
+            | Self::ResetSolidPreviewView
+            | Self::RecomputeReserveStats(_)
+            | Self::RunPlanningStage(_)
+            | Self::RunAllPlanningStages
+            | Self::CancelPlanningRun
+            | Self::RunScheduleStage(_)
+            | Self::RunAllScheduleStages
+            | Self::CancelScheduleRun
+            | Self::RunSchedulePeriod
+            | Self::RunAllSchedulePeriods
+            | Self::ImproveSchedule
+            | Self::CancelScheduleCalculation => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,
@@ -3957,12 +5606,169 @@ impl UiCommand {
             Self::ExportLayerDxf(id) => report(tr!("state-export-layer-dxf"), format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
+            Self::ExportScheduleReport(export) => report(tr!("report-export-title"), export.0.clone()),
             Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
             Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
             Self::ExitWithoutSaving => report(tr!("common-exit-without-saving"), tr!("state-discarding-unsaved-changes")),
             Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
+            Self::AddReserveField { name, .. } => report(tr!("reserve-add-field"), name.clone()),
+            Self::AddReserveFieldFromColumn { column, .. } => report(tr!("reserve-add-field"), column.clone()),
+            Self::DeleteReserveField(id) => report(tr!("planning-delete-field"), format!("{id:?}")),
+            Self::AddSolid { name, .. } => report(tr!("solids-add-solid"), name.clone()),
+            // The fleet editors report additions and deletions, which are
+            // structural, but not renames or rate edits: those are cell edits
+            // and a console line per keystroke-commit would bury the log.
+            Self::Schedule { edit, .. } => match edit {
+                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", if kind.is_drill_blast() { kind.rate_unit() } else { "tph" })),
+                ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
+                ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
+                ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
+                ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
+                ScheduleEdit::AddReclaimBar { name, .. } => report(tr!("reclaim-add-bar"), name.clone()),
+                ScheduleEdit::AddOpeningLot { name, tonnes_t, .. } => report(tr!("inventory-new-lot"), format!("{name} · {tonnes_t} t")),
+                ScheduleEdit::DuplicateOpeningLot { lot, .. } => report(tr!("inventory-duplicate-lot"), format!("{lot:?}")),
+                ScheduleEdit::DeleteOpeningLot { lot, .. } => report(tr!("inventory-delete-lot"), format!("{lot:?}")),
+                ScheduleEdit::AddOpeningPortion { tonnes_t, .. } => report(tr!("inventory-new-portion"), format!("{tonnes_t} t")),
+                ScheduleEdit::DeleteOpeningPortion { portion, .. } => report(tr!("inventory-delete-portion"), format!("{portion:?}")),
+                ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
+                ScheduleEdit::DeleteBars(ids) => report(tr!("schedule-delete-bar"), format!("{ids:?}")),
+                // Applying a sequence edit is a deliberate, single act on a
+                // whole dig order, unlike the per-block edits below it.
+                ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
+                ScheduleEdit::SetRoutingEnabled(enabled) => report(
+                    tr!("destination-routing-toggle"),
+                    if *enabled { tr!("destination-routing-on") } else { tr!("destination-routing-off") },
+                ),
+                ScheduleEdit::AddDestination { name, kind } => report(tr!("destination-new"), format!("{name} · {}", kind.label())),
+                ScheduleEdit::DeleteDestination(id) => report(tr!("destination-delete"), format!("{id:?}")),
+                ScheduleEdit::AddRule { name, .. } => report(tr!("destination-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
+                ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
+                ScheduleEdit::DuplicateTruckClass(id) => report(tr!("truck-duplicate-class"), format!("{id:?}")),
+                ScheduleEdit::DeleteTruckClass(id) => report(tr!("truck-delete-class"), format!("{id:?}")),
+                ScheduleEdit::AddTruckingRule { name, .. } => report(tr!("truck-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateTruckingRule(id) => report(tr!("truck-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteTruckingRule(id) => report(tr!("truck-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
+                ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
+                ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
+                ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
+                ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
+                ScheduleEdit::SetClassKind { .. }
+                | ScheduleEdit::SetDrillBlast(_)
+                | ScheduleEdit::SetBlastWindows(_)
+                | ScheduleEdit::SetBlastStatus { .. }
+                | ScheduleEdit::SetBlastPattern { .. }
+                | ScheduleEdit::SetBlastMembers { .. } => None,
+                ScheduleEdit::AddDelayType { name, .. } => report(tr!("delay-new-type"), name.clone()),
+                ScheduleEdit::DeleteDelayType(id) => report(tr!("delay-delete-type"), format!("{id:?}")),
+                ScheduleEdit::AddDelayList { title } => report(tr!("delay-new-list"), title.clone()),
+                ScheduleEdit::DeleteDelayList(id) => report(tr!("delay-delete-list"), format!("{id:?}")),
+                ScheduleEdit::AddRoster { name } => report(tr!("delay-new-roster"), name.clone()),
+                ScheduleEdit::DeleteRoster(id) => report(tr!("delay-delete-roster"), format!("{id:?}")),
+                // Delay cell edits: the Delays page and the bar's menu show
+                // the result in place.
+                ScheduleEdit::SetDelayBarType { .. }
+                | ScheduleEdit::SetFollowLeader { .. }
+                | ScheduleEdit::RenameDelayType { .. }
+                | ScheduleEdit::SetDelayTypeColor { .. }
+                | ScheduleEdit::RenameDelayList { .. }
+                | ScheduleEdit::SetDelayListType { .. }
+                | ScheduleEdit::SetDelayListEntries { .. }
+                | ScheduleEdit::SetRoster(_) => None,
+                ScheduleEdit::SetName(_)
+                | ScheduleEdit::RenameClass { .. }
+                | ScheduleEdit::SetClassRate { .. }
+                | ScheduleEdit::RenameAgent { .. }
+                | ScheduleEdit::SetAgentClass { .. }
+                | ScheduleEdit::RenameBar { .. }
+                | ScheduleEdit::SetTonnageField(_)
+                | ScheduleEdit::SetBarHeight(_)
+                // Assignment, lane and earliest-start edits are cell edits of
+                // one bar, and dragging one produces a stream of them: the
+                // Gantt shows the result in place, and a console line per
+                // frame of a drag would bury the log.
+                | ScheduleEdit::SetBarAgent { .. }
+                | ScheduleEdit::SetBarPriority { .. }
+                | ScheduleEdit::SetBarWindow { .. }
+                | ScheduleEdit::SetBarPlacement { .. }
+                // Membership edits are cell edits of the dig order: the bar's
+                // own panel shows the result, and a console line per block
+                // would bury the log once a bar is picked out of a viewport.
+                | ScheduleEdit::AddMember { .. }
+                | ScheduleEdit::RemoveMember { .. }
+                | ScheduleEdit::MoveMember { .. }
+                // Routing cell edits: the rule table and its editor show the
+                // result in place, and a line per keystroke-commit would bury
+                // the log the same way a rename would.
+                | ScheduleEdit::RenameDestination { .. }
+                | ScheduleEdit::SetGradeTargetCells { .. }
+                | ScheduleEdit::SetDestinationCapacity { .. }
+                | ScheduleEdit::RenameRule { .. }
+                | ScheduleEdit::SetRuleEnabled { .. }
+                | ScheduleEdit::SetRuleDestinations { .. }
+                | ScheduleEdit::SetRuleLoaders { .. }
+                | ScheduleEdit::SetRuleSources { .. }
+                | ScheduleEdit::SetRuleConditions { .. }
+                | ScheduleEdit::MoveRule { .. }
+                // Truck cell edits, for the same reason: the class editor and
+                // the rule editor show the result where it was typed.
+                | ScheduleEdit::SetDestinationDistance { .. }
+                | ScheduleEdit::RenameTruckClass { .. }
+                | ScheduleEdit::SetTruckClassPayload { .. }
+                | ScheduleEdit::SetTruckClassHaulage { .. }
+                | ScheduleEdit::SetClassSpotTime { .. }
+                | ScheduleEdit::SetDestinationDumpTime { .. }
+                | ScheduleEdit::RenameTruckingRule { .. }
+                | ScheduleEdit::SetTruckingRuleEnabled { .. }
+                | ScheduleEdit::SetTruckingRuleLoaders { .. }
+                | ScheduleEdit::SetTruckingRuleSources { .. }
+                | ScheduleEdit::SetTruckingRuleDestinations { .. }
+                | ScheduleEdit::SetTruckingRuleClasses { .. }
+                // Cashflow cell edits: the rule editor shows the result where
+                // it was typed.
+                | ScheduleEdit::SetCurrency(_)
+                | ScheduleEdit::RenameCashflowRule { .. }
+                | ScheduleEdit::SetCashflowRuleEnabled { .. }
+                | ScheduleEdit::SetCashflowRuleActivity { .. }
+                | ScheduleEdit::SetCashflowRuleLoaders { .. }
+                | ScheduleEdit::SetCashflowRuleSources { .. }
+                | ScheduleEdit::SetCashflowRuleDestinations { .. }
+                | ScheduleEdit::SetCashflowRuleConditions { .. }
+                | ScheduleEdit::SetCashflowRuleValue { .. }
+                // Inventory and reclaim cell edits: the Stockpiles page and the
+                // bar's own menu show the result where it was typed.
+                | ScheduleEdit::SetClassReclaimRate { .. }
+                | ScheduleEdit::SetReclaimOrder { .. }
+                | ScheduleEdit::RenameOpeningLot { .. }
+                | ScheduleEdit::MoveOpeningLot { .. }
+                | ScheduleEdit::SetOpeningPortionTonnes { .. }
+                | ScheduleEdit::SetOpeningPortionValue { .. }
+                | ScheduleEdit::SetReclaimSources { .. }
+                | ScheduleEdit::SetReclaimMaximum { .. }
+                // Experimental optimiser settings: the Optimisation section
+                // and the stockpile's own page show the result where it was
+                // typed.
+                | ScheduleEdit::SetExperimentHorizon { .. }
+                | ScheduleEdit::SetExperimentEventCapacity { .. }
+                | ScheduleEdit::SetExperimentSolveLimits { .. }
+                | ScheduleEdit::SetExperimentGradeUnit { .. }
+                | ScheduleEdit::SetStockpileRepresentation { .. }
+                | ScheduleEdit::SetStockpileChunks { .. } => None,
+            },
+            Self::DeleteSolid(id) => report(tr!("planning-delete-solid"), format!("{id:?}")),
+            Self::SelectBlast(_) | Self::SelectDigBlock(_) => None,
+            Self::ResetBlastName(blast) => report(tr!("planning-reset-blast-name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
+            Self::SaveSolidPreviewToProject => report(tr!("planning-save-solid-project"), tr!("state-solids-preview")),
             Self::CreateFolder(section) => report(
                 tr!("state-create-collection"),
                 tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
@@ -4138,6 +5944,7 @@ impl UiCommand {
                 tr!("state-name-z-min-z-max", name = name.to_string(), z_min = z_min.to_string(), z_max = z_max.to_string()),
             ),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
+            Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
@@ -4370,8 +6177,10 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
-    pub(crate) _block_count: usize,
+    pub(crate) block_count: usize,
     pub(crate) variable_count: usize,
+    pub(crate) lower: glam::DVec3,
+    pub(crate) upper: glam::DVec3,
     /// Folder the block model sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
@@ -4419,6 +6228,19 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
+    /// The *active* project's schedule. Read from the active project rather
+    /// than the render-scene composite, which copies planning data from every
+    /// open project in turn and so holds whichever was copied last: opening a
+    /// second project must not change or show the first one's fleet.
+    pub(crate) schedule: crate::model::schedule::SchedulePlan,
+    pub(crate) haulage: crate::model::haulage::HaulNetwork,
+    pub(crate) haul_points: std::collections::BTreeMap<crate::model::schedule::DestinationId, DVec3>,
+    pub(crate) haul_destinations: Vec<crate::model::schedule::destinations::DestinationView>,
+    /// Runtime id of the active project, the session token fleet edits are
+    /// addressed to. Zero when no project is open - never a live id, so a
+    /// command that somehow escaped an empty workspace is refused rather than
+    /// applied to whatever opens next.
+    pub(crate) active_session: u32,
     /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
 }
@@ -4483,6 +6305,1768 @@ impl Workspace {
     /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+}
+
+/// Fixed pages within the Planning workspace, remembered for this session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PlanningPage {
+    Solids,
+    Haulage,
+    Schedule,
+}
+
+impl PlanningPage {
+    pub(crate) const ALL: [Self; 3] = [Self::Solids, Self::Haulage, Self::Schedule];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Solids => tr!("planning-page-solids"),
+            Self::Haulage => tr!("planning-page-haulage"),
+            Self::Schedule => tr!("planning-page-schedule"),
+        }
+    }
+
+    pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
+        match self {
+            Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
+            Self::Haulage => &[PlanningSubpage::Setup, PlanningSubpage::Layout],
+            Self::Schedule => &[
+                PlanningSubpage::Setup,
+                PlanningSubpage::Calendar,
+                PlanningSubpage::Gantt,
+                PlanningSubpage::Charts,
+                PlanningSubpage::Animate,
+            ],
+        }
+    }
+}
+
+/// The Haulage Setup page's steps: how roads join and are driven, then the
+/// trucks that drive them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum HaulageStep {
+    Network,
+    TruckClasses,
+}
+
+impl HaulageStep {
+    pub(crate) const ALL: [Self; 2] = [Self::Network, Self::TruckClasses];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Network => tr!("haul-step-network"),
+            Self::TruckClasses => tr!("truck-classes"),
+        }
+    }
+}
+
+/// Steps within a Planning page. Schedule remembers its selected step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PlanningSubpage {
+    Setup,
+    /// Solids: everything the setup has generated, to look through rather than
+    /// to configure.
+    View,
+    Layout,
+    Calendar,
+    /// Schedule: one timeline row per loader agent, along elapsed project
+    /// time. Stage 1 draws the rows and the ruler; the bars follow.
+    Gantt,
+    /// Schedule: a chart per destination along the Gantt's own timeline.
+    Charts,
+    Animate,
+}
+
+impl PlanningSubpage {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Setup => tr!("planning-page-setup"),
+            Self::View => tr!("planning-subpage-view"),
+            Self::Layout => tr!("planning-subpage-layout"),
+            Self::Calendar => tr!("planning-subpage-calendar"),
+            Self::Gantt => tr!("planning-subpage-gantt"),
+            Self::Charts => tr!("planning-subpage-charts"),
+            Self::Animate => tr!("planning-subpage-animate"),
+        }
+    }
+}
+
+/// The Schedule Setup subpage's steps, in the order the step tree lists them.
+///
+/// Configuration is the schedule's own name and the field read as tonnes; the
+/// two fleet steps are the machines the Gantt draws its rows from; Scheduling
+/// Readiness is the gate over everything before it, and over the Solids run
+/// this schedule would be calculated from.
+///
+/// The same enum indexes the pipeline in [`crate::app::schedule_pipeline`] and
+/// selects which panel the Setup page draws, so a step cannot be marked in the
+/// tree without having somewhere to say why.
+/// The text of whatever the Delays page has open, as it is being typed.
+///
+/// Text, not numbers: `Day 3 06:` is not yet an instant, and the stored delay
+/// must not move until the field is left with something readable in it.
+/// `source` is what the draft was opened from; a change from elsewhere
+/// (an undo, a paste) reopens it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DelayDraft {
+    pub(crate) selection: Option<DelaySelection>,
+    pub(crate) source: String,
+    /// A list's title or a roster's name.
+    pub(crate) title: String,
+    /// One `[start, end]` per list row.
+    pub(crate) cells: Vec<[String; 2]>,
+    /// A roster's first start, duration, repeat and end.
+    pub(crate) roster: [String; 4],
+    /// Each delay type's name, in order.
+    pub(crate) type_names: Vec<String>,
+    /// The paste box, while it is open.
+    pub(crate) paste: Option<String>,
+}
+
+/// The Update Topography dialog: which surface, and which solids take it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TopographyUpdate {
+    pub(crate) topography: Option<crate::model::triangulation::TriangulationId>,
+    pub(crate) solids: Vec<crate::model::SolidId>,
+}
+
+/// What a chip in the Gantt's palette makes when it is dropped on a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GanttPaletteItem {
+    Dig,
+    Reclaim,
+    Delay,
+    /// A dozer, drill or MPU bar listing blasts.
+    Blast,
+    /// A drill and blast bar working another machine's blasts.
+    Follow,
+}
+
+/// Where a delay or follow bar was dropped, held while its type or the
+/// machine it follows is chosen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DelayDrop {
+    pub(crate) session: u32,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) insert: bool,
+    pub(crate) start_h: f64,
+    /// Where the type menu opens, in screen points.
+    pub(crate) pos: egui::Pos2,
+}
+
+/// What the Delays page has open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DelaySelection {
+    Types,
+    List(crate::model::schedule::DelayListId),
+    Roster(crate::model::schedule::RosterId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ScheduleStep {
+    Configuration,
+    LoaderClasses,
+    LoaderAgents,
+    /// Delay types, delay lists and rosters.
+    Delays,
+    /// Drill and blast settings and each blast's starting stage.
+    DrillBlast,
+    TruckClasses,
+    Stockpiles,
+    Dumps,
+    Crushers,
+    Destinations,
+    TruckingRules,
+    Cashflow,
+    Readiness,
+}
+
+impl ScheduleStep {
+    /// Every step, in the order the step tree lists them.
+    ///
+    /// Destinations comes after the three places a destination can be defined
+    /// and before Readiness: a rule names a destination, so the lists it
+    /// chooses from have to be checked first, and the ground its source scopes
+    /// name is only known once Readiness has the Solids run.
+    /// Truck Classes sits with the loader fleet because it is fleet, and
+    /// Trucking Rules after Destinations because a trucking rule names them.
+    pub(crate) const ALL: [Self; 13] = [
+        Self::Configuration,
+        Self::LoaderClasses,
+        Self::LoaderAgents,
+        Self::Delays,
+        Self::DrillBlast,
+        Self::TruckClasses,
+        Self::Stockpiles,
+        Self::Dumps,
+        Self::Crushers,
+        Self::Destinations,
+        Self::TruckingRules,
+        Self::Cashflow,
+        Self::Readiness,
+    ];
+
+    pub(crate) fn index(self) -> usize {
+        Self::ALL.iter().position(|step| *step == self).expect("every step is in ALL")
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Configuration => tr!("planning-configuration"),
+            Self::LoaderClasses => tr!("schedule-loader-classes"),
+            Self::LoaderAgents => tr!("schedule-loader-agents"),
+            Self::Delays => tr!("delay-step"),
+            Self::DrillBlast => tr!("drill-blast-step"),
+            Self::TruckClasses => tr!("truck-classes"),
+            Self::Stockpiles => tr!("planning-stockpiles"),
+            Self::Dumps => tr!("planning-dumps"),
+            Self::Crushers => tr!("destination-crushers"),
+            Self::Destinations => tr!("destination-destinations"),
+            Self::TruckingRules => tr!("truck-rules"),
+            Self::Cashflow => tr!("cashflow"),
+            Self::Readiness => tr!("schedule-readiness-step"),
+        }
+    }
+
+    pub(crate) fn tree_id(self) -> &'static str {
+        match self {
+            Self::Configuration => "schedule_configuration",
+            Self::LoaderClasses => "schedule_loader_classes",
+            Self::LoaderAgents => "schedule_loader_agents",
+            Self::Delays => "schedule_delays",
+            Self::DrillBlast => "schedule_drill_blast",
+            Self::TruckClasses => "schedule_truck_classes",
+            Self::Stockpiles => "schedule_stockpiles",
+            Self::Dumps => "schedule_dumps",
+            Self::Crushers => "schedule_crushers",
+            Self::Destinations => "schedule_destinations",
+            Self::TruckingRules => "schedule_trucking_rules",
+            Self::Cashflow => "schedule_cashflow",
+            Self::Readiness => "schedule_readiness",
+        }
+    }
+}
+
+/// The setup location that can repair the prerequisite currently blocking a
+/// Gantt run. Carrying the step prevents a generic navigation action from
+/// depositing the user at an unrelated setup screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleRepairTarget {
+    Schedule(ScheduleStep),
+    Solids(SolidsStep),
+}
+
+/// One Schedule Setup stage's status as the step tree reads it.
+///
+/// Separate from [`PlanningStageView`] because the step it can be blocked by
+/// is a Schedule step, not a Solids one - a stage view that could name either
+/// would let the two trees be crossed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScheduleStageView {
+    pub(crate) state: crate::app::planning_pipeline::StageState,
+    pub(crate) message: Option<String>,
+    pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
+    pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// The earlier step that has to run first, when this one cannot.
+    pub(crate) blocked_by: Option<ScheduleStep>,
+}
+
+/// One piece of ground a routing rule may name, as the run describes it.
+///
+/// Derived from the completed Solids run each time the run changes, never
+/// stored: which benches and flitches exist is the run's answer.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SourceScopeView {
+    pub(crate) scope: crate::model::schedule::SourceScope,
+    pub(crate) label: String,
+    /// 0 for a whole pit, 1 for a bench of it, 2 for a flitch of that bench.
+    pub(crate) depth: usize,
+}
+
+/// One destination's capacity as it is being typed.
+///
+/// Text, not a number: "" is unlimited and "0" is a destination that can
+/// receive nothing, and a numeric draft could not hold the difference while
+/// the field is being edited.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleDestinationDraft {
+    pub(crate) id: crate::model::schedule::DestinationId,
+    /// What the project held when this draft was seeded, so an edit made
+    /// elsewhere replaces the draft rather than being overwritten by it.
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64, u64, Option<u64>),
+    pub(crate) name: String,
+    /// A stockpile's rest before reclaim, in hours.
+    pub(crate) rest: String,
+    pub(crate) capacity: String,
+    /// A crusher's default daily budget, blank for unlimited.
+    pub(crate) crusher_default: String,
+    /// One-way haul distance in kilometres. Always a figure - there is no
+    /// blank state, because every destination is somewhere.
+    pub(crate) distance: String,
+    pub(crate) dump_time: String,
+}
+
+/// One truck class's cells as they are being typed.
+///
+/// Text, not numbers: a half-typed payload is not a payload, and a numeric
+/// draft would have to hold some number while it was being written.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleTruckClassDraft {
+    pub(crate) id: crate::model::schedule::TruckClassId,
+    /// What the project held when this draft was seeded, so an edit made
+    /// elsewhere replaces the draft rather than being overwritten by it.
+    pub(crate) source: (String, u64, u64, u64),
+    pub(crate) name: String,
+    pub(crate) payload: String,
+    pub(crate) haul_source: String,
+    pub(crate) maximum_speed: String,
+    pub(crate) maximum_grade: String,
+    pub(crate) dump_time: String,
+    pub(crate) grade_rows: Vec<(String, String, String)>,
+}
+
+/// Which rule a condition being written belongs to.
+///
+/// One dialog serves both rule kinds: they ask exactly the same question of the
+/// same field variables, and a second copy of it would be a second place for
+/// `60 < Fe < 70` to be parsed slightly differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConditionOwner {
+    Routing(crate::model::schedule::RuleId),
+    Cashflow(crate::model::schedule::CashflowRuleId),
+}
+
+/// One cashflow rule's name and value as they are being typed.
+///
+/// Text, so a half-typed value - "-" on the way to "-35" - is not a value, and
+/// so full stored precision survives an edit that does not change it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleCashflowDraft {
+    pub(crate) id: crate::model::schedule::CashflowRuleId,
+    pub(crate) source: (String, u64),
+    pub(crate) name: String,
+    pub(crate) value: String,
+}
+
+/// One trucking rule's name as it is being typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleRuleNameDraft {
+    pub(crate) id: crate::model::schedule::TruckingRuleId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// One routing rule's cells as they are being typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleRuleDraft {
+    pub(crate) id: crate::model::schedule::RuleId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// One field condition as it is being written.
+///
+/// Both ends of a range are kept as text and both inclusivity flags are
+/// explicit: `60 < Fe < 70` is what the user typed and is stored as exactly
+/// that, so nothing here may quietly close an endpoint.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleConditionDraft {
+    pub(crate) rule: ConditionOwner,
+    /// The condition being replaced, or `None` while a new one is being added.
+    pub(crate) replacing: Option<crate::model::ReserveFieldId>,
+    pub(crate) field: Option<crate::model::ReserveFieldId>,
+    /// Selected category values, for a categorical field.
+    pub(crate) values: Vec<String>,
+    pub(crate) lower: String,
+    pub(crate) lower_inclusive: bool,
+    pub(crate) upper: String,
+    pub(crate) upper_inclusive: bool,
+}
+
+/// The cells of one loader class as they are being typed.
+///
+/// The rate is kept as text, not a number: "3000." and "" are states a user
+/// passes through, and snapping them to a number every frame would make the
+/// field impossible to edit. It becomes a rate only when the edit is
+/// committed, and a rate that will not parse is reported in place.
+///
+/// `source` is what the plan held when the draft was built. While the plan
+/// still holds that, the typed text stands - which is what leaves an invalid
+/// entry on screen with its error instead of snapping back. The moment the
+/// plan moves on its own, through an undo, a redo or the edit landing, the
+/// draft is rebuilt from it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleClassDraft {
+    pub(crate) id: crate::model::schedule::LoaderClassId,
+    pub(crate) source: (String, f64, f64, f64),
+    pub(crate) name: String,
+    pub(crate) rate: String,
+    /// The rate this type reclaims at, typed on its own: the two rates are
+    /// separate answers, so committing one must not carry the other with it.
+    pub(crate) reclaim_rate: String,
+    pub(crate) spot_time: String,
+}
+
+/// The editable cell of one loader agent, on the same rule as
+/// [`ScheduleClassDraft`]. Its class is a combo, committed the moment it is
+/// picked, so only the name needs a draft.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleAgentDraft {
+    pub(crate) id: crate::model::schedule::LoaderAgentId,
+    pub(crate) source: String,
+    pub(crate) name: String,
+}
+
+/// Typed Optimisation settings, held against the values they were read from
+/// so an edit elsewhere refreshes the fields.
+#[derive(Clone, Debug)]
+pub(crate) struct ScheduleExperimentDraft {
+    pub(crate) source: (u32, u64, u64, u64, Option<usize>),
+    pub(crate) end_day: String,
+    pub(crate) interval_h: String,
+    pub(crate) event_capacity: String,
+    pub(crate) solve_seconds: String,
+    pub(crate) relative_gap: String,
+}
+
+/// What one [`UiCommand::Schedule`] does to the fleet.
+///
+/// Split out from the command so every fleet edit carries the project it was
+/// drawn from in one place, and so adding an edit cannot quietly skip that.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ScheduleEdit {
+    /// Rename the project's schedule.
+    SetName(String),
+    /// Add a machine class - what it does, and the rate it works at in that
+    /// kind's unit.
+    AddClass {
+        name: String,
+        rate_tph: f64,
+        kind: crate::model::schedule::MachineKind,
+    },
+    RenameClass {
+        class: crate::model::schedule::LoaderClassId,
+        name: String,
+    },
+    SetClassRate {
+        class: crate::model::schedule::LoaderClassId,
+        rate_tph: f64,
+    },
+    /// Delete a loader class. Refused, with the machines named, while any
+    /// agent is still of that class.
+    DeleteClass(crate::model::schedule::LoaderClassId),
+    /// Add one machine of an existing class.
+    AddAgent {
+        name: String,
+        class: crate::model::schedule::LoaderClassId,
+    },
+    RenameAgent {
+        agent: crate::model::schedule::LoaderAgentId,
+        name: String,
+    },
+    /// Move one machine to a different class, and so to that class's rate.
+    SetAgentClass {
+        agent: crate::model::schedule::LoaderAgentId,
+        class: crate::model::schedule::LoaderClassId,
+    },
+    DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Apply one atomic calendar edit or rectangular paste/clear batch.
+    SetCalendarCells {
+        edits: Vec<crate::model::schedule::CalendarCellEdit>,
+    },
+    /// Nominate the reserve field whose summed value is read as tonnes, or
+    /// clear the choice. Never inferred from a field's name.
+    SetTonnageField(Option<crate::model::ReserveFieldId>),
+    /// Set the logical-point height of dig-sequence bars on the Gantt.
+    SetBarHeight(f32),
+    /// Add an empty Gantt bar to one machine's lane - the row it was asked
+    /// for - at the instant it was asked for. Its ground is chosen afterwards.
+    AddBar {
+        name: String,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        /// The period the bar was created over, in hours from the schedule
+        /// origin. A bar added while a later week is on screen belongs where
+        /// it was asked for, not back at hour zero where it cannot be seen.
+        window: crate::model::schedule::WorkWindow,
+        /// Whether `priority` names a lane to open rather than one to join,
+        /// as for [`ScheduleEdit::SetBarPlacement`].
+        insert_lane: bool,
+    },
+    RenameBar {
+        bar: crate::model::schedule::BarId,
+        name: String,
+    },
+    /// Delete bars, all in one edit.
+    DeleteBars(Vec<crate::model::schedule::BarId>),
+    /// Copy a bar into an independent one: a fresh identity and its own
+    /// membership list, so editing either never reaches the other.
+    CopyBar(crate::model::schedule::BarId),
+    /// Assign a bar to a machine, or take it off the fleet.
+    SetBarAgent {
+        bar: crate::model::schedule::BarId,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+    },
+    /// Put a bar in a priority lane. Lower is higher priority.
+    SetBarPriority {
+        bar: crate::model::schedule::BarId,
+        priority: u32,
+    },
+    /// Set the period a bar may be worked in - which is what dragging it
+    /// along the Gantt does, and what dragging either of its edges resizes.
+    /// The same edit carries a window typed into the numeric dialog, so both
+    /// routes are subject to exactly the same validation.
+    SetBarWindow {
+        bar: crate::model::schedule::BarId,
+        window: crate::model::schedule::WorkWindow,
+    },
+    /// Commit a Gantt drag's time, loader and lane as one undoable move.
+    SetBarPlacement {
+        bar: crate::model::schedule::BarId,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        /// Whether `priority` names a lane to open rather than one to join.
+        /// A bar let go between two lanes is asking for a lane of its own
+        /// there, so that loader's bars from `priority` down move one lane
+        /// further out to make the room. Part of the same edit, because a
+        /// half-applied lane insert is a schedule with two bars in a lane
+        /// that was meant to hold one.
+        insert_lane: bool,
+    },
+    /// Put one dug block into a sequence's dig order, at `position` or - when
+    /// that is past the end - after everything already in it. The pick names
+    /// a block of the run the picker saw; the handler validates it against
+    /// the current snapshot and constructs the stored reference itself, so a
+    /// late pick cannot masquerade as current ground.
+    #[allow(dead_code, reason = "constructed by the checkpoint 3 floating 3D block picker; the Gantt edits what is already in the order")]
+    AddMember {
+        bar: crate::model::schedule::BarId,
+        position: usize,
+        pick: crate::model::schedule::DigBlockPick,
+    },
+    /// Take one block out of the dig order. The block itself is untouched;
+    /// only this bar's claim on it goes.
+    #[allow(dead_code, reason = "emitted by the checkpoint 3 sequence editor's ordered list")]
+    RemoveMember {
+        bar: crate::model::schedule::BarId,
+        position: usize,
+    },
+    /// Move one block to a different place in the dig order.
+    #[allow(dead_code, reason = "emitted by the checkpoint 3 sequence editor's ordered list")]
+    MoveMember {
+        bar: crate::model::schedule::BarId,
+        from: usize,
+        to: usize,
+    },
+    /// Replace a bar's whole dig order with what the sequence editor drafted,
+    /// as one undo step.
+    ///
+    /// `expected` is the order the draft was opened from. The handler refuses
+    /// the edit when the bar no longer holds it - an undo, or an edit from
+    /// somewhere else, while the window was open - rather than overwriting a
+    /// newer order with an older list. Every member picked in the editing
+    /// session is revalidated against the current snapshot on the way
+    /// through, exactly as [`ScheduleEdit::AddMember`] does, so a pick that
+    /// outlived its run is refused rather than having its provenance quietly
+    /// refreshed to fit.
+    SetBarMembers {
+        bar: crate::model::schedule::BarId,
+        expected: Vec<crate::model::schedule::DigBlockRef>,
+        members: Vec<DraftMember>,
+    },
+    /// Switch destination routing on or off for this project. Off means the
+    /// dig-only behaviour every project had before routing existed; nothing
+    /// else on these pages turns it on.
+    SetRoutingEnabled(bool),
+    /// Add a destination with no geometry behind it - a crusher, or a
+    /// stockpile or dump nobody has drawn.
+    AddDestination {
+        name: String,
+        kind: crate::model::schedule::DestinationKind,
+    },
+    RenameDestination {
+        destination: crate::model::schedule::StandaloneDestinationId,
+        name: String,
+    },
+    /// Delete a standalone destination. Refused, with the rules named, while
+    /// any rule still delivers to it.
+    DeleteDestination(crate::model::schedule::StandaloneDestinationId),
+    /// Set crusher grade-target cells in the Calendar, validated as one batch.
+    SetGradeTargetCells {
+        edits: Vec<crate::model::schedule::grade_targets::GradeTargetCellEdit>,
+    },
+    /// Set a stockpile's or dump's maximum tonnes, or clear it for unlimited.
+    /// Addressed by destination id, so it reaches a solid-backed destination
+    /// and a standalone one the same way.
+    SetDestinationCapacity {
+        destination: crate::model::schedule::DestinationId,
+        capacity_t: Option<f64>,
+    },
+    /// Apply one atomic crusher-budget edit, or one rectangular paste or clear.
+    SetCrusherCells {
+        edits: Vec<crate::model::schedule::CrusherCellEdit>,
+    },
+    /// Set stockpile Mode cells in the Calendar, as one undo step.
+    SetPileModeCells {
+        edits: Vec<crate::model::schedule::stockpile_operation::PileModeCellEdit>,
+    },
+    /// Set whether a stockpile may build and reclaim at once, and how long
+    /// new material rests before reclaim.
+    SetStockpileOperating {
+        destination: crate::model::schedule::DestinationId,
+        simultaneous: bool,
+        rest_h: f64,
+    },
+    /// Add a routing rule at the end of the priority order.
+    AddRule {
+        name: String,
+        destinations: Vec<crate::model::schedule::DestinationId>,
+    },
+    /// Copy a rule into an independent one directly below it.
+    DuplicateRule(crate::model::schedule::RuleId),
+    DeleteRule(crate::model::schedule::RuleId),
+    RenameRule {
+        rule: crate::model::schedule::RuleId,
+        name: String,
+    },
+    SetRuleEnabled {
+        rule: crate::model::schedule::RuleId,
+        enabled: bool,
+    },
+    /// Replace the destinations one rule may deliver to, in the order it
+    /// should try them.
+    SetRuleDestinations {
+        rule: crate::model::schedule::RuleId,
+        destinations: Vec<crate::model::schedule::DestinationId>,
+    },
+    SetRuleLoaders {
+        rule: crate::model::schedule::RuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetRuleSources {
+        rule: crate::model::schedule::RuleId,
+        sources: crate::model::schedule::MovementSourceSelection,
+    },
+    /// Replace one rule's whole condition list, validated as a set.
+    SetRuleConditions {
+        rule: crate::model::schedule::RuleId,
+        conditions: Vec<crate::model::schedule::FieldCondition>,
+    },
+    /// Move a rule one place along the priority order. `later` is down.
+    MoveRule {
+        rule: crate::model::schedule::RuleId,
+        later: bool,
+    },
+    /// One destination's one-way haul distance, in kilometres. A transport
+    /// input, edited on the destination pages because that is where the
+    /// destination is.
+    SetDestinationDistance {
+        destination: crate::model::schedule::DestinationId,
+        distance_km: f64,
+    },
+    /// Add a truck class - a shared pool of one type of truck, starting with
+    /// no trucks in it.
+    AddTruckClass {
+        name: String,
+    },
+    /// Copy a class, calendar overrides included, under a new id.
+    DuplicateTruckClass(crate::model::schedule::TruckClassId),
+    /// Delete a class. Refused, with the rules named, while one permits it.
+    DeleteTruckClass(crate::model::schedule::TruckClassId),
+    RenameTruckClass {
+        class: crate::model::schedule::TruckClassId,
+        name: String,
+    },
+    SetTruckClassPayload {
+        class: crate::model::schedule::TruckClassId,
+        payload_t: f64,
+    },
+    /// Both speeds at once: they are two halves of one travel cycle, and an
+    /// editor that committed them separately would put two undo steps on the
+    /// stack for one thought.
+    SetTruckClassHaulage {
+        class: crate::model::schedule::TruckClassId,
+        speeds: Vec<crate::model::schedule::trucking::GradeSpeed>,
+        maximum_speed_kph: f64,
+        maximum_grade: f64,
+        dump_time_s: f64,
+    },
+    SetDestinationDumpTime {
+        destination: crate::model::schedule::StandaloneDestinationId,
+        seconds: Option<f64>,
+    },
+    SetClassSpotTime {
+        class: crate::model::schedule::LoaderClassId,
+        seconds: f64,
+    },
+
+    /// Apply one atomic truck-calendar edit, or one rectangular paste or clear.
+    SetTruckCells {
+        edits: Vec<crate::model::schedule::TruckCellEdit>,
+    },
+    AddTruckingRule {
+        name: String,
+        classes: Vec<crate::model::schedule::TruckClassId>,
+    },
+    DuplicateTruckingRule(crate::model::schedule::TruckingRuleId),
+    DeleteTruckingRule(crate::model::schedule::TruckingRuleId),
+    RenameTruckingRule {
+        rule: crate::model::schedule::TruckingRuleId,
+        name: String,
+    },
+    SetTruckingRuleEnabled {
+        rule: crate::model::schedule::TruckingRuleId,
+        enabled: bool,
+    },
+    SetTruckingRuleLoaders {
+        rule: crate::model::schedule::TruckingRuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetTruckingRuleSources {
+        rule: crate::model::schedule::TruckingRuleId,
+        sources: crate::model::schedule::MovementSourceSelection,
+    },
+    SetTruckingRuleDestinations {
+        rule: crate::model::schedule::TruckingRuleId,
+        destinations: crate::model::schedule::DestinationSelection,
+    },
+    SetTruckingRuleClasses {
+        rule: crate::model::schedule::TruckingRuleId,
+        classes: Vec<crate::model::schedule::TruckClassId>,
+    },
+    /// What the schedule's figures are labelled with. Display only; nothing is
+    /// converted.
+    SetCurrency(String),
+    /// Add a cashflow rule worth nothing.
+    AddCashflowRule {
+        name: String,
+    },
+    /// Copy a rule. Two identical rules contribute twice, deliberately.
+    DuplicateCashflowRule(crate::model::schedule::CashflowRuleId),
+    DeleteCashflowRule(crate::model::schedule::CashflowRuleId),
+    RenameCashflowRule {
+        rule: crate::model::schedule::CashflowRuleId,
+        name: String,
+    },
+    SetCashflowRuleEnabled {
+        rule: crate::model::schedule::CashflowRuleId,
+        enabled: bool,
+    },
+    SetCashflowRuleActivity {
+        rule: crate::model::schedule::CashflowRuleId,
+        activity: crate::model::schedule::ActivitySelection,
+    },
+    SetCashflowRuleLoaders {
+        rule: crate::model::schedule::CashflowRuleId,
+        loaders: crate::model::schedule::LoaderSelection,
+    },
+    SetCashflowRuleSources {
+        rule: crate::model::schedule::CashflowRuleId,
+        sources: crate::model::schedule::MovementSourceSelection,
+    },
+    SetCashflowRuleDestinations {
+        rule: crate::model::schedule::CashflowRuleId,
+        destinations: crate::model::schedule::DestinationSelection,
+    },
+    SetCashflowRuleConditions {
+        rule: crate::model::schedule::CashflowRuleId,
+        conditions: Vec<crate::model::schedule::FieldCondition>,
+    },
+    /// Signed, and never clamped: a cost is a negative value.
+    SetCashflowRuleValue {
+        rule: crate::model::schedule::CashflowRuleId,
+        value_per_tonne: f64,
+    },
+    /// The rate one machine type reclaims at. Separate from its dig rate:
+    /// loading a pile back out is a different job, and editing one must not
+    /// move the other.
+    SetClassReclaimRate {
+        class: crate::model::schedule::LoaderClassId,
+        rate_tph: f64,
+    },
+    /// Which end of a stockpile's lots reclaim takes from.
+    SetReclaimOrder {
+        destination: crate::model::schedule::DestinationId,
+        order: crate::model::schedule::ReclaimOrder,
+    },
+    /// Add a lot of opening stock at the newest end of a stockpile.
+    AddOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        name: String,
+        tonnes_t: f64,
+    },
+    /// Copy a lot, portions included, under fresh ids.
+    DuplicateOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+    },
+    DeleteOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+    },
+    RenameOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        name: String,
+    },
+    /// Move a lot one place along the oldest-to-newest order. `newer` is down.
+    MoveOpeningLot {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        newer: bool,
+    },
+    AddOpeningPortion {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        tonnes_t: f64,
+    },
+    DeleteOpeningPortion {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+    },
+    SetOpeningPortionTonnes {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+        tonnes_t: f64,
+    },
+    /// Set or clear one field's value on one portion. `None` returns it to
+    /// missing, which no condition matches and which is not zero.
+    SetOpeningPortionValue {
+        destination: crate::model::schedule::DestinationId,
+        lot: crate::model::schedule::OpeningLotId,
+        portion: crate::model::schedule::OpeningPortionId,
+        field: crate::model::ReserveFieldId,
+        value: Option<crate::model::schedule::OpeningValue>,
+    },
+    /// Add a Gantt bar that reclaims from an explicitly permitted set of
+    /// stockpiles. No viewport picking: a reclaim bar names piles, not ground.
+    AddReclaimBar {
+        name: String,
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        sources: Vec<crate::model::schedule::DestinationId>,
+        maximum_t: Option<f64>,
+    },
+    /// Replace the set of stockpiles a reclaim bar may draw on, as one edit.
+    /// Never empty, and never a silent repair of an entry that no longer
+    /// resolves.
+    SetReclaimSources {
+        bar: crate::model::schedule::BarId,
+        sources: Vec<crate::model::schedule::DestinationId>,
+    },
+    /// The most one reclaim bar may take over the whole calculation, or `None`
+    /// for no cap of its own.
+    SetReclaimMaximum {
+        bar: crate::model::schedule::BarId,
+        maximum_t: Option<f64>,
+    },
+    /// Set what a machine class does: load, doze, drill or charge.
+    SetClassKind {
+        class: crate::model::schedule::LoaderClassId,
+        kind: crate::model::schedule::MachineKind,
+    },
+    /// Replace the drill and blast settings, as one edit.
+    SetDrillBlast(crate::model::schedule::DrillBlastSettings),
+    SetBlastWindows(Vec<crate::model::schedule::drill_blast::BlastWindow>),
+    /// Set the stage blasts start the schedule at.
+    SetBlastStatus {
+        blasts: Vec<crate::model::schedule::BlastRef>,
+        stage: crate::model::schedule::BlastStage,
+    },
+    /// Give a blast its own pattern, or `None` to use the default.
+    SetBlastPattern {
+        blast: crate::model::schedule::BlastRef,
+        pattern: Option<crate::model::schedule::DrillPattern>,
+    },
+    /// Add a dozer, drill or MPU bar listing blasts in order.
+    AddBlastBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        insert_lane: bool,
+        members: Vec<crate::model::schedule::BlastRef>,
+    },
+    /// Replace a blast bar's blasts, as one edit.
+    SetBlastMembers {
+        bar: crate::model::schedule::BarId,
+        members: Vec<crate::model::schedule::BlastRef>,
+    },
+    /// Optimisation settings. Persisted and undoable like every other plan
+    /// setting, and edited in every build.
+    SetExperimentHorizon {
+        end_day: u32,
+        interval_h: f64,
+    },
+    SetExperimentSolveLimits {
+        seconds: f64,
+        relative_gap: f64,
+    },
+    SetExperimentGradeUnit {
+        field: crate::model::ReserveFieldId,
+        unit: Option<crate::model::schedule::experiment::GradeUnit>,
+    },
+    SetExperimentEventCapacity {
+        capacity: Option<usize>,
+    },
+    SetStockpileRepresentation {
+        destination: crate::model::schedule::DestinationId,
+        representation: crate::model::schedule::experiment::StockpileRepresentation,
+    },
+    SetStockpileChunks {
+        destination: crate::model::schedule::DestinationId,
+        capacities: Vec<f64>,
+    },
+    /// Add a delay bar to one machine's lane: while it has priority the
+    /// machine stands.
+    AddDelayBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+        insert_lane: bool,
+    },
+    /// Add a follow bar: while it has priority the machine works `leader`'s
+    /// blasts.
+    AddFollowBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        leader: crate::model::schedule::LoaderAgentId,
+        insert_lane: bool,
+    },
+    /// Change which machine a follow bar follows.
+    SetFollowLeader {
+        bar: crate::model::schedule::BarId,
+        leader: crate::model::schedule::LoaderAgentId,
+    },
+    /// Change what kind of delay a delay bar is.
+    SetDelayBarType {
+        bar: crate::model::schedule::BarId,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+    },
+    AddDelayType {
+        name: String,
+        color: [u8; 3],
+    },
+    RenameDelayType {
+        kind: crate::model::schedule::DelayTypeId,
+        name: String,
+    },
+    SetDelayTypeColor {
+        kind: crate::model::schedule::DelayTypeId,
+        color: [u8; 3],
+    },
+    /// Refused, with the users named, while any bar, list or roster is of it.
+    DeleteDelayType(crate::model::schedule::DelayTypeId),
+    AddDelayList {
+        title: String,
+    },
+    RenameDelayList {
+        list: crate::model::schedule::DelayListId,
+        title: String,
+    },
+    SetDelayListType {
+        list: crate::model::schedule::DelayListId,
+        kind: Option<crate::model::schedule::DelayTypeId>,
+    },
+    /// Replace one list's whole table: a cell edit, an added or deleted row
+    /// and a paste are each one undo step.
+    SetDelayListEntries {
+        list: crate::model::schedule::DelayListId,
+        entries: Vec<crate::model::schedule::DelayEntry>,
+    },
+    DeleteDelayList(crate::model::schedule::DelayListId),
+    AddRoster {
+        name: String,
+    },
+    /// Replace one roster's settings, its identity kept.
+    SetRoster(crate::model::schedule::Roster),
+    DeleteRoster(crate::model::schedule::RosterId),
+}
+
+/// One opening lot's name and its portions' tonnages as they are being typed.
+///
+/// Text, not numbers: a half-typed figure is not a tonnage, and the stored
+/// value must not move until the field is left with something valid in it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleLotDraft {
+    pub(crate) destination: crate::model::schedule::DestinationId,
+    pub(crate) lot: crate::model::schedule::OpeningLotId,
+    /// What the lot held when this draft was opened, so an edit from elsewhere
+    /// replaces the draft rather than being overwritten by it.
+    pub(crate) source: String,
+    pub(crate) name: String,
+    /// One entry per portion, in the lot's order: its id and its tonnage.
+    pub(crate) portions: Vec<(crate::model::schedule::OpeningPortionId, String)>,
+    /// One entry per numerical value being typed. A field with no entry is
+    /// missing, which is what an empty field commits back to.
+    pub(crate) values: Vec<(crate::model::schedule::OpeningPortionId, crate::model::ReserveFieldId, String)>,
+}
+
+/// The New Bar / Rename Bar dialog's draft.
+///
+/// Nothing reaches the project until the name is valid and the user confirms
+/// it, so cancelling leaves the schedule - and the project's dirty marker -
+/// exactly as it found them.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BarNameDialog {
+    pub(crate) target: crate::model::schedule::BarId,
+    /// The name being typed. Empty is a real answer rather than a missing
+    /// one: it clears the override and returns the bar to the name its
+    /// ground derives.
+    pub(crate) name: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BlastWindowDialog {
+    pub(crate) session: u32,
+    pub(crate) opened: Vec<crate::model::schedule::drill_blast::BlastWindow>,
+    pub(crate) id: Option<u64>,
+    pub(crate) start: String,
+    pub(crate) end: String,
+    pub(crate) daily: bool,
+}
+
+/// An interactive blast sequence draft, applied as one schedule edit.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastBarDialog {
+    pub(crate) session: u32,
+    pub(crate) edition: u64,
+    pub(crate) generation: Option<u64>,
+    pub(crate) opened_from: Vec<crate::model::schedule::BlastRef>,
+    pub(crate) view: SolidPreviewView,
+    pub(crate) target: Option<crate::model::schedule::BarId>,
+    pub(crate) members: Vec<crate::model::schedule::BlastRef>,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) insert_lane: bool,
+    pub(crate) start_h: f64,
+    pub(crate) end_h: f64,
+    /// The order-preview slider, `0..=members.len()`: at *k* the first *k*
+    /// blasts draw as fired and are taken off the pane, which uncovers the
+    /// ground under them for the next pick - as the dig sequence editor's
+    /// slider does for dug blocks. Not a time axis.
+    pub(crate) preview: usize,
+}
+
+/// One blast of the Solids run, as the Drill & Blast page lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastListEntry {
+    pub(crate) reference: crate::model::schedule::BlastRef,
+    pub(crate) name: String,
+    pub(crate) solid_name: String,
+    pub(crate) bench_base: f64,
+    pub(crate) bench_top: f64,
+    pub(crate) area: f64,
+    /// The faces, to tell whether a stored reference is this blast.
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+}
+
+impl BlastListEntry {
+    pub(crate) fn holds(&self, blast: &crate::model::schedule::BlastRef) -> bool {
+        blast.solid == self.reference.solid && (blast.bench - self.bench_base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&self.face, glam::DVec2::from(blast.anchor))
+    }
+
+    /// The blast's ground path, the way lists show a blast.
+    pub(crate) fn label(&self) -> String {
+        crate::ui::elements::solids_view::blast_path(&self.solid_name, self.bench_base, &self.name)
+    }
+}
+
+/// The Drill & Blast settings as typed: each number a string until it parses.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DrillBlastDraft {
+    pub(crate) source: crate::model::schedule::DrillBlastSettings,
+    /// Burden, spacing, subdrill, hole diameter, stemming, density, buffer,
+    /// window start, window end.
+    pub(crate) fields: [String; 9],
+}
+
+/// One blast's own pattern as typed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastPatternDraft {
+    pub(crate) blast: crate::model::schedule::BlastRef,
+    pub(crate) source: crate::model::schedule::DrillPattern,
+    /// Burden, spacing, subdrill.
+    pub(crate) fields: [String; 3],
+}
+
+pub(crate) struct ReclaimBarDialog {
+    pub(crate) target: Option<crate::model::schedule::BarId>,
+    /// The permitted stockpiles, as the draft holds them. Entries that no
+    /// longer resolve stay in the list and stay removable.
+    pub(crate) sources: Vec<crate::model::schedule::DestinationId>,
+    pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) priority: u32,
+    pub(crate) start: String,
+    pub(crate) end: String,
+    pub(crate) maximum: String,
+}
+
+/// What a drag on a bar is doing to its window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GanttDragMode {
+    /// The whole window, keeping its length.
+    Move,
+    ResizeStart,
+    ResizeEnd,
+}
+
+/// A bar being dragged or resized along the Gantt.
+///
+/// A drag moves or resizes the bar's work window and nothing else. Not its
+/// tonnes, because what a bar holds is its dig order and a drag that changed
+/// tonnes would be a drag that changed the plan; not its machine or its lane,
+/// because both are decisions, and reading one off a pointer position would
+/// make it an accident. Those are chosen from the bar's own menu, where what
+/// is being chosen is named.
+///
+/// The drag previews in this state and commits once, on release, so one drag
+/// is one undo step rather than one per frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GanttDrag {
+    /// The project the drag took hold in. A drag is pointer state, and the
+    /// pointer outlives a project switch; without this, a drag begun in one
+    /// project could release onto the same-numbered bar of its successor.
+    pub(crate) session: u32,
+    pub(crate) bar: crate::model::schedule::BarId,
+    pub(crate) mode: GanttDragMode,
+    /// The window the bar held when the drag began, in seconds. What the
+    /// commit compares against, so a drag that ends where it started commits
+    /// nothing.
+    pub(crate) from_start_seconds: f64,
+    pub(crate) from_end_seconds: Option<f64>,
+    /// Where along the bar the pointer took hold, in seconds, so the bar does
+    /// not jump its own width on the first movement.
+    pub(crate) grab_offset_seconds: f64,
+    /// Where the drag has the window now, in seconds. Drawn, not stored on the
+    /// project, until the drag is released.
+    pub(crate) preview_start_seconds: f64,
+    pub(crate) preview_end_seconds: Option<f64>,
+    pub(crate) from_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) from_priority: u32,
+    pub(crate) preview_agent: Option<crate::model::schedule::LoaderAgentId>,
+    pub(crate) preview_priority: u32,
+    /// Whether the drag is over the seam between two lanes rather than over a
+    /// lane: released there it opens a lane of its own at `preview_priority`,
+    /// pushing that loader's bars from there down one lane further out.
+    pub(crate) preview_insert: bool,
+    /// Whether the pointer has actually moved. A click that never moves is a
+    /// selection, and must not commit an edit or dirty the project.
+    pub(crate) moved: bool,
+}
+
+impl GanttDrag {
+    pub(crate) fn preview_window(self) -> crate::model::schedule::WorkWindow {
+        crate::model::schedule::WorkWindow {
+            start_h: self.preview_start_seconds / GanttView::HOUR,
+            end_h: self.preview_end_seconds.map(|end| end / GanttView::HOUR),
+        }
+    }
+}
+
+/// The numeric work-window dialog's draft.
+///
+/// Kept as text rather than parsed numbers so a half-typed entry stays on
+/// screen with its error instead of snapping back to the last valid value,
+/// and so an empty end reads as open-ended rather than as zero.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BarWindowDialog {
+    pub(crate) bar: crate::model::schedule::BarId,
+    pub(crate) start: String,
+    pub(crate) end: String,
+}
+
+impl BarWindowDialog {
+    pub(crate) fn of(bar: crate::model::schedule::BarId, window: crate::model::schedule::WorkWindow) -> Self {
+        Self {
+            bar,
+            start: format!("{:.2}", window.start_h),
+            end: window.end_h.map(|end| format!("{end:.2}")).unwrap_or_default(),
+        }
+    }
+
+    /// The window this draft describes, or `None` while it does not describe
+    /// one. An empty end is open-ended and is not an error; anything else that
+    /// does not parse is.
+    pub(crate) fn window(&self) -> Option<crate::model::schedule::WorkWindow> {
+        let start_h = self.start.trim().parse::<f64>().ok()?;
+        let end_h = match self.end.trim() {
+            "" => None,
+            text => Some(text.parse::<f64>().ok()?),
+        };
+        let window = crate::model::schedule::WorkWindow { start_h, end_h };
+        window.is_valid().then_some(window)
+    }
+}
+
+/// One member of a sequence as the panels show it: what the current run says
+/// about the ground at that place in the dig order. The dig order itself is
+/// persistent plan data; only the answers here are per-run.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleMemberView {
+    /// Its place in the dig order, from 1.
+    pub(crate) position: usize,
+    /// The block's name and solid in the Solids panels, when the reference
+    /// resolved.
+    pub(crate) name: Option<String>,
+    /// The dig area it belongs to, which is what a bar is named after.
+    pub(crate) area: Option<String>,
+    pub(crate) solid_name: Option<String>,
+    pub(crate) solid_type: Option<String>,
+    pub(crate) bench: Option<String>,
+    pub(crate) blast: Option<String>,
+    pub(crate) flitch: Option<String>,
+    /// Why the reference did not resolve, when it did not.
+    pub(crate) unresolved: Option<String>,
+    /// Its complete measured tonnage, when everything needed to state one was
+    /// there. Never a quiet zero.
+    pub(crate) tonnes: Option<f64>,
+}
+
+impl ScheduleMemberView {
+    /// The block's full ground path, `Pit A/336/1/344/3`, when it resolved.
+    pub(crate) fn path(&self) -> Option<String> {
+        let parts = [&self.solid_name, &self.bench, &self.blast, &self.flitch, &self.name];
+        let parts: Option<Vec<&str>> = parts.into_iter().map(|part| part.as_deref()).collect();
+        parts.map(|parts| crate::ui::elements::solids_view::ground_path(&parts))
+    }
+}
+
+/// One bar's readiness as the Gantt draws it, mirrored from the readiness
+/// report every frame the Gantt is on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleBarView {
+    pub(crate) bar: crate::model::schedule::BarId,
+    /// Ground-derived name used while the bar has no authored override.
+    pub(crate) default_name: String,
+    pub(crate) ready: bool,
+    pub(crate) tonnes: Option<f64>,
+    pub(crate) members: Vec<ScheduleMemberView>,
+    /// A reclaim bar's permitted stockpiles as they are currently named, in
+    /// the bar's authored order, with an unresolved entry named as such.
+    /// Empty for a dig bar.
+    pub(crate) reclaim_sources: Vec<String>,
+    pub(crate) problems: Vec<String>,
+}
+
+/// One member of a sequence editor's draft.
+///
+/// Ground the bar already held is carried through exactly as it was stored:
+/// applying an edit must never refresh a provenance stamp that could not be
+/// re-derived, because that stamp is the whole point of the identity layer. A
+/// block picked in this editing session is carried as the *pick* it was,
+/// naming the run it was picked from, and becomes a stored reference only at
+/// the command boundary - where the generation is checked against whatever
+/// snapshot is current by then, which may be a later one than the pick saw.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DraftMember {
+    Held(crate::model::schedule::DigBlockRef),
+    Picked(crate::model::schedule::DigBlockPick),
+}
+
+/// A press being held in the sequence editor's dig order.
+///
+/// Which gesture it is was settled at the press rather than inferred from the
+/// movement, because both gestures are the same movement - a drag down a list.
+/// A press on a row outside the selection sweeps a new one out of the rows it
+/// crosses; a press on a row inside it carries the whole selection to wherever
+/// it is let go. That is the rule a file list uses, and it is the only reading
+/// under which selecting several rows and then moving them are both possible
+/// with one pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SequenceListDrag {
+    pub(crate) mode: SequenceListDragMode,
+    /// The row the press landed on. A sweep runs from here to the row under
+    /// the pointer.
+    pub(crate) from: usize,
+    /// Where a carry would drop the rows it holds: a gap in the order,
+    /// `0..=members.len()`, counted before anything is taken out.
+    pub(crate) to: usize,
+}
+
+/// One left-drag across the sequence editor's 3D pane, picking every dig
+/// block it crosses.
+///
+/// `flitch` is the base RL of the first block the stroke took, and it is the
+/// stroke's whole extent: a later block on any other flitch is not painted.
+/// A stroke reads as one pass over one working level, and the pane is a
+/// picture - ground a flitch below is *behind* what the pointer is crossing,
+/// not beside it, so a stroke that slid onto it would add blocks the user
+/// never saw themselves touch. It is held here rather than in the draft
+/// because a stroke is a gesture, not an edit: cancelling the editor leaves
+/// nothing of it behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct SequencePaint {
+    pub(crate) flitch: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SequenceListDragMode {
+    /// Select the rows the pointer crosses.
+    Sweep,
+    /// Move the selected rows to where the pointer is let go.
+    Carry,
+}
+
+/// The floating 3D sequence editor's draft.
+///
+/// A member list alone is not enough to apply safely, because the window
+/// stays open across frames in which anything can happen: the project can be
+/// closed, the bar deleted, the order undone, or Dig Strips rerun. So the
+/// draft carries what it needs to *refuse* rather than to guess - the session
+/// it was opened under, the bar it edits, the member list it was opened from,
+/// and, inside each new member, the run generation it was picked against.
+///
+/// Nothing here is durable. Cancelling discards it and touches no project
+/// state at all, and the draft is dropped outright when the project changes.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SequenceDraft {
+    /// The project session the editor was opened under. A fresh project
+    /// numbers its first bar `0` too, so an id alone could land on unrelated
+    /// work rather than failing to resolve.
+    pub(crate) session: u32,
+    pub(crate) bar: crate::model::schedule::BarId,
+    /// Which instance of this editor the draft is. Every opened draft - a
+    /// fresh open, a close and reopen of the *same* bar, a Reload - takes the
+    /// next number, so a click made in one editing session can never be
+    /// answered into another, however similar the two look.
+    pub(crate) edition: u64,
+    /// The bar's dig order exactly as it stood when the editor opened. Apply
+    /// refuses when the bar no longer holds this, rather than overwriting a
+    /// newer edit with an older list.
+    pub(crate) opened_from: Vec<crate::model::schedule::DigBlockRef>,
+    pub(crate) members: Vec<DraftMember>,
+    /// The selected rows of the ordered list, as positions - the order is
+    /// what is being edited, and two positions can hold ground that resolves
+    /// to nothing at all. A set rather than one row because a run of rows is
+    /// moved through the order together, which is how a dig order is actually
+    /// rearranged.
+    pub(crate) selected: std::collections::BTreeSet<usize>,
+    /// The order-preview slider, `0..=members.len()`: at *k* the first *k*
+    /// blocks draw as dug. This previews the authored order and nothing else.
+    /// It is not a time axis, consults no loader rate, and is not the
+    /// whole-schedule playback the dispatch stage will drive.
+    pub(crate) preview: usize,
+    /// This editor's own camera, so opening it moves nothing in the main
+    /// viewport or on the Solids pages.
+    pub(crate) view: SolidPreviewView,
+    /// Set once Cancel or the window's close button is pressed with unapplied
+    /// changes, so discarding them is asked about rather than done.
+    pub(crate) confirming_close: bool,
+}
+
+impl SequenceDraft {
+    /// Source of the instance numbers above. Global rather than per-editor
+    /// state so every construction site - including a Reload inside the window
+    /// - shares one sequence, with nothing to reset or keep in step.
+    pub(crate) fn next_edition() -> u64 {
+        static EDITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        EDITION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn open(session: u32, bar: crate::model::schedule::BarId, members: &[crate::model::schedule::DigBlockRef]) -> Self {
+        Self {
+            session,
+            bar,
+            edition: Self::next_edition(),
+            opened_from: members.to_vec(),
+            members: members.iter().copied().map(DraftMember::Held).collect(),
+            selected: std::collections::BTreeSet::new(),
+            // Nothing dug: the editor opens on the whole authored order, and
+            // the slider walks forward through it from there.
+            preview: 0,
+            view: SolidPreviewView::default(),
+            confirming_close: false,
+        }
+    }
+
+    /// Whether the draft holds anything the bar does not. A draft that only
+    /// ever looked at the order has nothing to discard, so closing it asks
+    /// nothing.
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.members.len() != self.opened_from.len()
+            || self
+                .members
+                .iter()
+                .zip(&self.opened_from)
+                .any(|(member, held)| !matches!(member, DraftMember::Held(reference) if reference == held))
+    }
+}
+
+/// One draft member as the sequence editor shows it, measured against the run
+/// the project currently holds. Mirrored out of
+/// [`crate::app::commands::schedule_readiness`] while the editor is open, and
+/// cleared when it is not, so the editor can never describe a member against
+/// a run it was not measured from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SequenceMemberView {
+    /// The block's name and solid in the Solids panels, when it resolved.
+    pub(crate) name: Option<String>,
+    pub(crate) solid_name: Option<String>,
+    pub(crate) solid_type: Option<String>,
+    pub(crate) bench: Option<String>,
+    pub(crate) blast: Option<String>,
+    pub(crate) flitch: Option<String>,
+    /// Why it did not resolve, when it did not. An unresolved member stays in
+    /// the list, stays numbered and stays removable.
+    pub(crate) unresolved: Option<String>,
+    pub(crate) tonnes: Option<f64>,
+    /// True when this member was picked against a run that has since been
+    /// replaced. Apply will refuse it; saying so here is what stops that
+    /// being a surprise.
+    pub(crate) stale_pick: bool,
+    /// The block of the current run this member landed on, so the display
+    /// list can pick it out without resolving every reference a second time.
+    /// Session-scoped and display-only: nothing durable is ever keyed by it.
+    pub(crate) block: Option<crate::model::DigBlockId>,
+}
+
+/// The schedule's own name as it is being typed, and what the plan held when
+/// the typing started. See [`ScheduleClassDraft`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleNameDraft {
+    pub(crate) source: String,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleBarHeightDraft {
+    pub(crate) source: f32,
+    pub(crate) text: String,
+}
+
+/// Which row of one loader's calendar group a cell sits in.
+///
+/// Input rows carry the authored [`crate::model::schedule::CalendarField`] they
+/// edit. The scheduled-tonnes row is read back off a calculated result and is
+/// never authored, so it has no field to name and can produce no edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CalendarRow {
+    Input(crate::model::schedule::CalendarField),
+    /// Tonnes a loader dug out of the ground in the period.
+    DigTonnes,
+    /// Tonnes a loader reclaimed from stockpiles in the period. Kept apart
+    /// from [`Self::DigTonnes`]: the two are not one "mined" figure.
+    ReclaimTonnes,
+    /// A crusher's maximum tonnes for the period, the one destination input the
+    /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
+    /// figure for the whole calculation, not for a day of it.
+    CrusherLimit,
+    /// A stockpile's daily mode: building, reclaiming, both or neither.
+    PileMode,
+    /// One truck class's fleet size or time percentages for the period. Sized
+    /// here rather than in Setup because a fleet changes day to day, unlike the
+    /// truck itself.
+    Truck(crate::model::schedule::TruckField),
+    /// Truck-hours one class spent hauling in the period.
+    TruckHours,
+    TruckCycle,
+    TruckTonneKm,
+    /// What a destination received in the period. For a crusher this is what
+    /// it processed, direct mining and reclaim together.
+    Received,
+    /// What was reclaimed out of a stockpile in the period.
+    Reclaimed,
+    /// A balance at the end of the period: a stockpile's closing inventory,
+    /// opening stock included, or a dump's cumulative deposit.
+    Cumulative,
+    /// One editable input of a crusher's daily grade target.
+    GradeInput(crate::model::ReserveFieldId, crate::model::schedule::grade_targets::GradeTargetInput),
+    /// The tonnes-weighted grade a crusher received that day.
+    GradeActual(crate::model::ReserveFieldId),
+    /// The schedule's movement value for the period, in the plan's currency.
+    Value,
+    /// What a dozer, drill or MPU did in the period, in its own unit.
+    BlastWork,
+}
+
+impl CalendarRow {
+    pub(crate) fn field(self) -> Option<crate::model::schedule::CalendarField> {
+        match self {
+            Self::Input(field) => Some(field),
+            _ => None,
+        }
+    }
+
+    /// Whether this row is read back off a calculated result rather than
+    /// authored. A calculated row is selectable, so it can be copied, and
+    /// nothing more.
+    pub(crate) fn is_calculated(self) -> bool {
+        matches!(
+            self,
+            Self::DigTonnes
+                | Self::ReclaimTonnes
+                | Self::TruckHours
+                | Self::TruckCycle
+                | Self::TruckTonneKm
+                | Self::Received
+                | Self::Reclaimed
+                | Self::Cumulative
+                | Self::GradeActual(_)
+                | Self::Value
+        )
+    }
+
+    /// The truck-calendar field this row edits, when it is one.
+    pub(crate) fn truck_field(self) -> Option<crate::model::schedule::TruckField> {
+        match self {
+            Self::Truck(field) => Some(field),
+            _ => None,
+        }
+    }
+}
+
+/// Whose calendar group a row belongs to.
+///
+/// One address type for both halves of the grid: the selection, the clipboard
+/// rectangle and the keyboard all measure rows the same way whether they are a
+/// loader's settings or a destination's receipts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CalendarOwner {
+    /// The schedule as a whole, which owns only calculated rows.
+    Schedule,
+    Loader(crate::model::schedule::LoaderAgentId),
+    Truck(crate::model::schedule::TruckClassId),
+    Destination(crate::model::schedule::DestinationId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CalendarCellAddress {
+    pub(crate) owner: CalendarOwner,
+    pub(crate) row: CalendarRow,
+    pub(crate) cell: crate::model::schedule::CalendarCell,
+}
+
+impl CalendarCellAddress {
+    pub(crate) fn agent(self) -> Option<crate::model::schedule::LoaderAgentId> {
+        match self.owner {
+            CalendarOwner::Loader(agent) => Some(agent),
+            CalendarOwner::Schedule | CalendarOwner::Truck(_) | CalendarOwner::Destination(_) => None,
+        }
+    }
+
+    pub(crate) fn truck(self) -> Option<crate::model::schedule::TruckClassId> {
+        match self.owner {
+            CalendarOwner::Truck(class) => Some(class),
+            CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Destination(_) => None,
+        }
+    }
+
+    pub(crate) fn destination(self) -> Option<crate::model::schedule::DestinationId> {
+        match self.owner {
+            CalendarOwner::Destination(destination) => Some(destination),
+            CalendarOwner::Schedule | CalendarOwner::Loader(_) | CalendarOwner::Truck(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CalendarSelection {
+    pub(crate) anchor: CalendarCellAddress,
+    pub(crate) focus: CalendarCellAddress,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CalendarCellDraft {
+    pub(crate) address: CalendarCellAddress,
+    pub(crate) text: String,
+    pub(crate) error: Option<String>,
+    pub(crate) request_focus: bool,
+}
+
+/// Transient spreadsheet state, reset when the active project runtime moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleCalendarView {
+    pub(crate) runtime: u32,
+    pub(crate) visible_days: u32,
+    pub(crate) scroll_x: f32,
+    pub(crate) scroll_y: f32,
+    pub(crate) collapsed: std::collections::HashSet<CalendarOwner>,
+    /// Crusher grades whose target inputs are shown; folded away by default.
+    pub(crate) grade_expanded: std::collections::HashSet<(crate::model::schedule::DestinationId, crate::model::ReserveFieldId)>,
+    pub(crate) selection: Option<CalendarSelection>,
+    pub(crate) draft: Option<CalendarCellDraft>,
+    /// The Mode cell whose choice list is open.
+    pub(crate) mode_menu: Option<CalendarCellAddress>,
+    pub(crate) error: Option<String>,
+}
+
+impl Default for ScheduleCalendarView {
+    fn default() -> Self {
+        Self {
+            runtime: 0,
+            visible_days: 14,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            collapsed: Default::default(),
+            grade_expanded: Default::default(),
+            selection: None,
+            draft: None,
+            mode_menu: None,
+            error: None,
+        }
+    }
+}
+
+/// Where the Gantt is looking: the window of project time across its
+/// timeline, and how far its rows are scrolled.
+///
+/// Time here is *elapsed project time* in seconds - zero is `Day 1, 00:00`,
+/// not a calendar date and not the computer clock. Everything is kept in
+/// `f64` seconds; pixels are worked out per frame from the rect the timeline
+/// happens to get, so a resize or a DPI change cannot drift the two apart.
+///
+/// This is view state: it is not saved with the project, and it resets when
+/// the active project changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GanttView {
+    /// Elapsed seconds at the left edge of the timeline.
+    pub(crate) start_seconds: f64,
+    /// Elapsed seconds the timeline spans, left edge to right.
+    pub(crate) span_seconds: f64,
+    /// Downward row scroll, in points.
+    pub(crate) row_scroll: f32,
+}
+
+impl Default for GanttView {
+    fn default() -> Self {
+        Self {
+            start_seconds: 0.0,
+            span_seconds: Self::DEFAULT_SPAN_SECONDS,
+            row_scroll: 0.0,
+        }
+    }
+}
+
+impl GanttView {
+    pub(crate) const HOUR: f64 = 3600.0;
+    pub(crate) const DAY: f64 = 24.0 * Self::HOUR;
+    /// The span a Gantt opens at, and returns to on Reset View.
+    pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
+    /// Closest it zooms in, and furthest out. An hour is the finest window a
+    /// tonnes-per-hour schedule says anything useful over; a year is past the
+    /// point where a bar is a pixel.
+    pub(crate) const MIN_SPAN_SECONDS: f64 = Self::HOUR;
+    pub(crate) const MAX_SPAN_SECONDS: f64 = 365.0 * Self::DAY;
+
+    /// The minor tick intervals the ruler steps through as it is zoomed,
+    /// coarsest last. Hours, then days, then weeks - the scales a mine plan
+    /// is actually read at.
+    pub(crate) const TICK_LADDER: [f64; 8] = [
+        Self::HOUR,
+        3.0 * Self::HOUR,
+        6.0 * Self::HOUR,
+        12.0 * Self::HOUR,
+        Self::DAY,
+        2.0 * Self::DAY,
+        7.0 * Self::DAY,
+        14.0 * Self::DAY,
+    ];
+
+    /// Frame the timeline on the work it holds: from the start of the project
+    /// through `extent_seconds`, rounded up to a whole day so the ruler lands
+    /// on one. With nothing scheduled there is nothing to frame, so it falls
+    /// back to the default week.
+    pub(crate) fn reset_to(&mut self, extent_seconds: Option<f64>) {
+        let span = match extent_seconds.filter(|end| end.is_finite() && *end > 0.0) {
+            Some(end) => (end / Self::DAY).ceil() * Self::DAY,
+            None => Self::DEFAULT_SPAN_SECONDS,
+        };
+        *self = Self {
+            start_seconds: 0.0,
+            span_seconds: span,
+            row_scroll: self.row_scroll,
+        };
+        self.clamp();
+    }
+
+    /// Hold the window inside its limits: a span between an hour and a year,
+    /// and a left edge no earlier than the start of the project.
+    fn clamp(&mut self) {
+        if !self.span_seconds.is_finite() || self.span_seconds <= 0.0 {
+            self.span_seconds = Self::DEFAULT_SPAN_SECONDS;
+        }
+        self.span_seconds = self.span_seconds.clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        if !self.start_seconds.is_finite() {
+            self.start_seconds = 0.0;
+        }
+        self.start_seconds = self.start_seconds.max(0.0);
+    }
+
+    pub(crate) fn end_seconds(&self) -> f64 {
+        self.start_seconds + self.span_seconds
+    }
+
+    /// Where `seconds` falls across a timeline `width` points wide starting at
+    /// `left`. Presentation only: nothing is stored in pixels.
+    pub(crate) fn x_of(&self, seconds: f64, left: f32, width: f32) -> f32 {
+        left + (((seconds - self.start_seconds) / self.span_seconds) * f64::from(width)) as f32
+    }
+
+    /// What instant sits at `x`, the inverse of [`Self::x_of`]. Used where a
+    /// pointer position has to become a time - dragging a bar - so the two
+    /// conversions cannot drift apart.
+    pub(crate) fn seconds_at(&self, x: f32, left: f32, width: f32) -> f64 {
+        if width <= 0.0 {
+            return self.start_seconds;
+        }
+        self.start_seconds + f64::from(x - left) / f64::from(width) * self.span_seconds
+    }
+
+    /// Zoom by `factor` (above one zooms in), holding the time under
+    /// `anchor` - a fraction across the timeline - in place.
+    ///
+    /// The anchor is only held where the limits allow it: at the left end the
+    /// window stops at zero rather than panning into negative time, so a zoom
+    /// out near the origin widens to the right instead.
+    pub(crate) fn zoom_at(&mut self, factor: f64, anchor: f64) {
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let anchor = anchor.clamp(0.0, 1.0);
+        let pinned = self.start_seconds + anchor * self.span_seconds;
+        let span = (self.span_seconds / factor).clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        self.span_seconds = span;
+        self.start_seconds = pinned - anchor * span;
+        self.clamp();
+    }
+
+    /// Slide the window along time by `delta` seconds.
+    pub(crate) fn pan(&mut self, delta: f64) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.start_seconds += delta;
+        self.clamp();
+    }
+
+    /// The finest interval from [`Self::TICK_LADDER`] whose ticks are at least
+    /// `min_spacing` points apart on a timeline `width` points wide.
+    ///
+    /// Choosing the interval from the spacing - rather than from the span - is
+    /// what keeps labels from overlapping at any width or DPI: a narrow pane
+    /// simply steps up to a coarser interval.
+    pub(crate) fn minor_interval(&self, width: f32, min_spacing: f32) -> f64 {
+        let points_per_second = f64::from(width.max(1.0)) / self.span_seconds;
+        let needed = f64::from(min_spacing.max(1.0)) / points_per_second;
+        Self::TICK_LADDER.into_iter().find(|interval| *interval >= needed).unwrap_or(Self::MAX_SPAN_SECONDS)
+    }
+
+    /// Every tick of `interval` inside the visible window, as elapsed seconds.
+    ///
+    /// Starts from the first tick at or after the left edge rather than from
+    /// zero, so scrolling to day 300 costs the same as scrolling to day 1.
+    pub(crate) fn visible_ticks(&self, interval: f64) -> impl Iterator<Item = f64> {
+        let first = (self.start_seconds / interval).ceil();
+        let end = self.end_seconds();
+        (0..).map(move |step| (first + f64::from(step)) * interval).take_while(move |tick| *tick <= end)
     }
 }
 
@@ -4709,6 +8293,7 @@ pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
 /// A section of the Preferences window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
+    Reserves,
     Interface,
     Camera,
     Performance,

@@ -50,9 +50,18 @@ impl<'a> App<'a> {
             let navigation = self.graphics.as_mut().and_then(|graphics| graphics.touch_input(touch));
             if navigation == Some(true) {
                 self.refresh_snap_index();
+                let drawn = drawn_surfaces(
+                    &self.editor,
+                    self.showing_solid_preview(),
+                    &self.triangulations,
+                    &self.solid_view_body,
+                    &self.schedule_animation,
+                    self.solid_preview.as_ref(),
+                );
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.begin_orbit_at_surface(
-                        &self.triangulations,
+                        drawn.0,
+                        drawn.1,
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         &self.editor.frozen_handles,
@@ -235,6 +244,27 @@ impl<'a> App<'a> {
                     }
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
+                    // The Solids Setup page's inspection mesh is rebuilt before
+                    // the frame that shows it, and borrowed straight into the
+                    // render input - it is never a project item.
+                    // Invalidation first: the edits made since the last frame
+                    // decide which stages are still current, and so what a run
+                    // in flight is allowed to schedule. Doing this after the
+                    // geometry sync would let one frame's work start against a
+                    // demand that the same frame's edit had already retired.
+                    self.sync_planning_pipeline();
+                    self.auto_run_planning();
+                    self.auto_recalculate_schedule();
+                    self.pick_entry_ground();
+                    self.sync_solid_preview();
+                    self.sync_schedule_animation();
+                    self.sync_reserve_setup_stats();
+                    self.sync_blasting_view();
+                    self.sync_blasting_bench();
+                    self.sync_blasting_outlines();
+                    self.sync_dig_blocks();
+                    self.sync_blasting_frame();
+                    let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
                     let mut slice_moving = false;
@@ -257,15 +287,24 @@ impl<'a> App<'a> {
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
+                        let drawn = drawn_surfaces(
+                            &self.editor,
+                            showing_solid_preview,
+                            &self.triangulations,
+                            &self.solid_view_body,
+                            &self.schedule_animation,
+                            self.solid_preview.as_ref(),
+                        );
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
-                            triangulations: &self.triangulations,
+                            triangulations: drawn.0,
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
                             well_logs: &self.well_logs,
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
+                            solid_preview: drawn.1,
                             project: &project,
                         }) {
                             Ok(ui_output) => {
@@ -447,7 +486,7 @@ impl<'a> App<'a> {
                     let raw = self.graphics.as_ref().and_then(|g| g.cursor_world(z));
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
-                    let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
+                    let snap_eligible = (self.editor.active_tool.snaps_cursor() || self.editor.haul_placing()) && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
                     let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
@@ -464,6 +503,7 @@ impl<'a> App<'a> {
                         self.redraw_requested = true;
                     }
                     self.drag_to_cursor();
+                    self.track_haul_cursor();
                     if self.gizmo_drag.is_some() {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
@@ -873,6 +913,13 @@ impl<'a> App<'a> {
                 return;
             }
             self.editor.canvas_context_menu_open = false;
+            if self.editor.haul_draw && self.editor.is_haulage_page() {
+                self.place_haul_point();
+                return;
+            }
+            if self.editor.is_haulage_page() && self.editor.active_tool == ActiveTool::None {
+                self.begin_haul_drag();
+            }
             match self.editor.active_tool {
                 ActiveTool::MakePoint => self.place_point_at_cursor(),
                 ActiveTool::MakeText if !self.editor.text_editing_enabled => self.text_tool_click(),
@@ -980,6 +1027,8 @@ impl<'a> App<'a> {
     }
 
     fn finish_left_button_interactions(&mut self) {
+        // Before the box selection: a drag that moved a node is not a click.
+        self.finish_haul_drag();
         self.finish_box_selection();
         self.finish_drag();
         if self.gizmo_drag.is_some() {
@@ -1155,6 +1204,7 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.haul_menu_point = matches!(handle, crate::model::SceneEntityId::HaulRoad(_)).then_some(pick.world);
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1188,6 +1238,8 @@ impl<'a> App<'a> {
                 KeyCode::KeyA => {
                     self.select_all_active_objects();
                 }
+                KeyCode::KeyC if self.editor.is_dig_strips_step() => self.copy_dig_strips(),
+                KeyCode::KeyV if self.editor.is_dig_strips_step() => self.paste_dig_strips(),
                 KeyCode::KeyD => {
                     self.duplicate_selection();
                 }
@@ -1227,12 +1279,27 @@ impl<'a> App<'a> {
             return;
         }
 
+        if self.editor.is_planning_cut_step() {
+            // Blast outlines are drawn in plan; orbiting out of it would put
+            // the cursor plane at an angle to the ground being drawn on.
+            return;
+        }
+
         self.refresh_snap_index();
+        let drawn = drawn_surfaces(
+            &self.editor,
+            self.showing_solid_preview(),
+            &self.triangulations,
+            &self.solid_view_body,
+            &self.schedule_animation,
+            self.solid_preview.as_ref(),
+        );
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         graphics.begin_orbit_at_surface(
-            &self.triangulations,
+            drawn.0,
+            drawn.1,
             &self.drill_holes,
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
@@ -1360,7 +1427,14 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
-                if self.editor.tie_anchor.is_some() {
+                if self.editor.haul_drag.take().is_some() {
+                    self.invalidate_overlay();
+                } else if self.editor.haul_link_pick {
+                    self.editor.haul_link_pick = false;
+                    self.redraw_requested = true;
+                } else if self.editor.haul_draw {
+                    self.finish_haul_road();
+                } else if self.editor.tie_anchor.is_some() {
                     self.end_tie_chain();
                     self.redraw_requested = true;
                 } else if self.editor.canvas_context_menu_open {
@@ -1451,7 +1525,9 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
-                if self.editor.active_tool.translates() {
+                if self.editor.haul_draw {
+                    self.finish_haul_road();
+                } else if self.editor.active_tool.translates() {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));
                     self.editor.active_tool = ActiveTool::None;
@@ -1471,7 +1547,25 @@ impl<'a> App<'a> {
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,
             // so without this guard Delete/Backspace raises "delete this object?".
+            KeyCode::Backspace if self.editor.haul_draw => {
+                self.editor.haul_points.pop();
+                self.invalidate_overlay();
+            }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
+                // The Gantt shows no scene objects, so Delete there is for the
+                // selected bars only - never a prompt to delete objects
+                // selected out of sight. Not while a bar's editor is open over it.
+                if self.editor.is_schedule_gantt() {
+                    if self.editor.sequence_editor.is_none() && self.editor.blast_bar_dialog.is_none() && !self.editor.schedule_selected_bars.is_empty() {
+                        let bars: Vec<_> = self.editor.schedule_selected_bars.iter().copied().collect();
+                        self.delete_bars(&bars);
+                        self.redraw_requested = true;
+                    }
+                    return;
+                }
+                if self.editor.is_haulage_page() && self.delete_selected_haulage() {
+                    return;
+                }
                 if !self.editor.selected_tie_ins.is_empty() {
                     self.delete_selected_tie_ins();
                     return;
@@ -1550,6 +1644,11 @@ impl<'a> App<'a> {
     pub(crate) fn set_active_tool_from_toolbar(&mut self, tool: ActiveTool) {
         if self.editor.text_editing_enabled {
             return;
+        }
+        // Reaching for a placing tool is what creates the bench's cut layer,
+        // and it has to exist before the gate below asks for one.
+        if self.editor.is_planning_cut_step() && tool.requires_active_layer() && tool != self.editor.active_tool {
+            self.ensure_bench_cut_layer();
         }
         if self.editor.drill_pattern_open {
             self.editor.close_drill_pattern();
@@ -1674,6 +1773,37 @@ impl<'a> App<'a> {
         self.editor.fly_mode_enabled = enabled;
         self.redraw_requested = true;
     }
+}
+
+/// The surfaces the viewport draws: the scene's own, then those drawn over
+/// it as a preview. Rendering and every pick read this one answer, so a
+/// pivot lands on whatever the eye sees - planning solids, Animate's ground -
+/// rather than passing through it.
+pub(crate) fn drawn_surfaces<'s>(
+    editor: &crate::ui::state::EditorState,
+    showing_solid_preview: bool,
+    triangulations: &'s [crate::model::triangulation::OpenTriangulation],
+    solid_view_body: &'s [crate::model::triangulation::OpenTriangulation],
+    schedule_animation: &'s crate::app::schedule_animation::ScheduleAnimation,
+    solid_preview: Option<&'s crate::app::commands::solids::SolidPreview>,
+) -> (&'s [crate::model::triangulation::OpenTriangulation], &'s [crate::model::triangulation::OpenTriangulation]) {
+    // Blasting draws into the real viewport, so its bench slabs are the
+    // scene rather than an offscreen preview.
+    if editor.is_planning_cut_step() {
+        return (solid_view_body, &[]);
+    }
+    let scene = if editor.is_schedule_animation() { schedule_animation.scene() } else { triangulations };
+    // The floating sequence editor draws the same dig-block display list the
+    // Solids View page does, through the same offscreen preview - one
+    // renderer, not two.
+    let preview = if editor.is_solids_view() || editor.sequence_editor_active() || editor.blast_sequence_active() {
+        solid_view_body
+    } else if showing_solid_preview {
+        solid_preview.map_or(&[][..], |preview| preview.meshes())
+    } else {
+        &[]
+    };
+    (scene, preview)
 }
 
 fn bezier_cp_hit(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<u8> {

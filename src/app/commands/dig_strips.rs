@@ -1,0 +1,187 @@
+//! Flitch-owned strip drawings and the dig blocks formed jointly with blasts.
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use glam::{DVec2, DVec3};
+
+use crate::{
+    model::{Command, Object, SceneEntityId, arrangement},
+    ui::state::{BenchSelection, BlastOutline},
+};
+
+/// The plan faces one flitch's ground is divided into, north-west first.
+///
+/// A flitch is cut by its own strips *and* by the blast boundaries of the bench
+/// holding it, so a strip crossing a blast boundary yields one block per blast.
+/// The bench's own cut lines stand in for those boundaries: a blast boundary is
+/// made of bench cuts and stretches of the bench footprint, and the bench
+/// footprint lies outside this flitch's, the pit narrowing as it goes down.
+///
+/// Shared by the derivation the panel reads and the geometry job that cuts the
+/// flitch solid apart, so the blocks drawn and the blocks measured are the same
+/// blocks.
+pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> Vec<(arrangement::Face, DVec2)> {
+    let mut cuts = arrangement::cut_lines(strips);
+    cuts.extend(arrangement::cut_lines(bench_cuts));
+    let mut faces: Vec<_> = arrangement::subdivide(footprint, &cuts)
+        .into_iter()
+        .filter_map(|face| arrangement::representative_point(&face).map(|anchor| (face, anchor)))
+        .collect();
+    // Numbered by where they sit, so a block keeps its number while its
+    // neighbours are redrawn.
+    faces.sort_by(|a, b| b.1.y.total_cmp(&a.1.y).then_with(|| a.1.x.total_cmp(&b.1.x)));
+    faces
+}
+
+impl crate::app::App<'_> {
+    pub(crate) fn copy_dig_strips(&mut self) {
+        if !self.editor.is_dig_strips_step() {
+            return;
+        }
+        self.editor.dig_clipboard = self
+            .scene_document
+            .objects()
+            .iter()
+            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| matches!(object, Object::Polyline { .. }))
+            .cloned()
+            .collect();
+        self.redraw_requested = true;
+    }
+
+    pub(crate) fn paste_dig_strips(&mut self) {
+        if !self.editor.is_dig_strips_step() || self.editor.dig_clipboard.is_empty() {
+            return;
+        }
+        let Some((_, band)) = self.editor.planning_cut_target() else { return };
+        let Some(layer) = self.ensure_bench_cut_layer() else { return };
+        let mut commands = Vec::new();
+        let mut selected = std::collections::HashSet::new();
+        let Some(document) = self.workspace.active_document_mut() else { return };
+        for source in &self.editor.dig_clipboard {
+            let id = document.allocate_object_id();
+            let mut object = source.with_id_and_layer(id, layer);
+            if let Object::Polyline { verts, .. } = &mut object {
+                for vertex in verts {
+                    vertex.pos.z = band.top;
+                }
+            }
+            selected.insert(SceneEntityId::Object(id));
+            commands.push(Command::AddObject(object));
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.editor.selected_handles = selected;
+        self.invalidate_geometry();
+    }
+
+    pub(crate) fn sync_dig_blocks(&mut self) {
+        // Only the Dig Strips step draws and lists these. View shows the blocks
+        // as cut-apart geometry instead, and Blasting comes before the strips
+        // exist at all - a later step's subdivision must not appear over an
+        // earlier step's benches.
+        if !self.editor.is_dig_strips_step() {
+            if !self.editor.dig_outlines.is_empty() {
+                self.editor.dig_outlines.clear();
+                self.editor.dig_outlines_key = None;
+                self.invalidate_overlay();
+            }
+            return;
+        }
+        let Some(document) = self.workspace.active_document() else { return };
+        let mut hash = DefaultHasher::new();
+        self.workspace.active_project().map(|project| project.runtime_id).hash(&mut hash);
+        document.revision().hash(&mut hash);
+        self.editor.selected_blast.hash(&mut hash);
+        // Blast boundaries cut the strips, so a derivation that ran before the
+        // blast outlines settled has to be redone once they change.
+        self.editor.blasting_outlines_key.hash(&mut hash);
+        for row in &self.editor.solids_view_selection {
+            row.solid.hash(&mut hash);
+            row.band.map(|b| (b.base.to_bits(), b.top.to_bits(), b.is_flitch)).hash(&mut hash);
+        }
+        for cache in self.solid_view_cache.values() {
+            cache.key.hash(&mut hash);
+            cache.built_through(crate::app::planning_pipeline::GeometryDemand::Body).hash(&mut hash);
+        }
+        let key = hash.finish();
+        if self.editor.dig_outlines_key == Some(key) {
+            return;
+        }
+        let mut outlines = Vec::new();
+        for solid in document.solids() {
+            // The flitch ground, which Benching committed: the strips drawn on
+            // it are this step's own input, not the blocks cut out of them.
+            let Some(footprints) = self.solid_view_cache.get(&solid.id).and_then(super::solids_view::ViewSolid::flitch_footprints) else {
+                continue;
+            };
+            for bench in solid.benching.benches() {
+                for flitch in &bench.flitches {
+                    let band = BenchSelection {
+                        base: flitch.base,
+                        top: flitch.top(),
+                        is_flitch: true,
+                    };
+                    if !super::solids_view::selected(&self.editor.solids_view_selection, solid.id, Some(band)) {
+                        continue;
+                    }
+                    let drawing = solid.blasting.drawing(flitch.base, true);
+                    let Some(footprint) = footprints.get(&flitch.base.to_bits()) else {
+                        continue;
+                    };
+                    let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+                    let faces = dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), bench_cuts);
+                    // The bench's blasts, as Blasting named them, so each block
+                    // can be listed under the blast it lies in.
+                    let blasts: Vec<(&str, Vec<Vec<DVec2>>)> = self
+                        .editor
+                        .blasting_outlines
+                        .iter()
+                        .filter(|outline| outline.solid == solid.id && (outline.bench_base - bench.base).abs() < 1e-6)
+                        .map(|outline| {
+                            (
+                                outline.name.as_str(),
+                                outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect(),
+                            )
+                        })
+                        .collect();
+                    let first = outlines.len();
+                    for (index, (face, anchor)) in faces.into_iter().enumerate() {
+                        let blast = blasts
+                            .iter()
+                            .find(|(_, rings)| arrangement::point_in_face(rings, anchor))
+                            .map(|(name, _)| (*name).to_owned());
+                        let area = face
+                            .iter()
+                            .enumerate()
+                            .map(|(i, ring)| arrangement::signed_area(ring).abs() * if i == 0 { 1.0 } else { -1.0 })
+                            .sum();
+                        outlines.push(BlastOutline {
+                            solid: solid.id,
+                            bench_base: flitch.base,
+                            plane: flitch.top(),
+                            name: (index + 1).to_string(),
+                            anchor: anchor.to_array(),
+                            area,
+                            blast,
+                            rings: face
+                                .into_iter()
+                                .map(|ring| ring.into_iter().map(|p| DVec3::new(p.x, p.y, flitch.top())).collect())
+                                .collect(),
+                        });
+                    }
+                    // Grouped by blast, numbered blasts in number order, as the
+                    // panel nests them.
+                    let number = |name: Option<&str>| name.and_then(|name| name.parse::<u64>().ok()).unwrap_or(u64::MAX);
+                    outlines[first..].sort_by(|a, b| {
+                        number(a.blast.as_deref())
+                            .cmp(&number(b.blast.as_deref()))
+                            .then_with(|| a.blast.cmp(&b.blast))
+                            .then_with(|| number(Some(&a.name)).cmp(&number(Some(&b.name))))
+                    });
+                }
+            }
+        }
+        self.editor.dig_outlines = outlines;
+        self.editor.dig_outlines_key = Some(key);
+        self.invalidate_overlay();
+    }
+}

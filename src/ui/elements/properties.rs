@@ -76,6 +76,9 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, dril
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
+                        // Not one of this dialog's own tabs: set from the planning
+                        // viewport's Reserves panel, which this dialog never shows.
+                        PropertyTab::Reserves => {}
                         PropertyTab::Drillholes => draw_drillhole_settings(ui, editor, drill_holes, commands),
                     });
             });
@@ -119,6 +122,7 @@ pub(crate) fn draw_selection_appearance(
             SceneEntityId::DrillHole(_) => 5,
             SceneEntityId::PointCloud(_) => 6,
             SceneEntityId::Raster(_) => 7,
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => continue,
         };
         selected_types[kind] = true;
     }

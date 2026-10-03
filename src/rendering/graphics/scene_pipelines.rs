@@ -171,6 +171,10 @@ fn make_document_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu:
 pub(crate) struct ScenePipelines {
     pub(crate) surface_render_pipeline: wgpu::RenderPipeline,
     pub(crate) transparent_surface_render_pipeline: wgpu::RenderPipeline,
+    /// Planning slabs are closed, outward-wound solids, so their back faces
+    /// are culled - unlike a triangulation, which is seen from both sides.
+    pub(crate) solid_surface_render_pipeline: wgpu::RenderPipeline,
+    pub(crate) transparent_solid_surface_render_pipeline: wgpu::RenderPipeline,
     pub(crate) grid_render_pipeline: wgpu::RenderPipeline,
     pub(crate) section_grid_render_pipeline: wgpu::RenderPipeline,
     pub(crate) raster_plane_render_pipeline: wgpu::RenderPipeline,
@@ -656,7 +660,7 @@ pub(crate) fn create_scene_pipelines(
 
     // Triangulation surface pipelines use position-only vertices with a per-draw colour
     // uniform.
-    let create_tri_surface_pipeline = |label, write_depth, depth_compare| {
+    let create_tri_surface_pipeline = |label, write_depth, depth_compare, cull_mode| {
         let mut depth = Graphics::depth_state(write_depth, 0);
         depth.depth_compare = Some(depth_compare);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -682,7 +686,7 @@ pub(crate) fn create_scene_pipelines(
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -697,8 +701,11 @@ pub(crate) fn create_scene_pipelines(
             cache: None,
         })
     };
-    let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual);
-    let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual);
+    let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual, None);
+    let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual, None);
+    let solid_surface_render_pipeline = create_tri_surface_pipeline("Opaque Planning Slab Pipeline", true, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
+    let transparent_solid_surface_render_pipeline =
+        create_tri_surface_pipeline("Transparent Planning Slab Pipeline", false, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
     let grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Infinite XY Grid Pipeline"),
         layout: Some(&grid_pipeline_layout),
@@ -1033,6 +1040,8 @@ pub(crate) fn create_scene_pipelines(
     ScenePipelines {
         surface_render_pipeline,
         transparent_surface_render_pipeline,
+        solid_surface_render_pipeline,
+        transparent_solid_surface_render_pipeline,
         grid_render_pipeline,
         section_grid_render_pipeline,
         raster_plane_render_pipeline,

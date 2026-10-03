@@ -1,8 +1,11 @@
+pub(crate) mod blasting;
 pub(crate) mod block_model;
+mod dig_strips;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
+pub(crate) mod haulage;
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
@@ -12,10 +15,16 @@ pub(crate) mod products; // Handles the Drill & Blast workspace's stored product
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
+pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
 pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
+pub(crate) mod schedule;
+pub(crate) mod schedule_capture; // Captures the project into the blended model a schedule run solves
+pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).
+pub(crate) mod solids_view;
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
@@ -124,6 +133,33 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferenceSurface { .. }
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::AddReserveField { .. }
+                | UiCommand::AddReserveFieldFromColumn { .. }
+                | UiCommand::SetReserveFieldAggregation { .. }
+                | UiCommand::DeleteReserveField(_)
+                | UiCommand::SetReserveMapping { .. }
+                | UiCommand::SetReserveModelIncluded { .. }
+                | UiCommand::AddSolid { .. }
+                | UiCommand::DeleteSolid(_)
+                | UiCommand::SaveSolidPreviewToProject
+                | UiCommand::UpdateSolid { .. }
+                | UiCommand::SetSolidsTopography { .. }
+                | UiCommand::RecomputeReserveStats(_)
+                | UiCommand::RunPlanningStage(_)
+                | UiCommand::RunAllPlanningStages
+                | UiCommand::RunScheduleStage(_)
+                | UiCommand::RunAllScheduleStages
+                | UiCommand::RunSchedulePeriod
+                | UiCommand::RunAllSchedulePeriods
+                | UiCommand::ImproveSchedule
+                | UiCommand::FocusScheduleAnimationSolid(_)
+                | UiCommand::Haulage { .. }
+                | UiCommand::StartHaulRoad
+                | UiCommand::FinishHaulRoad
+                | UiCommand::ConvertHaulSelection
+                | UiCommand::NewHaulDestination { .. }
+                | UiCommand::ExportHaulRoads
+                | UiCommand::Schedule { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -321,6 +357,11 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
+            UiCommand::ExportScheduleReport(export) => {
+                let (file_name, text) = *export;
+                self.choose_export_schedule_report(file_name, text);
+                Ok(())
+            }
             UiCommand::ExportDrillHoleCsv(id) => {
                 self.choose_export_drill_hole_csv(id);
                 Ok(())
@@ -353,6 +394,173 @@ impl<'a> App<'a> {
             }
             UiCommand::DeleteDelayProduct(id) => {
                 self.delete_delay_product(id);
+                Ok(())
+            }
+            UiCommand::AddReserveField { name, aggregation } => {
+                self.add_reserve_field(name, aggregation);
+                Ok(())
+            }
+            UiCommand::AddReserveFieldFromColumn { column, categorical } => {
+                self.add_reserve_field_from_column(column, categorical);
+                Ok(())
+            }
+            UiCommand::SetReserveFieldAggregation { field, aggregation } => {
+                self.set_reserve_field_aggregation(field, aggregation);
+                Ok(())
+            }
+            UiCommand::DeleteReserveField(id) => {
+                self.delete_reserve_field(id);
+                Ok(())
+            }
+            UiCommand::SetReserveMapping { block_model, field, source } => {
+                self.set_reserve_mapping(block_model, field, source);
+                Ok(())
+            }
+            UiCommand::SetReserveModelIncluded { block_model, included } => {
+                self.set_reserve_model_included(block_model, included);
+                Ok(())
+            }
+            UiCommand::AddSolid {
+                name,
+                kind,
+                surface,
+                topography,
+                block_model,
+            } => {
+                self.add_solid(name, kind, surface, topography, block_model);
+                Ok(())
+            }
+            UiCommand::Haulage { project, edit } => self.edit_haulage(project, edit),
+            UiCommand::OpenHaulImport => {
+                self.editor.show_import = true;
+                self.editor.data_menu = crate::ui::state::DataMenu::Dxf;
+                self.editor.import_as_haul_roads = true;
+                Ok(())
+            }
+            UiCommand::EditHaulProperties => {
+                self.editor.canvas_context_menu_open = false;
+                self.editor.active_workspace = crate::ui::state::Workspace::Planning;
+                self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+                self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+                self.refresh_haulage_view();
+                Ok(())
+            }
+            UiCommand::RefreshHaulOverlay => {
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::StartHaulRoad => {
+                self.start_haul_road();
+                Ok(())
+            }
+            UiCommand::FinishHaulRoad => {
+                self.finish_haul_road();
+                Ok(())
+            }
+            UiCommand::ConvertHaulSelection => {
+                if let Some(project) = self.workspace.active_project() {
+                    let runtime = project.runtime_id;
+                    self.edit_haulage(runtime, crate::ui::state::HaulEdit::ConvertSelection)?;
+                }
+                Ok(())
+            }
+            UiCommand::FrameHaul(min, max) => {
+                self.frame_haul(min, max);
+                Ok(())
+            }
+            UiCommand::NewHaulDestination { node, kind } => self.new_haul_destination(node, kind),
+            UiCommand::ExportHaulRoads => {
+                self.choose_export_haul_roads();
+                Ok(())
+            }
+            UiCommand::Schedule { project, edit } => {
+                self.apply_schedule_edit(project, edit);
+                Ok(())
+            }
+            UiCommand::SelectDigBlock(block) => {
+                self.editor.selected_dig_block = Some(block);
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::SelectBlast(blast) => {
+                self.editor.selected_blast = blast;
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::ResetBlastName(blast) => {
+                self.reset_blast_name(blast);
+                Ok(())
+            }
+            UiCommand::DeleteSolid(id) => {
+                self.delete_solid(id);
+                Ok(())
+            }
+            UiCommand::SaveSolidPreviewToProject => self.save_solid_preview_to_project(),
+            UiCommand::ResetSolidPreviewView => {
+                self.editor.solid_preview_view = crate::ui::state::SolidPreviewView::default();
+                Ok(())
+            }
+            UiCommand::RecomputeReserveStats(block_model) => {
+                self.recompute_reserve_totals(block_model);
+                self.request_reserve_stats(block_model);
+                Ok(())
+            }
+            UiCommand::RunPlanningStage(stage) => {
+                self.planning_advance_after = self.run_planning_stage(stage).then_some(stage);
+                Ok(())
+            }
+            UiCommand::RunAllPlanningStages => {
+                self.run_all_planning_stages();
+                Ok(())
+            }
+            UiCommand::CancelPlanningRun => {
+                self.cancel_planning_run();
+                Ok(())
+            }
+            UiCommand::RunScheduleStage(step) => {
+                // Set before the run: a step that finishes at once settles in
+                // the run's own mirror pass.
+                self.schedule_advance_after = Some(step);
+                if !self.run_schedule_step(step) {
+                    self.schedule_advance_after = None;
+                }
+                Ok(())
+            }
+            UiCommand::RunAllScheduleStages => {
+                self.run_all_schedule_steps();
+                Ok(())
+            }
+            // Refused on the browser build inside `start_schedule_run` itself,
+            // not only by the disabled button: a command can arrive from
+            // anywhere.
+            UiCommand::RunSchedulePeriod => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Period);
+                Ok(())
+            }
+            UiCommand::RunAllSchedulePeriods => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::All);
+                Ok(())
+            }
+            UiCommand::ImproveSchedule => {
+                self.start_schedule_run(crate::app::schedule_run::ScheduleRunMode::Improve);
+                Ok(())
+            }
+            UiCommand::CancelScheduleCalculation => {
+                self.cancel_schedule_run_calculation();
+                Ok(())
+            }
+            UiCommand::CancelScheduleRun => {
+                self.cancel_schedule_run();
+                Ok(())
+            }
+            UiCommand::UpdateSolid { solid, edit } => {
+                self.update_solid(solid, edit);
+                Ok(())
+            }
+            UiCommand::SetSolidsTopography { solids, topography } => {
+                for solid in solids {
+                    self.update_solid(solid, crate::model::SolidEdit::Topography(topography));
+                }
                 Ok(())
             }
             UiCommand::SetInitiation { target, delay_ms } => {
@@ -413,6 +621,9 @@ impl<'a> App<'a> {
                         self.activate_project_for_layer(layer_id);
                         self.rename_layer(layer_id, new_name);
                     }
+                    crate::ui::state::RenameTarget::ReserveField(id) => self.rename_reserve_field(id, new_name),
+                    crate::ui::state::RenameTarget::Solid(id) => self.rename_solid(id, new_name),
+                    crate::ui::state::RenameTarget::BlastShape(blast) => self.rename_blast(blast, new_name),
                     crate::ui::state::RenameTarget::Folder(section, id) => self.rename_folder(section, id, new_name),
                     _ => self.rename_project_item(target, new_name),
                 }
@@ -845,6 +1056,50 @@ impl<'a> App<'a> {
                 self.editor.survey.open_transform();
                 Ok(())
             }
+            UiCommand::SetPlanningSubpage(subpage) => {
+                if self.editor.planning_page.subpages().contains(&subpage) {
+                    match self.editor.planning_page {
+                        crate::ui::state::PlanningPage::Schedule => {
+                            if self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar && subpage != crate::ui::state::PlanningSubpage::Calendar {
+                                self.editor.schedule_calendar.draft = None;
+                                self.editor.schedule_calendar.error = None;
+                            }
+                            self.editor.schedule_subpage = subpage;
+                        }
+                        crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
+                        crate::ui::state::PlanningPage::Haulage => {
+                            self.editor.haulage_subpage = subpage;
+                            self.editor.cancel_haul_edit();
+                        }
+                    }
+                    if self.editor.is_planning_viewport() {
+                        self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
+                    }
+                    self.redraw_requested = true;
+                }
+                Ok(())
+            }
+            UiCommand::FocusScheduleAnimationSolid(solid) => {
+                self.focus_schedule_animation_solid(solid);
+                Ok(())
+            }
+            UiCommand::SetPlanningPage(page) => {
+                if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule
+                    && self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar
+                    && page != crate::ui::state::PlanningPage::Schedule
+                {
+                    self.editor.schedule_calendar.draft = None;
+                    self.editor.schedule_calendar.error = None;
+                }
+                self.editor.planning_page = page;
+                self.editor.cancel_haul_edit();
+                self.refresh_haulage_view();
+                if self.editor.is_planning_viewport() {
+                    self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
+                }
+                self.redraw_requested = true;
+                Ok(())
+            }
             UiCommand::SaveSurveyDefinition { target, definition } => {
                 let result = self.save_survey_definition(target, definition);
                 if let Err(error) = &result {
@@ -1185,11 +1440,10 @@ impl<'a> App<'a> {
             UiCommand::OpenCutTriangulationBySurface => {
                 self.editor.tri_cut_surface_open = true;
                 self.editor.tri_cut_surface_name_auto = true;
-                // Match the other topology tools: the active triangulation is
-                // the topology, and the surface that will be changed is chosen
-                // explicitly second.
-                self.editor.tri_cut_surface_reference_id = self.active_triangulation;
-                self.editor.tri_cut_surface_target_id = None;
+                // Match the other topology tools: the selection is the
+                // surface that will be changed, and the topology is chosen.
+                self.editor.tri_cut_surface_reference_id = None;
+                self.editor.tri_cut_surface_target_id = self.topology_tool_surface();
                 self.editor.tri_cut_surface_side = crate::ui::state::TriSurfaceCutSide::CutTop;
                 self.editor.tri_cut_surface_name_input.clear();
                 self.editor.tri_cut_surface_unload_source = true;
@@ -1208,17 +1462,42 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenBuildSolidFromSurfaces => {
+                self.editor.tri_solid_open = true;
+                self.editor.tri_solid_name_auto = true;
+                // The active surface is the design being reserved; the ground
+                // it meets is chosen explicitly second, as the other topology
+                // tools do it.
+                self.editor.tri_solid_design_id = self.active_triangulation;
+                self.editor.tri_solid_topography_id = None;
+                self.editor.tri_solid_region = crate::ui::state::SolidRegion::Cut;
+                self.editor.tri_solid_name_input = self
+                    .active_triangulation
+                    .and_then(|id| self.triangulations.iter().find(|item| item.id == id))
+                    .map(|item| crate::app::canvas::derived_triangulation_name(&item.name, &tr!("tri-type-solid-closed")))
+                    .unwrap_or_default();
+                Ok(())
+            }
+            UiCommand::ExecuteBuildSolidFromSurfaces {
+                design_id,
+                topography_id,
+                region,
+                name,
+            } => {
+                let result = self.create_solid_from_surfaces(design_id, topography_id, region, name);
+                if result.is_ok() {
+                    self.editor.tri_solid_open = false;
+                }
+                result
+            }
             UiCommand::OpenCutTopologyByPitShell => {
                 self.editor.tri_cut_pitshell_open = true;
                 self.editor.tri_cut_pitshell_name_auto = true;
-                self.editor.tri_cut_pitshell_topology_id = self.active_triangulation;
-                self.editor.tri_cut_pitshell_pitshell_id = None;
+                // The name follows the topology once it is chosen.
+                self.editor.tri_cut_pitshell_topology_id = None;
+                self.editor.tri_cut_pitshell_pitshell_id = self.topology_tool_surface();
                 self.editor.tri_cut_pitshell_unload_source = true;
-                self.editor.tri_cut_pitshell_name_input = self
-                    .active_triangulation
-                    .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!("common-cut")))
-                    .unwrap_or_default();
+                self.editor.tri_cut_pitshell_name_input.clear();
                 Ok(())
             }
             UiCommand::ExecuteCutTopologyByPitShell {
@@ -1236,15 +1515,12 @@ impl<'a> App<'a> {
             UiCommand::OpenIncludeSolidInTopology => {
                 self.editor.tri_include_solid_open = true;
                 self.editor.tri_include_solid_name_auto = true;
-                self.editor.tri_include_solid_topology_id = self.active_triangulation;
-                self.editor.tri_include_solid_shape_id = None;
+                // The name follows the topology once it is chosen.
+                self.editor.tri_include_solid_topology_id = None;
+                self.editor.tri_include_solid_shape_id = self.topology_tool_surface();
                 self.editor.tri_include_solid_save_as_two = false;
                 self.editor.tri_include_solid_hide_old = true;
-                self.editor.tri_include_solid_name_input = self
-                    .active_triangulation
-                    .and_then(|id| self.triangulations.iter().find(|triangulation| triangulation.id == id))
-                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, &tr!("common-shell")))
-                    .unwrap_or_default();
+                self.editor.tri_include_solid_name_input.clear();
                 Ok(())
             }
             UiCommand::ExecuteIncludeSolidInTopology {

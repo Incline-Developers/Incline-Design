@@ -18,6 +18,11 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
         .open(&mut open)
         .min_width(390.0)
         .show(ui.ctx(), |ui| {
+            // Enter that commits a typed grid or variogram value surrenders
+            // that field's focus while it is drawn, before the actions below
+            // read the key. Read as confirm too, it would start a long job on
+            // half-entered values, so it only confirms from an unfocused dialog.
+            let editing_field = ui.ctx().memory(|memory| memory.focused().is_some());
             menu::menu_note(ui, tr!("block-model-kriging-help"));
             ui.add_space(4.0);
 
@@ -172,7 +177,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 && editor.kriging_min_samples <= editor.kriging_max_samples
                 && editor.kriging_max_samples <= 64;
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = !editing_field && menu::dialog_confirm_pressed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("common-create")).primary().enabled(ready)).clicked() || (confirm && ready) {
                     commands.push(UiCommand::ExecuteCreateBlockModel {
                         drill_hole_id: editor.kriging_drill_hole_id.unwrap(),

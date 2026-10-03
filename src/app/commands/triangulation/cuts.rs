@@ -565,7 +565,7 @@ pub(super) fn bary_z(x: f64, y: f64, v: [mesh_data::Vertex; 3]) -> f64 {
 }
 
 /// Clip a triangle to the band z_min <= z <= z_max, returning 0–2 result triangles.
-pub(super) fn clip_triangle_z(v: [mesh_data::Vertex; 3], z_min: f64, z_max: f64) -> Vec<[mesh_data::Vertex; 3]> {
+pub(crate) fn clip_triangle_z(v: [mesh_data::Vertex; 3], z_min: f64, z_max: f64) -> Vec<[mesh_data::Vertex; 3]> {
     let mut result = clip_triangle_plane(v, z_min, true);
     let above_min = std::mem::take(&mut result);
     for tri in above_min {
@@ -804,6 +804,13 @@ pub(super) fn validate_reference_surface(reference: &mesh_data::Triangulation) -
             let overlap_area = signed_area_xy(&overlap).abs();
             if overlap_area > overlap_area_tolerance {
                 let z_delta = overlap_z_delta(triangle, prepared.triangles[other_index], &overlap);
+                // Coincident triangles - a sliver duplicated where two
+                // surfaces were merged - still give one height wherever they
+                // overlap, so the surface is single-valued there. Only a fold,
+                // where the heights differ, is refused.
+                if z_delta <= REFERENCE_COINCIDENT_Z_TOLERANCE {
+                    continue;
+                }
                 anyhow::bail!(
                     "Reference topology overlaps itself in XY and is not single-valued \
                     (triangles {index} and {other_index} overlap by {overlap_area:.6} \
@@ -814,6 +821,9 @@ pub(super) fn validate_reference_surface(reference: &mesh_data::Triangulation) -
     }
     Ok(prepared)
 }
+
+/// Two overlapping reference triangles this close in height are one surface.
+const REFERENCE_COINCIDENT_Z_TOLERANCE: f64 = 1.0e-3;
 
 pub(super) fn reference_xy_overlap_area_tolerance(reference: &mesh_data::Triangulation) -> f64 {
     let bounds = reference.bounds();

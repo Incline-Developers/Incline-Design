@@ -1,0 +1,491 @@
+//! Offscreen orbit view of one solid, for the Solids Setup page.
+//!
+//! The Setup page covers the window, so the main scene pass does not run
+//! while it is open (see [`crate::ui::state::EditorState::is_planning_setup`]).
+//! This renders the solid being inspected on its own into an offscreen
+//! texture that egui then draws into the page's third column - the same
+//! technique the slice preview uses, with an orbit camera framing one mesh
+//! instead of a plan view of the whole scene.
+
+use std::sync::Arc;
+
+use winit::dpi::PhysicalSize;
+
+use super::{BlockModelTransparencyTargets, BlockModelVolumeTarget, Graphics};
+use crate::{
+    model::{Document, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, point_cloud::OpenPointCloud, raster::OpenRasterTexture, triangulation::OpenTriangulation},
+    rendering::camera::{Camera, CameraUniform, Projection},
+    ui::state::{EditorState, SolidPreviewView, ViewportRect},
+};
+
+/// Everything the preview draws besides the solid itself: the project content
+/// that is loaded, so a solid can be inspected against the design strings and
+/// surfaces around it rather than floating on its own.
+pub(crate) struct SolidPreviewScene<'frame> {
+    pub(crate) document: &'frame Document,
+    pub(crate) triangulations: &'frame [OpenTriangulation],
+    pub(crate) block_models: &'frame [OpenBlockModel],
+    pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
+    pub(crate) point_clouds: &'frame [OpenPointCloud],
+    pub(crate) rasters: &'frame [OpenRasterTexture],
+}
+
+pub(super) struct SolidPreviewTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    gui_view: wgpu::TextureView,
+    texture_id: egui::TextureId,
+    config: wgpu::SurfaceConfiguration,
+    size: PhysicalSize<u32>,
+    camera: Camera,
+    projection: Projection,
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    msaa_color: wgpu::Texture,
+    msaa_view: wgpu::TextureView,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    transparency_targets: Option<BlockModelTransparencyTargets>,
+    volume_target: Option<BlockModelVolumeTarget>,
+}
+
+impl SolidPreviewTarget {
+    fn new(graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) -> Self {
+        let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            format: graphics.config.format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: graphics.config.view_formats.clone(),
+            desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        let (texture, view, gui_view) = Self::create_color_target(&graphics.device, &config);
+        let texture_id = graphics.gui.register_native_texture(&graphics.device, &gui_view);
+        let camera = Camera::new(glam::DVec3::new(0.0, 0.0, 10.0), 0.0, 0.0);
+        let projection = Projection::new(size.width, size.height, -1000.0, 1000.0);
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.update_viewport(size.width, size.height);
+        let camera_buffer = {
+            use wgpu::util::DeviceExt;
+            graphics.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Solid preview camera"),
+                contents: bytemuck::bytes_of(&camera_uniform),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
+        };
+        let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Solid preview camera bind group"),
+            layout: &graphics.camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+        let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &config, graphics.sample_count);
+        let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &config, graphics.sample_count);
+        Self {
+            texture,
+            view,
+            gui_view,
+            texture_id,
+            config,
+            size,
+            camera,
+            projection,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+            msaa_color,
+            msaa_view,
+            depth_texture,
+            depth_view,
+            transparency_targets: None,
+            volume_target: None,
+        }
+    }
+
+    fn create_color_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Solid preview colour target"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format.add_srgb_suffix(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[config.format.remove_srgb_suffix()],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // egui samples image bytes as already gamma encoded; the non-sRGB view
+        // keeps the hardware from decoding them a second time.
+        let gui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(config.format.remove_srgb_suffix()),
+            ..Default::default()
+        });
+        (texture, view, gui_view)
+    }
+
+    fn recreate_targets(&mut self, graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) {
+        self.size = PhysicalSize::new(size.width.max(1), size.height.max(1));
+        self.config.width = self.size.width;
+        self.config.height = self.size.height;
+        self.projection.resize(self.size.width, self.size.height);
+        self.camera_uniform.update_viewport(self.size.width, self.size.height);
+        (self.texture, self.view, self.gui_view) = Self::create_color_target(&graphics.device, &self.config);
+        graphics.gui.update_native_texture(&graphics.device, self.texture_id, &self.gui_view);
+        let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &self.config, graphics.sample_count);
+        let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &self.config, graphics.sample_count);
+        self.msaa_color = msaa_color;
+        self.msaa_view = msaa_view;
+        self.depth_texture = depth_texture;
+        self.depth_view = depth_view;
+        self.transparency_targets = None;
+        self.volume_target = None;
+    }
+}
+
+/// Corners of the box a set of meshes occupies, in world units, or `None`
+/// when there is nothing there to bound.
+fn mesh_bounds(meshes: &[OpenTriangulation]) -> Option<(glam::DVec3, glam::DVec3)> {
+    let mut lower = glam::DVec3::splat(f64::INFINITY);
+    let mut upper = glam::DVec3::splat(f64::NEG_INFINITY);
+    for mesh in meshes {
+        let bounds = mesh.mesh.bounds();
+        lower = lower.min(glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z));
+        upper = upper.max(glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
+    }
+    (lower.is_finite() && upper.is_finite()).then_some((lower, upper))
+}
+
+/// Centre and bounding radius of a box.
+fn framing_of(lower: glam::DVec3, upper: glam::DVec3) -> (glam::DVec3, f64) {
+    // Half the diagonal, so the mesh stays inside the frame at every orbit
+    // angle rather than only the one it was fitted at.
+    ((lower + upper) * 0.5, ((upper - lower).length() * 0.5).max(1e-3))
+}
+
+/// Centre and bounding radius of a mesh, in world units.
+pub(super) fn mesh_framing(meshes: &[OpenTriangulation]) -> (glam::DVec3, f64) {
+    mesh_bounds(meshes).map_or((glam::DVec3::ZERO, 1.0), |(lower, upper)| framing_of(lower, upper))
+}
+
+/// A preview framing being held still, and what it is being held for.
+pub(super) struct HeldFraming {
+    hold: crate::ui::state::PreviewFramingHold,
+    lower: glam::DVec3,
+    upper: glam::DVec3,
+}
+
+/// Advance the preview's content revision over a redraw that changes what is
+/// on screen.
+///
+/// The revision numbers each distinct image the renderer has drawn, so a
+/// click can name the image it was made on. Anything the render key covers -
+/// geometry, surrounding scene, camera, size - is a content change.
+pub(crate) fn advance_image_revision(image_revision: u64, content_changed: bool) -> u64 {
+    if content_changed { image_revision.wrapping_add(1) } else { image_revision }
+}
+
+/// Whether a click made on `request_image` may still be resolved against the
+/// image being drawn now.
+///
+/// The image-identity half of the pick gate: a click on any earlier image -
+/// the camera has moved, the meshes were replaced - is rejected rather than
+/// reinterpreted against the new one.
+pub(crate) fn click_names_current_image(request_image: u64, image_revision: u64) -> bool {
+    request_image == image_revision
+}
+
+impl Graphics<'_> {
+    /// Centre and radius to draw the preview at, held still while a pane is
+    /// holding them - see [`crate::ui::state::EditorState::preview_framing_hold`].
+    ///
+    /// A held framing is only ever grown. A run's meshes arrive over several
+    /// frames, so the first frame's bounds are not the run's, and the framing
+    /// has to be able to catch up to ground that appears; but it must never
+    /// follow ground that *disappears*, because that is what digging a block
+    /// does and the camera chasing it is the thing being prevented.
+    fn preview_framing(&mut self, preview: &[OpenTriangulation], hold: Option<crate::ui::state::PreviewFramingHold>) -> (glam::DVec3, f64) {
+        let Some((lower, upper)) = mesh_bounds(preview) else {
+            return (glam::DVec3::ZERO, 1.0);
+        };
+        let Some(hold) = hold else {
+            self.solid_preview_framing = None;
+            return framing_of(lower, upper);
+        };
+        let held = match self.solid_preview_framing.as_mut().filter(|held| held.hold == hold) {
+            Some(held) => held,
+            None => self.solid_preview_framing.insert(HeldFraming { hold, lower, upper }),
+        };
+        held.lower = held.lower.min(lower);
+        held.upper = held.upper.max(upper);
+        framing_of(held.lower, held.upper)
+    }
+
+    /// Draw the solid being inspected into its own texture, and hand egui the
+    /// id to paint it with. Does nothing - and releases the previous id - when
+    /// no solid is being previewed.
+    pub(crate) fn render_solid_preview(&mut self, preview: &[OpenTriangulation], scene: SolidPreviewScene<'_>, editor: &mut EditorState) {
+        if preview.is_empty() {
+            editor.solid_preview_texture = None;
+            return;
+        }
+
+        let requested = PhysicalSize::new(editor.solid_preview_size_px[0].clamp(120, 2048), editor.solid_preview_size_px[1].clamp(120, 2048));
+        let mut target = self.solid_preview.take().unwrap_or_else(|| SolidPreviewTarget::new(self, requested));
+        let resized = target.size != requested;
+        if resized {
+            target.recreate_targets(self, requested);
+        }
+        editor.solid_preview_texture = Some(target.texture_id);
+
+        let (center, radius) = self.preview_framing(preview, editor.preview_framing_hold());
+        // Whichever pane is showing this image owns the orbit. The sequence
+        // editor keeps its own, so opening it moves nothing on the Solids
+        // pages and closing it puts the user back where they left off.
+        let view = editor.preview_camera();
+        // Re-render only when something the image depends on changed: the
+        // mesh, the orbit, or the frame size. Everything else on this page is
+        // egui, which composites over an unchanged texture for free.
+        let key = {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            for mesh in preview {
+                (Arc::as_ptr(&mesh.mesh) as usize).hash(&mut hasher);
+                mesh.cull_back_faces.hash(&mut hasher);
+                if let Some(style) = mesh.flitch_style {
+                    (style.pattern as u8).hash(&mut hasher);
+                    for channel in style.pattern_color {
+                        channel.to_bits().hash(&mut hasher);
+                    }
+                }
+                // Edge styling is part of the image too: highlighting a picked
+                // dig block changes only its line colour, and leaving that out
+                // meant the preview never redrew to show the pick.
+                for channel in mesh.color.iter().chain(&mesh.line_color) {
+                    channel.to_bits().hash(&mut hasher);
+                }
+                mesh.always_show_edges.hash(&mut hasher);
+                mesh.line_weight.map(f32::to_bits).hash(&mut hasher);
+            }
+            // What else is loaded around the solid is part of the image, so
+            // the scene's own fingerprint - the camera-free one the slice
+            // preview uses - decides a redraw alongside the orbit.
+            super::slice_preview::slice_preview_scene_key(
+                editor,
+                scene.document,
+                scene.triangulations,
+                scene.block_models,
+                scene.drill_holes,
+                scene.point_clouds,
+                scene.rasters,
+            )
+            .hash(&mut hasher);
+            (requested.width, requested.height).hash(&mut hasher);
+            // The framing is half of the camera and is deliberately not a
+            // function of the meshes above: while it is held, ground can leave
+            // the display list without it moving. Hashed so the image is still
+            // redrawn on the frames it does move.
+            for value in [center.x, center.y, center.z, radius] {
+                value.to_bits().hash(&mut hasher);
+            }
+            view.hash_into(&mut hasher);
+            editor.dig_outlines_key.hash(&mut hasher);
+            hasher.finish()
+        };
+        // A click changes nothing about the image, so it would not re-render on
+        // its own - and the pick is resolved against the camera this sets up.
+        // Left to the key alone, a picked block stayed unhighlighted until some
+        // unrelated change happened to redraw the preview.
+        let pick_pending = editor.solid_preview_pick.is_some() || editor.solid_preview_pivot_request.is_some();
+        let content_changed = resized || self.solid_preview_key != Some(key);
+        if content_changed {
+            self.solid_preview_key = Some(key);
+            // The image on screen is about to be replaced by a different one -
+            // new geometry, a new surrounding scene or a new camera. Numbering
+            // it here is what lets a pending click say which image it was made
+            // on: one made on the outgoing image is dropped inside this render
+            // rather than answered against the incoming one.
+            editor.solid_preview_image_revision = advance_image_revision(editor.solid_preview_image_revision, true);
+        }
+        if content_changed || pick_pending {
+            self.render_solid_preview_inner(&mut target, preview, &scene, center, radius, view, editor);
+        }
+        self.solid_preview = Some(target);
+    }
+
+    /// Resolve a click on the preview image to the solid it landed on.
+    ///
+    /// Dig blocks are separate solids in this view, so picking one is how a
+    /// block that the tree does not list gets selected for its own figures.
+    /// The ray is unprojected through the matrix the preview was drawn with,
+    /// and the points are rebased to match it.
+    ///
+    /// Always returns a completed result. A miss has to be distinguishable
+    /// from "not resolved yet", because a miss clears the selection.
+    fn pick_preview_solid(&self, preview: &[OpenTriangulation], uv: [f32; 2]) -> crate::ui::state::SolidPick {
+        let Some((origin, direction)) = self.preview_ray(uv) else {
+            return crate::ui::state::SolidPick::Miss;
+        };
+        let mut nearest: Option<(f64, crate::model::triangulation::TriangulationId)> = None;
+        for item in preview {
+            let Some(hit) = item.spatial.ray_hit(&item.mesh, origin, direction) else {
+                continue;
+            };
+            let distance = hit.distance(origin);
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, item.id));
+            }
+        }
+        nearest.map_or(crate::ui::state::SolidPick::Miss, |(_, id)| crate::ui::state::SolidPick::Hit(id))
+    }
+
+    /// The ray through a point of the preview image, `0..1` across and down,
+    /// unprojected through the camera the preview is being drawn with.
+    fn preview_ray(&self, uv: [f32; 2]) -> Option<(glam::DVec3, glam::DVec3)> {
+        // The image only ever hands over points inside it, so clamping keeps
+        // a point exactly on the right or bottom edge from reading as off it.
+        let uv = uv.map(|value| f64::from(value).clamp(0.0, 1.0));
+        let matrix = crate::rendering::camera::scene_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
+        let inverse = matrix.inverse();
+        let at_depth = |depth: f64| {
+            let clip = glam::DVec4::new(2.0 * uv[0] - 1.0, 1.0 - 2.0 * uv[1], depth, 1.0);
+            let point = inverse * clip;
+            point.truncate() / point.w + self.scene_origin
+        };
+        // Reversed-Z: the near plane is at one.
+        let origin = at_depth(1.0);
+        let direction = (at_depth(0.0) - origin).normalize_or_zero();
+        (direction != glam::DVec3::ZERO).then_some((origin, direction))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_solid_preview_inner(
+        &mut self,
+        target: &mut SolidPreviewTarget,
+        preview: &[OpenTriangulation],
+        scene: &SolidPreviewScene<'_>,
+        center: glam::DVec3,
+        radius: f64,
+        view: SolidPreviewView,
+        editor: &mut EditorState,
+    ) {
+        // Orthographic orbit: the eye sits on a sphere around the mesh, far
+        // enough out that the whole of it stays in front of the near plane at
+        // any angle, and the zoom - not the distance - sets the framing.
+        let (sin_pitch, cos_pitch) = view.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = view.yaw.sin_cos();
+        // Positive pitch puts the eye above the mesh looking down, so the
+        // view direction's Z is the negative of it.
+        let forward = glam::DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch).normalize();
+        let distance = radius * 4.0;
+        target.projection.zoom = radius * SolidPreviewView::FRAMING_MARGIN / view.zoom_multiplier.max(0.05);
+        let framed = view.framed_center(center, radius);
+        target.camera.look_to(framed - forward * distance, forward, glam::DVec3::Z, distance);
+
+        std::mem::swap(&mut self.camera, &mut target.camera);
+        std::mem::swap(&mut self.projection, &mut target.projection);
+        std::mem::swap(&mut self.camera_uniform, &mut target.camera_uniform);
+        std::mem::swap(&mut self.camera_buffer, &mut target.camera_buffer);
+        std::mem::swap(&mut self.camera_bind_group, &mut target.camera_bind_group);
+        std::mem::swap(&mut self.msaa_color, &mut target.msaa_color);
+        std::mem::swap(&mut self.msaa_view, &mut target.msaa_view);
+        std::mem::swap(&mut self.depth_texture, &mut target.depth_texture);
+        std::mem::swap(&mut self.depth_view, &mut target.depth_view);
+        std::mem::swap(&mut self.block_model_transparency_targets, &mut target.transparency_targets);
+        std::mem::swap(&mut self.block_model_volume_target, &mut target.volume_target);
+        std::mem::swap(&mut self.config, &mut target.config);
+        std::mem::swap(&mut self.size, &mut target.size);
+
+        // The mesh is the only thing in this view, so the depth range follows
+        // straight from its own extent rather than the scene's.
+        self.projection.set_symmetric_depth_extent(distance + radius * 2.0);
+        self.camera_uniform.update_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
+        self.camera_uniform.update_viewport(self.size.width, self.size.height);
+        self.camera_uniform.set_interaction_quality(1.0, 1.0);
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
+
+        if let Some(uv) = editor.solid_preview_pivot_request.take() {
+            // Ground under the pointer, else the point at the framed centre's
+            // depth along the same ray - an orbit begun over empty space
+            // still turns about where the pointer is, as the main view does.
+            let pivot = self.preview_ray(uv).map(|(origin, direction)| {
+                let hit = preview
+                    .iter()
+                    .filter_map(|item| item.spatial.ray_hit(&item.mesh, origin, direction))
+                    .min_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
+                let framed = view.framed_center(center, radius);
+                hit.unwrap_or_else(|| origin + direction * (framed - origin).dot(direction))
+            });
+            editor.solid_preview_pivot = pivot.map(|point| (point - center) / radius);
+        }
+        if let Some(request) = editor.solid_preview_pick.take() {
+            // Resolved against the target actually drawn to, which the clamp
+            // above may have sized differently from the pane the click landed
+            // in. UVs survive that; pane pixels did not.
+            //
+            // Only a click made on *this* image is resolved at all: the camera
+            // and the meshes below are the ones the image on screen was drawn
+            // with, and answering a click that named an earlier image against
+            // them would reinterpret it. A superseded click is dropped here,
+            // still carrying the request that named it.
+            if click_names_current_image(request.image, editor.solid_preview_image_revision) {
+                editor.solid_preview_pick_result = Some(crate::ui::state::SolidPreviewPickResult {
+                    request,
+                    outcome: self.pick_preview_solid(preview, request.uv),
+                });
+            }
+        }
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Solid preview encoder"),
+        });
+        // The solid is not a project item, so it joins the project's own
+        // surfaces here rather than in the list the explorer and the main
+        // viewport read. Built once per re-render, not once per frame.
+        //
+        // Every loaded surface is drawn, the solid's own two included. Those
+        // coincide with its generated floor and roof, so the two can fight for
+        // pixels where they meet - but loading the pit surface you are
+        // inspecting and not seeing it is the worse surprise, and what is
+        // shown here is the project's own answer about visibility.
+        let mut surfaces = Vec::with_capacity(scene.triangulations.len() + preview.len());
+        surfaces.extend(scene.triangulations.iter().cloned());
+        surfaces.extend(preview.iter().cloned());
+        self.render_scene_pass(
+            &mut encoder,
+            &target.view,
+            ViewportRect::full(self.size.width, self.size.height),
+            editor,
+            &surfaces,
+            scene.block_models,
+            scene.drill_holes,
+            scene.point_clouds,
+            scene.rasters,
+            false,
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        std::mem::swap(&mut self.camera, &mut target.camera);
+        std::mem::swap(&mut self.projection, &mut target.projection);
+        std::mem::swap(&mut self.camera_uniform, &mut target.camera_uniform);
+        std::mem::swap(&mut self.camera_buffer, &mut target.camera_buffer);
+        std::mem::swap(&mut self.camera_bind_group, &mut target.camera_bind_group);
+        std::mem::swap(&mut self.msaa_color, &mut target.msaa_color);
+        std::mem::swap(&mut self.msaa_view, &mut target.msaa_view);
+        std::mem::swap(&mut self.depth_texture, &mut target.depth_texture);
+        std::mem::swap(&mut self.depth_view, &mut target.depth_view);
+        std::mem::swap(&mut self.block_model_transparency_targets, &mut target.transparency_targets);
+        std::mem::swap(&mut self.block_model_volume_target, &mut target.volume_target);
+        std::mem::swap(&mut self.config, &mut target.config);
+        std::mem::swap(&mut self.size, &mut target.size);
+    }
+}

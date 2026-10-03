@@ -1,6 +1,8 @@
 use super::*;
 use crate::rendering::scene::{
-    build::{self, DocumentSceneBuildInput, DynamicSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene, restyle_document_scene},
+    build::{
+        self, DocumentSceneBuildInput, DynamicSceneBuildInput, FlowSceneBuildInput, rebuild_document_scene, rebuild_dynamic_scene, rebuild_flow_scene, restyle_document_scene,
+    },
     overlays::{OverlaySceneBuildInput, rebuild_editor_overlay},
 };
 
@@ -103,6 +105,12 @@ pub(crate) struct RenderInput<'frame> {
     pub(crate) well_logs: &'frame crate::model::geophysics::GeophysicsSession,
     pub(crate) point_clouds: &'frame [OpenPointCloud],
     pub(crate) rasters: &'frame [OpenRasterTexture],
+    /// The Solids Setup page's inspection mesh, when one is being shown. It
+    /// is not a project item, so it reaches the renderer beside the project's
+    /// own triangulations rather than among them.
+    /// The Solids Setup page's inspection meshes: the solid as one, or one
+    /// closed mesh per flitch once it has a benching plan.
+    pub(crate) solid_preview: &'frame [OpenTriangulation],
     pub(crate) project: &'frame UiProjectView,
 }
 
@@ -117,6 +125,7 @@ impl<'a> Graphics<'a> {
             well_logs,
             point_clouds,
             rasters,
+            solid_preview,
             project,
         } = input;
         // Acquire before any queue writes: a hidden/unavailable surface can fail
@@ -134,7 +143,29 @@ impl<'a> Graphics<'a> {
         // `render_editor_overlay_pass`, so `overlay_dirty` deliberately does
         // not appear here - that is what keeps a cursor-following tool preview
         // off the critical path of a full scene render.
+        // The inspector can be opened before the main viewport has ever fitted
+        // the imported mine coordinates, leaving GPU coordinates at mine
+        // magnitudes. Rebase towards the solid, but only once it is genuinely
+        // far away, and snap to a coarse grid: the preview's bounds follow the
+        // View selection, and an origin that tracked them exactly would clear
+        // every GPU cache each time a bench was ticked.
+        if !solid_preview.is_empty() {
+            const REBASE_DISTANCE: f64 = 4096.0;
+            const REBASE_GRID: f64 = 1024.0;
+            let (center, _) = super::solid_preview::mesh_framing(solid_preview);
+            let origin = (center / REBASE_GRID).round() * REBASE_GRID;
+            if (center - self.scene_origin).abs().max_element() > REBASE_DISTANCE && self.scene_origin != origin {
+                self.scene_origin = origin;
+                self.triangulation_gpu.clear();
+                self.block_model_gpu.clear();
+                self.drill_hole_gpu.clear();
+                self.geometry_dirty = true;
+                self.scene_cache_key = None;
+                self.solid_preview_key = None;
+            }
+        }
         let mut scene_content_changed = self.geometry_dirty;
+        self.haul_roads_in_bounds = editor.shows_haul_network();
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
         if self.slice_view.is_some() {
@@ -164,6 +195,7 @@ impl<'a> Graphics<'a> {
             self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
             self.include_tool_previews_in_depth(editor);
             self.include_batter_berm_preview_in_depth(editor);
+            self.include_blast_outlines_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
         // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
@@ -222,6 +254,7 @@ impl<'a> Graphics<'a> {
             self.scene_origin,
             scale_factor,
             triangulations,
+            solid_preview,
             rasters,
             editor,
             &self.surface_style_bind_group_layout,
@@ -364,6 +397,35 @@ impl<'a> Graphics<'a> {
             );
         }
 
+        // Animate's haul flows move every frame while shown, and clear once
+        // when they stop.
+        // Drill and blast's blasts are drawn with them, at the shown hour.
+        let blasts = editor
+            .is_schedule_animation()
+            .then(|| editor.schedule_result.as_ref().and_then(|schedule| schedule.drill_blast.as_ref()))
+            .flatten()
+            .map(|result| (result, editor.schedule_animation_shown_h, editor.schedule_animation_blasts.as_slice()));
+        if !editor.animation_flows.is_empty() || blasts.is_some() || !self.flow_strokes.is_empty() {
+            let view_proj = self.view_proj();
+            self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {
+                blasts,
+                flows: &editor.animation_flows,
+                flow_strokes: &mut self.flow_strokes,
+                view_proj,
+                scene_origin: self.scene_origin,
+                scale_factor,
+                time_s: self.flow_clock.elapsed().as_secs_f64(),
+            });
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.flow_stroke_gpu,
+                &mut self.flow_stroke_capacity,
+                &mut self.flow_strokes,
+                "Haul Flow Stroke Buffer",
+            );
+        }
+
         let measurement_state = (
             matches!(
                 editor.active_tool,
@@ -427,8 +489,7 @@ impl<'a> Graphics<'a> {
             || self.point_cloud_gpu.has_pending_uploads()
             || self.block_model_gpu.has_pending_builds()
             || self.block_model_gpu.has_visible_pending_streaming(&primary_frustum, &editor.hidden_handles);
-        let scene_changed = scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
-        let render_scene = scene_changed;
+        let render_scene = !editor.is_planning_setup() && scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
         let sample_volume_feedback = render_scene && self.frame_index.is_multiple_of(VOLUME_FEEDBACK_INTERVAL_FRAMES);
         if sample_volume_feedback {
             let phase = (self.frame_index / VOLUME_FEEDBACK_INTERVAL_FRAMES) % 64;
@@ -471,12 +532,28 @@ impl<'a> Graphics<'a> {
             }
             self.scene_cache_key = Some(scene_key);
         }
-        // The overlay pass draws over whatever the multisample target holds.
-        // After an ordinary scene pass that is the scene itself; after a
-        // cinematic one it is the *ungraded* scene, because the graded image
-        // went to the cache - so restore from the cache exactly as a frame
-        // that skipped the scene pass would.
-        self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene || cinematic_post_ran);
+        if !editor.is_planning_setup() {
+            // The overlay pass draws over whatever the multisample target holds.
+            // After an ordinary scene pass that is the scene itself; after a
+            // cinematic one it is the *ungraded* scene, because the graded image
+            // went to the cache - so restore from the cache exactly as a frame
+            // that skipped the scene pass would.
+            self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene || cinematic_post_ran);
+        } else {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Planning setup background"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
 
         // One-shot viewport export: re-render the scene (without the egui
         // chrome) into an offscreen texture and queue a readback on this
@@ -490,6 +567,18 @@ impl<'a> Graphics<'a> {
         // pass as the main and detached viewports. The egui panel samples this
         // offscreen texture below.
         self.render_embedded_slice_preview(document, triangulations, block_models, drill_holes, point_clouds, rasters, editor);
+        self.render_solid_preview(
+            solid_preview,
+            super::solid_preview::SolidPreviewScene {
+                document,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+            },
+            editor,
+        );
 
         // Keep the engineering-drawing dialog's map preview current.
         self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);

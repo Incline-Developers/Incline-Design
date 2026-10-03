@@ -469,7 +469,88 @@ impl<'a> Graphics<'a> {
         (lines, Some(elevation_spacing))
     }
 
+    /// Animate's flows at the shown instant: every delivery under way adds
+    /// its tonnes per hour to each road segment of its loaded route, so a road
+    /// shared by several blocks carries their sum, drawn once.
+    fn project_haul_flows(&self, editor: &mut EditorState) {
+        let mut flows = std::mem::take(&mut editor.animation_flows);
+        flows.clear();
+        if editor.is_schedule_animation()
+            && editor.schedule_animation_enabled
+            && let Some(schedule) = editor.schedule_result.as_ref()
+        {
+            let mut rates: std::collections::HashMap<crate::ui::state::HaulFlowKey, f64> = std::collections::HashMap::new();
+            for delivery in schedule.deliveries_at(editor.schedule_animation_shown_h) {
+                let duration = delivery.end_h - delivery.start_h;
+                if duration > 0.0 && delivery.tonnes > 0.0 {
+                    *rates.entry((delivery.source, delivery.destination, delivery.truck)).or_default() += delivery.tonnes / duration;
+                }
+            }
+            let view_proj = self.view_proj();
+            // Centimetre keys: the same road vertex reached by two routes is
+            // the same segment.
+            let key = |p: glam::DVec3| [(p.x * 100.0).round() as i64, (p.y * 100.0).round() as i64, (p.z * 100.0).round() as i64];
+            let mut segments: std::collections::HashMap<([i64; 3], [i64; 3]), usize> = std::collections::HashMap::new();
+            let mut ordered: Vec<_> = rates.into_iter().collect();
+            // Busiest first, so a shared road takes its stripes' phase from
+            // the route most of its tonnes are on.
+            ordered.sort_by(|a, b| b.1.total_cmp(&a.1));
+            for (route, tph) in ordered {
+                let Some(path) = editor.animation_routes.get(&route) else { continue };
+                let mut along = 0.0f32;
+                for pair in path.windows(2) {
+                    let (Some(a), Some(b)) = (self.world_to_window_px(&view_proj, pair[0]), self.world_to_window_px(&view_proj, pair[1])) else {
+                        continue;
+                    };
+                    let segment = (key(pair[0]), key(pair[1]));
+                    match segments.get(&segment) {
+                        Some(&index) => flows[index].tph += tph,
+                        None => {
+                            segments.insert(segment, flows.len());
+                            flows.push(crate::ui::state::HaulFlowSegment {
+                                from: pair[0],
+                                to: pair[1],
+                                a,
+                                b,
+                                offset: along,
+                                tph,
+                            });
+                        }
+                    }
+                    along += (b.0 - a.0).hypot(b.1 - a.1);
+                }
+            }
+        }
+        editor.animation_flows = flows;
+    }
+
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
+        self.project_haul_flows(editor);
+        editor.haul_pins = if editor.shows_haul_network() {
+            document
+                .haulage()
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let role = node.role?;
+                    self.world_to_window_px(&self.view_proj(), node.pos).map(|point| (point, role))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        editor.blast_labels = (if editor.is_dig_strips_step() { &editor.dig_outlines } else { &editor.blasting_outlines })
+            .iter()
+            .filter_map(|outline| {
+                let world = DVec3::new(outline.anchor[0], outline.anchor[1], outline.plane);
+                let selected = (if editor.is_dig_strips_step() {
+                    editor.selected_dig_block
+                } else {
+                    editor.selected_blast
+                }) == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+                self.world_to_window_px(&self.view_proj(), world).map(|point| (outline.name.clone(), point, selected))
+            })
+            .collect();
         // Where the snap landed, for the drawn cursor to mark. The snapped
         // point is the one the tool will use, and it is not the pointer: it
         // can sit anywhere inside the snap threshold of it.
