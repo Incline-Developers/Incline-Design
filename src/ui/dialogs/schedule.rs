@@ -90,7 +90,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         }
         menu::menu_actions(ui, |ui| {
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked())
+            if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(valid)).clicked())
                 && valid
                 && let Some(maximum_t) = maximum
             {
@@ -114,7 +114,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 }
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -136,7 +136,7 @@ pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .min_width(320.0)
         .show(ui.ctx(), |ui| {
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_loader_class_name)
-                .hint_text(tr!(literal = "Required"))
+                .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
             let kind_label = editor.new_loader_class_kind.label();
             MenuFieldCombo::new(
@@ -171,7 +171,7 @@ pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     commands.push(UiCommand::schedule(session, ScheduleEdit::AddClass { name, rate_tph, kind }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -204,7 +204,7 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .min_width(320.0)
         .show(ui.ctx(), |ui| {
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_loader_agent_name)
-                .hint_text(tr!(literal = "Required"))
+                .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
             let selected_text = editor
                 .new_loader_agent_class
@@ -242,7 +242,7 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     commands.push(UiCommand::schedule(session, ScheduleEdit::AddAgent { name, class }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -277,7 +277,7 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
         .min_width(320.0)
         .show(ui.ctx(), |ui| {
             MenuFieldText::new(tr!("planning-name"), &mut draft.name)
-                .hint_text(tr!(literal = "Leave blank to use the ground-derived name"))
+                .hint_text(tr!("schedule-leave-blank-use-ground"))
                 .show(ui);
             let name = draft.name.trim().to_owned();
             // Rejected before it is offered rather than after it is pressed:
@@ -299,7 +299,7 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                     commands.push(UiCommand::schedule(session, ScheduleEdit::RenameBar { bar: target, name }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -348,7 +348,7 @@ pub(crate) fn draw_bar_window_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                     commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarWindow { bar, window }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -557,7 +557,7 @@ pub(crate) fn draw_blast_bar_dialog(
             let valid = (target.is_some() || draft.agent.is_some()) && !target_changed && !run_changed && !draft.members.is_empty();
             menu::menu_actions(ui, |ui| {
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
-                if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(valid)).clicked()) && valid {
+                if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(valid)).clicked()) && valid {
                     let members = draft.members.clone();
                     match target {
                         Some(bar) => commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastMembers { bar, members })),
@@ -577,7 +577,7 @@ pub(crate) fn draw_blast_bar_dialog(
                     }
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -662,7 +662,7 @@ pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-invalid"));
             }
             menu::menu_actions(ui, |ui| {
-                let apply = ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
+                let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
                 if apply
                     && current
                     && let Some(window) = window
@@ -676,7 +676,7 @@ pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });

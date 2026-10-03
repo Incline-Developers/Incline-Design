@@ -13,7 +13,7 @@
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command,
@@ -25,7 +25,7 @@ use crate::{
 
 impl App<'_> {
     /// The dataset the workspace is tying in, if it is loaded and drawn.
-    fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
+    pub(crate) fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
         let id = self.editor.active_drill_hole?;
         let entity = crate::model::SceneEntityId::DrillHole(id);
         self.drill_holes
@@ -33,7 +33,7 @@ impl App<'_> {
             .find(|dataset| dataset.id == id && dataset.state.loaded && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity))
     }
 
-    fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
+    pub(crate) fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
         let graphics = self.graphics.as_ref()?;
         let cursor = self.editor.cursor_screen_px?;
         let view_proj = graphics.view_proj();
@@ -143,6 +143,11 @@ impl App<'_> {
                 },
             }
         });
+        // The fuller reading - detonation times, relief, contours - goes
+        // with it, on the same key.
+        self.editor.blast_analysis = dataset.map(|dataset| std::sync::Arc::new(crate::model::blast::BlastAnalysis::compute(&dataset.dataset)));
+        let end = self.editor.blast_analysis.as_ref().and_then(|analysis| analysis.timeline_end_ms()).unwrap_or(0.0);
+        self.editor.blast_review.playhead_ms = self.editor.blast_review.playhead_ms.min(end);
         self.editor.blast_round_key = key;
         self.editor.blast_round = summary;
     }
@@ -159,11 +164,11 @@ impl App<'_> {
     pub(crate) fn tie_holes_click(&mut self) {
         let product = self.editor.active_product().cloned();
         if product.is_none() {
-            crate::userspace_warn!("{}", tr!(literal = "Select a delay product in the palette before tying holes in"));
+            crate::userspace_warn!("{}", tr!("tie-in-select-delay-product-palette-before"));
             return;
         }
         if self.tie_target().is_none() {
-            crate::userspace_warn!("{}", tr!(literal = "Choose the drillhole dataset to tie in first"));
+            crate::userspace_warn!("{}", tr!("tie-in-choose-drillhole-dataset-tie-first"));
             return;
         }
         if self.editor.tie_anchor.is_none() {
@@ -191,8 +196,8 @@ impl App<'_> {
             Some(product) => legs
                 .iter()
                 .map(|leg| TieIn {
-                    from: leg.from,
-                    to: leg.to,
+                    a: leg.from,
+                    b: leg.to,
                     delay_ms: product.delay_ms,
                     product: product.name.clone(),
                     color: [f32::from(red) / 255.0, f32::from(green) / 255.0, f32::from(blue) / 255.0],
@@ -217,23 +222,23 @@ impl App<'_> {
             return;
         };
         let detail = if replaced > 0 {
-            tr_format!(
-                literal = "Tied %count% connector(s) at %delay% ms with %product%, replacing %replaced%",
-                count = laid,
-                delay = product.delay_ms,
-                product = &product.name,
-                replaced = replaced
+            tr!(
+                "tie-in-tied-connectors-replacing",
+                count = laid.to_string(),
+                delay = product.delay_ms.to_string(),
+                product = product.name.to_string(),
+                replaced = replaced.to_string()
             )
         } else {
-            tr_format!(
-                literal = "Tied %count% connector(s) at %delay% ms with %product%",
-                count = laid,
-                delay = product.delay_ms,
-                product = &product.name
+            tr!(
+                "tie-in-tied-connectors",
+                count = laid.to_string(),
+                delay = product.delay_ms.to_string(),
+                product = product.name.to_string()
             )
         };
         crate::logging::report_completed_action(
-            CommandReportSpec::new(tr!(literal = "Tie Holes"), tr_format!(literal = "%count% connector(s)", count = laid)),
+            CommandReportSpec::new(tr!("common-tie-holes"), tr!("tie-in-count-connector-s", count = laid.to_string())),
             detail,
         );
     }
@@ -247,7 +252,7 @@ impl App<'_> {
         let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == hole.dataset) else {
             return;
         };
-        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| tr!("tie-in-hole"), |hole| hole.dhid.clone());
         let existing = dataset.dataset.initiations.iter().find(|initiation| initiation.hole == hole.hole).copied();
         self.editor.initiation_dialog = Some(InitiationDialog {
             target: hole,
@@ -273,17 +278,17 @@ impl App<'_> {
         if before == after {
             return;
         }
-        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| tr!("tie-in-hole"), |hole| hole.dhid.clone());
         self.execute_edit(Command::SetInitiation {
             dataset: target.dataset,
             before,
             after,
         });
         let detail = match after {
-            Some(initiation) => tr_format!(literal = "Initiation point set on %name% at %delay% ms", name = &name, delay = initiation.delay_ms),
-            None => tr_format!(literal = "Initiation point lifted from %name%", name = &name),
+            Some(initiation) => tr!("tie-in-initiation-point-set-name-delay", name = name.to_string(), delay = initiation.delay_ms.to_string()),
+            None => tr!("tie-in-initiation-point-lifted-from-name", name = name.to_string()),
         };
-        crate::logging::report_completed_action(CommandReportSpec::new(tr!(literal = "Set Initiation Point"), name), detail);
+        crate::logging::report_completed_action(CommandReportSpec::new(tr!("common-set-initiation-point"), name), detail);
     }
 
     /// Select the nearest visible tie under the pointer. Returns `false` when
@@ -303,7 +308,7 @@ impl App<'_> {
                 continue;
             }
             for tie in &dataset.dataset.ties {
-                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
+                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.a), dataset.dataset.holes.get(tie.b)) else {
                     continue;
                 };
                 let (Some(a), Some(b)) = (
@@ -318,7 +323,7 @@ impl App<'_> {
                 // a click aimed at either hole it joins.
                 let clear_of_collars = along * length >= 7.0 && (1.0 - along) * length >= 7.0;
                 if clear_of_collars && distance <= 8.0 && best.is_none_or(|(best_distance, _)| distance < best_distance) {
-                    best = Some((distance, TieInRef::new(dataset.id, tie.from, tie.to)));
+                    best = Some((distance, TieInRef::new(dataset.id, tie.a, tie.b)));
                 }
             }
         }
@@ -363,7 +368,7 @@ impl App<'_> {
                     .dataset
                     .ties
                     .iter()
-                    .filter(|tie| selected.contains(&TieInRef::new(dataset.id, tie.from, tie.to)))
+                    .filter(|tie| selected.contains(&TieInRef::new(dataset.id, tie.a, tie.b)))
                     .cloned()
                     .collect();
                 (!before.is_empty()).then_some(Command::SetTieIns {
@@ -387,8 +392,8 @@ impl App<'_> {
         self.execute_edit(Command::Batch(commands));
         self.editor.selected_tie_ins.clear();
         crate::logging::report_completed_action(
-            CommandReportSpec::new(tr!(literal = "Delete Tie-Ins"), tr_format!(literal = "%count% connector(s)", count = count)),
-            tr_format!(literal = "Deleted %count% selected tie-in connector(s)", count = count),
+            CommandReportSpec::new(tr!("tie-in-delete-tie-ins"), tr!("tie-in-count-connector-s", count = count.to_string())),
+            tr!("tie-in-deleted-count-selected-tie-connector", count = count.to_string()),
         );
     }
 }

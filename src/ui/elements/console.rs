@@ -3,7 +3,7 @@
 use std::{borrow::Cow, collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::{ConsoleEntry, ConsoleEntryId, ConsoleEntryState, ConsoleSeverity},
     ui::{
         themed_icon, unthemed_icon,
@@ -83,7 +83,7 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
                 if rows.is_empty() {
                     ui.add_sized(
                         [ui.available_width(), row_height],
-                        egui::Label::new(egui::RichText::new(tr!(literal = "No console activity yet")).weak()).halign(egui::Align::Center),
+                        egui::Label::new(egui::RichText::new(tr!("console-no-console-activity-yet")).weak()).halign(egui::Align::Center),
                     );
                 } else {
                     let visual_rows_id = ui.make_persistent_id("console_visual_rows");
@@ -229,7 +229,7 @@ fn draw_header_row(ui: &mut egui::Ui, rect: egui::Rect, row_id: egui::Id, entry_
     x += title_width + 8.0;
 
     let summary = if entry.state == ConsoleEntryState::Pending {
-        tr_format!(literal = "In progress · %summary%", summary = &entry.summary)
+        tr!("console-progress-summary", summary = entry.summary.to_string())
     } else {
         entry.summary.clone()
     };
@@ -287,11 +287,11 @@ fn draw_detail_row(
 
 fn copy_context_menu(response: &egui::Response, entry: &ConsoleEntry, entries: &[ConsoleEntry]) {
     context_menu_popup(response, &entry.title, |ui| {
-        if ContextMenuAction::new(tr!(literal = "Copy message")).show(ui).clicked() {
+        if ContextMenuAction::new(tr!("console-copy-message")).show(ui).clicked() {
             ui.ctx().copy_text(console_entry_text(entry));
             ui.close();
         }
-        if ContextMenuAction::new(tr!(literal = "Copy all")).show(ui).clicked() {
+        if ContextMenuAction::new(tr!("console-copy-all")).show(ui).clicked() {
             ui.ctx().copy_text(console_text(entries));
             ui.close();
         }
@@ -300,11 +300,11 @@ fn copy_context_menu(response: &egui::Response, entry: &ConsoleEntry, entries: &
 
 fn console_severity_label(entry: &ConsoleEntry) -> String {
     match (entry.state, entry.severity) {
-        (ConsoleEntryState::Pending, _) => tr!(literal = "PENDING"),
-        (_, ConsoleSeverity::Info) => tr!(literal = "INFO"),
-        (_, ConsoleSeverity::Success) => tr!(literal = "SUCCESS"),
-        (_, ConsoleSeverity::Warn) => tr!(literal = "WARN"),
-        (_, ConsoleSeverity::Error) => tr!(literal = "ERROR"),
+        (ConsoleEntryState::Pending, _) => tr!("console-pending"),
+        (_, ConsoleSeverity::Info) => tr!("console-info"),
+        (_, ConsoleSeverity::Success) => tr!("console-success"),
+        (_, ConsoleSeverity::Warn) => tr!("console-warn"),
+        (_, ConsoleSeverity::Error) => tr!("console-error"),
     }
 }
 

@@ -1,7 +1,7 @@
 //! Controls belonging to Schedule's main-viewport animation page.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Document, schedule::SCHEDULE_PERIOD_H},
     ui::{EditorState, chrome},
 };
@@ -164,5 +164,5 @@ fn instant_label(hours: f64) -> String {
     let total_minutes = (hours.max(0.0) * 60.0).round() as u64;
     let day = total_minutes / (24 * 60) + 1;
     let within = total_minutes % (24 * 60);
-    tr_format!(literal = "Day %day% %clock%", day = day, clock = format!("{:02}:{:02}", within / 60, within % 60))
+    tr!("animate-day", day = day.to_string(), clock = format!("{:02}:{:02}", within / 60, within % 60))
 }

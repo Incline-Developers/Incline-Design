@@ -45,7 +45,7 @@
 //! costs the same as day 1.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::schedule::{
         DestinationId, LoaderAgentId, ScheduleBar, SchedulePlan, WorkWindow,
         cashflow::Activity,
@@ -375,11 +375,11 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
     }
     for agent in plan.agents() {
         let subtitle = match plan.class(agent.class_id) {
-            Some(class) => tr_format!(
-                literal = "%class% · %rate% %unit%",
-                class = class.name.clone(),
-                rate = format!("{}", class.default_dig_rate_tph),
-                unit = if class.kind.is_drill_blast() {
+            Some(class) => format!(
+                "{} · {} {}",
+                class.name,
+                class.default_dig_rate_tph,
+                if class.kind.is_drill_blast() {
                     class.kind.rate_unit().to_owned()
                 } else {
                     tr!("schedule-tph")
@@ -1136,11 +1136,8 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         }
         let hover = name_cell.intersect(header);
         if hover.is_positive() {
-            ui.interact(hover, ui.id().with(("gantt_row", index)), egui::Sense::hover()).on_hover_text(tr_format!(
-                literal = "%name%\n%detail%",
-                name = row.title.clone(),
-                detail = row.subtitle.clone()
-            ));
+            ui.interact(hover, ui.id().with(("gantt_row", index)), egui::Sense::hover())
+                .on_hover_text(format!("{}\n{}", row.title, row.subtitle));
         }
     }
 }
@@ -1182,7 +1179,7 @@ fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, plan: Option<&
             None => tr!("follow-bar-no-machine"),
         }
     } else {
-        report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!(literal = "Dig sequence"))
+        report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!("schedule-dig-sequence"))
     }
 }
 
@@ -1197,10 +1194,7 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
         ),
         None => tr!("schedule-gantt-window-open", from = instant_label(window.start_h * GanttView::HOUR)),
     };
-    let mut lines = vec![
-        bar_label(bar, report, Some(plan)),
-        tr_format!(literal = "%label%: %span%", label = tr!("schedule-gantt-window"), span = span),
-    ];
+    let mut lines = vec![bar_label(bar, report, Some(plan)), format!("{}: {}", tr!("schedule-gantt-window"), span)];
     if bar.delay().is_some() {
         lines.push(tr!("gantt-delay-bar-note"));
         return lines.join("\n");
@@ -1539,10 +1533,10 @@ pub(super) fn execution_tooltip(
     let source = qualified_source_label(execution.source, bar, report, schedule, destinations);
     let mut lines = vec![
         tr!("schedule-dispatch-heading", kind = kind, source = source),
-        tr_format!(
-            literal = "%from% → %to%",
-            from = instant_label(execution.start_h * GanttView::HOUR),
-            to = instant_label(execution.end_h * GanttView::HOUR)
+        format!(
+            "{} → {}",
+            instant_label(execution.start_h * GanttView::HOUR),
+            instant_label(execution.end_h * GanttView::HOUR)
         ),
         tr!(
             "schedule-dispatch-tonnes-rate",
@@ -3157,7 +3151,7 @@ fn draw_blasting_row(
                 open_blast_window(editor, plan, session, Some(window), start);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Delete")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("haul-delete")).show(ui).clicked() {
                 let mut windows = plan.drill_blast().effective_windows();
                 windows.retain(|entry| entry.id != window.id);
                 commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));

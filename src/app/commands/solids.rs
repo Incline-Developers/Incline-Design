@@ -791,7 +791,7 @@ impl crate::app::App<'_> {
             app.solid_preview = Some(SolidPreview::carrying(key, built_from, status, carried));
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Building solid preview…"),
+            crate::i18n::tr!("solids-building-solid-preview"),
             vec![crate::app::jobs::JobKey::SolidPreview(key.solid)],
             compute,
             apply,
@@ -824,7 +824,7 @@ impl crate::app::App<'_> {
             .and_then(|document| document.solid(preview.key.solid))
             .map(|solid| solid.name.clone())
             .unwrap_or_else(|| mesh.name.clone());
-        let name = crate::app::canvas::derived_triangulation_name(&solid_name, &crate::i18n::tr!(literal = "Solid"));
+        let name = crate::app::canvas::derived_triangulation_name(&solid_name, &crate::i18n::tr!("tri-type-solid-closed"));
         let generated = crate::model::triangulation::GeneratedTriangulation {
             name,
             mesh: mesh.mesh.clone(),
@@ -835,11 +835,7 @@ impl crate::app::App<'_> {
         };
         crate::userspace_log!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Saved solid '%name%' to the project · %volume% m³",
-                name = &solid_name,
-                volume = format!("{volume:.1}")
-            )
+            crate::i18n::tr!("solids-saved-solid-project", name = solid_name.to_string(), volume = format!("{volume:.1}"))
         );
         self.insert_generated_triangulation(generated);
         Ok(())

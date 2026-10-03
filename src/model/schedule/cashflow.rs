@@ -603,10 +603,5 @@ pub(crate) fn format_value(value: f64, currency: &str) -> String {
         }
         text
     };
-    crate::i18n::tr_format!(
-        literal = "%sign%%value% %currency%/t",
-        sign = sign.to_owned(),
-        value = digits,
-        currency = currency.to_owned()
-    )
+    format!("{}{} {}/t", sign, digits, currency)
 }

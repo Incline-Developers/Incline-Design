@@ -28,14 +28,10 @@
 //! Add `my-message = English text` to `i18n/en/incline_design.ftl` (and ideally
 //! the other languages), then call `tr!("my-message")` where the literal was.
 //! For interpolated values: `greeting = Hello, { $name }` → `tr!("greeting", name = who)`.
-//! For a short UI literal that has not yet received a hand-written id, use
-//! `tr!(literal = "Apply")`; its stable `literal-*` id can be translated in
-//! each catalog without changing the call site.
-//!
-//! See `.claude/skills/incline-i18n/SKILL.md` for the full recipe and the
-//! migration checklist.
+//! `cargo check` enforces both: `tr!` fails the build on an unknown id or a
+//! missing argument.
 
-use std::{fmt::Write as _, sync::LazyLock};
+use std::sync::LazyLock;
 
 use i18n_embed::{
     LanguageLoader,
@@ -221,13 +217,13 @@ impl LanguageChoice {
 pub(crate) fn select_language(choice: LanguageChoice) {
     if let Err(error) = i18n_embed::select(&*LOADER, &Localizations, &[choice.lang_id()]) {
         // Not fatal: the English fallback bundle is already loaded.
-        log::warn!("{}", crate::i18n::tr_format!(literal = "Could not select a language: %error%", error = error));
+        log::warn!("{}", crate::i18n::tr!("i18n-could-not-select-language-error", error = error.to_string()));
     }
     log::info!(
         "{}",
-        crate::i18n::tr_format!(
-            literal = "Active language is %language% (bundled: %bundled%)",
-            language = LOADER.current_language(),
+        crate::i18n::tr!(
+            "i18n-active-language",
+            language = LOADER.current_language().to_string(),
             bundled = format!("{:?}", available_languages())
         )
     );
@@ -262,101 +258,17 @@ fn system_languages() -> Vec<LanguageIdentifier> {
     Vec::new()
 }
 
-/// Translate a message id, with optional named Fluent arguments.
+/// Translate a message id, with optional named Fluent arguments. A thin wrapper
+/// over [`i18n_embed_fl::fl!`], which checks the id and its arguments against
+/// `i18n/en/incline_design.ftl` at compile time.
 ///
 /// ```ignore
 /// tr!("menu-file");
-/// tr!("tri-count-polylines", count = n);
+/// tr!("tri-count-polylines", count = n.to_string());
 /// ```
-///
-/// Translate a source literal that has not yet been assigned a hand-written
-/// message id. The generated id is readable and includes a stable hash, so
-/// punctuation and whitespace remain significant (`"Layer"` and `"Layer:"`
-/// cannot accidentally share a translation). Missing entries intentionally
-/// fall back to the source text while a locale is being filled.
-pub(crate) fn tr_literal(source: &str) -> String {
-    let id = literal_id(source);
-    let translated = LOADER.get(&id);
-    if !translated.starts_with("No localization for id:") {
-        // Fluent trims padding around message values. A few compact labels are
-        // deliberately fragments (" FPS", "Major "), so restore their source
-        // padding after translation.
-        let leading = source.len() - source.trim_start().len();
-        let trailing = source.len() - source.trim_end().len();
-        let content_end = source.len().saturating_sub(trailing);
-        format!("{}{}{}", &source[..leading], translated.trim(), &source[content_end..])
-    } else {
-        source.to_owned()
-    }
-}
-
-fn literal_id(source: &str) -> String {
-    let mut id = String::from("literal-");
-    let mut separator = false;
-    for character in source.chars() {
-        if character.is_ascii_alphanumeric() {
-            if separator && id.len() > "literal-".len() {
-                id.push('-');
-            }
-            for lower in character.to_lowercase() {
-                id.push(lower);
-            }
-            separator = false;
-        } else {
-            separator = true;
-        }
-    }
-    // Nothing but punctuation ("?", "-") leaves the stem empty, still holding
-    // the dash the id started with. The catalog spells those `literal-value-`,
-    // so name them that rather than trimming back to a bare `literal-`. A dash
-    // is only ever pushed immediately before the character it separates, so
-    // this is the one case where the id can still end in one.
-    if id == "literal-" {
-        id.push_str("value");
-    }
-
-    // FNV-1a is intentionally fixed rather than DefaultHasher, whose output is
-    // not a persistence contract. The catalog generator uses the same bytes.
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in source.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    write!(&mut id, "-{hash:016x}").expect("writing to a String cannot fail");
-    id
-}
-
-/// Thin wrapper over [`i18n_embed_fl::fl!`], which checks hand-written ids and
-/// their arguments against `i18n/en/incline_design.ftl` at compile time.
 macro_rules! tr {
-    (literal = $source:literal) => {
-        $crate::i18n::tr_literal($source)
-    };
     ($($tail:tt)*) => {
         i18n_embed_fl::fl!($crate::i18n::LOADER, $($tail)*)
     };
 }
 pub(crate) use tr;
-
-/// Translate a source literal and substitute named values written as
-/// `%name%` placeholders.
-///
-/// This is the literal counterpart of Fluent's normal named arguments. It is
-/// intentionally limited to simple textual replacement so ad-hoc activity
-/// messages can be catalogued without making their source strings invalid
-/// Fluent syntax. Values are inserted after lookup, so translators may move
-/// each placeholder to suit their language.
-///
-/// ```ignore
-/// tr_format!(literal = "Loading %name%…", name = filename)
-/// ```
-macro_rules! tr_format {
-    (literal = $source:literal, $($name:ident = $value:expr),+ $(,)?) => {{
-        let mut translated = $crate::i18n::tr_literal($source);
-        $(
-            translated = translated.replace(concat!("%", stringify!($name), "%"), &::std::string::ToString::to_string(&($value)));
-        )+
-        translated
-    }};
-}
-pub(crate) use tr_format;

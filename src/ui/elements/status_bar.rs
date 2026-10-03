@@ -130,8 +130,8 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
     ui.separator();
     if editor.frame_counter_enabled {
         match editor.measured_fps {
-            Some(fps) => ui.label(format!("{}: {fps:.0}", tr!(literal = "Frame rate"))),
-            None => ui.label(format!("{}: --", tr!(literal = "Frame rate"))),
+            Some(fps) => ui.label(format!("{}: {fps:.0}", tr!("status-frame-rate"))),
+            None => ui.label(format!("{}: --", tr!("status-frame-rate"))),
         };
         ui.separator();
     }
@@ -144,7 +144,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
                 drawn_chunks = stats.drawn_chunks,
                 total_chunks = stats.total_chunks
             )),
-            None => ui.label(tr!(literal = "Faces: -- / -- (--/-- chunks)")),
+            None => ui.label(tr!("status-faces-chunks")),
         };
         ui.separator();
     }
@@ -156,7 +156,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
                 far = format!("{far:.3}"),
                 delta = format!("{:.3}", far - near)
             )),
-            None => ui.label(tr!(literal = "Clip near/far/Δ: -- / -- / --")),
+            None => ui.label(tr!("status-clip-near-far")),
         };
         ui.separator();
     }
@@ -170,7 +170,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
                 drawn_chunks = stats.drawn_chunks,
                 total_chunks = stats.total_chunks
             )),
-            None => ui.label(tr!(literal = "Points: -- / -- of -- (--/-- chunks)")),
+            None => ui.label(tr!("status-points-chunks")),
         };
         ui.separator();
     }

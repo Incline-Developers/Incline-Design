@@ -73,7 +73,7 @@ pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, d
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let (slot, top) = reserve_fixed_stripes(ui);
         if document.solids().is_empty() {
-            explorer_note(ui, tr!(literal = "No solids yet - add one on the Setup page"));
+            explorer_note(ui, tr!("solids-no-solids-yet-add"));
         }
         for kind in SolidKind::ALL {
             let solids: Vec<_> = document.solids().iter().filter(|solid| solid.kind == kind).collect();
@@ -293,7 +293,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let (slot, top) = reserve_fixed_stripes(ui);
         if document.solids().is_empty() {
-            explorer_note(ui, tr!(literal = "No solids yet - add one on the Setup page"));
+            explorer_note(ui, tr!("solids-no-solids-yet-add"));
         }
         for solid in document.solids() {
             let occupied = editor.solid_view_bands.get(&solid.id);
@@ -351,7 +351,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
         let (slot, top) = reserve_fixed_stripes(ui);
 
         if document.solids().is_empty() {
-            explorer_note(ui, tr!(literal = "No solids yet - add one on the Setup page"));
+            explorer_note(ui, tr!("solids-no-solids-yet-add"));
         }
         let selection = &editor.solids_view_selection;
         let mut clicked: Option<Vec<SolidsViewRow>> = None;
@@ -551,7 +551,7 @@ pub(crate) fn blast_path(solid: &str, bench: f64, blast: &str) -> String {
 /// An RL with no more decimals than it needs: 348, 348.5, 348.25.
 pub(crate) fn format_rl(value: f64) -> String {
     if !value.is_finite() {
-        return tr!(literal = "—");
+        return String::from("—");
     }
     let text = format!("{value:.2}");
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');
@@ -646,8 +646,8 @@ fn shared<T: PartialEq, I: IntoIterator<Item = T>>(values: I) -> Option<Option<T
 /// Render one property, saying "Multiple" when the selection disagrees.
 fn read_across<T: PartialEq>(values: Vec<T>, describe: impl Fn(&T) -> String) -> String {
     match shared(values) {
-        None => tr!(literal = "—"),
-        Some(None) => tr!(literal = "Multiple…"),
+        None => String::from("—"),
+        Some(None) => tr!("solids-multiple"),
         Some(Some(value)) => describe(&value),
     }
 }
@@ -670,7 +670,7 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
     if rows.is_empty() {
         PropertyTable::new("solids_view_properties", rect, &title).show(ui, |table| {
             table.header(&tr!("planning-property"), &tr!("planning-value"));
-            table.readonly(&tr!(literal = "Selection"), &tr!(literal = "Select a solid, bench or flitch"), None, None);
+            table.readonly(&tr!("solids-selection"), &tr!("solids-select-solid-bench-flitch"), None, None);
         });
         return;
     }
@@ -678,13 +678,13 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
     PropertyTable::new("solids_view_properties", rect, &title).show(ui, |table| {
         table.header(&tr!("planning-property"), &tr!("planning-value"));
         table.readonly(
-            &tr!(literal = "Type"),
+            &tr!("destination-type"),
             &read_across(rows.iter().map(|(solid, _)| solid.kind).collect(), |kind| kind_label(*kind)),
             None,
             None,
         );
         table.readonly(
-            &tr!(literal = "Solid"),
+            &tr!("tri-type-solid-closed"),
             &read_across(rows.iter().map(|(solid, _)| solid.name.clone()).collect(), Clone::clone),
             None,
             None,
@@ -694,10 +694,10 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
                 .blasting_outlines
                 .iter()
                 .find(|outline| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor) == selected);
-            table.readonly(&tr!(literal = "Blast"), &blast.map_or_else(|| tr!(literal = "—"), |blast| blast.name.clone()), None, None);
+            table.readonly(&tr!("solids-blast"), &blast.map_or_else(|| String::from("—"), |blast| blast.name.clone()), None, None);
             table.readonly(
-                &tr!(literal = "Plan area"),
-                &blast.map_or_else(|| tr!(literal = "—"), |blast| format!("{:.1}", blast.area)),
+                &tr!("solids-plan-area"),
+                &blast.map_or_else(|| String::from("—"), |blast| format!("{:.1}", blast.area)),
                 Some("m²"),
                 None,
             );
@@ -705,12 +705,12 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
         if let Some(block) = &editor.selected_dig_block_info {
             // The block names its own parents. A scheduler reads the same
             // record, so the panel and the export agree by construction.
-            table.readonly(&tr!(literal = "Dig block"), &block.name, None, None);
+            table.readonly(&tr!("solids-dig-block"), &block.name, None, None);
             // Lineage is shown, not inferred: a block that came out of a split
             // or a merge names what it replaced, so a schedule can be traced
             // across a redraw instead of reading as an unrelated new block.
             table.readonly(
-                &tr!(literal = "Block ID"),
+                &tr!("solids-block-id"),
                 &block.id.0.to_string(),
                 None,
                 (!block.replaces.is_empty())
@@ -722,23 +722,23 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
                     })
                     .as_deref(),
             );
-            table.readonly(&tr!(literal = "Plan area"), &format!("{:.1}", block.plan_area), Some("m²"), None);
-            table.readonly(&tr!(literal = "In bench"), &format!("{:.2}", block.bench.base), Some("RL"), None);
-            table.readonly(&tr!(literal = "In flitch"), &format!("{:.2}", block.flitch.base), Some("RL"), None);
+            table.readonly(&tr!("solids-plan-area"), &format!("{:.1}", block.plan_area), Some("m²"), None);
+            table.readonly(&tr!("solids-bench"), &format!("{:.2}", block.bench.base), Some("RL"), None);
+            table.readonly(&tr!("solids-flitch"), &format!("{:.2}", block.flitch.base), Some("RL"), None);
             table.readonly(
-                &tr!(literal = "Block volume"),
-                &block.volume.map_or_else(|| tr!(literal = "—"), |volume| format!("{volume:.1}")),
+                &tr!("solids-block-volume"),
+                &block.volume.map_or_else(|| String::from("—"), |volume| format!("{volume:.1}")),
                 Some("m³"),
                 None,
             );
         }
         // A flitch names the bench it sits in, so both rows read for either.
         let benches: Vec<_> = rows.iter().map(|(solid, band)| band.map(|band| bench_base_for(solid, band)).unwrap_or(f64::NAN)).collect();
-        table.readonly(&tr!(literal = "Bench RL"), &read_rl(benches), None, None);
+        table.readonly(&tr!("solids-bench-rl"), &read_rl(benches), None, None);
         let flitches: Vec<_> = rows.iter().map(|(_, band)| band.filter(|band| band.is_flitch).map_or(f64::NAN, |band| band.base)).collect();
-        table.readonly(&tr!(literal = "Flitch RL"), &read_rl(flitches), None, None);
+        table.readonly(&tr!("solids-flitch-rl"), &read_rl(flitches), None, None);
         table.readonly(
-            &tr!(literal = "Block Model"),
+            &tr!("ws-menubar-block-model"),
             &read_across(rows.iter().map(|(solid, _)| solid.block_model).collect(), |model| block_model_label(project, *model)),
             None,
             None,
@@ -749,13 +749,13 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
 /// The figures for whatever is selected: volume, block-model coverage, and one
 /// row per reserve field.
 pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, document: &Document) {
-    PropertyTable::new("solids_view_figures", rect, &tr!(literal = "Contents")).show(ui, |table| {
-        table.header(&tr!(literal = "Field"), &tr!("planning-value"));
+    PropertyTable::new("solids_view_figures", rect, &tr!("solids-contents")).show(ui, |table| {
+        table.header(&tr!("destination-condition-field"), &tr!("planning-value"));
         let volume = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => format!("{volume:.1}"),
-            _ => tr!(literal = "—"),
+            _ => String::from("—"),
         };
-        table.readonly(&tr!(literal = "Volume"), &volume, Some("m³"), None);
+        table.readonly(&tr!("tri-volume"), &volume, Some("m³"), None);
         // Geometric volume and block-model coverage are separate figures: a
         // solid the model only partly reaches must not read as fully measured.
         if let Some(coverage) = editor.solid_view_coverage {
@@ -784,7 +784,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                 let groups = reserves.and_then(|reserves| reserves.categories.get(&field.id));
                 table.readonly(
                     &field.name,
-                    &groups.map_or_else(|| tr!(literal = "—"), |groups| tr!("planning-reserve-categories", count = groups.len())),
+                    &groups.map_or_else(|| String::from("—"), |groups| tr!("planning-reserve-categories", count = groups.len())),
                     None,
                     groups.is_none().then(|| editor.solid_view_reserve_issues.get(&field.id)).flatten().map(String::as_str),
                 );
@@ -800,7 +800,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                             let value = group.numeric.get(&value_field.id).and_then(|total| total.value(value_field.aggregation));
                             table.readonly(
                                 &format!("{label} · {}", value_field.name),
-                                &value.map_or_else(|| tr!(literal = "—"), |value| format!("{value:.3}")),
+                                &value.map_or_else(|| String::from("—"), |value| format!("{value:.3}")),
                                 None,
                                 None,
                             );
@@ -827,7 +827,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                     )),
                     _ => None,
                 };
-                table.readonly(&field.name, &value.map_or_else(|| tr!(literal = "—"), |value| format!("{value:.3}")), None, note.as_deref());
+                table.readonly(&field.name, &value.map_or_else(|| String::from("—"), |value| format!("{value:.3}")), None, note.as_deref());
             }
         }
     });
@@ -837,13 +837,13 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
 /// "Multiple" where they disagree.
 fn read_rl(values: Vec<f64>) -> String {
     if values.iter().all(|value| value.is_nan()) {
-        return tr!(literal = "—");
+        return String::from("—");
     }
     let first = values[0];
     if values.iter().all(|value| (*value - first).abs() < 1e-6 || (value.is_nan() && first.is_nan())) {
         return format_rl(first);
     }
-    tr!(literal = "Multiple…")
+    tr!("solids-multiple")
 }
 
 /// Which bench a slice belongs to: a bench is its own, and a flitch names the

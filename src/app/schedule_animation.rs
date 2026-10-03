@@ -493,7 +493,7 @@ impl crate::app::App<'_> {
             self.editor.schedule_animation_status = if let Some(error) = &self.schedule_animation.error {
                 error.clone()
             } else if !solids_ready {
-                crate::i18n::tr!(literal = "Calculated solids are unavailable. Run Solids through Dig Strips.")
+                crate::i18n::tr!("animate-calculated-solids-unavailable-run")
             } else if self.schedule_calculation.is_some() {
                 crate::i18n::tr!("schedule-animation-stale")
             } else {
@@ -861,7 +861,7 @@ impl crate::app::App<'_> {
         self.editor.schedule_animation_pending = true;
 
         self.spawn_job_quietly(
-            crate::i18n::tr!(literal = "Updating schedule animation"),
+            crate::i18n::tr!("animate-updating-schedule-animation"),
             vec![JobKey::ScheduleAnimation {
                 runtime: identity.runtime,
                 run: identity.run,
@@ -1129,11 +1129,7 @@ impl VolumeProfile {
             .map(|step| retained_volume_at_cut(mesh, direction, low + (high - low) * step as f64 / span, cancel))
             .collect::<anyhow::Result<Vec<_>>>()?;
         for sample in &samples {
-            anyhow::ensure!(
-                sample.is_finite() && *sample >= 0.0,
-                "{}",
-                crate::i18n::tr!(literal = "A block's volume could not be measured.")
-            );
+            anyhow::ensure!(sample.is_finite() && *sample >= 0.0, "{}", crate::i18n::tr!("animate-block-volume-could-not"));
         }
         // The search below brackets by descent, so the samples have to descend.
         // Summing thousands of triangles at two nearby cuts can put a few ulps
@@ -1142,11 +1138,7 @@ impl VolumeProfile {
         // inverting it would place the cut confidently in the wrong place.
         let slack = VOLUME_TOLERANCE * samples[0];
         for index in 1..samples.len() {
-            anyhow::ensure!(
-                samples[index] <= samples[index - 1] + slack,
-                "{}",
-                crate::i18n::tr!(literal = "A block retains more material the further it is cut back.")
-            );
+            anyhow::ensure!(samples[index] <= samples[index - 1] + slack, "{}", crate::i18n::tr!("animate-block-retains-more-material"));
             samples[index] = samples[index].min(samples[index - 1]);
         }
         Ok(Self { low, high, samples })
@@ -1220,11 +1212,7 @@ impl VolumeProfile {
                 (far, far_volume) = (cut, retained);
             }
         }
-        anyhow::ensure!(
-            near_volume - far_volume <= tolerance,
-            "{}",
-            crate::i18n::tr!(literal = "A block's shape could not be cut to the depletion the schedule reports.")
-        );
+        anyhow::ensure!(near_volume - far_volume <= tolerance, "{}", crate::i18n::tr!("animate-block-shape-could-not"));
         Ok((near + far) * 0.5)
     }
 }

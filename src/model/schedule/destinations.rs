@@ -55,7 +55,7 @@ use super::{
     same_name,
 };
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{ReserveFieldId, SolidId},
 };
 
@@ -1555,30 +1555,20 @@ impl FieldCondition {
     /// This condition as the user wrote it: `60 < Fe <= 70`, or `Ore / Waste`.
     pub(crate) fn summary(&self, field: &str) -> String {
         match &self.test {
-            ConditionTest::Category { values } => tr_format!(literal = "%field% = %values%", field = field.to_owned(), values = values.join(" / ")),
+            ConditionTest::Category { values } => format!("{} = {}", field, values.join(" / ")),
             ConditionTest::Range { lower, upper } => {
                 let number = |value: f64| value.to_string();
                 match (lower, upper) {
                     (None, None) => field.to_owned(),
-                    (Some(lower), None) => tr_format!(
-                        literal = "%field% %operator% %value%",
-                        field = field.to_owned(),
-                        operator = if lower.inclusive { ">=" } else { ">" }.to_owned(),
-                        value = number(lower.value)
-                    ),
-                    (None, Some(upper)) => tr_format!(
-                        literal = "%field% %operator% %value%",
-                        field = field.to_owned(),
-                        operator = if upper.inclusive { "<=" } else { "<" }.to_owned(),
-                        value = number(upper.value)
-                    ),
-                    (Some(lower), Some(upper)) => tr_format!(
-                        literal = "%low% %lower% %field% %upper% %high%",
-                        low = number(lower.value),
-                        lower = if lower.inclusive { "<=" } else { "<" }.to_owned(),
-                        field = field.to_owned(),
-                        upper = if upper.inclusive { "<=" } else { "<" }.to_owned(),
-                        high = number(upper.value)
+                    (Some(lower), None) => format!("{} {} {}", field, if lower.inclusive { ">=" } else { ">" }, number(lower.value)),
+                    (None, Some(upper)) => format!("{} {} {}", field, if upper.inclusive { "<=" } else { "<" }, number(upper.value)),
+                    (Some(lower), Some(upper)) => format!(
+                        "{} {} {} {} {}",
+                        number(lower.value),
+                        if lower.inclusive { "<=" } else { "<" },
+                        field,
+                        if upper.inclusive { "<=" } else { "<" },
+                        number(upper.value)
                     ),
                 }
             }

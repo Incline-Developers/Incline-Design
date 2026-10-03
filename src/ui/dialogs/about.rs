@@ -30,8 +30,8 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE)).heading());
-                    ui.label(tr!(literal = "Free Open Source Mine Design"));
-                    ui.label(egui::RichText::new(tr!(literal = "Licensed under the MIT License")).weak());
+                    ui.label(tr!("about-free-open-source-mine-design"));
+                    ui.label(egui::RichText::new(tr!("about-licensed-under-mit-license")).weak());
                 });
             });
 
@@ -39,11 +39,7 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.separator();
             ui.add_space(6.0);
 
-            ui.label(
-                egui::RichText::new(tr!(
-                    literal = "Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.\n\nIncline Design is provided \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT."
-                )),
-            );
+            ui.label(egui::RichText::new(tr!("about-copyright-c-2026-leo-timmins")));
             ui.add_space(4.0);
             ui.hyperlink_to(tr!("about-read-full-licence"), "https://opensource.org/license/mit");
 

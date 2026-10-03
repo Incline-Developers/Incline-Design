@@ -12,7 +12,7 @@
 
 use super::schedule_destinations::{ConditionAction, condition_note, descendant_selected, draw_condition_dialog, open_condition_draft, scope_key, visible};
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document,
         schedule::{ActivitySelection, DestinationSelection, LoaderAgentId, LoaderSelection, MovementSourceScope, MovementSourceSelection, SchedulePlan, cashflow, destinations},
@@ -41,11 +41,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 explorer_note(ui, tr!("cashflow-no-rules"));
             }
             for rule in &rules.rules {
-                let label = tr_format!(
-                    literal = "%name% · %value%",
-                    name = rule.name.clone(),
-                    value = cashflow::format_value(rule.value_per_tonne, currency)
-                );
+                let label = format!("{} · {}", rule.name, cashflow::format_value(rule.value_per_tonne, currency));
                 let summary = rule.summary(
                     |agent| plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent")),
                     |field| {
@@ -58,11 +54,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     },
                 );
                 let disabled = (!rule.enabled).then(|| tr!("cashflow-rule-disabled"));
-                let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id))).on_hover_text(tr_format!(
-                    literal = "%label%\n%summary%",
-                    label = label.clone(),
-                    summary = summary
-                ));
+                let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id))).on_hover_text(format!("{}\n{}", label, summary));
                 if response.clicked() {
                     selected = Some(rule.id);
                 }
@@ -164,7 +156,7 @@ pub(crate) fn draw_rule_editor(
                 edits.push(UiCommand::schedule(session, ScheduleEdit::SetCashflowRuleEnabled { rule: rule.id, enabled }));
             }
             {
-                let label = tr_format!(literal = "%label% (%currency%/t)", label = tr!("cashflow-rule-value"), currency = currency.clone());
+                let label = format!("{} ({}/t)", tr!("cashflow-rule-value"), currency);
                 let (cell, _) = grid_named_row(ui, &label, 0);
                 if cell.is_positive() {
                     let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.value).desired_width(cell.width()));
@@ -404,7 +396,7 @@ pub(crate) fn draw_rule_editor(
                     }
                     for entry in &available {
                         let picked = all || held.contains(&entry.id);
-                        let label = tr_format!(literal = "%name% · %kind%", name = entry.name.clone(), kind = entry.kind.label());
+                        let label = format!("{} · {}", entry.name, entry.kind.label());
                         if ChecklistRow::new(&label, Tick::of(picked, false)).depth(1).show(ui).toggled {
                             let mut list = if all {
                                 available.iter().map(|entry| entry.id).collect::<Vec<_>>()

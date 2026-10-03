@@ -96,16 +96,13 @@ impl<'a> App<'a> {
             let polylines = match result {
                 Ok(polylines) => polylines,
                 Err(error) => {
-                    userspace_warn!("{}", tr_format!(literal = "Contour generation failed: %error%", error = format!("{error:#}")));
+                    userspace_warn!("{}", tr!("cmd-contours-contour-generation-failed-error", error = format!("{error:#}")));
                     return;
                 }
             };
             let project_is_active = app.workspace.active_project().is_some_and(|project| project.runtime_id == project_runtime_id);
             let Some(project) = app.workspace.projects.iter_mut().find(|project| project.runtime_id == project_runtime_id) else {
-                userspace_warn!(
-                    "{}",
-                    tr_format!(literal = "Contours for '%name%' were discarded: the project was closed", name = apply_tri_name)
-                );
+                userspace_warn!("{}", tr!("cmd-contours-discarded-project-closed", name = apply_tri_name.to_string()));
                 return;
             };
             let (layer_id, layer_name, create_layer) = match output_layer {
@@ -113,10 +110,10 @@ impl<'a> App<'a> {
                     if project.project.document.layer_id_by_name(&layer_name).is_some() {
                         userspace_warn!(
                             "{}",
-                            tr_format!(
-                                literal = "Contours for '%name%' were discarded: layer '%layer_name%' now exists",
-                                name = apply_tri_name,
-                                layer_name = layer_name
+                            tr!(
+                                "cmd-contours-discarded-layer-exists",
+                                name = apply_tri_name.to_string(),
+                                layer_name = layer_name.to_string()
                             )
                         );
                         return;
@@ -126,13 +123,7 @@ impl<'a> App<'a> {
                 }
                 ContourOutputLayer::Existing(layer_id) => {
                     let Some(layer_name) = project.project.document.layer(layer_id).map(|layer| layer.name.clone()) else {
-                        userspace_warn!(
-                            "{}",
-                            tr_format!(
-                                literal = "Contours for '%name%' were discarded: the selected output layer was deleted",
-                                name = apply_tri_name
-                            )
-                        );
+                        userspace_warn!("{}", tr!("cmd-contours-discarded-layer-deleted", name = apply_tri_name.to_string()));
                         return;
                     };
                     (layer_id, layer_name, false)
@@ -172,11 +163,11 @@ impl<'a> App<'a> {
             }
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "Generated %line_count% contour polyline(s) for triangulation '%name%' in layer '%layer_name%'",
-                    line_count = line_count,
-                    name = apply_tri_name,
-                    layer_name = layer_name
+                tr!(
+                    "cmd-contours-generated",
+                    line_count = line_count.to_string(),
+                    name = apply_tri_name.to_string(),
+                    layer_name = layer_name.to_string()
                 )
             );
             app.invalidate_geometry();

@@ -133,7 +133,7 @@ impl crate::app::App<'_> {
             name: if self.editor.is_dig_strips_step() {
                 crate::i18n::tr!("planning-dig-strips")
             } else {
-                crate::i18n::tr!(literal = "Blast cuts")
+                crate::i18n::tr!("planning-blast-cuts")
             },
             color_index: None,
             color: self.editor.tool_line_color,

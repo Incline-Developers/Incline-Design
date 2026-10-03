@@ -12,9 +12,9 @@ use crate::{
 
 pub(crate) fn kind_label(kind: SolidKind) -> String {
     match kind {
-        SolidKind::Pit => tr!(literal = "Pit"),
-        SolidKind::Dump => tr!(literal = "Dump"),
-        SolidKind::Stockpile => tr!(literal = "Stockpile"),
+        SolidKind::Pit => tr!("edit-pit"),
+        SolidKind::Dump => tr!("report-dump"),
+        SolidKind::Stockpile => tr!("report-stockpile"),
     }
 }
 
@@ -22,36 +22,36 @@ pub(crate) fn kind_label(kind: SolidKind) -> String {
 /// when it is unset or the surface it named is no longer in the project.
 pub(crate) fn triangulation_label(project: &UiProjectView, id: Option<TriangulationId>) -> String {
     match id {
-        None => tr!(literal = "None"),
+        None => tr!("grade-calendar-none"),
         Some(id) => project
             .triangulations
             .iter()
             .find(|entry| entry.id == id)
-            .map_or_else(|| tr!(literal = "Missing surface"), |entry| entry.name.clone()),
+            .map_or_else(|| tr!("solids-missing-surface"), |entry| entry.name.clone()),
     }
 }
 
 /// Block-model counterpart of [`triangulation_label`].
 pub(crate) fn block_model_label(project: &UiProjectView, id: Option<BlockModelId>) -> String {
     match id {
-        None => tr!(literal = "None"),
+        None => tr!("grade-calendar-none"),
         Some(id) => project
             .block_models
             .iter()
             .find(|entry| entry.id == id)
-            .map_or_else(|| tr!(literal = "Missing block model"), |entry| entry.name.clone()),
+            .map_or_else(|| tr!("solids-missing-block-model"), |entry| entry.name.clone()),
     }
 }
 
 /// Every triangulation in the project, offered after an explicit "None".
 pub(crate) fn triangulation_options(project: &UiProjectView) -> Vec<(Option<TriangulationId>, String)> {
-    std::iter::once((None, tr!(literal = "None")))
+    std::iter::once((None, tr!("grade-calendar-none")))
         .chain(project.triangulations.iter().map(|entry| (Some(entry.id), entry.name.clone())))
         .collect()
 }
 
 pub(crate) fn block_model_options(project: &UiProjectView) -> Vec<(Option<BlockModelId>, String)> {
-    std::iter::once((None, tr!(literal = "None")))
+    std::iter::once((None, tr!("grade-calendar-none")))
         .chain(project.block_models.iter().map(|entry| (Some(entry.id), entry.name.clone())))
         .collect()
 }
@@ -69,17 +69,17 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
     }
     let mut open = true;
     let mut close = false;
-    DragableMenu::new("new_solid_dialog", tr!(literal = "New Solid"))
+    DragableMenu::new("new_solid_dialog", tr!("solids-new-solid"))
         .open(&mut open)
         .min_width(320.0)
         .show(ui.ctx(), |ui| {
-            MenuFieldText::new(tr!(literal = "Name"), &mut editor.new_solid_name)
-                .hint_text(tr!(literal = "Required"))
+            MenuFieldText::new(tr!("planning-name"), &mut editor.new_solid_name)
+                .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
             let selected_kind = kind_label(editor.new_solid_kind);
             MenuFieldCombo::new(
                 "new_solid_kind",
-                tr!(literal = "Type"),
+                tr!("destination-type"),
                 &mut editor.new_solid_kind,
                 selected_kind,
                 SolidKind::ALL.into_iter().map(|kind| (kind, kind_label(kind).into())),
@@ -88,41 +88,41 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             let surface_text = triangulation_label(project, editor.new_solid_surface);
             MenuFieldCombo::new(
                 "new_solid_surface",
-                tr!(literal = "Surface"),
+                tr!("tri-type-open-surface"),
                 &mut editor.new_solid_surface,
                 surface_text,
                 triangulation_options(project).into_iter().map(|(id, name)| (id, name.into())),
             )
-            .help_text(tr!(literal = "The pit or dump design itself"))
+            .help_text(tr!("solids-pit-dump-design-itself"))
             .show(ui);
             let topography_text = triangulation_label(project, editor.new_solid_topography);
             MenuFieldCombo::new(
                 "new_solid_topography",
-                tr!(literal = "Topography"),
+                tr!("solids-topography"),
                 &mut editor.new_solid_topography,
                 topography_text,
                 triangulation_options(project).into_iter().map(|(id, name)| (id, name.into())),
             )
-            .help_text(tr!(literal = "The surface the design is measured against"))
+            .help_text(tr!("solids-surface-design-measured-against"))
             .show(ui);
             let block_model_text = block_model_label(project, editor.new_solid_block_model);
             MenuFieldCombo::new(
                 "new_solid_block_model",
-                tr!(literal = "Block Model"),
+                tr!("ws-menubar-block-model"),
                 &mut editor.new_solid_block_model,
                 block_model_text,
                 block_model_options(project).into_iter().map(|(id, name)| (id, name.into())),
             )
             .help_text(if editor.new_solid_kind.requires_block_model() {
-                tr!(literal = "Reserved against this model")
+                tr!("solids-reserved-against-model")
             } else {
-                tr!(literal = "Optional for dumps and stockpiles")
+                tr!("solids-optional-dumps-stockpiles")
             })
             .show(ui);
             menu::menu_actions(ui, |ui| {
                 let can_add = !editor.new_solid_name.trim().is_empty();
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
-                if (submitted || ui.add(MenuButton::new(tr!(literal = "Add Solid")).primary().enabled(can_add)).clicked()) && can_add {
+                if (submitted || ui.add(MenuButton::new(tr!("solids-add-solid")).primary().enabled(can_add)).clicked()) && can_add {
                     commands.push(UiCommand::AddSolid {
                         name: editor.new_solid_name.trim().to_owned(),
                         kind: editor.new_solid_kind,
@@ -132,7 +132,7 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });
@@ -181,7 +181,7 @@ pub(crate) fn draw_topography_update_dialog(ui: &mut egui::Ui, editor: &mut Edit
             let topography_text = triangulation_label(project, update.topography);
             MenuFieldCombo::new(
                 "topography_update_surface",
-                tr!(literal = "Topography"),
+                tr!("solids-topography"),
                 &mut update.topography,
                 topography_text,
                 triangulation_options(project).into_iter().map(|(id, name)| (id, name.into())),
@@ -211,7 +211,7 @@ pub(crate) fn draw_topography_update_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });

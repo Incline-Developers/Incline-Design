@@ -60,7 +60,7 @@ fn main() {
 
     wasm_bindgen_futures::spawn_local(async {
         if let Err(error) = start_web().await {
-            log::error!("{}", crate::i18n::tr_format!(literal = "Incline Design Web startup failed: %error%", error = error));
+            log::error!("{}", crate::i18n::tr!("main-incline-design-web-startup-failed", error = error.to_string()));
             show_web_startup_error(&error);
         }
     });

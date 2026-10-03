@@ -405,7 +405,7 @@ fn selection(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork,
         }
         ui.horizontal(|ui| {
             if let [keep, remove] = nodes[..]
-                && ui.button(tr!("haul-join-nodes")).on_hover_text(tr!("haul-join-help")).clicked()
+                && ui.button(tr!("haul-join-nodes")).on_hover_text(tr!("haul-join-nodes-help")).clicked()
             {
                 command(commands, session, HaulEdit::Join(keep, remove));
             }

@@ -45,10 +45,10 @@ impl<'a> App<'a> {
             self.record_applied_edit(Command::Batch(commands));
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    crate::i18n::tr!(literal = "Move Selection"),
-                    crate::i18n::tr_format!(literal = "%count% object(s)", count = moved),
+                    crate::i18n::tr!("common-move-selection"),
+                    crate::i18n::tr!("common-count-object-s", count = moved.to_string()),
                 ),
-                crate::i18n::tr_format!(literal = "Applied move delta (%delta%) to %count% object(s)", delta = delta, count = moved),
+                crate::i18n::tr!("cmd-move-tool-moved-objects", delta = delta.to_string(), count = moved.to_string()),
             );
         }
         self.reset_move_editor_state();
@@ -514,10 +514,10 @@ impl<'a> App<'a> {
         });
         crate::logging::report_completed_action(
             CommandReportSpec::new(
-                crate::i18n::tr!(literal = "Move Collar"),
-                crate::i18n::tr_format!(literal = "%count% hole(s)", count = moved),
+                crate::i18n::tr!("common-move-collar"),
+                crate::i18n::tr!("cmd-move-tool-count-hole-s", count = moved.to_string()),
             ),
-            crate::i18n::tr_format!(literal = "Applied move delta (%delta%) to %count% drillhole collar(s)", delta = delta, count = moved),
+            crate::i18n::tr!("cmd-move-tool-moved-collars", delta = delta.to_string(), count = moved.to_string()),
         );
         self.reset_move_editor_state();
         self.invalidate_topology_bounds_and_redraw();

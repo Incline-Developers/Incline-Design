@@ -2,12 +2,7 @@
 
 use glam::DVec2;
 
-use crate::{
-    app::App,
-    i18n::{tr, tr_format},
-    ui::state::ActiveTool,
-    userspace_log,
-};
+use crate::{app::App, i18n::tr, ui::state::ActiveTool, userspace_log};
 
 impl<'a> App<'a> {
     /// Canvas click while the Vertical Slice tool is armed. First click
@@ -60,14 +55,14 @@ impl<'a> App<'a> {
         self.redraw_requested = true;
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Entered slice view @ %cx%, %cy%, %cz% along %dx%, %dy% (%length%m line)",
+            tr!(
+                "cmd-slice-entered-slice-view-cx-cy",
                 cx = format!("{:.3}", center.x),
                 cy = format!("{:.3}", center.y),
                 cz = format!("{:.3}", center.z),
                 dx = format!("{:.3}", direction.x),
                 dy = format!("{:.3}", direction.y),
-                length = half_length * 2.0
+                length = (half_length * 2.0).to_string()
             )
         );
     }
@@ -104,7 +99,7 @@ impl<'a> App<'a> {
         self.end_right_orbit();
         self.clear_rotation_centre();
         self.redraw_requested = true;
-        userspace_log!("{}", tr!(literal = "Exited slice view"));
+        userspace_log!("{}", tr!("cmd-slice-exited-slice-view"));
     }
 
     /// Reset View while sliced: square the camera to the section plane, then
@@ -129,7 +124,7 @@ impl<'a> App<'a> {
         }
         self.end_right_orbit();
         self.redraw_requested = true;
-        userspace_log!("{}", tr!(literal = "Reset the section view (fit to extents)"));
+        userspace_log!("{}", tr!("cmd-slice-reset-section-view-fit-extents"));
     }
 
     /// Whether the cursor may be re-projected onto the section: yes when the section moves with no mouse event behind it, not while a right drag is orbiting it.
@@ -152,7 +147,7 @@ impl<'a> App<'a> {
     pub(crate) fn set_slice_grid_enabled(&mut self, enabled: bool) {
         self.editor.slice_grid_enabled = enabled;
         self.redraw_requested = true;
-        userspace_log!("{}", tr_format!(literal = "Set section grid = %enabled%", enabled = enabled));
+        userspace_log!("{}", tr!("cmd-slice-set-section-grid-enabled", enabled = enabled.to_string()));
     }
 
     /// Re-places the cursor after a camera move with no mouse event behind it.

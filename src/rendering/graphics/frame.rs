@@ -101,6 +101,8 @@ pub(crate) struct RenderInput<'frame> {
     pub(crate) triangulations: &'frame [OpenTriangulation],
     pub(crate) block_models: &'frame [OpenBlockModel],
     pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
+    /// Read by the borehole inspector's log, beside the inspected hole.
+    pub(crate) well_logs: &'frame crate::model::geophysics::GeophysicsSession,
     pub(crate) point_clouds: &'frame [OpenPointCloud],
     pub(crate) rasters: &'frame [OpenRasterTexture],
     /// The Solids Setup page's inspection mesh, when one is being shown. It
@@ -120,6 +122,7 @@ impl<'a> Graphics<'a> {
             triangulations,
             block_models,
             drill_holes,
+            well_logs,
             point_clouds,
             rasters,
             solid_preview,
@@ -155,7 +158,7 @@ impl<'a> Graphics<'a> {
                 self.scene_origin = origin;
                 self.triangulation_gpu.clear();
                 self.block_model_gpu.clear();
-                self.drill_hole_gpu = Default::default();
+                self.drill_hole_gpu.clear();
                 self.geometry_dirty = true;
                 self.scene_cache_key = None;
                 self.solid_preview_key = None;
@@ -268,7 +271,7 @@ impl<'a> Graphics<'a> {
             &self.block_model_volume_bind_group_layout,
             &self.edge_style_bind_group_layout,
         );
-        self.drill_hole_gpu.sync(&self.device, self.scene_origin, drill_holes, editor);
+        self.drill_hole_gpu.sync(&self.device, &self.queue, self.scene_origin, drill_holes, editor);
         self.point_cloud_gpu.sync(
             &self.device,
             &self.queue,
@@ -598,6 +601,7 @@ impl<'a> Graphics<'a> {
             project,
             block_models,
             drill_holes,
+            well_logs,
             [self.size.width, self.size.height],
             orbit_marker_screen,
             rotation_centre_screen,

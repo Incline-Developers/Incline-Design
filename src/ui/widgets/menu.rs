@@ -1,7 +1,7 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
 use super::shifted;
-use crate::i18n::{tr, tr_format};
+use crate::i18n::tr;
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -519,7 +519,7 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
 /// that paint their own bar. Returns whether it was clicked.
 pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-    close_cross(ui, close_rect, ui.id().with("close"), surface).on_hover_text(tr!(literal = "Close")).clicked()
+    close_cross(ui, close_rect, ui.id().with("close"), surface).on_hover_text(tr!("survey-close")).clicked()
 }
 
 /// The small cross that dismisses whatever it sits on, drawn and interacted
@@ -734,6 +734,68 @@ pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
     ui.add_space(2.0);
 }
 
+/// Whether the [`menu_section_folding`] section `id` is open; folded until
+/// the user first opens it.
+pub(crate) fn menu_section_open(ui: &egui::Ui, id: impl std::hash::Hash + std::fmt::Debug) -> bool {
+    ui.data_mut(|data| data.get_persisted::<bool>(egui::Id::new(id))).unwrap_or(false)
+}
+
+/// The height one [`menu_section_folding`] heading takes, spacing included.
+pub(crate) fn menu_section_folding_height(ui: &egui::Ui) -> f32 {
+    let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(11.0))).max(14.0);
+    4.0 + row + ui.spacing().item_spacing.y + 2.0
+}
+
+/// A [`menu_section`] heading with an arrow that folds the section away: a
+/// click hides or shows what follows, remembered between sessions. Returns
+/// whether the section is open, so the caller draws its body only then.
+pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, heading: impl Into<String>) -> bool {
+    const ARROW: f32 = 8.0;
+    const ARROW_GAP: f32 = 5.0;
+    let id = egui::Id::new(id);
+    let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(false);
+    ui.add_space(4.0);
+    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER);
+    record_intrinsic_content_width(ui, ARROW + ARROW_GAP + galley.size().x);
+    let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(11.0))).max(14.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|data| data.insert_persisted(id, open));
+    }
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let center = egui::pos2(rect.left() + ARROW / 2.0, rect.center().y);
+    let half = ARROW / 2.0;
+    let points = if open {
+        vec![
+            center + egui::vec2(-half, -half / 2.0),
+            center + egui::vec2(half, -half / 2.0),
+            center + egui::vec2(0.0, half / 2.0 + 1.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-half / 2.0, -half),
+            center + egui::vec2(half / 2.0 + 1.0, 0.0),
+            center + egui::vec2(-half / 2.0, half),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+    let text_left = rect.left() + ARROW + ARROW_GAP;
+    let text_end = text_left + galley.size().x;
+    ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, color);
+    ui.painter().line_segment(
+        [egui::pos2(text_end + 8.0, rect.center().y), rect.right_center()],
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    );
+    ui.add_space(2.0);
+    open
+}
+
 /// A quiet block of explanatory text inside a menu.
 ///
 /// For the sentence that says what the dialog is about to do, or what the
@@ -869,8 +931,8 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             label: label.into(),
             help_text: None,
             paths,
-            empty_text: tr!(literal = "No file chosen").into(),
-            button_text: tr!(literal = "Choose...").into(),
+            empty_text: tr!("common-no-file-chosen").into(),
+            button_text: tr!("common-choose").into(),
             width: None,
         }
     }
@@ -930,7 +992,7 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
             .map(str::to_owned)
             .unwrap_or_else(|| path.to_string_lossy().into_owned())
             .into(),
-        paths => tr_format!(literal = "%count% files selected", count = paths.len()).into(),
+        paths => tr!("menu-count-files-selected", count = paths.len().to_string()).into(),
     }
 }
 
@@ -1396,12 +1458,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             width,
         } = self;
         let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let widest_text = std::iter::once(selected_text.text())
-            .chain(options.iter().map(|(_, text)| text.text()))
-            .map(|text| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x)
-            .fold(0.0, f32::max);
-        let natural_control_width =
-            (widest_text + ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
+        let text_width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
+        let selected_needs = text_width(selected_text.text()) + chrome;
+        let widest_text = options.iter().map(|(_, text)| text_width(text.text())).fold(0.0, f32::max);
+        let natural_control_width = (widest_text + chrome).max(selected_needs).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
         menu_field_row(ui, label, help_text, |ui, _, column_width| {
             let width = width.unwrap_or(column_width).max(natural_control_width);
             let selected_tooltip = selected_text.text().to_owned();
@@ -1415,8 +1476,11 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                         selection_changed |= ui.selectable_value(value, option, text).changed();
                     }
                 })
-                .response
-                .on_hover_text(selected_tooltip);
+                .response;
+            // Only a value the box cuts short is worth repeating on hover.
+            if selected_needs > width + 0.5 {
+                response = response.on_hover_text(selected_tooltip);
+            }
             if selection_changed {
                 response.mark_changed();
             }

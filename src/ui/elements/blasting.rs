@@ -67,13 +67,13 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                     if response.double_clicked() {
                         commands.push(UiCommand::BeginRenameItem(RenameTarget::BlastShape(blast)));
                     }
-                    response.clone().on_hover_text(tr!(literal = "Double-click to rename"));
+                    response.clone().on_hover_text(tr!("planning-double-click-rename"));
                     context_menu_popup(&response, &outline.name, |ui| {
-                        if ContextMenuAction::new(tr!(literal = "Rename Blast")).show(ui).clicked() {
+                        if ContextMenuAction::new(tr!("planning-rename-blast")).show(ui).clicked() {
                             commands.push(UiCommand::BeginRenameItem(RenameTarget::BlastShape(blast)));
                             ui.close();
                         }
-                        if ContextMenuAction::new(tr!(literal = "Reset Blast Name")).show(ui).clicked() {
+                        if ContextMenuAction::new(tr!("planning-reset-blast-name")).show(ui).clicked() {
                             commands.push(UiCommand::ResetBlastName(blast));
                             ui.close();
                         }

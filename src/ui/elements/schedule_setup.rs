@@ -10,7 +10,7 @@
 //! neither run the Solids pipeline nor move its completion markers.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Document, ReserveField, schedule::SchedulePlan},
     ui::{
         EditorState,
@@ -30,7 +30,7 @@ fn rate_text(rate: f64) -> String {
 }
 
 fn rate_with_unit(rate: f64) -> String {
-    tr_format!(literal = "%rate% %unit%", rate = rate_text(rate), unit = tr!("schedule-tph"))
+    format!("{} {}", rate_text(rate), tr!("schedule-tph"))
 }
 
 /// Parse a typed dig rate, or say what is wrong with it.
@@ -155,7 +155,7 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
         Some(_) if status.state == StageState::Complete => tr!("schedule-readiness-result-current"),
         Some(_) => tr!("schedule-readiness-result-stale"),
     };
-    let blocks = summary.map_or_else(|| tr!(literal = "—"), |summary| summary.entities.to_string());
+    let blocks = summary.map_or_else(|| String::from("—"), |summary| summary.entities.to_string());
 
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 5).min(rect.height())));
     PropertyTable::new("schedule_readiness", table_rect, &ScheduleStep::Readiness.label()).show(ui, |rows| {
@@ -181,7 +181,7 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
             }
             for entry in &status.diagnostics {
                 let text = match &entry.entity {
-                    Some(entity) => tr_format!(literal = "%entity%: %message%", entity = entity.clone(), message = entry.message.clone()),
+                    Some(entity) => format!("{}: {}", entity, entry.message),
                     None => entry.message.clone(),
                 };
                 let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
@@ -199,11 +199,7 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
 /// because only a summed field can be read as tonnes and the choice should
 /// not look like it can.
 fn field_option_label(document: &Document, field: &ReserveField) -> String {
-    tr_format!(
-        literal = "%name% · %aggregation%",
-        name = field.name.clone(),
-        aggregation = super::planning_setup::aggregation_summary(document, &field.aggregation)
-    )
+    format!("{} · {}", field.name, super::planning_setup::aggregation_summary(document, &field.aggregation))
 }
 
 /// The schedule's own settings: what it is called, and which reserve field is
@@ -341,7 +337,7 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                 } else {
                     rate_with_unit(class.default_dig_rate_tph)
                 };
-                let label = tr_format!(literal = "%name% · %rate%", name = class.name.clone(), rate = rate);
+                let label = format!("{} · {}", class.name, rate);
                 let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
                 if response.clicked() {
                     selected = Some(class.id);
@@ -494,7 +490,7 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                     .class(agent.class_id)
                     .map(|class| class.name.clone())
                     .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
-                let label = tr_format!(literal = "%name% · %class%", name = agent.name.clone(), class = class);
+                let label = format!("{} · {}", agent.name, class);
                 let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id))).on_hover_text(&label);
                 if response.clicked() {
                     selected = Some(agent.id);

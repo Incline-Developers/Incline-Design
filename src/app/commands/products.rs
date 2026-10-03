@@ -7,7 +7,7 @@
 
 use crate::{
     app::{App, commands::view::config_from},
-    i18n::{tr, tr_format},
+    i18n::tr,
     ui::state::{DelayProduct, DelayProductId},
     userspace_log, userspace_warn,
 };
@@ -17,7 +17,10 @@ impl App<'_> {
     pub(crate) fn add_delay_product(&mut self, delay_ms: u32, name: String, color: egui::Color32) {
         let id = DelayProductId(self.editor.next_delay_product_id);
         self.editor.next_delay_product_id += 1;
-        userspace_log!("{}", tr_format!(literal = "Added product %delay_ms% ms %name%", delay_ms = delay_ms, name = name.clone()));
+        userspace_log!(
+            "{}",
+            tr!("cmd-products-added-product-delay-ms-ms", delay_ms = delay_ms.to_string(), name = name.clone().to_string())
+        );
         self.editor.delay_products.push(DelayProduct { id, delay_ms, name, color });
         // The palette reads as a scale from the shortest delay to the longest,
         // so a new product takes its place in that run rather than landing at
@@ -34,13 +37,17 @@ impl App<'_> {
     /// Drop one stored product from the palette.
     pub(crate) fn delete_delay_product(&mut self, id: DelayProductId) {
         let Some(index) = self.editor.delay_products.iter().position(|product| product.id == id) else {
-            userspace_warn!("{}", tr!(literal = "That product is no longer in the palette"));
+            userspace_warn!("{}", tr!("cmd-products-product-no-longer-palette"));
             return;
         };
         let product = self.editor.delay_products.remove(index);
         userspace_log!(
             "{}",
-            tr_format!(literal = "Deleted product %delay_ms% ms %name%", delay_ms = product.delay_ms, name = product.name.clone())
+            tr!(
+                "cmd-products-deleted-product-delay-ms-ms",
+                delay_ms = product.delay_ms.to_string(),
+                name = product.name.clone().to_string()
+            )
         );
         // The selection cannot stand on a card that has gone; the palette
         // falls back to its first, and to nothing while it is empty.
@@ -62,10 +69,11 @@ impl App<'_> {
             &preferences,
             self.editor.workspace_order,
             products,
+            self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
         )) {
-            userspace_warn!("{}", tr_format!(literal = "Failed to save products: %error%", error = error));
+            userspace_warn!("{}", tr!("cmd-products-failed-save-products-error", error = error.to_string()));
         }
     }
 }

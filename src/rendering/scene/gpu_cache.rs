@@ -386,10 +386,7 @@ impl BlockModelGpuCache {
                     self.prepared_surface_chunks.insert(id, PreparedSurfaceChunks { key: build.key, chunks });
                 }
                 Ok(Err(error)) => {
-                    log::warn!(
-                        "{}",
-                        crate::i18n::tr_format!(literal = "Block-model surface build failed: %error%", error = format!("{error:#}"))
-                    );
+                    log::warn!("{}", crate::i18n::tr!("gpu-cache-block-model-surface-build-failed", error = format!("{error:#}")));
                     // Store an empty result under the key so the model draws
                     // nothing rather than rescheduling the failing build
                     // every frame.
@@ -405,7 +402,7 @@ impl BlockModelGpuCache {
                     self.pending_surface_builds.insert(id, build);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::warn!("{}", crate::i18n::tr!(literal = "Block-model surface build worker disconnected"));
+                    log::warn!("{}", crate::i18n::tr!("gpu-cache-block-model-surface-build-worker"));
                 }
             }
         }
@@ -419,20 +416,14 @@ impl BlockModelGpuCache {
                     self.prepared_volumes.insert(id, PreparedVolume { key: build.key, asset });
                 }
                 Ok(Err(error)) => {
-                    crate::userspace_warn!(
-                        "{}",
-                        crate::i18n::tr_format!(
-                            literal = "Translucent volume could not be built (%error%); showing this block model as cubes instead.",
-                            error = format!("{error:#}")
-                        )
-                    );
+                    crate::userspace_warn!("{}", crate::i18n::tr!("gpu-cache-translucent-volume-could-not-built", error = format!("{error:#}")));
                     self.prepared_volumes.insert(id, PreparedVolume { key: build.key, asset: None });
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.pending_volume_builds.insert(id, build);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::warn!("{}", crate::i18n::tr!(literal = "Block-volume preparation worker disconnected"));
+                    log::warn!("{}", crate::i18n::tr!("gpu-cache-block-volume-worker-disconnected"));
                 }
             }
         }
@@ -1048,7 +1039,7 @@ impl BlockModelGpuCache {
     }
 }
 
-fn ray_aabb_distance(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
+pub(crate) fn ray_aabb_distance(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
     let mut near = 0.0_f64;
     let mut far = f64::INFINITY;
     for axis in 0..3 {
@@ -1559,10 +1550,10 @@ fn build_surface_chunks(
         if source.len() > u32::MAX as usize {
             log::error!(
                 "{}",
-                crate::i18n::tr_format!(
-                    literal = "Triangulation '%name%' has %count% vertices (> u32::MAX); cannot chunk for GPU",
-                    name = &triangulation.name,
-                    count = source.len()
+                crate::i18n::tr!(
+                    "gpu-cache-triangulation-too-many-vertices",
+                    name = triangulation.name.to_string(),
+                    count = source.len().to_string()
                 )
             );
         }
@@ -1699,11 +1690,11 @@ fn build_surface_chunks(
     if chunks.len() > 1 {
         log::info!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Triangulation '%name%' uploaded in %chunks% spatial chunks (%faces% faces)",
-                name = &triangulation.name,
-                chunks = chunks.len(),
-                faces = face_count
+            crate::i18n::tr!(
+                "gpu-cache-triangulation-uploaded",
+                name = triangulation.name.to_string(),
+                chunks = chunks.len().to_string(),
+                faces = face_count.to_string()
             )
         );
     }
@@ -1761,11 +1752,11 @@ fn upload_surface_chunk(
     if vertex_bytes > limit || index_bytes > limit {
         log::error!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Triangulation GPU chunk rejected before allocation: vertices=%vertices% bytes, indices=%indices% bytes, limit=%limit% bytes",
-                vertices = vertex_bytes,
-                indices = index_bytes,
-                limit = limit
+            crate::i18n::tr!(
+                "gpu-cache-triangulation-chunk-rejected",
+                vertices = vertex_bytes.to_string(),
+                indices = index_bytes.to_string(),
+                limit = limit.to_string()
             )
         );
         return None;
@@ -1902,11 +1893,7 @@ fn upload_edge_chunk(device: &wgpu::Device, instances: &[EdgeInstance]) -> Optio
     if instance_bytes > limit {
         log::error!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Triangulation edge chunk rejected before GPU allocation: instances=%instances% bytes, limit=%limit% bytes",
-                instances = instance_bytes,
-                limit = limit
-            )
+            crate::i18n::tr!("gpu-cache-edge-chunk-rejected", instances = instance_bytes.to_string(), limit = limit.to_string())
         );
         return None;
     }
@@ -2329,10 +2316,10 @@ fn upload_block_model_surface_chunk(device: &wgpu::Device, instances: &[BlockIns
     if instance_bytes > limit {
         log::error!(
             "{}",
-            crate::i18n::tr_format!(
-                literal = "Block model surface chunk rejected before GPU allocation: instances=%instances% bytes, limit=%limit% bytes",
-                instances = instance_bytes,
-                limit = limit
+            crate::i18n::tr!(
+                "gpu-cache-block-model-surface-chunk-rejected",
+                instances = instance_bytes.to_string(),
+                limit = limit.to_string()
             )
         );
         return None;

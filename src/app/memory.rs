@@ -1,10 +1,9 @@
 //! Central limits for allocations that can approach the WASM32 address space.
 
 #[cfg(target_arch = "wasm32")]
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+#[cfg(any(target_arch = "wasm32", test))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) const WORKING_SET_LIMIT: usize = 3 * 1024 * 1024 * 1024;
@@ -49,14 +48,15 @@ pub(crate) struct MemoryReservation;
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug)]
 struct Reservation {
-    bytes: usize,
+    bytes: AtomicUsize,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl Drop for Reservation {
     fn drop(&mut self) {
-        if self.bytes != 0 {
-            RESERVED.fetch_sub(self.bytes, Ordering::AcqRel);
+        let bytes = *self.bytes.get_mut();
+        if bytes != 0 {
+            RESERVED.fetch_sub(bytes, Ordering::AcqRel);
         }
     }
 }
@@ -70,7 +70,7 @@ impl MemoryReservation {
         #[cfg(target_arch = "wasm32")]
         {
             Self {
-                _reservation: Arc::new(Reservation { bytes: 0 }),
+                _reservation: Arc::new(Reservation { bytes: AtomicUsize::new(0) }),
             }
         }
     }
@@ -84,19 +84,31 @@ pub(crate) fn reserve(bytes: usize, description: &str) -> Result<MemoryReservati
     }
 
     #[cfg(target_arch = "wasm32")]
+    {
+        claim_counted(&RESERVED, bytes, WORKING_SET_LIMIT, description)?;
+        Ok(MemoryReservation {
+            _reservation: Arc::new(Reservation { bytes: AtomicUsize::new(bytes) }),
+        })
+    }
+}
+
+/// Add `bytes` to `used`, or refuse them if that would push `used` past
+/// `limit`. Free of the reservation type so it can run under a plain test
+/// counter as well as the real wasm budget.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the wasm budget uses these; native builds them only for tests"))]
+fn claim_counted(used: &AtomicUsize, bytes: usize, limit: usize, description: &str) -> Result<(), String> {
     loop {
-        let used = RESERVED.load(Ordering::Acquire);
-        let requested = used.checked_add(bytes).ok_or_else(|| format!("{description} memory estimate overflows"))?;
-        if requested > WORKING_SET_LIMIT {
+        let current = used.load(Ordering::Acquire);
+        let requested = current.checked_add(bytes).ok_or_else(|| format!("{description} memory estimate overflows"))?;
+        if requested > limit {
             return Err(format!(
                 "{description} needs {bytes} bytes, but only {} bytes remain in Incline Design's 3 GiB browser working-set budget",
-                WORKING_SET_LIMIT.saturating_sub(used)
+                limit.saturating_sub(current)
             ));
         }
-        if RESERVED.compare_exchange_weak(used, requested, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-            return Ok(MemoryReservation {
-                _reservation: Arc::new(Reservation { bytes }),
-            });
+        if used.compare_exchange_weak(current, requested, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            return Ok(());
         }
     }
 }

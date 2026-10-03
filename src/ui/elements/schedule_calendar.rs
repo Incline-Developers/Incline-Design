@@ -13,7 +13,7 @@
 use thousands::Separable;
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document,
         schedule::{
@@ -737,7 +737,7 @@ fn draw_row(
                     None => return,
                 },
                 CalendarOwner::Destination(id) => match destinations.iter().find(|entry| entry.id == id) {
-                    Some(entry) => tr_format!(literal = "%name% · %kind%", name = entry.name.clone(), kind = entry.kind.label()),
+                    Some(entry) => format!("{} · {}", entry.name, entry.kind.label()),
                     None => return,
                 },
             };

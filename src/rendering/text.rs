@@ -147,11 +147,11 @@ impl GlyphMeshCache {
                     Err(error) => {
                         log::warn!(
                             "{}",
-                            crate::i18n::tr_format!(
-                                literal = "Could not build vector mesh for font %font%, glyph %glyph%: %error%",
+                            crate::i18n::tr!(
+                                "text-could-not-build-vector-mesh",
                                 font = format!("{:?}", key.font_id),
-                                glyph = key.glyph_id,
-                                error = error
+                                glyph = key.glyph_id.to_string(),
+                                error = error.to_string()
                             )
                         );
                         None
@@ -337,7 +337,7 @@ impl TextBox {
                 let baseline_y = run.line_y + glyph.y - glyph.font_size * glyph.y_offset;
 
                 if !append_glyph_mesh(mesh, glyph_x, baseline_y, glyph.font_size, transform, color, vertices, indices) {
-                    log::warn!("{}", crate::i18n::tr!(literal = "Document text mesh exceeded its u32 index range"));
+                    log::warn!("{}", crate::i18n::tr!("text-document-text-mesh-exceeded-its"));
                     return;
                 }
             }

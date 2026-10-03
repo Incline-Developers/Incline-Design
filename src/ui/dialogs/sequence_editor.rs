@@ -123,7 +123,7 @@ pub(crate) fn draw_sequence_editor(
             // applied, and there is nothing left to apply it to.
             ui.label(egui::RichText::new(tr!("sequence-editor-bar-gone")).color(ui.visuals().error_fg_color));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!(literal = "Close"))).clicked() {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
                     close = true;
                 }
             });
@@ -202,7 +202,7 @@ pub(crate) fn draw_sequence_editor(
                 if target_changed && ui.add(MenuButton::new(tr!("sequence-editor-reload"))).clicked() {
                     reload = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
                     close = true;
                 }
             });
@@ -251,14 +251,14 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
         // without these the two scroll areas collide.
         ui.push_id("solids_navigation", |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
-                ui.label(egui::RichText::new(tr!(literal = "Solids Navigation")).strong());
+                ui.label(egui::RichText::new(tr!("sequence-solids-navigation")).strong());
                 crate::ui::elements::solids_view::draw_tree(ui, editor, document, commands);
             });
         });
         ui.separator();
         ui.push_id("objects", |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
-                ui.label(egui::RichText::new(tr!(literal = "Objects")).strong());
+                ui.label(egui::RichText::new(tr!("sequence-objects")).strong());
                 crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
             });
         });

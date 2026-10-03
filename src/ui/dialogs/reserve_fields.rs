@@ -12,9 +12,9 @@ use crate::{
 
 fn kind_label(kind: ReserveFieldKind) -> String {
     match kind {
-        ReserveFieldKind::Sum => tr!(literal = "Sum"),
-        ReserveFieldKind::WeightedAverage => tr!(literal = "Weighted average"),
-        ReserveFieldKind::Category => tr!(literal = "Category"),
+        ReserveFieldKind::Sum => tr!("planning-stat-sum"),
+        ReserveFieldKind::WeightedAverage => tr!("reserve-weighted-average"),
+        ReserveFieldKind::Category => tr!("csv-block-model-category"),
     }
 }
 
@@ -31,18 +31,18 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
     }
     let mut open = true;
     let mut close = false;
-    DragableMenu::new("new_reserve_field_dialog", tr!(literal = "New Field"))
+    DragableMenu::new("new_reserve_field_dialog", tr!("reserve-new-field"))
         .open(&mut open)
         .min_width(300.0)
         .show(ui.ctx(), |ui| {
-            MenuFieldText::new(tr!(literal = "Name"), &mut editor.new_reserve_field_name)
-                .hint_text(tr!(literal = "Required"))
+            MenuFieldText::new(tr!("planning-name"), &mut editor.new_reserve_field_name)
+                .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
             const KINDS: [ReserveFieldKind; 3] = [ReserveFieldKind::Sum, ReserveFieldKind::WeightedAverage, ReserveFieldKind::Category];
             let selected_kind_text = kind_label(editor.new_reserve_field_kind);
             MenuFieldCombo::new(
                 "new_reserve_field_kind",
-                tr!(literal = "Type"),
+                tr!("destination-type"),
                 &mut editor.new_reserve_field_kind,
                 selected_kind_text,
                 KINDS.into_iter().map(|kind| (kind, kind_label(kind).into())),
@@ -61,10 +61,10 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     .new_reserve_field_weight_field
                     .and_then(|id| sum_fields.iter().find(|field| field.id == id))
                     .map(|field| field.name.clone())
-                    .unwrap_or_else(|| tr!(literal = "None"));
+                    .unwrap_or_else(|| tr!("grade-calendar-none"));
                 MenuFieldCombo::new(
                     "new_reserve_field_weight",
-                    tr!(literal = "Weighted by"),
+                    tr!("reserve-weighted"),
                     &mut editor.new_reserve_field_weight_field,
                     selected_text,
                     sum_fields.iter().map(|field| (Some(field.id), field.name.clone().into())),
@@ -75,7 +75,7 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 let can_add = !editor.new_reserve_field_name.trim().is_empty()
                     && (editor.new_reserve_field_kind != ReserveFieldKind::WeightedAverage || editor.new_reserve_field_weight_field.is_some());
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
-                if (submitted || ui.add(MenuButton::new(tr!(literal = "Add Field")).primary().enabled(can_add)).clicked()) && can_add {
+                if (submitted || ui.add(MenuButton::new(tr!("reserve-add-field")).primary().enabled(can_add)).clicked()) && can_add {
                     let aggregation = match editor.new_reserve_field_kind {
                         ReserveFieldKind::Sum => ReserveAggregation::Sum,
                         ReserveFieldKind::WeightedAverage => ReserveAggregation::WeightedAverage {
@@ -89,7 +89,7 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
             });

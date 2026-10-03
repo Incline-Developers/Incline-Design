@@ -37,7 +37,7 @@ use std::{
 
 use super::solids_view::{DigBlockRecord, MaterialState, PlanningSnapshot};
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document, ReserveAggregation, ReserveFieldId,
         schedule::{
@@ -53,7 +53,7 @@ fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String,
     let solid_type = document
         .solid(block.solid)
         .map(|solid| crate::ui::dialogs::solids::kind_label(solid.kind))
-        .unwrap_or_else(|| tr!(literal = "Solid"));
+        .unwrap_or_else(|| tr!("tri-type-solid-closed"));
     // The same RL spelling the Solids tree beside these rows uses, so a
     // bench read in the navigation panel and the same bench read in the dig
     // order are recognisably the one bench. Bare: these are read in a row
@@ -74,7 +74,7 @@ fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String,
                 .find(|blast| blast.anchor == reference.anchor())
                 .map(|blast| blast.name.clone())
         })
-        .unwrap_or_else(|| tr!(literal = "Unblasted"));
+        .unwrap_or_else(|| tr!("schedule-unblasted"));
     // The bar's own name when nothing was authored: the blast's ground path,
     // which is how a dig area is spoken about.
     let area = crate::ui::elements::solids_view::blast_path(&block.solid_name, block.bench.base, &blast);
@@ -102,9 +102,9 @@ fn default_bar_name<'a>(areas: impl Iterator<Item = &'a str>) -> String {
         }
     }
     match distinct.as_slice() {
-        [] => tr!(literal = "Dig sequence"),
+        [] => tr!("schedule-dig-sequence"),
         [only] => (*only).to_owned(),
-        [first, rest @ ..] => tr_format!(literal = "%area% (+%count%)", area = (*first).to_owned(), count = rest.len().to_string()),
+        [first, rest @ ..] => format!("{} (+{})", first, rest.len()),
     }
 }
 

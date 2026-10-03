@@ -13,7 +13,7 @@
 //! stack nobody asked for.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document, ReserveAggregation,
         schedule::{
@@ -109,12 +109,12 @@ pub(crate) fn draw_destination_list(
             // to and the list is where that is compared.
             let label = match entry.kind {
                 DestinationKind::Crusher => match plan.routing().crusher(standalone_of(entry.id)).and_then(|calendar| calendar.default_tpd) {
-                    Some(limit) => tr_format!(literal = "%name% · %limit%", name = entry.name.clone(), limit = tonnes_per_day(limit)),
-                    None => tr_format!(literal = "%name% · %limit%", name = entry.name.clone(), limit = tr!("destination-unlimited")),
+                    Some(limit) => format!("{} · {}", entry.name, tonnes_per_day(limit)),
+                    None => format!("{} · {}", entry.name, tr!("destination-unlimited")),
                 },
                 _ => match entry.capacity_t {
-                    Some(capacity) => tr_format!(literal = "%name% · %limit%", name = entry.name.clone(), limit = tonnes(capacity)),
-                    None => tr_format!(literal = "%name% · %limit%", name = entry.name.clone(), limit = tr!("destination-unlimited")),
+                    Some(capacity) => format!("{} · {}", entry.name, tonnes(capacity)),
+                    None => format!("{} · {}", entry.name, tr!("destination-unlimited")),
                 },
             };
             let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(entry.id))).on_hover_text(&label);
@@ -439,12 +439,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                let label = tr_format!(
-                    literal = "%order%. %name% → %target%",
-                    order = (position + 1).to_string(),
-                    name = rule.name.clone(),
-                    target = target
-                );
+                let label = format!("{}. {} → {}", (position + 1), rule.name, target);
                 let summary = rule.summary(
                     |agent| plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent")),
                     |field| {
@@ -461,8 +456,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 // numbering jump.
                 let disabled = (!rule.enabled).then(|| tr!("destination-rule-disabled"));
                 let row = GridRow::new(&label).error(disabled.as_deref());
-                let response =
-                    grid_row(ui, row.selected(selected == Some(rule.id))).on_hover_text(tr_format!(literal = "%label%\n%summary%", label = label.clone(), summary = summary));
+                let response = grid_row(ui, row.selected(selected == Some(rule.id))).on_hover_text(format!("{}\n{}", label, summary));
                 if response.clicked() {
                     selected = Some(rule.id);
                 }
@@ -617,13 +611,8 @@ pub(crate) fn draw_rule_editor(
                         // Numbered while selected, because the order they are
                         // listed in is the order they are tried.
                         let label = match position {
-                            Some(position) => tr_format!(
-                                literal = "%order%. %name% · %kind%",
-                                order = (position + 1).to_string(),
-                                name = entry.name.clone(),
-                                kind = entry.kind.label()
-                            ),
-                            None => tr_format!(literal = "%name% · %kind%", name = entry.name.clone(), kind = entry.kind.label()),
+                            Some(position) => format!("{}. {} · {}", (position + 1), entry.name, entry.kind.label()),
+                            None => format!("{} · {}", entry.name, entry.kind.label()),
                         };
                         if ChecklistRow::new(&label, Tick::of(position.is_some(), false)).depth(1).show(ui).toggled {
                             match position {
@@ -989,7 +978,7 @@ pub(crate) fn draw_condition_dialog(
                     .collect();
                 for value in retained {
                     let mut picked = true;
-                    let label = tr_format!(literal = "%value% (%note%)", value = value.clone(), note = tr!("destination-condition-absent"));
+                    let label = format!("{} ({})", value, tr!("destination-condition-absent"));
                     if ui.checkbox(&mut picked, label).changed() {
                         draft.values.retain(|held| *held != value);
                     }
@@ -1116,7 +1105,7 @@ pub(crate) fn draw_new_destination_dialog(ui: &mut egui::Ui, editor: &mut Editor
         .min_width(320.0)
         .show(ui.ctx(), |ui| {
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_destination_name)
-                .hint_text(tr!(literal = "Required"))
+                .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
             menu::menu_note(ui, tr!("destination-type-fixed", kind = kind.label()));
             if let Some(message) = &error {
@@ -1204,11 +1193,11 @@ fn standalone_of(id: DestinationId) -> StandaloneDestinationId {
 }
 
 fn tonnes(value: f64) -> String {
-    tr_format!(literal = "%value% t", value = super::schedule_calendar::format_tonnes(value))
+    format!("{} t", super::schedule_calendar::format_tonnes(value))
 }
 
 fn tonnes_per_day(value: f64) -> String {
-    tr_format!(literal = "%value% t/day", value = super::schedule_calendar::format_tonnes(value))
+    tr!("schedule-tonnes-per-day", value = (super::schedule_calendar::format_tonnes(value)).to_string())
 }
 
 /// Whether a source row is shown: every group above it is open.
@@ -1432,7 +1421,7 @@ pub(crate) fn draw_opening_lots(
             }
             let last = inventory.lots.len().saturating_sub(1);
             for (position, lot) in inventory.lots.iter().enumerate() {
-                let label = tr_format!(literal = "%name% · %tonnes%", name = lot.name.clone(), tonnes = tonnes(lot.tonnes()));
+                let label = format!("{} · {}", lot.name, tonnes(lot.tonnes()));
                 let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(lot.id))).on_hover_text(&label);
                 if response.clicked() {
                     selected = Some(lot.id);
@@ -1618,7 +1607,7 @@ pub(crate) fn draw_lot_editor(
         }
 
         for (index, portion) in lot.portions.iter().enumerate() {
-            let title = tr_format!(literal = "%portion% %index%", portion = tr!("inventory-portion"), index = (index + 1).to_string());
+            let title = format!("{} {}", tr!("inventory-portion"), (index + 1));
             grid_separator_row(ui, &title, 0);
             {
                 let (cell, response) = grid_named_row(ui, &tr!("inventory-lot-tonnes"), 1);

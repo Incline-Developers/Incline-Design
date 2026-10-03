@@ -7,8 +7,10 @@
 //! [`bar_strip`] is the one piece shared between them: the layout the two bars
 //! across the top of the window are laid out on.
 
+pub(crate) mod blast;
 pub(crate) mod blasting;
 pub(crate) mod block_model;
+pub(crate) mod borehole_inspector;
 pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod dig_strips;

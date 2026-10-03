@@ -1087,7 +1087,7 @@ impl crate::app::App<'_> {
                         .workspace
                         .active_document()
                         .and_then(|document| document.reserve_field(*field))
-                        .map_or_else(|| tr!(literal = "?"), |field| field.name.clone());
+                        .map_or_else(|| String::from("?"), |field| field.name.clone());
                     // Numerator and denominator separately: a weighted average
                     // can match while both halves are wrong.
                     if relative(child_total.sum, parent_total.sum) > 1e-6 || relative(child_total.weight, parent_total.weight) > 1e-6 {

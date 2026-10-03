@@ -12,12 +12,17 @@
 //! Nothing in the panel is a button: a product is chosen by clicking its row,
 //! and the palette itself is edited from the section heading's right-click
 //! menu, so the list holds products and only products.
+//!
+//! The charge library sits below the delays in the same form: loading rules,
+//! one of which the Charge Holes tool stands on the way the Tie Holes tool
+//! stands on a delay, and the products those rules stack into a column.
 
 use crate::{
     i18n::tr,
+    model::blast::{BlastLibrary, ChargeProduct, ChargeRule, DeckLength},
     ui::{
         EditorState,
-        state::DelayProduct,
+        state::{BlastLibraryItem, ChargeProductDialog, ChargeRuleDialog, DelayProduct, UiCommand},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -37,11 +42,22 @@ pub(crate) const PANEL_ID: &str = "products_panel";
 /// one alike.
 const HEADER_DELAY_PALETTE: egui::Color32 = egui::Color32::from_rgb(0xE2, 0x3B, 0x46);
 
+/// Heading tint for the charge sections: the explosive pink of their icon.
+const HEADER_CHARGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x4F, 0x8C);
+
+/// The column bar at the right of a rule's row.
+const RULE_BAR_WIDTH: f32 = 58.0;
+const RULE_BAR_HEIGHT: f32 = 8.0;
+/// Clear space between the bar and the panel's right edge.
+const RULE_BAR_INSET: f32 = 10.0;
+/// The hole a rule is pictured on when no pattern is active.
+const RULE_BAR_FALLBACK_DEPTH: f64 = 12.0;
+
 /// Space between a product's delay and the name after it.
 const LABEL_GAP: f32 = 6.0;
 
 /// Draw the products panel and return what it claimed.
-pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> egui::Rect {
+pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     // The explorer's row colours, because these are the explorer's rows: the
     // two islands share one palette rather than each mixing its own.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
@@ -74,7 +90,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     // Reserved before any row is laid out and filled once the
                     // list's height is known: see `paint_fixed_stripes`.
                     let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!(literal = "Delay Palette"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!("products-delay-palette"))
                         .icon(unthemed_icon!("tie_holes.svg"))
                         .color(HEADER_DELAY_PALETTE)
                         .show(ui, |ui| draw_delay_palette(ui, editor));
@@ -82,12 +98,44 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     // one product in it, so it hangs off the section heading -
                     // the way the explorer's own section menus do - instead of
                     // taking a permanent row at the foot of the list.
-                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Delay Palette"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "New Product")).show(ui).clicked() {
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-delay-palette"), |ui| {
+                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
                             editor.begin_new_delay_product();
                             ui.close();
                         }
                     });
+
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_rules_collapse"), tr!("products-charge-rules"))
+                        .icon(unthemed_icon!("charge_holes.svg"))
+                        .color(HEADER_CHARGE)
+                        .show(ui, |ui| draw_charge_rules(ui, editor, commands));
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-rules"), |ui| {
+                        if ContextMenuAction::new(tr!("products-new-rule")).show(ui).clicked() {
+                            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, new_rule(&editor.blast_library)));
+                            ui.close();
+                        }
+                    });
+
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_products_collapse"), tr!("products-charge-products"))
+                        .icon(unthemed_icon!("charge_products.svg"))
+                        .color(HEADER_CHARGE)
+                        .default_open(false)
+                        .show(ui, |ui| draw_charge_products(ui, editor));
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-products"), |ui| {
+                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
+                            editor.charge_product_dialog = Some(ChargeProductDialog {
+                                original: None,
+                                product: ChargeProduct {
+                                    name: String::new(),
+                                    kind: crate::model::blast::DeckKind::Explosive,
+                                    density: 1.0,
+                                    color: [0xD0, 0x7A, 0x4A],
+                                },
+                            });
+                            ui.close();
+                        }
+                    });
+
                     paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                 });
         })
@@ -107,7 +155,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
     let mut delete = None;
 
     if editor.delay_products.is_empty() {
-        explorer_note(ui, tr!(literal = "No products"));
+        explorer_note(ui, tr!("products-no-products"));
     }
     // The palette stands on its first product whenever the selection has
     // nothing to point at - a config that never named one, say - so the row
@@ -134,7 +182,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
         }
         let label = format!("{} {}", product.delay_ms, product.name);
         context_menu_popup(&response, label.clone(), |ui| {
-            if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-delete-product")).show(ui).clicked() {
                 delete = Some((product.id, label.clone()));
                 ui.close();
             }
@@ -180,4 +228,237 @@ fn product_label(ui: &egui::Ui, product: &DelayProduct) -> egui::WidgetText {
         },
     );
     job.into()
+}
+
+/// A fresh rule to start the New Rule dialog from: stemming over a column of
+/// the first explosive in the library, named so it does not clash.
+fn new_rule(library: &BlastLibrary) -> ChargeRule {
+    let stemming = library.products.iter().find(|product| product.kind == crate::model::blast::DeckKind::Stemming);
+    let explosive = library.products.iter().find(|product| product.kind == crate::model::blast::DeckKind::Explosive);
+    let mut decks = Vec::new();
+    if let Some(stemming) = stemming {
+        decks.push(crate::model::blast::RuleDeck {
+            product: stemming.name.clone(),
+            length: DeckLength::Fixed(3.0),
+        });
+    }
+    if let Some(explosive) = explosive {
+        decks.push(crate::model::blast::RuleDeck {
+            product: explosive.name.clone(),
+            length: DeckLength::Fill,
+        });
+    }
+    let base = tr!("products-new-rule-default-name");
+    let mut name = base.clone();
+    let mut counter = 2;
+    while library.rules.iter().any(|rule| rule.name == name) {
+        name = format!("{base} ({counter})");
+        counter += 1;
+    }
+    ChargeRule {
+        name,
+        decks,
+        downhole_delay_ms: 500,
+        primer_offset: 0.5,
+        booster_kg: 0.4,
+    }
+}
+
+/// The loading rules: one row each, the one the Charge Holes tool loads with
+/// lit. A row's menu loads or unloads the selected holes with it directly.
+fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    if editor.blast_library.rules.is_empty() {
+        explorer_note(ui, tr!("products-no-rules"));
+    }
+    let active = editor.active_rule().map(|rule| rule.name.clone());
+    let selected_holes = editor
+        .active_drill_hole
+        .map_or(0, |id| editor.selected_drill_holes.iter().filter(|hole| hole.dataset == id).count());
+    // Rules are pictured on a hole of the active pattern's median depth, so
+    // the bar shows the proportions the rule will actually load.
+    let depth = editor
+        .blast_analysis
+        .as_deref()
+        .and_then(|analysis| analysis.median_depth)
+        .unwrap_or(RULE_BAR_FALLBACK_DEPTH);
+    let mut choose = None;
+    for rule in &editor.blast_library.rules {
+        let chosen = active.as_deref() == Some(rule.name.as_str());
+        let problem = rule.problem(&editor.blast_library.products);
+        let mut entry = ExplorerEntry::new(egui::Id::new(("charge_rule", rule.name.as_str())), rule_label(ui, rule, problem.is_some()))
+            .selected(chosen)
+            .trailing(RULE_BAR_WIDTH + RULE_BAR_INSET);
+        if chosen {
+            entry = entry.leading_icon(unthemed_icon!("product_active.svg"), HEADER_CHARGE);
+        }
+        let shown = entry.show(ui);
+        if let Some(slot) = shown.trailing
+            && problem.is_none()
+        {
+            paint_rule_bar(ui, slot, rule, &editor.blast_library, depth);
+        }
+        let mut response = shown.response;
+        if let Some(problem) = &problem {
+            response = response.on_hover_text(problem);
+        } else {
+            response = response.on_hover_text(rule_description(rule));
+        }
+        if response.clicked() {
+            choose = Some(rule.name.clone());
+        }
+        if response.double_clicked() {
+            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(Some(rule.name.clone()), rule.clone()));
+        }
+        context_menu_popup(&response, rule.name.clone(), |ui| {
+            let can_load = selected_holes > 0 && problem.is_none();
+            if ContextMenuAction::new(tr!("products-load-selected-holes-count", count = selected_holes.to_string()))
+                .enabled(can_load)
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::ChargeSelectedHoles { rule: Some(rule.name.clone()) });
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("products-unload-selected-holes-count", count = selected_holes.to_string()))
+                .enabled(selected_holes > 0)
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::ChargeSelectedHoles { rule: None });
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("products-edit-rule")).show(ui).clicked() {
+                editor.charge_rule_dialog = Some(ChargeRuleDialog::new(Some(rule.name.clone()), rule.clone()));
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("products-duplicate-rule")).show(ui).clicked() {
+                let mut copy = rule.clone();
+                copy.name = tr!("cmd-layer-name-copy", name = rule.name.to_string());
+                editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, copy));
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("products-delete-rule")).show(ui).clicked() {
+                editor.pending_delete_blast_item = Some(BlastLibraryItem::Rule(rule.name.clone()));
+                ui.close();
+            }
+        });
+    }
+    if let Some(name) = choose {
+        editor.active_charge_rule = Some(name);
+    }
+}
+
+/// A rule as a row: its name, with a warning mark when it cannot load
+/// anything. The column it makes is painted beside it - see
+/// [`paint_rule_bar`].
+fn rule_label(ui: &egui::Ui, rule: &ChargeRule, broken: bool) -> egui::WidgetText {
+    let mut text = egui::RichText::new(&rule.name).color(ui.visuals().text_color());
+    if broken {
+        text = egui::RichText::new(format!("{}  ⚠", rule.name)).color(ui.visuals().warn_fg_color);
+    }
+    text.into()
+}
+
+/// The column a rule loads, lying on its side at the right of its row:
+/// collar at the left, each deck as long as it would be down a hole of
+/// `depth` metres, so "a long column under a short stem" reads at a glance
+/// and two rules that differ only in their lengths read apart.
+fn paint_rule_bar(ui: &egui::Ui, slot: egui::Rect, rule: &ChargeRule, library: &BlastLibrary, depth: f64) {
+    let Ok(charge) = crate::model::blast::lay_rule(rule, &library.products, 0.0, depth) else {
+        return;
+    };
+    let bar = egui::Rect::from_min_size(
+        egui::pos2(slot.left(), slot.center().y - RULE_BAR_HEIGHT * 0.5),
+        egui::vec2(RULE_BAR_WIDTH, RULE_BAR_HEIGHT),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(bar, 2.0, ui.visuals().extreme_bg_color);
+    let x = |at: f64| bar.left() + (at / depth).clamp(0.0, 1.0) as f32 * bar.width();
+    for deck in &charge.decks {
+        let [red, green, blue] = deck.color.map(|channel| (channel * 255.0) as u8);
+        painter.rect_filled(
+            egui::Rect::from_x_y_ranges(x(deck.from)..=x(deck.to), bar.y_range()),
+            0.0,
+            egui::Color32::from_rgb(red, green, blue),
+        );
+    }
+    painter.rect_stroke(bar, 2.0, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(90)), egui::StrokeKind::Inside);
+}
+
+/// A rule spelled out deck by deck, for its row's hover text.
+fn rule_description(rule: &ChargeRule) -> String {
+    let mut lines: Vec<String> = rule
+        .decks
+        .iter()
+        .map(|deck| match deck.length {
+            DeckLength::Fixed(length) => format!("{length:.2} m  {}", deck.product),
+            DeckLength::Fill => tr!("products-fill-product", product = deck.product.to_string()),
+        })
+        .collect();
+    lines.push(tr!(
+        "products-primer-offset-m-off-each-explosive",
+        offset = format!("{:.2}", rule.primer_offset),
+        booster = format!("{:.2}", rule.booster_kg),
+        delay = rule.downhole_delay_ms.to_string()
+    ));
+    lines.push(tr!("products-double-click-edit"));
+    lines.join("\n")
+}
+
+/// The charge products: one row each with a swatch of the colour its decks
+/// are drawn in.
+fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
+    if editor.blast_library.products.is_empty() {
+        explorer_note(ui, tr!("products-no-products"));
+    }
+    for product in &editor.blast_library.products {
+        let color = egui::Color32::from_rgb(product.color[0], product.color[1], product.color[2]);
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &product.name,
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color: ui.visuals().text_color(),
+                ..Default::default()
+            },
+        );
+        // Only an explosive has anything to add: the inert products'
+        // names already say what they are.
+        if product.kind == crate::model::blast::DeckKind::Explosive {
+            job.append(
+                &format!("{:.2} g/cm³", product.density),
+                LABEL_GAP,
+                egui::TextFormat {
+                    font_id: font,
+                    color: ui.visuals().weak_text_color(),
+                    ..Default::default()
+                },
+            );
+        }
+        let response = ExplorerEntry::new(egui::Id::new(("charge_product", product.name.as_str())), job)
+            .leading_icon(unthemed_icon!("charge_swatch.svg"), color)
+            .show(ui)
+            .response;
+        if response.double_clicked() {
+            editor.charge_product_dialog = Some(ChargeProductDialog {
+                original: Some(product.name.clone()),
+                product: product.clone(),
+            });
+        }
+        context_menu_popup(&response, product.name.clone(), |ui| {
+            if ContextMenuAction::new(tr!("products-edit-product")).show(ui).clicked() {
+                editor.charge_product_dialog = Some(ChargeProductDialog {
+                    original: Some(product.name.clone()),
+                    product: product.clone(),
+                });
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("common-delete-product")).show(ui).clicked() {
+                editor.pending_delete_blast_item = Some(BlastLibraryItem::Product(product.name.clone()));
+                ui.close();
+            }
+        });
+    }
 }

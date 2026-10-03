@@ -10,7 +10,7 @@
 use thousands::Separable;
 
 use crate::{
-    i18n::tr_format,
+    i18n::tr,
     ui::{EditorState, widgets::shifted},
 };
 
@@ -86,7 +86,7 @@ pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
         None => {
             if let Some(finished) = &editor.last_finished_task {
                 let status = ring_status_text(1.0, finished.total_units.map(|total| (total, total)));
-                draw_ring(ui, &status, &tr_format!(literal = "%task%: Finished", task = finished.text), RingFill::Fraction(1.0));
+                draw_ring(ui, &status, &tr!("progress-task-finished", task = finished.text.to_string()), RingFill::Fraction(1.0));
             }
         }
     }
@@ -96,11 +96,11 @@ pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
 fn ring_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
     let percent = format!("{:.0}%", fraction * 100.0);
     match units {
-        Some((done, total)) => tr_format!(
-            literal = "%percent% (%done% of %total%)",
-            percent = percent,
-            done = done.separate_with_commas(),
-            total = total.separate_with_commas()
+        Some((done, total)) => tr!(
+            "progress-percent-done-total",
+            percent = percent.to_string(),
+            done = done.separate_with_commas().to_string(),
+            total = total.separate_with_commas().to_string()
         ),
         None => percent,
     }

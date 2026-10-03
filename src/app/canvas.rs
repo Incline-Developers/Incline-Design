@@ -1,6 +1,6 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, Object, SceneEntityId},
     ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
 };
@@ -28,7 +28,7 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|triangulation| triangulation.id == id)
                     .map(|triangulation| triangulation.name.clone())
-                    .unwrap_or_else(|| tr!(literal = "Surface"));
+                    .unwrap_or_else(|| tr!("tri-type-open-surface"));
                 self.apply_triangulation_field_pick(target, id, &name);
             }
             return;
@@ -50,7 +50,7 @@ impl<'a> App<'a> {
             {
                 let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                 self.editor.drill_pattern_boundary_id = Some(id);
-                self.editor.drill_pattern_boundary_name = tr_format!(literal = "Polyline on '%layer%'", layer = layer);
+                self.editor.drill_pattern_boundary_name = tr!("common-polyline-layer", layer = layer.to_string());
                 self.editor.drill_pattern_awaiting_shape_pick = false;
                 self.editor.viewport_pick_hover_label = None;
                 self.editor.tool_highlight_id = Some(id);
@@ -100,7 +100,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -115,7 +115,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
+                if self.editor.active_tool.box_selects_from_open_ground() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {
@@ -147,7 +147,7 @@ impl<'a> App<'a> {
                 self.triangulations
                     .iter()
                     .find(|triangulation| triangulation.id == id)
-                    .map(|triangulation| tr_format!(literal = "Surface | %name%", name = &triangulation.name))
+                    .map(|triangulation| tr!("canvas-surface-name", name = triangulation.name.to_string()))
             });
             if self.editor.tri_hover_handles != next_handles || self.editor.viewport_pick_hover_label != next_label {
                 self.editor.tri_hover_handles = next_handles;
@@ -173,26 +173,16 @@ impl<'a> App<'a> {
                 Some(object) if if pattern_picker { is_drill_pattern_boundary(object) } else { object.encloses_area() } => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                     match object {
-                        Object::Circle { radius, .. } => (
-                            Some(id),
-                            Some(tr_format!(
-                                literal = "Circle | Layer: %layer% | radius %radius%",
-                                layer = layer,
-                                radius = format!("{radius:.3}")
-                            )),
-                        ),
+                        Object::Circle { radius, .. } => (Some(id), Some(tr!("canvas-circle-summary", layer = layer.to_string(), radius = format!("{radius:.3}")))),
                         _ => {
                             let count = object.string_geometry().map_or(0, |(verts, _)| verts.len());
-                            (
-                                Some(id),
-                                Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = count)),
-                            )
+                            (Some(id), Some(tr!("canvas-polyline-summary", layer = layer.to_string(), count = count.to_string())))
                         }
                     }
                 }
-                _ => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
+                _ => (None, Some(tr!("canvas-not-selectable-closed-polyline"))),
             },
-            Some(_) => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
+            Some(_) => (None, Some(tr!("canvas-not-selectable-closed-polyline"))),
             None => (None, None),
         };
         if self.editor.tool_highlight_id != next_highlight || self.editor.viewport_pick_hover_label != next_label {
@@ -219,7 +209,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_cut_surface_name_input,
                     self.editor.tri_cut_surface_name_auto,
                     name,
-                    &tr!(literal = "Trimmed"),
+                    &tr!("canvas-trimmed"),
                 );
             }
             TriangulationPickTarget::SolidDesign => {
@@ -227,7 +217,7 @@ impl<'a> App<'a> {
                 if self.editor.tri_solid_topography_id == Some(id) {
                     self.editor.tri_solid_topography_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_solid_name_input, self.editor.tri_solid_name_auto, name, &tr!(literal = "Solid"));
+                update_auto_derived_name(&mut self.editor.tri_solid_name_input, self.editor.tri_solid_name_auto, name, &tr!("tri-type-solid-closed"));
             }
             TriangulationPickTarget::SolidTopography => {
                 self.editor.tri_solid_topography_id = Some(id);
@@ -244,7 +234,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_cut_pitshell_name_input,
                     self.editor.tri_cut_pitshell_name_auto,
                     name,
-                    &tr!(literal = "Cut"),
+                    &tr!("common-cut"),
                 );
             }
             TriangulationPickTarget::CutPitShell => {
@@ -262,7 +252,7 @@ impl<'a> App<'a> {
                     &mut self.editor.tri_include_solid_name_input,
                     self.editor.tri_include_solid_name_auto,
                     name,
-                    &tr!(literal = "With Shell"),
+                    &tr!("common-shell"),
                 );
             }
             TriangulationPickTarget::IncludeShape => {
@@ -400,9 +390,9 @@ impl<'a> App<'a> {
             if let Some(pick) = pending_selection_click {
                 let world = pick.world;
                 let handle = pick.entity;
-                // Drill & Blast selects the hole the cursor was over, where
-                // production selects the dataset holding it.
-                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
+                // A click takes the one hole the cursor was over, in every
+                // workspace. Selecting a dataset whole is the explorer's job.
+                let hole = pick.hole;
 
                 // Selecting an object may retarget the active project, but never the
                 // active layer: that is owned solely by the toolbar layer selector.
@@ -441,6 +431,14 @@ impl<'a> App<'a> {
                 match hole {
                     Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
                     None => self.editor.on_canvas_pick(handle, world, selection_mode),
+                }
+                // A click that dropped its hit must not park the panel on it.
+                let still_selected = match hole {
+                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
+                    None => self.editor.selected_handles.contains(&handle),
+                };
+                if still_selected {
+                    self.editor.show_picked_hole(hole);
                 }
                 // A drape has no geometry of its own - it is painted onto the
                 // surface - so the click that lands on the surface lands on
@@ -520,17 +518,35 @@ impl<'a> App<'a> {
             SceneEntityId::HaulRoad(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
             SceneEntityId::HaulNode(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
         });
+        // Holes ride the same box, taken by their collars: they are not
+        // rendered geometry the picker walks, so `enclosed` never holds one,
+        // and Move takes none because it marquees only what it can move.
+        let holes = self
+            .graphics
+            .as_ref()
+            .filter(|_| !objects_only)
+            .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .unwrap_or_default();
         if self.modifiers.shift_key() {
             for handle in enclosed {
                 if !self.editor.selected_handles.remove(&handle) {
                     self.editor.selected_handles.insert(handle);
                 }
             }
+            for hole in holes {
+                if !self.editor.selected_drill_holes.remove(&hole) {
+                    self.editor.selected_drill_holes.insert(hole);
+                }
+            }
         } else {
             if !self.modifiers.control_key() {
                 self.editor.selected_handles.clear();
+                // Cleared with the handles, or a box over empty ground would
+                // leave the previous box's holes selected.
+                self.editor.selected_drill_holes.clear();
             }
             self.editor.selected_handles.extend(enclosed);
+            self.editor.selected_drill_holes.extend(holes);
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;
@@ -542,6 +558,15 @@ impl<'a> App<'a> {
     /// takes any; otherwise select its holes one at a time rather than as the
     /// datasets they came from.
     fn finish_blast_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+        if self.editor.active_tool == crate::ui::state::ActiveTool::ChargeHoles {
+            let enclosed = self
+                .graphics
+                .as_ref()
+                .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+                .unwrap_or_default();
+            self.finish_charge_box(enclosed);
+            return;
+        }
         let tie_ins = self
             .graphics
             .as_ref()

@@ -149,6 +149,9 @@ pub(crate) struct Config {
     /// first launch, where it resolves to the OS locale - see [`crate::i18n`].
     #[serde(default = "default_language")]
     pub(crate) language: LanguageChoice,
+    /// Colours and scales for the borehole log's trace columns.
+    #[serde(default)]
+    pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     /// Use egui's dark visuals and the dark UI icon set.
     #[serde(default = "default_dark_mode")]
     pub(crate) dark_mode: bool,
@@ -224,6 +227,10 @@ pub(crate) struct Config {
     /// here with the rest of what outlives a project.
     #[serde(default = "default_delay_products")]
     pub(crate) delay_products: Vec<StoredDelayProduct>,
+    /// The charge products and loading rules, kept beside the delays for the
+    /// same reason.
+    #[serde(default)]
+    pub(crate) blast_library: crate::model::blast::BlastLibrary,
     #[serde(default)]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
@@ -269,6 +276,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: default_language(),
+            well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
             panel_chrome: default_panel_chrome(),
@@ -299,6 +307,7 @@ impl Default for Config {
             fly_near_clip_limit: default_fly_near_clip_limit(),
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
+            blast_library: Default::default(),
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,

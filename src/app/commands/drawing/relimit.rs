@@ -2,7 +2,7 @@ use glam::DVec3;
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     ui::state::{ActiveTool, RelimitCandidate, RelimitMode, TrimEnd},
@@ -67,20 +67,20 @@ impl<'a> App<'a> {
 
         // Phase 1: pick the target boundary (only when dialog is closed).
         if !self.editor.relimit_waiting_for_pick {
-            userspace_warn!("{}", tr!(literal = "Relimit: click ignored, tool is not currently waiting for a target pick"));
+            userspace_warn!("{}", tr!("cmd-relimit-click-ignored"));
             return;
         }
         let picked = self.pick_under_cursor();
         let Some((SceneEntityId::Object(second_id), _)) = picked else {
-            userspace_warn!("{}", tr!(literal = "Relimit: click did not hit any object (nothing under cursor)"));
+            userspace_warn!("{}", tr!("cmd-relimit-click-missed"));
             return;
         };
         let Some(source_id) = self.editor.relimit_source_id else {
-            userspace_warn!("{}", tr!(literal = "Relimit: no source line is set, aborting pick"));
+            userspace_warn!("{}", tr!("cmd-relimit-no-source-line"));
             return;
         };
         if second_id == source_id {
-            userspace_warn!("{}", tr!(literal = "Relimit: clicked the source line itself, pick a different line"));
+            userspace_warn!("{}", tr!("cmd-relimit-clicked-source-line"));
             return;
         }
 
@@ -205,8 +205,8 @@ impl<'a> App<'a> {
         self.cancel_relimit();
         if changed {
             crate::logging::report_completed_action(
-                CommandReportSpec::new(crate::i18n::tr!(literal = "Relimit Line"), format!("{source_id:?}")),
-                tr_format!(literal = "Relimited line %source_id% to the selected target", source_id = format!("{source_id:?}")),
+                CommandReportSpec::new(crate::i18n::tr!("common-relimit-line"), format!("{source_id:?}")),
+                tr!("cmd-relimit-relimited-line-source-id-selected", source_id = format!("{source_id:?}")),
             );
         }
         self.invalidate_geometry();
@@ -241,12 +241,12 @@ impl<'a> App<'a> {
         self.cancel_relimit();
         if changed {
             crate::logging::report_completed_action(
-                CommandReportSpec::new(crate::i18n::tr!(literal = "Relimit Line"), format!("{source_id:?}")),
-                tr_format!(
-                    literal = "Resized line %source_id% using %mode% value %value%",
+                CommandReportSpec::new(crate::i18n::tr!("common-relimit-line"), format!("{source_id:?}")),
+                tr!(
+                    "cmd-relimit-resized-line-source-id-using",
                     source_id = format!("{source_id:?}"),
                     mode = format!("{mode:?}"),
-                    value = value
+                    value = value.to_string()
                 ),
             );
         }

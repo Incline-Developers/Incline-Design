@@ -1,6 +1,10 @@
+pub(crate) mod blast; // Drill & Blast's charging and pattern reviews
 pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
 pub(crate) mod events; // Handles window events
+pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
@@ -57,7 +61,7 @@ use crate::{
     model::{
         Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, SectionKind, StepEffects,
         block_model::{BlockModelSource, OpenBlockModel},
-        drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
+        drill_hole::{CollarRotation, DrillHoleRef, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -110,13 +114,13 @@ fn rate_interval(rate: u32) -> Duration {
 
 fn window_icon() -> Option<Icon> {
     let image = egui_extras::image::load_svg_bytes(include_bytes!("../../res/logo.svg"), &Default::default())
-        .map_err(|error| log::error!("{}", crate::i18n::tr_format!(literal = "Failed to rasterize window icon: %error%", error = error)))
+        .map_err(|error| log::error!("{}", crate::i18n::tr!("app-failed-rasterize-window-icon-error", error = error.to_string())))
         .ok()?;
     let [width, height] = image.size;
     let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
 
     Icon::from_rgba(rgba, width as u32, height as u32)
-        .map_err(|error| log::error!("{}", crate::i18n::tr_format!(literal = "Failed to create window icon: %error%", error = error)))
+        .map_err(|error| log::error!("{}", crate::i18n::tr!("app-failed-create-window-icon-error", error = error.to_string())))
         .ok()
 }
 
@@ -341,6 +345,15 @@ pub(crate) struct App<'a> {
     tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
     #[cfg(not(target_arch = "wasm32"))]
     tracked_project_paths: Vec<PathBuf>,
+    /// Whether each loaded dataset's linked geophysics files can be read
+    /// this session, and the holes read from them lately. The links
+    /// themselves are the datasets'.
+    pub(crate) well_logs: crate::model::geophysics::GeophysicsSession,
+    /// Geophysics files picked this session, by their identity, so a saved
+    /// link finds its file again without another pick. A page cannot open a
+    /// file by path.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) geophysics_files: Vec<(crate::model::geophysics::FileIdentity, web_sys::File)>,
     /// Latest non-zero window size awaiting surface reconfiguration. Resize
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
@@ -491,7 +504,6 @@ pub(crate) struct App<'a> {
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
-    pending_drill_hole_loads: Vec<PendingLoad<DrillHoleSource, crate::model::drill_hole::LoadedDrillHoleDataset>>,
     pending_point_cloud_loads: Vec<PendingLoad<PathBuf, crate::model::point_cloud::LoadedPointCloud>>,
     pending_raster_loads: Vec<PendingLoad<PathBuf, crate::model::raster::LoadedRasterTexture>>,
     /// project paths currently being parsed. They remain reserved until the job
@@ -512,8 +524,18 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
+    /// Set by a job's apply step that handed the renderer new geometry to
+    /// upload; read and cleared by `poll_jobs`, which keeps that job's busy
+    /// state until the GPU upload finishes instead of settling it early.
+    applied_job_needs_gpu: bool,
     #[cfg(target_arch = "wasm32")]
     web_import_files: Option<(crate::ui::state::DataMenu, Vec<crate::model::input::InputFile>)>,
+    /// Files picked for the current drillhole CSV bundle, in the order of
+    /// `EditorState::import_drill_csv`. Only their heads were read, for the
+    /// mapping, so the import reads its tables from these and links its
+    /// geophysics files.
+    #[cfg(target_arch = "wasm32")]
+    web_import_picked_files: Option<Vec<web_sys::File>>,
     window_focused: bool,
 }
 
@@ -550,6 +572,9 @@ impl<'a> Default for App<'a> {
             tracked_browser_projects: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
+            well_logs: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            geophysics_files: Vec::new(),
             pending_resize: None,
             last_resize_event: None,
             last_render_time: None,
@@ -623,7 +648,6 @@ impl<'a> Default for App<'a> {
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
-            pending_drill_hole_loads: Vec::new(),
             pending_point_cloud_loads: Vec::new(),
             pending_raster_loads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -636,8 +660,11 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
+            applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
+            #[cfg(target_arch = "wasm32")]
+            web_import_picked_files: None,
             window_focused: true,
         }
     }
@@ -697,6 +724,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
             MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
+            MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
+            MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -719,7 +748,7 @@ impl<'a> App<'a> {
             Ok(session) => session,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => io::Session::default(),
             Err(e) => {
-                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load session file: %error%", error = e));
+                userspace_warn!("{}", crate::i18n::tr!("app-failed-load-session-file-error", error = e.to_string()));
                 io::Session::default()
             }
         };
@@ -727,7 +756,7 @@ impl<'a> App<'a> {
             Ok(config) => config,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => io::Config::default(),
             Err(e) => {
-                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load config file: %error%", error = e));
+                userspace_warn!("{}", crate::i18n::tr!("app-failed-load-config-file-error", error = e.to_string()));
                 io::Config::default()
             }
         };
@@ -769,6 +798,7 @@ impl<'a> App<'a> {
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
         crate::i18n::select_language(config.language);
+        self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
@@ -803,6 +833,7 @@ impl<'a> App<'a> {
         self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
+        self.editor.blast_library = config.blast_library.clone();
         self.configure_graphics_camera_preferences();
     }
 
@@ -815,7 +846,7 @@ impl<'a> App<'a> {
         match io::load_config() {
             Ok(config) => app.apply_config(config),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load browser preferences: %error%", error = error)),
+            Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-browser-preferences-load-failed", error = error.to_string())),
         }
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
@@ -1159,8 +1190,8 @@ impl<'a> App<'a> {
         if self.editor.tie_anchor.is_some_and(|anchor| !self.drill_holes.iter().any(|item| item.id == anchor.dataset)) {
             self.editor.end_tie_chain();
         }
-        self.editor.selected_drill_holes.retain(|hole| self.drill_holes.iter().any(|item| item.id == hole.dataset));
-        self.editor.selected_tie_ins.retain(|tie| self.drill_holes.iter().any(|item| item.id == tie.dataset));
+        let drill_holes = &self.drill_holes;
+        self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
         if self
             .editor
             .initiation_dialog
@@ -1299,6 +1330,9 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // Drillhole loads are said by name, as a project switch says them;
+        // the rest go silently.
+        self.cancel_drill_hole_loads(|_| true);
         // A browser save already holds its own snapshot and still owes the
         // completion handler a result; cancelling it would strand the pending
         // flag and lose a save the user asked for.
@@ -1318,12 +1352,6 @@ impl<'a> App<'a> {
             }
         }
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_block_model_loads) {
-            self.cancel_background_task(ticket);
-            if let Some(report) = report {
-                report.cancel();
-            }
-        }
-        for (ticket, _, _, report) in std::mem::take(&mut self.pending_drill_hole_loads) {
             self.cancel_background_task(ticket);
             if let Some(report) = report {
                 report.cancel();
@@ -1354,6 +1382,7 @@ impl<'a> App<'a> {
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();
+        self.well_logs.clear();
         self.next_drill_hole_id = 0;
         self.point_clouds.clear();
         self.next_point_cloud_id = 0;
@@ -1384,6 +1413,7 @@ impl<'a> App<'a> {
         self.editor.active_tool = active_tool;
         self.workspace.set_active_index(index);
         self.history.activate(self.workspace.projects[index].runtime_id);
+        self.cancel_drill_hole_loads_for_other_projects();
         self.persist_session();
         self.invalidate_overlay();
     }
@@ -1770,10 +1800,7 @@ impl<'a> App<'a> {
                 .open_slice_preview(window)
         });
         if let Err(error) = result {
-            log::error!(
-                "{}",
-                crate::i18n::tr_format!(literal = "Failed to detach top-down preview: %error%", error = format!("{error:#}"))
-            );
+            log::error!("{}", crate::i18n::tr!("app-failed-detach-top-down-preview", error = format!("{error:#}")));
             self.editor.slice_preview_detached = false;
         }
     }
@@ -1809,7 +1836,7 @@ impl<'a> App<'a> {
             for layer in project.project.document.layers() {
                 layer.hash_row(&mut hasher);
             }
-            // All six sections at once: the registry is shared project
+            // Every section at once: the registry is shared project
             // content, not just the Designs tree's.
             project.project.folders.hash_into(&mut hasher);
         }
@@ -1914,7 +1941,7 @@ impl<'a> App<'a> {
                         path.file_stem()
                             .and_then(|stem| stem.to_str())
                             .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| crate::i18n::tr!(literal = "Project"))
+                            .unwrap_or_else(|| crate::i18n::tr!("common-project"))
                     };
                     UiTrackedProjectEntry {
                         name,
@@ -2071,10 +2098,27 @@ impl<'a> App<'a> {
                 .active_project()
                 .is_some_and(|project| project.project.folders.names(section) != self.project_asset_baseline.folders.names(section))
         };
-        let triangulations_membership_dirty = !same_membership(
-            &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
-            &self.project_asset_baseline.triangulations,
-        ) || section_folders_dirty(SectionKind::Triangulations);
+        // Triangulations sit under two sections and the baseline records no
+        // section, so an added or moved id marks the section it is in now,
+        // and a deleted one marks every section its kind can sit in.
+        let section_membership_dirty = |section: SectionKind, current: &[(u64, SectionKind)], saved: &[(u64, u64)]| {
+            let added = current
+                .iter()
+                .any(|(id, item_section)| *item_section == section && !saved.iter().any(|(saved_id, _)| saved_id == id));
+            let deleted = saved.iter().any(|(saved_id, _)| !current.iter().any(|(id, _)| id == saved_id));
+            added || deleted
+        };
+        let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
+        let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Triangulations);
+        // Modelling's own half of the same question. Its layers belong here
+        // rather than with the rows: a deleted one has no row left to mark.
+        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
+            || section_folders_dirty(SectionKind::Modelling)
+            || self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -2099,6 +2143,7 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
+            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
@@ -2143,7 +2188,7 @@ impl<'a> App<'a> {
             current_project_path: self.workspace.active_project().and_then(|project| project.path.clone()),
         };
         if let Err(e) = io::save_session(&session) {
-            log::warn!("{}", crate::i18n::tr_format!(literal = "Failed to save session: %error%", error = e));
+            log::warn!("{}", crate::i18n::tr!("app-failed-save-session-error", error = e.to_string()));
         }
     }
 
@@ -2155,7 +2200,7 @@ impl<'a> App<'a> {
         });
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = crate::app::web_storage::save_session(id).await {
-                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to save browser session: %error%", error = error));
+                userspace_warn!("{}", crate::i18n::tr!("app-failed-save-browser-session-error", error = error.to_string()));
             }
         });
     }
@@ -2193,7 +2238,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         let window = match event_loop.create_window(window_attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => {
-                log::error!("{}", crate::i18n::tr_format!(literal = "Failed to create window: %error%", error = e));
+                log::error!("{}", crate::i18n::tr!("app-failed-create-window-error", error = e.to_string()));
                 #[cfg(target_arch = "wasm32")]
                 crate::show_web_startup_error(&format!("failed to create the browser window: {e}"));
                 self.close_requested = true;
@@ -2214,7 +2259,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 self.fit_view_to_extents();
             }
             Err(e) => {
-                log::error!("{}", crate::i18n::tr_format!(literal = "Failed to initialize graphics: %error%", error = format!("{e:?}")));
+                log::error!("{}", crate::i18n::tr!("app-failed-initialize-graphics-error", error = format!("{e:?}")));
                 self.close_requested = true;
             }
         }
@@ -2266,6 +2311,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         }
 
         self.poll_file_dialogs();
+        self.sync_geophysics();
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2384,7 +2430,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     // left for the startup dialog to offer.
                     self.tracked_browser_projects = restored.projects;
                 }
-                Err(error) => userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not restore the browser project: %error%", error = error)),
+                Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-could-not-restore-browser-project", error = error.to_string())),
             },
             AppEvent::BrowserProjectLoaded { project_id, ticket, result } => {
                 self.finish_background_task(ticket, false);
@@ -2409,23 +2455,20 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                         project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record_id);
                                     }
                                     app.persist_session();
-                                    userspace_log!("{}", crate::i18n::tr_format!(literal = "Activated browser project '%name%'.", name = record_name));
+                                    userspace_log!("{}", crate::i18n::tr!("app-activated-browser-project-name", name = ToString::to_string(&record_name)));
                                 }
-                                Err(error) => userspace_warn!(
-                                    "{}",
-                                    crate::i18n::tr_format!(literal = "Could not activate browser project: %error%", error = format!("{error:#}"))
-                                ),
+                                Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-could-not-activate-browser-project", error = format!("{error:#}"))),
                             }
                         };
                         self.spawn_job_reporting_progress("Switching project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
                     }
                     Ok(None) => {
                         self.browser_project_loads_pending.remove(&project_id);
-                        userspace_warn!("{}", crate::i18n::tr!(literal = "That browser project no longer exists"));
+                        userspace_warn!("{}", crate::i18n::tr!("app-browser-project-no-longer-exists"));
                     }
                     Err(error) => {
                         self.browser_project_loads_pending.remove(&project_id);
-                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not load the browser project: %error%", error = error));
+                        userspace_warn!("{}", crate::i18n::tr!("app-could-not-load-browser-project", error = error.to_string()));
                     }
                 }
             }
@@ -2442,7 +2485,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     // Its project is gone and the id may be someone else's now,
                     // so nothing here is ours to clear.
                     if let Err(error) = result {
-                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
+                        userspace_warn!("{}", crate::i18n::tr!("app-browser-save-failed-error", error = error.to_string()));
                     }
                     return;
                 }
@@ -2462,17 +2505,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                 project.project.metadata.name.clone()
                             };
                             self.track_browser_project(project_id, name.clone());
-                            userspace_log!("{}", crate::i18n::tr_format!(literal = "Saved '%name%' to browser storage", name = name));
+                            userspace_log!("{}", crate::i18n::tr!("app-saved-name-browser-storage", name = name.to_string()));
                             self.persist_session();
                         }
                         if self.project_replacement_after_save
                             && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
                             && let Err(error) = self.continue_project_replacement()
                         {
-                            userspace_warn!(
-                                "{}",
-                                crate::i18n::tr_format!(literal = "Could not replace the current project: %error%", error = format!("{error:#}"))
-                            );
+                            userspace_warn!("{}", crate::i18n::tr!("common-could-not-replace-current-project", error = format!("{error:#}")));
                         }
                         if self.editor.pending_close_project == Some(runtime_id) {
                             self.close_project(runtime_id);
@@ -2489,17 +2529,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                             self.workspace.projects[index].lossy_save_confirmed = false;
                             self.editor.lossy_save_confirm_open = true;
                         }
-                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
+                        userspace_warn!("{}", crate::i18n::tr!("app-browser-save-failed-error", error = error.to_string()));
                     }
                 }
 
                 if self.browser_delete_after_save.remove(&runtime_id)
                     && let Err(error) = self.delete_browser_project(runtime_id)
                 {
-                    userspace_warn!(
-                        "{}",
-                        crate::i18n::tr_format!(literal = "Could not delete browser project: %error%", error = format!("{error:#}"))
-                    );
+                    userspace_warn!("{}", crate::i18n::tr!("app-could-not-delete-browser-project", error = format!("{error:#}")));
                 }
                 self.try_finish_deferred_exit();
             }
@@ -2514,10 +2551,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                             self.close_project(runtime_id);
                         }
                         self.persist_session();
-                        userspace_log!("{}", crate::i18n::tr!(literal = "Deleted browser project"));
+                        userspace_log!("{}", crate::i18n::tr!("app-deleted-browser-project"));
                     }
                     Err(error) => {
-                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser project deletion failed: %error%", error = error));
+                        userspace_warn!("{}", crate::i18n::tr!("app-browser-project-delete-failed", error = error.to_string()));
                     }
                 }
             }
@@ -2526,6 +2563,45 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     graphics.queue_browser_paste(text);
                     self.redraw_requested = true;
                 }
+            }
+            AppEvent::GeophysicsFileIdentified { dataset, files } => {
+                self.handle_geophysics_file_identified(dataset, files);
+            }
+            AppEvent::GeophysicsBundleIdentified { dataset, generation, result } => {
+                self.handle_geophysics_bundle_identified(dataset, generation, result);
+            }
+            AppEvent::GeophysicsHoleRunsRead {
+                dataset,
+                generation,
+                dhid,
+                runs,
+                reservation,
+            } => {
+                self.handle_geophysics_hole_runs_read(dataset, generation, dhid, runs, reservation);
+            }
+            AppEvent::DrillHoleTablesRead {
+                key,
+                source,
+                geophysics,
+                ticket,
+                workspace,
+                result,
+            } => {
+                let active_runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+                if workspace != self.workspace_generation || jobs::drill_hole_load_is_stale(&key, active_runtime_id) {
+                    let label = self
+                        .background_tasks
+                        .reported
+                        .iter()
+                        .find(|task| task.ticket == ticket)
+                        .map(|task| task.label.clone())
+                        .unwrap_or_else(|| crate::i18n::tr!("jobs-drillhole-import"));
+                    self.cancel_background_task(ticket);
+                    userspace_log!("{}", crate::i18n::tr!("jobs-cancelled-label-its-project-no", label = label.to_string()));
+                    return;
+                }
+                self.finish_background_task(ticket, false);
+                self.continue_web_drill_hole_import(key, source, geophysics, result);
             }
         }
     }
@@ -2536,7 +2612,7 @@ pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{}.omf", crate::i18n::tr!(literal = "Untitled")))
+        .unwrap_or_else(|| format!("{}.omf", crate::i18n::tr!("common-untitled")))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2572,6 +2648,45 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// Picked geophysics files' identities, computed on the page thread.
+    GeophysicsFileIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        files: Vec<(web_sys::File, std::result::Result<crate::model::geophysics::FileIdentity, String>)>,
+    },
+    /// A freshly loaded CSV bundle's geophysics files' identities.
+    GeophysicsBundleIdentified {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        result: std::result::Result<
+            Vec<(
+                crate::model::formats::csv_drill_hole::CsvDrillFileMapping,
+                web_sys::File,
+                crate::model::geophysics::FileIdentity,
+            )>,
+            String,
+        >,
+    },
+    /// One hole's geophysics run bytes, read from the linked files on the
+    /// page thread and ready to parse on the job queue.
+    GeophysicsHoleRunsRead {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        generation: u64,
+        dhid: String,
+        runs: std::result::Result<Vec<Vec<u8>>, String>,
+        /// Browser memory claimed for the bytes and their parse.
+        reservation: crate::app::memory::MemoryReservation,
+    },
+    /// A browser drillhole CSV bundle's table files, read whole on the page
+    /// thread with their mappings; ready to parse on the job queue.
+    DrillHoleTablesRead {
+        key: crate::app::jobs::JobKey,
+        source: crate::model::drill_hole::DrillHoleSource,
+        geophysics: Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, web_sys::File)>,
+        ticket: BackgroundTaskTicket,
+        /// Which workspace the read started in; runtime ids are recycled.
+        workspace: u64,
+        result: std::result::Result<Vec<(crate::model::formats::csv_drill_hole::CsvDrillFileMapping, crate::model::input::InputFile)>, String>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]

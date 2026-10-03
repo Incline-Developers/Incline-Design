@@ -50,10 +50,7 @@ pub(crate) struct DigBlockPick {
 }
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    i18n::{tr, tr_format},
-    model::ReserveFieldId,
-};
+use crate::{i18n::tr, model::ReserveFieldId};
 
 /// Identity of one loader class within its project.
 ///
@@ -2103,7 +2100,7 @@ pub(crate) fn suggested_name(base: &str, existing: impl Iterator<Item = String>)
         return base.to_owned();
     }
     (2u32..)
-        .map(|index| tr_format!(literal = "%base% %index%", base = base.to_owned(), index = index.to_string()))
+        .map(|index| format!("{} {}", base, index))
         .find(|candidate| free(candidate))
         .expect("the range is unbounded")
 }

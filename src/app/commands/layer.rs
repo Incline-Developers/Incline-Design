@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, Document, Layer, LayerId, Object, SceneEntityId, SectionKind},
     userspace_log,
 };
@@ -68,7 +68,7 @@ impl<'a> App<'a> {
 
         self.editor.selected_handles.clear();
         self.editor.active_layer = Some(layer_id);
-        userspace_log!("{}", tr_format!(literal = "Created layer '%name%'", name = name));
+        userspace_log!("{}", tr!("cmd-layer-created-layer-name", name = name.to_string()));
         self.invalidate_geometry();
         Some(layer_id)
     }
@@ -106,10 +106,7 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         self.editor.selected_handles.clear();
-        userspace_log!(
-            "{}",
-            tr_format!(literal = "Deleted layer %layer_id% (and all objects on it)", layer_id = format!("{layer_id:?}"))
-        );
+        userspace_log!("{}", tr!("cmd-layer-deleted-with-objects", layer_id = format!("{layer_id:?}")));
         self.invalidate_geometry();
         Ok(())
     }
@@ -125,7 +122,7 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_name(&tr_format!(literal = "%name% copy", name = &source_layer.name), |candidate| {
+        let duplicate_name = unique_name(&tr!("cmd-layer-name-copy", name = source_layer.name.to_string()), |candidate| {
             project.project.document.layer_id_by_name(candidate).is_some()
         });
 
@@ -155,7 +152,7 @@ impl<'a> App<'a> {
         });
 
         self.editor.selected_handles.clear();
-        userspace_log!("{}", tr_format!(literal = "Duplicated layer '%duplicate_name%'", duplicate_name = duplicate_name));
+        userspace_log!("{}", tr!("cmd-layer-duplicated-layer-duplicate-name", duplicate_name = duplicate_name.to_string()));
         self.invalidate_geometry();
     }
 
@@ -207,11 +204,7 @@ impl<'a> App<'a> {
         let count = self.editor.selected_handles.len();
         userspace_log!(
             "{}",
-            tr_format!(
-                literal = "Selected %count% object(s) in layer %layer_id%",
-                count = count,
-                layer_id = format!("{layer_id:?}")
-            )
+            tr!("cmd-layer-selected-count-object-s-layer", count = count.to_string(), layer_id = format!("{layer_id:?}"))
         );
         self.invalidate_geometry();
         self.invalidate_overlay();
@@ -245,8 +238,8 @@ impl<'a> App<'a> {
                 self.editor.active_layer = None;
             }
         }
-        let state = if locked { tr!(literal = "Locked") } else { tr!(literal = "Unlocked") };
-        userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
+        let state = if locked { tr!("cmd-layer-locked") } else { tr!("cmd-layer-unlocked") };
+        userspace_log!("{}", tr!("cmd-layer-state-layer-name", state = state.to_string(), name = name.to_string()));
         self.invalidate_geometry();
     }
 }

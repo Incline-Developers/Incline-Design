@@ -6,14 +6,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{
-    app::App,
-    i18n::{tr, tr_format},
-    logging::CommandReportSpec,
-    rendering::graphics::RenderSurfaceError,
-    ui::state::ActiveTool,
-    userspace_error, userspace_warn,
-};
+use crate::{app::App, i18n::tr, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error, userspace_warn};
 
 /// Right-press-to-drag threshold, in logical points, scaled by the window's scale factor before use.
 const RIGHT_CLICK_DRAG_THRESHOLD_PT: f32 = 3.0;
@@ -172,9 +165,14 @@ impl<'a> App<'a> {
 
         // Taken here, before the renderer sees it, or one notch would both walk the section and zoom it.
         let slice_walked = !gui_consumed && self.slice_walk_scroll(&event);
+        // The welcome splash's backdrop takes every click, but a middle press
+        // normally gets past egui to the camera. Hold presses back while the
+        // splash is up so it cannot be panned behind; releases still pass, so
+        // a drag begun before it opened cannot stick.
+        let splash_blocks_press = !self.startup_dialog_dismissed && matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, .. });
         let graphics_consumed = !slice_walked
             && self.graphics.as_mut().is_some_and(|graphics| {
-                if gui_consumed && !graphics.should_receive_event_when_gui_consumed(&event) {
+                if gui_consumed && (splash_blocks_press || !graphics.should_receive_event_when_gui_consumed(&event)) {
                     return false;
                 }
 
@@ -198,7 +196,7 @@ impl<'a> App<'a> {
             match event {
                 WindowEvent::CloseRequested => {
                     if let Err(error) = self.request_exit() {
-                        userspace_error!("{}", tr_format!(literal = "Couldn't exit: %error%", error = error));
+                        userspace_error!("{}", tr!("events-couldn-t-exit-error", error = error.to_string()));
                     }
                 }
                 WindowEvent::KeyboardInput { .. } => self.handle_key_action(&event),
@@ -210,7 +208,6 @@ impl<'a> App<'a> {
                 WindowEvent::RedrawRequested => {
                     self.poll_triangulation_loads();
                     self.poll_block_model_loads();
-                    self.poll_drill_hole_loads();
                     self.poll_point_cloud_loads();
                     self.poll_raster_loads();
                     self.poll_saves();
@@ -232,6 +229,7 @@ impl<'a> App<'a> {
                     self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
+                    self.refresh_blast_hover();
                     self.refresh_object_edit_dialog();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
@@ -302,6 +300,7 @@ impl<'a> App<'a> {
                             triangulations: drawn.0,
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
+                            well_logs: &self.well_logs,
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
                             solid_preview: drawn.1,
@@ -998,6 +997,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
+                ActiveTool::ChargeHoles => self.charge_holes_press(),
                 ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
@@ -1177,9 +1177,9 @@ impl<'a> App<'a> {
                 });
                 if let Some(pick) = picked {
                     let handle = pick.entity;
-                    // Same rule the left-click path follows: Drill & Blast
-                    // acts on the hole under the cursor, not its dataset.
-                    let hole = pick.hole.filter(|_| self.editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast);
+                    // Same rule the left-click path follows: a click acts on
+                    // the hole under the cursor, not its dataset.
+                    let hole = pick.hole;
                     if let crate::model::SceneEntityId::Object(id) = handle {
                         self.activate_project_for_object(id);
                     }
@@ -1194,6 +1194,11 @@ impl<'a> App<'a> {
                         }
                         _ => {}
                     }
+                    // The panel follows a right click, but only a left click
+                    // decides what a repeat click toggles. The menu's hole
+                    // rows act on the hole under the cursor, selected or not.
+                    self.editor.show_picked_hole(pick.hole);
+                    self.editor.canvas_context_menu_hole = pick.hole;
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
@@ -1226,7 +1231,7 @@ impl<'a> App<'a> {
                 KeyCode::KeyY => self.apply_history_step(false),
                 KeyCode::KeyS => {
                     if let Err(error) = self.save_dirty_project() {
-                        userspace_error!("{}", tr_format!(literal = "Couldn't save: %error%", error = error));
+                        userspace_error!("{}", tr!("events-couldn-t-save-error", error = error.to_string()));
                     }
                 }
                 KeyCode::KeyA => {
@@ -1513,8 +1518,8 @@ impl<'a> App<'a> {
                     self.editor.z_input = z;
                     self.redraw_requested = true;
                     crate::logging::report_completed_action(
-                        CommandReportSpec::new(crate::i18n::tr!(literal = "Set Elevation"), format!("Z {z:.4}")),
-                        crate::i18n::tr_format!(literal = "Set elevation from cursor hit to Z %z%", z = format!("{z:.4}")),
+                        CommandReportSpec::new(crate::i18n::tr!("events-set-elevation"), format!("Z {z:.4}")),
+                        crate::i18n::tr!("events-set-elevation-from-cursor-hit", z = format!("{z:.4}")),
                     );
                 }
             }
@@ -1652,12 +1657,12 @@ impl<'a> App<'a> {
             return;
         }
         if self.editor.slice_mode_enabled && tool.section_refuses() {
-            userspace_warn!("{}", tr!(literal = "That tool is not available in the section view"));
+            userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }
         if tool != self.editor.active_tool
             && ((tool.requires_active_layer() && self.active_layer().is_none())
-                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint)
+                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles)
                     && !self
                         .editor
                         .active_drill_hole

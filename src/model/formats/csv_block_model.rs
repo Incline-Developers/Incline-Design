@@ -48,9 +48,9 @@ impl CsvColumnRole {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Value => crate::i18n::tr!(literal = "Value"),
-            Self::Category => crate::i18n::tr!(literal = "Category"),
-            Self::Ignore => crate::i18n::tr!(literal = "Ignore"),
+            Self::Value => crate::i18n::tr!("csv-block-model-value"),
+            Self::Category => crate::i18n::tr!("csv-block-model-category"),
+            Self::Ignore => crate::i18n::tr!("common-ignore"),
             Self::Id => "ID".to_owned(),
             Self::X => "x".to_owned(),
             Self::Y => "y".to_owned(),

@@ -169,13 +169,7 @@ fn build_solid_local(
     // ring, say - and is worth saying rather than passing off as a solid.
     let open_edges = open_edge_count(&vertices, &faces);
     if open_edges > 0 {
-        userspace_warn!(
-            "{}",
-            tr_format!(
-                literal = "Solid is open along %count% edge(s): the two surfaces do not meet all the way round, so this is a shell between them rather than a closed solid. Its volume is still exact.",
-                count = open_edges.to_string()
-            )
-        );
+        userspace_warn!("{}", tr!("tri-solid-open-along-edge", count = open_edges.to_string()));
     }
 
     Ok((vertices, faces, volume))
@@ -259,11 +253,11 @@ impl App<'_> {
             let generated = session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::SolidClosed, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: tr_format!(
-                    literal = "Built %region% solid between '%design%' and '%topography%' · %volume% m³",
-                    region = region.label().to_lowercase(),
-                    design = &design_name,
-                    topography = &topography_name,
+                message: tr!(
+                    "tri-built-solid-between",
+                    region = (region.label().to_lowercase()).to_string(),
+                    design = design_name.to_string(),
+                    topography = topography_name.to_string(),
                     volume = format!("{volume:.1}")
                 ),
             })
@@ -272,7 +266,7 @@ impl App<'_> {
             app.apply_generated_triangulation_job(result, &[]);
         };
         self.spawn_job_reporting_progress(
-            tr!(literal = "Building solid from surfaces…"),
+            tr!("tri-building-solid-surfaces"),
             vec![crate::app::jobs::JobKey::Triangulation(design_id), crate::app::jobs::JobKey::Triangulation(topography_id)],
             compute,
             apply,

@@ -26,7 +26,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(!editor.selected_handles.is_empty(), egui::Button::new(tr!("planning-dig-copy")))
-                    .on_hover_text(tr!(literal = "Ctrl+C"))
+                    .on_hover_text(tr!("planning-shortcut-copy"))
                     .clicked()
                 {
                     commands.push(UiCommand::CopyDigStrips);
@@ -36,7 +36,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                         !editor.dig_clipboard.is_empty() && editor.planning_cut_target().is_some(),
                         egui::Button::new(tr!("planning-dig-paste")),
                     )
-                    .on_hover_text(tr!(literal = "Ctrl+V"))
+                    .on_hover_text(tr!("planning-shortcut-paste"))
                     .clicked()
                 {
                     commands.push(UiCommand::PasteDigStrips);

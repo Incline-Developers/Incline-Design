@@ -418,8 +418,8 @@ impl RefStatus {
             Self::GroundChanged { was, now } => tr!("sequence-unresolved-changed", was = format!("{was:.1}"), now = format!("{now:.1}")),
             Self::VolumeChanged { was, now } => tr!(
                 "sequence-unresolved-volume",
-                was = was.map_or_else(|| tr!(literal = "—").to_owned(), |value| format!("{value:.1}")),
-                now = now.map_or_else(|| tr!(literal = "—").to_owned(), |value| format!("{value:.1}"))
+                was = was.map_or_else(|| String::from("—").to_owned(), |value| format!("{value:.1}")),
+                now = now.map_or_else(|| String::from("—").to_owned(), |value| format!("{value:.1}"))
             ),
             Self::SourceChanged => tr!("sequence-unresolved-source"),
         })

@@ -595,8 +595,77 @@ impl<'a> Graphics<'a> {
                     })
                 })
                 .collect();
+            // Lines of equal time across the active pattern, while that review is on.
+            let contours_visible = editor.blast_review.contours
+                && editor.active_drill_hole.is_some_and(|id| {
+                    drill_holes
+                        .iter()
+                        .any(|dataset| dataset.id == id && dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
+                });
+            editor.blast_contours_px = match editor.blast_analysis.as_deref().filter(|_| contours_visible) {
+                Some(analysis) => analysis
+                    .contours
+                    .iter()
+                    .map(|contour| crate::ui::state::ProjectedContour {
+                        time_ms: contour.time_ms,
+                        major: contour.major,
+                        points: contour
+                            .points
+                            .iter()
+                            .map(|point| {
+                                if slab.is_some_and(|slab| !slab.contains(*point)) {
+                                    return None;
+                                }
+                                self.world_to_window_px(&view_proj, *point)
+                            })
+                            .collect(),
+                        closed: contour.closed,
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            // Every collar of the pattern under review, for the timeline's
+            // signal and detonations and the heatmap's surface.
+            let timeline = editor.active_drill_hole.filter(|id| editor.review_showing_over(*id)).and_then(|id| {
+                drill_holes
+                    .iter()
+                    .find(|dataset| dataset.id == id && dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
+            });
+            match timeline {
+                Some(dataset) => {
+                    let holes = &dataset.dataset.holes;
+                    editor.blast_collars_px = holes
+                        .iter()
+                        .map(|hole| {
+                            let collar = hole.collar_position();
+                            if slab.is_some_and(|slab| !slab.contains(collar)) {
+                                return None;
+                            }
+                            self.world_to_window_px(&view_proj, collar)
+                        })
+                        .collect();
+                    // Measured at the middle of the pattern, like a card's
+                    // scale at its own collar.
+                    editor.blast_px_per_world = dataset
+                        .dataset
+                        .bounds
+                        .and_then(|(min, max)| {
+                            let centre = (min + max) * 0.5;
+                            let at = self.world_to_window_px_unclipped_depth(&view_proj, centre)?;
+                            let probe = self.world_to_window_px_unclipped_depth(&view_proj, centre + probe_offset)?;
+                            Some((probe.0 - at.0).hypot(probe.1 - at.1) / CARD_SCALE_PROBE_WORLD as f32)
+                        })
+                        .unwrap_or(0.0);
+                }
+                None => {
+                    editor.blast_collars_px.clear();
+                    editor.blast_px_per_world = 0.0;
+                }
+            }
         } else {
             editor.initiation_cards.clear();
+            editor.blast_contours_px.clear();
+            editor.blast_collars_px.clear();
         }
 
         if let Some(failure) = &editor.tri_create_failure {

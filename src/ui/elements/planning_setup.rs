@@ -13,7 +13,7 @@
 use thousands::Separable;
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         BenchInterval, BenchingPlan, Document, ReserveAggregation, ReserveFieldId, SolidEdit, SolidKind,
         block_model::{OpenBlockModel, ReserveMappingSource},
@@ -424,12 +424,12 @@ fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, running: bool, 
 /// the tonnage-field combo.
 pub(crate) fn aggregation_summary(document: &Document, aggregation: &ReserveAggregation) -> String {
     match aggregation {
-        ReserveAggregation::Sum => tr!(literal = "Sum"),
+        ReserveAggregation::Sum => tr!("planning-stat-sum"),
         ReserveAggregation::WeightedAverage { weight_field } => {
-            let weight_name = document.reserve_field(*weight_field).map_or_else(|| tr!(literal = "?"), |field| field.name.clone());
-            tr_format!(literal = "Weighted avg. by %name%", name = weight_name)
+            let weight_name = document.reserve_field(*weight_field).map_or_else(|| String::from("?"), |field| field.name.clone());
+            tr!("planning-weighted-avg", name = weight_name.to_string())
         }
-        ReserveAggregation::Category => tr!(literal = "Category"),
+        ReserveAggregation::Category => tr!("csv-block-model-category"),
     }
 }
 
@@ -439,18 +439,14 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
             explorer_note(ui, tr!("planning-no-fields"));
         }
         for field in document.reserve_fields() {
-            let label = tr_format!(
-                literal = "%name% · %aggregation%",
-                name = field.name.clone(),
-                aggregation = aggregation_summary(document, &field.aggregation)
-            );
+            let label = format!("{} · {}", field.name, aggregation_summary(document, &field.aggregation));
             let response = grid_row(ui, GridRow::new(&label));
             context_menu_popup(&response, &field.name, |ui| {
-                if ContextMenuAction::new(tr!(literal = "Rename Field")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("planning-rename-field")).show(ui).clicked() {
                     commands.push(UiCommand::BeginRenameItem(crate::ui::state::RenameTarget::ReserveField(field.id)));
                     ui.close();
                 }
-                if ContextMenuAction::new(tr!(literal = "Delete Field")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("planning-delete-field")).show(ui).clicked() {
                     commands.push(UiCommand::DeleteReserveField(field.id));
                     ui.close();
                 }
@@ -460,7 +456,7 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
         if body.is_positive() {
             let response = ui.interact(body, ui.id().with("new_reserve_field_space"), egui::Sense::click());
             context_menu_popup(&response, tr!("planning-field-list"), |ui| {
-                if ContextMenuAction::new(tr!(literal = "New Field")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("reserve-new-field")).show(ui).clicked() {
                     editor.new_reserve_field_open = true;
                     ui.close();
                 }
@@ -477,15 +473,15 @@ fn draw_block_model_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edito
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
             if project.block_models.is_empty() {
-                crate::ui::widgets::explorer::explorer_note(ui, tr!(literal = "No block models in this project"));
+                crate::ui::widgets::explorer::explorer_note(ui, tr!("planning-no-block-models-project"));
             }
             for entry in &project.block_models {
                 // Name only: the block count is a property of the model, and
                 // it is listed as one beside the others rather than being
                 // spliced into every row of the list.
                 let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_block_model == Some(entry.id))).on_hover_text(tr_format!(
-                    literal = "Extents: %lower% → %upper%",
+                let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_block_model == Some(entry.id))).on_hover_text(tr!(
+                    "planning-extents",
                     lower = format!("{:.1}, {:.1}, {:.1}", entry.lower.x, entry.lower.y, entry.lower.z),
                     upper = format!("{:.1}, {:.1}, {:.1}", entry.upper.x, entry.upper.y, entry.upper.z)
                 ));
@@ -519,8 +515,8 @@ impl MappingChoice {
 
     fn label(&self) -> String {
         match self {
-            Self::Unmapped => tr!(literal = "Unmapped"),
-            Self::Constant => tr!(literal = "Constant"),
+            Self::Unmapped => tr!("io-unmapped"),
+            Self::Constant => tr!("planning-constant"),
             Self::Column(name) => name.clone(),
             Self::PerVolume(name) => tr!("planning-mapping-per-volume", column = name.clone()),
         }
@@ -552,7 +548,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
     PropertyTable::new("reserve_block_model_mapping", header_rect, &model.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         rows.readonly(
-            &tr!(literal = "Extents"),
+            &tr!("planning-extents-heading"),
             &format!(
                 "{:.1}, {:.1}, {:.1} → {:.1}, {:.1}, {:.1}",
                 model.model.metadata.lower.x,
@@ -565,8 +561,8 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
             None,
             None,
         );
-        rows.readonly(&tr!(literal = "Blocks"), &blocks.separate_with_commas(), None, None);
-        rows.checkbox(&tr!(literal = "Used for reserving"), &mut included);
+        rows.readonly(&tr!("planning-blocks"), &blocks.separate_with_commas(), None, None);
+        rows.checkbox(&tr!("planning-used-reserving"), &mut included);
     });
     if included != model.included_in_reserves {
         commands.push(UiCommand::SetReserveModelIncluded { block_model: model.id, included });
@@ -580,9 +576,9 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                 let is_category = matches!(field.aggregation, ReserveAggregation::Category);
                 let current = MappingChoice::of(&model.reserve_mapping, field.id);
                 let mut choice = current.clone();
-                let mut options = vec![(MappingChoice::Unmapped, tr!(literal = "Unmapped").into())];
+                let mut options = vec![(MappingChoice::Unmapped, tr!("io-unmapped").into())];
                 if !is_category {
-                    options.push((MappingChoice::Constant, tr!(literal = "Constant").into()));
+                    options.push((MappingChoice::Constant, tr!("planning-constant").into()));
                 }
                 let columns = if is_category { &categorical_columns } else { &numeric_columns };
                 options.extend(columns.iter().map(|name| (MappingChoice::Column(name.clone()), name.clone().into())));
@@ -619,7 +615,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                             ReserveMappingSource::Column(_) | ReserveMappingSource::PerVolume(_) => None,
                         })
                         .unwrap_or(0.0);
-                    let response = MenuFieldF64::new(tr!(literal = "Value"), &mut value, f64::MIN..=f64::MAX).show(ui);
+                    let response = MenuFieldF64::new(tr!("planning-value"), &mut value, f64::MIN..=f64::MAX).show(ui);
                     if committed(&response) {
                         commands.push(UiCommand::SetReserveMapping {
                             block_model: model.id,
@@ -732,7 +728,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                 explorer_note(ui, tr!("planning-no-solids"));
             }
             for solid in document.solids() {
-                let label = tr_format!(literal = "%name% · %kind%", name = solid.name.clone(), kind = kind_label(solid.kind));
+                let label = format!("{} · {}", solid.name, kind_label(solid.kind));
                 let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_solid == Some(solid.id)));
                 if response.clicked() && editor.planning_selected_solid != Some(solid.id) {
                     editor.planning_selected_solid = Some(solid.id);
@@ -740,7 +736,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                     ui.ctx().request_repaint();
                 }
                 context_menu_popup(&response, &solid.name, |ui| {
-                    if ContextMenuAction::new(tr!(literal = "Rename Solid")).show(ui).clicked() {
+                    if ContextMenuAction::new(tr!("planning-rename-solid")).show(ui).clicked() {
                         commands.push(UiCommand::BeginRenameItem(crate::ui::state::RenameTarget::Solid(solid.id)));
                         ui.close();
                     }
@@ -748,7 +744,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                         crate::ui::dialogs::solids::open_topography_update(editor, document.solids(), Some(solid.id));
                         ui.close();
                     }
-                    if ContextMenuAction::new(tr!(literal = "Delete Solid")).show(ui).clicked() {
+                    if ContextMenuAction::new(tr!("planning-delete-solid")).show(ui).clicked() {
                         commands.push(UiCommand::DeleteSolid(solid.id));
                         ui.close();
                     }
@@ -758,7 +754,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
             if body.is_positive() {
                 let response = ui.interact(body, ui.id().with("new_solid_space"), egui::Sense::click());
                 context_menu_popup(&response, tr!("planning-solids"), |ui| {
-                    if ContextMenuAction::new(tr!(literal = "New Solid")).show(ui).clicked() {
+                    if ContextMenuAction::new(tr!("solids-new-solid")).show(ui).clicked() {
                         editor.new_solid_open = true;
                         ui.close();
                     }
@@ -785,7 +781,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         rows.readonly(&tr!("planning-name"), &solid.name, None, None);
 
         let mut color = solid.color;
-        if rows.color(&tr!(literal = "Colour"), &mut color).changed() {
+        if rows.color(&tr!("common-colour"), &mut color).changed() {
             commands.push(UiCommand::UpdateSolid {
                 solid: solid.id,
                 edit: SolidEdit::Color(color),
@@ -796,7 +792,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         if rows
             .combo(
                 ("solid_kind", solid.id),
-                &tr!(literal = "Type"),
+                &tr!("destination-type"),
                 &mut kind,
                 &kind_label(solid.kind),
                 SolidKind::ALL.into_iter().map(|kind| (kind, kind_label(kind))),
@@ -814,7 +810,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         if rows
             .combo(
                 ("solid_surface", solid.id),
-                &tr!(literal = "Surface"),
+                &tr!("tri-type-open-surface"),
                 &mut surface,
                 &triangulation_label(project, solid.surface),
                 surfaces.clone(),
@@ -831,7 +827,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         if rows
             .combo(
                 ("solid_topography", solid.id),
-                &tr!(literal = "Topography"),
+                &tr!("solids-topography"),
                 &mut topography,
                 &triangulation_label(project, solid.topography),
                 surfaces,
@@ -848,7 +844,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         if rows
             .combo(
                 ("solid_block_model", solid.id),
-                &tr!(literal = "Block Model"),
+                &tr!("ws-menubar-block-model"),
                 &mut block_model,
                 &block_model_label(project, solid.block_model),
                 block_model_options(project),
@@ -862,7 +858,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         }
 
         if solid.kind.requires_block_model() && solid.block_model.is_none() {
-            rows.readonly(&tr!(literal = "Reserves"), &tr!(literal = "Set a block model to reserve this pit"), None, None);
+            rows.readonly(&tr!("planning-reserve-status"), &tr!("planning-set-block-model-reserve"), None, None);
         }
     });
 }
@@ -875,7 +871,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
 /// a topography shows the closed volume between the two, with its enclosed
 /// volume captioned. Drag to orbit, scroll to zoom.
 pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) {
-    let title = tr!(literal = "Preview");
+    let title = tr!("charging-preview");
     framed_render_pane(ui, rect, &title, |ui, body| {
         let caption_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
         let image_rect = egui::Rect::from_min_max(body.min, egui::pos2(body.right(), (body.bottom() - caption_height).max(body.top())));
@@ -1019,11 +1015,11 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         // lone surface is already in the project, so there is nothing to add.
         let can_save = !editor.is_solids_view() && matches!(editor.solid_preview_summary, crate::ui::state::SolidPreviewSummary::Ready { volume: Some(_), .. });
         context_menu_popup(&response, &title, |ui| {
-            if ContextMenuAction::new(tr!(literal = "Save Solid to Project")).enabled(can_save).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("planning-save-solid-project")).enabled(can_save).show(ui).clicked() {
                 commands.push(UiCommand::SaveSolidPreviewToProject);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Reset View")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("gantt-reset-view")).show(ui).clicked() {
                 commands.push(UiCommand::ResetSolidPreviewView);
                 ui.close();
             }
@@ -1032,22 +1028,22 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         let caption_rect = egui::Rect::from_min_max(egui::pos2(body.left() + 8.0, image_rect.bottom()), body.max);
         let caption = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::NotRun => tr!("planning-not-run"),
-            crate::ui::state::SolidPreviewSummary::Empty => tr!(literal = "Set a surface to inspect this solid"),
-            crate::ui::state::SolidPreviewSummary::Unloaded => tr!(literal = "Load this solid's surfaces to inspect it"),
-            crate::ui::state::SolidPreviewSummary::LoadingInputs { .. } => tr!(literal = "Loading this solid's surfaces…"),
-            crate::ui::state::SolidPreviewSummary::Building { showing_previous: true } => tr!(literal = "Rebuilding solid…"),
-            crate::ui::state::SolidPreviewSummary::Building { .. } => tr!(literal = "Building solid…"),
+            crate::ui::state::SolidPreviewSummary::Empty => tr!("planning-set-surface-inspect-solid"),
+            crate::ui::state::SolidPreviewSummary::Unloaded => tr!("planning-load-solid-surfaces-inspect"),
+            crate::ui::state::SolidPreviewSummary::LoadingInputs { .. } => tr!("planning-loading-solid-surfaces"),
+            crate::ui::state::SolidPreviewSummary::Building { showing_previous: true } => tr!("planning-rebuilding-solid"),
+            crate::ui::state::SolidPreviewSummary::Building { .. } => tr!("planning-building-solid"),
             crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), faces, .. } => {
-                tr_format!(literal = "%volume% m³ · %faces% faces", volume = format!("{volume:.1}"), faces = faces.to_string())
+                tr!("planning-faces", volume = format!("{volume:.1}"), faces = faces.to_string())
             }
             crate::ui::state::SolidPreviewSummary::Ready { volume: None, .. } if editor.is_solids_view() => tr!("planning-volume-unavailable"),
             crate::ui::state::SolidPreviewSummary::Ready {
                 volume: None,
                 waiting_on_unloaded: true,
                 ..
-            } => tr!(literal = "Surface only · the other surface is not loaded"),
+            } => tr!("planning-surface-only-other-surface"),
             crate::ui::state::SolidPreviewSummary::Ready { volume: None, faces, .. } => {
-                tr_format!(literal = "Surface only · %faces% faces", faces = faces.to_string())
+                tr!("planning-surface-only-faces", faces = faces.to_string())
             }
             crate::ui::state::SolidPreviewSummary::Failed(message) => message.clone(),
         };
@@ -1191,7 +1187,7 @@ fn objects_column(
     lower_id: &'static str,
     lower: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &mut Vec<UiCommand>),
 ) {
-    let title = tr!(literal = "Objects");
+    let title = tr!("sequence-objects");
     let column = Island::new("planning_objects_island", Side::Right)
         .default_width(300.0)
         .min_width(160.0)
@@ -1253,15 +1249,15 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
 /// numbers and telling them apart by position alone is a trap.
 fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, changed: &mut bool) {
     DataGrid::new("planning_bench_list", rect, &tr!("planning-benching"))
-        .column_header(&tr!(literal = "Elevation · Height"))
+        .column_header(&tr!("planning-elevation-height"))
         .show(ui, |ui| {
             let count = plan.intervals.len();
             *changed |= grid_value_row(
                 ui,
                 ("bench_top", 0usize),
-                &tr!(literal = "Top RL"),
+                &tr!("planning-top-rl"),
                 GridNumber::Edit(&mut plan.top),
-                &tr!(literal = "RL"),
+                &tr!("planning-rl"),
                 0,
                 None,
             )
@@ -1271,26 +1267,26 @@ fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
                 let (height_row, edited) = grid_value_row(
                     ui,
                     ("bench_height", index),
-                    &tr!(literal = "Bench height"),
+                    &tr!("edit-bench-height"),
                     GridNumber::Edit(&mut interval.bench),
-                    &tr!(literal = "m"),
+                    &String::from("m"),
                     1,
                     None,
                 );
                 *changed |= edited;
-                let label = if index + 1 == count { tr!(literal = "Bottom RL") } else { tr!(literal = "RL") };
-                let (base_row, edited) = grid_value_row(ui, ("bench_base", index), &label, GridNumber::Edit(&mut interval.base), &tr!(literal = "RL"), 0, None);
+                let label = if index + 1 == count { tr!("planning-bottom-rl") } else { tr!("planning-rl") };
+                let (base_row, edited) = grid_value_row(ui, ("bench_base", index), &label, GridNumber::Edit(&mut interval.base), &tr!("planning-rl"), 0, None);
                 *changed |= edited;
                 // Both rows describe the same range, so both carry its menu:
                 // whichever one the user happens to be on is the one they
                 // right-click.
                 for row in [&height_row, &base_row] {
-                    context_menu_popup(row, tr!(literal = "Range"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "Insert Range Below")).show(ui).clicked() {
+                    context_menu_popup(row, tr!("destination-condition-range"), |ui| {
+                        if ContextMenuAction::new(tr!("planning-insert-range-below")).show(ui).clicked() {
                             edit = Some((index, true));
                             ui.close();
                         }
-                        if ContextMenuAction::new(tr!(literal = "Delete Range")).show(ui).clicked() {
+                        if ContextMenuAction::new(tr!("planning-delete-range")).show(ui).clicked() {
                             edit = Some((index, false));
                             ui.close();
                         }
@@ -1318,7 +1314,7 @@ fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
             if body.is_positive() {
                 let response = ui.interact(body, ui.id().with("new_bench_range"), egui::Sense::click());
                 context_menu_popup(&response, tr!("planning-benching"), |ui| {
-                    if ContextMenuAction::new(tr!(literal = "Add Range")).show(ui).clicked() {
+                    if ContextMenuAction::new(tr!("planning-add-range")).show(ui).clicked() {
                         let base = plan.intervals.last().map_or(plan.top, |interval| interval.base);
                         plan.intervals.push(BenchInterval {
                             base: base - DEFAULT_RANGE_DEPTH,
@@ -1337,20 +1333,20 @@ fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
 /// What one flitch position is called: the ends are named, the rest counted.
 fn flitch_position_label(position: usize, count: usize) -> String {
     if position == 0 {
-        return tr!(literal = "Top flitch");
+        return tr!("planning-top-flitch");
     }
     if position + 1 == count {
-        return tr!(literal = "Bottom flitch");
+        return tr!("planning-bottom-flitch");
     }
-    tr_format!(literal = "Flitch %index%", index = (position + 1).to_string())
+    tr!("planning-flitch", index = (position + 1).to_string())
 }
 
 fn pattern_label(pattern: crate::model::FillStyle) -> String {
     match pattern {
-        crate::model::FillStyle::Clear => tr!(literal = "None"),
-        crate::model::FillStyle::Crosses => tr!(literal = "Crosses"),
-        crate::model::FillStyle::Slashes => tr!(literal = "Slashes"),
-        crate::model::FillStyle::Solid => tr!(literal = "Solid"),
+        crate::model::FillStyle::Clear => tr!("grade-calendar-none"),
+        crate::model::FillStyle::Crosses => tr!("common-crosses"),
+        crate::model::FillStyle::Slashes => tr!("common-slashes"),
+        crate::model::FillStyle::Solid => tr!("tri-type-solid-closed"),
     }
 }
 
@@ -1366,19 +1362,19 @@ fn pattern_label(pattern: crate::model::FillStyle) -> String {
 /// that separates them from the heights above. Three controls crammed into one
 /// row fit no column width worth having.
 fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, solid_color: [f32; 4], changed: &mut bool) {
-    DataGrid::new("planning_flitch_list", rect, &tr!(literal = "Flitching"))
-        .column_header(&tr!(literal = "Elevation · Height"))
+    DataGrid::new("planning_flitch_list", rect, &tr!("planning-flitching"))
+        .column_header(&tr!("planning-elevation-height"))
         .show(ui, |ui| {
             let top = plan.top;
             let count = plan.intervals.len();
-            grid_value_row(ui, ("flitch_top", 0usize), &tr!(literal = "Top RL"), GridNumber::Fixed(top), &tr!(literal = "RL"), 0, None);
+            grid_value_row(ui, ("flitch_top", 0usize), &tr!("planning-top-rl"), GridNumber::Fixed(top), &tr!("planning-rl"), 0, None);
             for (index, interval) in plan.intervals.iter_mut().enumerate() {
                 let error = if interval.flitch > 0.0 && (interval.bench / interval.flitch).ceil() > 64.0 {
                     Some(tr!("planning-too-many-flitches"))
                 } else {
                     (!interval.flitch_divides_bench()).then(|| {
-                        tr_format!(
-                            literal = "A %bench% m bench is not a whole number of %flitch% m flitches",
+                        tr!(
+                            "planning-bench-not-whole-number",
                             bench = format!("{:.2}", interval.bench),
                             flitch = format!("{:.2}", interval.flitch)
                         )
@@ -1387,9 +1383,9 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
                 *changed |= grid_value_row(
                     ui,
                     ("flitch_height", index),
-                    &tr!(literal = "Flitch height"),
+                    &tr!("planning-flitch-height"),
                     GridNumber::Edit(&mut interval.flitch),
-                    &tr!(literal = "m"),
+                    &String::from("m"),
                     1,
                     error.as_deref(),
                 )
@@ -1415,7 +1411,7 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
                     *changed = true;
                 }
                 if flitches > 0 {
-                    grid_separator_row(ui, &tr!(literal = "Styling"), 1);
+                    grid_separator_row(ui, &tr!("planning-styling"), 1);
                 }
                 for (position, style) in interval.styles.iter_mut().enumerate() {
                     grid_value_row(
@@ -1427,21 +1423,21 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
                         1,
                         None,
                     );
-                    *changed |= grid_color_row(ui, ("flitch_fill", index, position), &tr!(literal = "Fill colour"), &mut style.color, 2);
+                    *changed |= grid_color_row(ui, ("flitch_fill", index, position), &tr!("planning-fill-colour"), &mut style.color, 2);
                     *changed |= grid_choice_row(
                         ui,
                         ("flitch_pattern", index, position),
-                        &tr!(literal = "Pattern"),
+                        &tr!("planning-pattern"),
                         &mut style.pattern,
                         crate::model::FillStyle::ALL,
                         pattern_label,
                         2,
                     );
-                    *changed |= grid_color_row(ui, ("flitch_pattern_color", index, position), &tr!(literal = "Pattern colour"), &mut style.pattern_color, 2);
+                    *changed |= grid_color_row(ui, ("flitch_pattern_color", index, position), &tr!("planning-pattern-colour"), &mut style.pattern_color, 2);
                 }
 
-                let label = if index + 1 == count { tr!(literal = "Bottom RL") } else { tr!(literal = "RL") };
-                grid_value_row(ui, ("flitch_base", index), &label, GridNumber::Fixed(interval.base), &tr!(literal = "RL"), 0, None);
+                let label = if index + 1 == count { tr!("planning-bottom-rl") } else { tr!("planning-rl") };
+                grid_value_row(ui, ("flitch_base", index), &label, GridNumber::Fixed(interval.base), &tr!("planning-rl"), 0, None);
             }
         });
 }
@@ -1451,8 +1447,8 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
 ///
 /// Selecting a row picks that slice out in the preview.
 fn draw_bench_results(ui: &mut egui::Ui, rect: egui::Rect, plan: &BenchingPlan, editor: &mut EditorState) {
-    DataGrid::new("planning_bench_results", rect, &tr!(literal = "Results"))
-        .column_header(&tr!(literal = "Bench · Flitch"))
+    DataGrid::new("planning_bench_results", rect, &tr!("planning-results"))
+        .column_header(&tr!("planning-bench-flitch"))
         .show(ui, |ui| {
             // A plan may run past the solid at either end - it is snapped out
             // to whole benches, and the topography cuts the solid short of the
@@ -1463,9 +1459,9 @@ fn draw_bench_results(ui: &mut egui::Ui, rect: egui::Rect, plan: &BenchingPlan, 
             let benches: Vec<_> = plan.benches().into_iter().filter(|bench| holds_solid(bench.base, bench.top())).collect();
             if benches.is_empty() {
                 let note = if plan.intervals.is_empty() {
-                    tr!(literal = "No benches yet - add a range")
+                    tr!("planning-no-benches-yet-add")
                 } else {
-                    tr!(literal = "No bench holds any of this solid")
+                    tr!("planning-no-bench-holds-any")
                 };
                 crate::ui::widgets::explorer::explorer_note(ui, note);
                 return;
@@ -1478,12 +1474,7 @@ fn draw_bench_results(ui: &mut egui::Ui, rect: egui::Rect, plan: &BenchingPlan, 
                     top: bench.top(),
                     is_flitch: false,
                 };
-                let label = tr_format!(
-                    literal = "%base% → %top% (%height% m)",
-                    base = format!("{:.2}", bench.base),
-                    top = format!("{:.2}", bench.top()),
-                    height = format!("{:.2}", bench.height)
-                );
+                let label = format!("{:.2} → {:.2} ({:.2} m)", bench.base, bench.top(), bench.height);
                 if grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_bench == Some(selection))).clicked() {
                     editor.planning_selected_bench = (editor.planning_selected_bench != Some(selection)).then_some(selection);
                 }
@@ -1493,7 +1484,7 @@ fn draw_bench_results(ui: &mut egui::Ui, rect: egui::Rect, plan: &BenchingPlan, 
                         top: flitch.top(),
                         is_flitch: true,
                     };
-                    let label = tr_format!(literal = "    %base% → %top%", base = format!("{:.2}", flitch.base), top = format!("{:.2}", flitch.top()));
+                    let label = format!("    {:.2} → {:.2}", flitch.base, flitch.top());
                     if grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_bench == Some(selection))).clicked() {
                         editor.planning_selected_bench = (editor.planning_selected_bench != Some(selection)).then_some(selection);
                     }
@@ -1525,7 +1516,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &results, editor);
         } else {
-            PropertyTable::new("planning_bench_results_empty", rect, &tr!(literal = "Results")).show(ui, |rows| {
+            PropertyTable::new("planning_bench_results_empty", rect, &tr!("planning-results")).show(ui, |rows| {
                 rows.header(&tr!("planning-property"), &tr!("planning-value"));
             });
         }
@@ -1543,7 +1534,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
                 if solid_id.is_some() {
                     draw_flitching_list(ui, rect, &mut plan, solid_color, &mut changed);
                 } else {
-                    PropertyTable::new("planning_flitching_empty", rect, &tr!(literal = "Flitching")).show(ui, |rows| {
+                    PropertyTable::new("planning_flitching_empty", rect, &tr!("planning-flitching")).show(ui, |rows| {
                         rows.header(&tr!("planning-property"), &tr!("planning-value"));
                     });
                 }

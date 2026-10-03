@@ -48,14 +48,14 @@ impl<'a> App<'a> {
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: crate::i18n::tr_format!(literal = "Clipped surface '%name%' by polyline (%mode%)", name = &tri_name, mode = mode.label()),
+                message: crate::i18n::tr!("cmd-cuts-clipped-surface-name-polyline-mode", name = tri_name.to_string(), mode = mode.label().to_string()),
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
             app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Clipping surface by polyline…"),
+            crate::i18n::tr!("cmd-cuts-clipping-surface-polyline"),
             vec![crate::app::jobs::JobKey::Triangulation(tri_id)],
             compute,
             apply,
@@ -110,14 +110,14 @@ impl<'a> App<'a> {
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: crate::i18n::tr_format!(literal = "Cut topology '%name%' to pit shell", name = &topology_name),
+                message: crate::i18n::tr!("cmd-cuts-cut-topology-name-pit-shell", name = topology_name.to_string()),
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
             app.apply_generated_triangulation_job(result, unload_source.then_some(topology_id).as_slice());
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Cutting topology by pit shell…"),
+            crate::i18n::tr!("cmd-cuts-cutting-topology-pit-shell"),
             vec![crate::app::jobs::JobKey::Triangulation(topology_id), crate::app::jobs::JobKey::Triangulation(pit_shell_id)],
             compute,
             apply,
@@ -171,9 +171,9 @@ impl<'a> App<'a> {
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: crate::i18n::tr_format!(
-                    literal = "Cut triangulation '%name%' by Z band [%min%, %max%]",
-                    name = &tri_name,
+                message: crate::i18n::tr!(
+                    "cmd-cuts-cut-triangulation-name-z-band",
+                    name = tri_name.to_string(),
                     min = format!("{z_min:.3}"),
                     max = format!("{z_max:.3}")
                 ),
@@ -183,7 +183,7 @@ impl<'a> App<'a> {
             app.apply_generated_triangulation_job(result, unload_source.then_some(tri_id).as_slice());
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Cutting triangulation by Z…"),
+            crate::i18n::tr!("cmd-cuts-cutting-triangulation-z"),
             vec![crate::app::jobs::JobKey::Triangulation(tri_id)],
             compute,
             apply,
@@ -234,11 +234,11 @@ impl<'a> App<'a> {
             let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: crate::i18n::tr_format!(
-                    literal = "Trimmed surface '%surface%' to topology '%topology%' (%mode%)",
-                    surface = &target_name,
-                    topology = &reference_name,
-                    mode = side.trim_label()
+                message: crate::i18n::tr!(
+                    "cmd-cuts-trimmed-surface",
+                    surface = target_name.to_string(),
+                    topology = reference_name.to_string(),
+                    mode = side.trim_label().to_string()
                 ),
             })
         };
@@ -246,7 +246,7 @@ impl<'a> App<'a> {
             app.apply_generated_triangulation_job(result, unload_source.then_some(target_id).as_slice());
         };
         self.spawn_job_reporting_progress(
-            crate::i18n::tr!(literal = "Trimming surface to topology…"),
+            crate::i18n::tr!("cmd-cuts-trimming-surface-topology"),
             vec![crate::app::jobs::JobKey::Triangulation(target_id), crate::app::jobs::JobKey::Triangulation(reference_id)],
             compute,
             apply,
@@ -624,13 +624,7 @@ pub(super) fn clip_mesh_by_surface(
     let target_vertices = target.vertices();
     let reference_surface = validate_reference_surface(reference)?;
     if reference_surface.skipped_vertical_faces > 0 {
-        userspace_warn!(
-            "{}",
-            tr_format!(
-                literal = "Ignored %count% vertical or degenerate reference topology face(s) with no XY area",
-                count = reference_surface.skipped_vertical_faces
-            )
-        );
+        userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = reference_surface.skipped_vertical_faces.to_string()));
     }
 
     let mut output_vertices = Vec::new();
@@ -936,9 +930,9 @@ pub(super) fn add_split_constraints(cdt: &mut spade::ConstrainedDelaunayTriangul
             let to = cdt.vertex(handle_b).position();
             userspace_warn!(
                 "{}",
-                tr_format!(
-                    literal = "%site%: skipped constraint (%from_x%, %from_y%) -> (%to_x%, %to_y%) the triangulator could not split",
-                    site = site,
+                tr!(
+                    "cmd-cuts-site-skipped-constraint-from-x",
+                    site = site.to_string(),
                     from_x = format!("{:.4}", from.x + origin.x),
                     from_y = format!("{:.4}", from.y + origin.y),
                     to_x = format!("{:.4}", to.x + origin.x),
@@ -948,14 +942,7 @@ pub(super) fn add_split_constraints(cdt: &mut spade::ConstrainedDelaunayTriangul
         }
     }
     if skipped > 0 {
-        userspace_warn!(
-            "{}",
-            tr_format!(
-                literal = "%site%: skipped %skipped% near-degenerate constraint edge(s); the cut boundary may be off by a hairline near them",
-                site = site,
-                skipped = skipped
-            )
-        );
+        userspace_warn!("{}", tr!("cmd-cuts-skipped-degenerate-edges", site = site.to_string(), skipped = skipped.to_string()));
     }
 }
 

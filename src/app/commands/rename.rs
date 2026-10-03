@@ -7,7 +7,7 @@
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, ItemRef, LayerId, project::unique_item_name},
     ui::state::RenameTarget,
     userspace_log, userspace_warn,
@@ -83,7 +83,7 @@ impl<'a> App<'a> {
             return;
         }
         let Some(before) = self.rename_target_name(target) else {
-            userspace_warn!("{}", tr!(literal = "That item no longer belongs to the active project"));
+            userspace_warn!("{}", tr!("cmd-rename-item-no-longer-belongs-active"));
             return;
         };
         if before == requested {
@@ -112,15 +112,15 @@ impl<'a> App<'a> {
             after: name.clone(),
         });
         if name == requested {
-            userspace_log!("{}", tr_format!(literal = "Renamed '%before%' to '%name%'", before = before, name = name));
+            userspace_log!("{}", tr!("cmd-rename-renamed-before-name", before = before.to_string(), name = name.to_string()));
         } else {
             userspace_log!(
                 "{}",
-                tr_format!(
-                    literal = "Renamed '%before%' to '%name%' ('%requested%' is already taken)",
-                    before = before,
-                    name = name,
-                    requested = requested
+                tr!(
+                    "cmd-rename-renamed-name-taken",
+                    before = before.to_string(),
+                    name = name.to_string(),
+                    requested = requested.to_string()
                 )
             );
         }

@@ -5,7 +5,7 @@
 //! section, carried by [`SectionKind`].
 //!
 //! The registry lives on [`crate::model::project::ProjectFile`], beside the
-//! design document, since five of the six sections hold items the `App`
+//! design document, since most sections hold items the `App`
 //! owns rather than the document.
 
 use anyhow::{Result, bail};
@@ -36,10 +36,23 @@ pub(crate) enum SectionKind {
     PointClouds,
     BlockModels,
     DrillHoles,
+    /// What the project derives from its data, such as reference points and the
+    /// surfaces built from them, and whatever is kept beside them.
+    /// An item is shown here because it is tagged here, never because of what
+    /// it holds - see [`Self::natural_for`].
+    Modelling,
 }
 
 impl SectionKind {
-    pub(crate) const ALL: [Self; 6] = [Self::Designs, Self::Triangulations, Self::Rasters, Self::PointClouds, Self::BlockModels, Self::DrillHoles];
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Designs,
+        Self::Triangulations,
+        Self::Rasters,
+        Self::PointClouds,
+        Self::BlockModels,
+        Self::DrillHoles,
+        Self::Modelling,
+    ];
 
     /// Stable key this section's folder list is written under. Never
     /// translated and never renamed: it is file content.
@@ -51,6 +64,7 @@ impl SectionKind {
             Self::PointClouds => "point_clouds",
             Self::BlockModels => "block_models",
             Self::DrillHoles => "drill_holes",
+            Self::Modelling => "modelling",
         }
     }
 
@@ -66,10 +80,15 @@ impl SectionKind {
             Self::PointClouds => 3,
             Self::BlockModels => 4,
             Self::DrillHoles => 5,
+            Self::Modelling => 6,
         }
     }
 
     /// Section an item of `kind` shows under until something tags it otherwise.
+    ///
+    /// Modelling is never natural for anything: a plain new layer is a design
+    /// layer, and a modelling layer is one tagged Modelling, when it was made
+    /// or by being moved there.
     pub(crate) const fn natural_for(kind: MemberKind) -> Self {
         match kind {
             MemberKind::Layer => Self::Designs,
@@ -84,7 +103,9 @@ impl SectionKind {
     /// The kinds of item this section has a row for.
     ///
     /// A section shows exactly what it admits, so nothing can be tagged into a
-    /// section that would not draw it.
+    /// section that would not draw it. This is also the whole rule for where
+    /// an item may be kept: a kind never changes, and any section admitting
+    /// that kind may hold it.
     pub(crate) fn admitted(self) -> &'static [MemberKind] {
         match self {
             Self::Designs => &[MemberKind::Layer],
@@ -93,6 +114,8 @@ impl SectionKind {
             Self::PointClouds => &[MemberKind::PointCloud],
             Self::BlockModels => &[MemberKind::BlockModel],
             Self::DrillHoles => &[MemberKind::DrillHole],
+            // Points and the surfaces built from them sit side by side here.
+            Self::Modelling => &[MemberKind::Layer, MemberKind::Triangulation],
         }
     }
 
@@ -108,6 +131,27 @@ impl SectionKind {
     /// stops the item being drawn nowhere at all.
     pub(crate) fn healed_for(self, kind: MemberKind) -> Self {
         if self.admits(kind) { self } else { Self::natural_for(kind) }
+    }
+
+    /// Where an item of `kind` built from things kept in `sources` is born:
+    /// beside its sources when they agree on a section that can show it, at
+    /// its natural section otherwise.
+    ///
+    /// A derived item belongs next to what it was derived from, so a surface
+    /// built from points kept under Modelling appears there rather than away
+    /// from them. Sources that disagree name no one place to be beside, and
+    /// nor does a section with no row for the kind, so both fall back to where
+    /// the kind puts it. Stated once here so the next tool that builds
+    /// something from something else does not restate it.
+    pub(crate) fn derived_for(kind: MemberKind, sources: impl IntoIterator<Item = Self>) -> Self {
+        let mut sources = sources.into_iter();
+        let Some(first) = sources.next() else {
+            return Self::natural_for(kind);
+        };
+        if sources.any(|section| section != first) {
+            return Self::natural_for(kind);
+        }
+        first.healed_for(kind)
     }
 
     /// `serde` hooks for [`crate::model::Layer::section`], the one tag a file
@@ -152,6 +196,37 @@ impl MemberTarget {
         match self {
             Self::Layer(_) => MemberKind::Layer,
             Self::Item(item) => item.kind(),
+        }
+    }
+}
+
+/// Where a member is kept: the section showing it, and the folder within that
+/// section, or `None` for the section root.
+///
+/// The two travel together because a folder id belongs to the section that
+/// minted it, so settling one settles the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Placement {
+    pub(crate) section: SectionKind,
+    pub(crate) folder: Option<FolderId>,
+}
+
+impl Placement {
+    pub(crate) fn new(section: SectionKind, folder: Option<FolderId>) -> Self {
+        Self { section, folder }
+    }
+
+    /// The placement actually reachable for an item of `kind`: the tagged
+    /// section when it admits that kind, its natural section otherwise, and a
+    /// folder only when the settled section still has it.
+    ///
+    /// The one guard between a recorded placement and the state it names,
+    /// which may have been changed by something outside the undo history.
+    pub(crate) fn placeable(self, kind: MemberKind, known: &FolderRegistry) -> Self {
+        let section = self.section.healed_for(kind);
+        Self {
+            section,
+            folder: self.folder.filter(|folder| known.contains(section, *folder)),
         }
     }
 }
@@ -204,7 +279,7 @@ impl FolderMember {
 #[serde(deny_unknown_fields)]
 pub(crate) struct FolderRegistry {
     #[serde(default)]
-    sections: [Vec<Folder>; 6],
+    sections: [Vec<Folder>; 7],
     #[serde(default)]
     next_id: u64,
 }

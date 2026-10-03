@@ -16,7 +16,7 @@
 
 use super::schedule_destinations::{descendant_selected, scope_key, visible};
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Document,
         schedule::{DestinationSelection, LoaderAgentId, LoaderSelection, MovementSourceScope, MovementSourceSelection, SchedulePlan, TruckClassId, destinations, trucking},
@@ -47,15 +47,7 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                 // The rostered fleet beside the name: a class with no trucks in
                 // it supplies nothing, and that is the first thing to know
                 // about it.
-                let label = tr_format!(
-                    literal = "%name% · %units%",
-                    name = class.name.clone(),
-                    units = tr_format!(
-                        literal = "%count% × %payload% t",
-                        count = class.calendar.default_units.to_string(),
-                        payload = number(class.payload_t)
-                    )
-                );
+                let label = format!("{} · {} × {} t", class.name, class.calendar.default_units, number(class.payload_t));
                 let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
                 if response.clicked() {
                     selected = Some(class.id);
@@ -269,7 +261,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     .iter()
                     .map(|id| trucks.class(*id).map(|class| class.name.clone()).unwrap_or_else(|| tr!("truck-error-unknown-class")))
                     .collect();
-                let label = tr_format!(literal = "%name% → %classes%", name = rule.name.clone(), classes = classes.join(", "));
+                let label = format!("{} → {}", rule.name, classes.join(", "));
                 let disabled = (!rule.enabled).then(|| tr!("truck-rule-disabled"));
                 let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id))).on_hover_text(&label);
                 if response.clicked() {
@@ -588,7 +580,7 @@ pub(crate) fn draw_rule_editor(
                     }
                     for entry in &available {
                         let picked = all || held.contains(&entry.id);
-                        let label = tr_format!(literal = "%name% · %kind%", name = entry.name.clone(), kind = entry.kind.label());
+                        let label = format!("{} · {}", entry.name, entry.kind.label());
                         if ChecklistRow::new(&label, Tick::of(picked, false)).depth(1).show(ui).toggled {
                             let mut list = if all {
                                 available.iter().map(|entry| entry.id).collect::<Vec<_>>()

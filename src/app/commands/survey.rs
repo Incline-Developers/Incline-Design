@@ -49,6 +49,7 @@ impl App<'_> {
             &self.editor.current_preferences(),
             self.editor.workspace_order,
             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
             definitions,
             local,
         );
