@@ -1960,8 +1960,8 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
                 };
                 bounds.push(GradeBound {
                     grade: position,
-                    lower: lower.as_ref().map(&endpoint).transpose()?,
-                    upper: upper.as_ref().map(&endpoint).transpose()?,
+                    lower: lower.as_ref().map(endpoint).transpose()?,
+                    upper: upper.as_ref().map(endpoint).transpose()?,
                 });
             }
         }
