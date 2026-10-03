@@ -30,7 +30,12 @@ const HANDLE_WIDTH: f32 = 18.0;
 const CELL_GAP: f32 = 4.0;
 const SCROLLBAR_ALLOWANCE: f32 = 14.0;
 const MAX_BODY_HEIGHT: f32 = 280.0;
+/// The least a grid asked to fill a height leaves for its rows.
+const MIN_FILLED_BODY_HEIGHT: f32 = 60.0;
 const BUTTON_SIDE: f32 = 26.0;
+/// Room at the left of every row of a grid with groups, where the bar that
+/// marks a row as belonging to its group is drawn.
+const GROUP_GUTTER: f32 = 14.0;
 
 /// One column: its header and its share of the row. Shares are weights, not
 /// pixels: 25, 15, 25, 35 gives the four columns those percentages.
@@ -101,10 +106,34 @@ pub(crate) enum GridAction {
     },
 }
 
+/// The width of each column of a grid of `columns` laid out across
+/// `available` pixels. Exposed so a row drawn beside the grid (a total, a
+/// field under two of its columns) can line up with it.
+pub(crate) fn column_widths(available: f32, columns: &[GridColumn], with_groups: bool) -> Vec<f32> {
+    let gutter = if with_groups { GROUP_GUTTER } else { 0.0 };
+    let total = (available - HANDLE_WIDTH - gutter - SCROLLBAR_ALLOWANCE - CELL_GAP * columns.len() as f32).max(80.0);
+    let weight_sum: f32 = columns.iter().map(|column| column.weight).sum::<f32>().max(f32::EPSILON);
+    columns.iter().map(|column| total * column.weight / weight_sum).collect()
+}
+
+/// The room a row has to its right edge that the grid keeps for its scrollbar,
+/// which a row drawn beside the grid should also leave free.
+pub(crate) const TRAILING_ALLOWANCE: f32 = SCROLLBAR_ALLOWANCE;
+
+/// The gap between a grid's columns.
+pub(crate) const COLUMN_GAP: f32 = CELL_GAP;
+
+/// The colour that marks the rows of the group with this position among the grid's groups.
+fn group_colour(ordinal: usize, dark_mode: bool) -> egui::Color32 {
+    let hue = (0.08 + ordinal as f32 * 0.17).fract();
+    egui::ecolor::Hsva::new(hue, 0.55, if dark_mode { 0.85 } else { 0.8 }, 1.0).into()
+}
+
 pub(crate) struct DataGrid {
     id: egui::Id,
     columns: Vec<GridColumn>,
     buttons: GridButtons,
+    fill_height: Option<f32>,
 }
 
 impl DataGrid {
@@ -113,7 +142,27 @@ impl DataGrid {
             id: egui::Id::new(("data_grid", id_salt)),
             columns,
             buttons: GridButtons::default(),
+            fill_height: None,
         }
+    }
+
+    /// Grow the grid, buttons and header included, to `height` from where it
+    /// starts, instead of stopping at the usual body height.
+    pub(crate) fn fill_height(mut self, height: f32) -> Self {
+        self.fill_height = Some(height);
+        self
+    }
+
+    /// The width a row spans: handle, gutter and every column with the gaps
+    /// between them. Group rows and plain rows share it so their backgrounds
+    /// end at the same edge.
+    fn row_width(&self, widths: &[f32]) -> f32 {
+        let widgets = widths.len() + 1 + usize::from(self.buttons.groups);
+        self.gutter() + HANDLE_WIDTH + widths.iter().sum::<f32>() + CELL_GAP * (widgets - 1) as f32
+    }
+
+    fn gutter(&self) -> f32 {
+        if self.buttons.groups { GROUP_GUTTER } else { 0.0 }
     }
 
     pub(crate) fn buttons(mut self, buttons: GridButtons) -> Self {
@@ -124,15 +173,14 @@ impl DataGrid {
     /// Draw the grid. `cell` draws one cell of a plain row, given the row and
     /// column; it should fill the width it is given.
     pub(crate) fn show(self, ui: &mut egui::Ui, selected: &mut Option<usize>, rows: &[GridRow], mut cell: impl FnMut(&mut egui::Ui, usize, usize)) -> Vec<GridAction> {
+        let top = ui.cursor().top();
         let mut actions = Vec::new();
         if selected.is_some_and(|row| row >= rows.len()) {
             *selected = rows.len().checked_sub(1);
         }
         self.draw_buttons(ui, *selected, &mut actions);
 
-        let total = (ui.available_width() - HANDLE_WIDTH - SCROLLBAR_ALLOWANCE - CELL_GAP * self.columns.len() as f32).max(80.0);
-        let weight_sum: f32 = self.columns.iter().map(|column| column.weight).sum::<f32>().max(f32::EPSILON);
-        let widths: Vec<f32> = self.columns.iter().map(|column| total * column.weight / weight_sum).collect();
+        let widths = column_widths(ui.available_width(), &self.columns, self.buttons.groups);
         let row_height = ui.spacing().interact_size.y + 4.0;
 
         ui.spacing_mut().item_spacing = egui::vec2(CELL_GAP, 2.0);
@@ -143,22 +191,42 @@ impl DataGrid {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         let released = ui.input(|input| input.pointer.any_released());
+        let body_height = self
+            .fill_height
+            .map_or(MAX_BODY_HEIGHT, |height| (height - (ui.cursor().top() - top)).max(MIN_FILLED_BODY_HEIGHT));
         egui::ScrollArea::vertical()
             .id_salt(self.id.with("scroll"))
-            .max_height(MAX_BODY_HEIGHT)
+            .max_height(body_height)
+            .min_scrolled_height(if self.fill_height.is_some() { body_height } else { 0.0 })
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 let mut folded = false;
+                let mut group: Option<egui::Color32> = None;
+                let mut groups_seen = 0;
                 for (index, row) in rows.iter().enumerate() {
                     let band = index % 2 == 1;
                     match row {
                         GridRow::Group { name, collapsed } => {
                             folded = *collapsed;
-                            self.draw_group_row(ui, index, name, *collapsed, row_height, selected, &mut actions, dragging.is_some().then_some(released));
+                            let colour = group_colour(groups_seen, ui.visuals().dark_mode);
+                            groups_seen += 1;
+                            group = Some(colour);
+                            self.draw_group_row(
+                                ui,
+                                index,
+                                name,
+                                *collapsed,
+                                self.row_width(&widths),
+                                row_height,
+                                colour,
+                                selected,
+                                &mut actions,
+                                dragging.is_some().then_some(released),
+                            );
                         }
                         GridRow::Item if folded => {}
                         GridRow::Item => {
-                            let row_rect = self.draw_item_row(ui, index, &widths, row_height, band, selected, &mut cell);
+                            let row_rect = self.draw_item_row(ui, index, &widths, row_height, band, group, selected, &mut cell);
                             self.handle_drop(ui, index, row_rect, false, dragging, released, &mut actions);
                         }
                     }
@@ -209,7 +277,7 @@ impl DataGrid {
 
     fn draw_header(&self, ui: &mut egui::Ui, widths: &[f32], row_height: f32) {
         ui.horizontal(|ui| {
-            ui.allocate_exact_size(egui::vec2(HANDLE_WIDTH, row_height), egui::Sense::hover());
+            ui.allocate_exact_size(egui::vec2(HANDLE_WIDTH + self.gutter(), row_height), egui::Sense::hover());
             for (column, width) in self.columns.iter().zip(widths) {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(*width, row_height), egui::Sense::hover());
                 ui.painter().text(
@@ -233,12 +301,24 @@ impl DataGrid {
         widths: &[f32],
         row_height: f32,
         band: bool,
+        group: Option<egui::Color32>,
         selected: &mut Option<usize>,
         cell: &mut impl FnMut(&mut egui::Ui, usize, usize),
     ) -> egui::Rect {
         let background = ui.painter().add(egui::Shape::Noop);
         let response = ui
             .horizontal(|ui| {
+                if self.buttons.groups {
+                    // The bar down the left edge ties a row to its group.
+                    let (gutter, _) = ui.allocate_exact_size(egui::vec2(GROUP_GUTTER, row_height), egui::Sense::hover());
+                    if let Some(colour) = group {
+                        let bar = egui::Rect::from_min_max(
+                            egui::pos2(gutter.center().x - 2.0, gutter.top() - 1.0),
+                            egui::pos2(gutter.center().x + 2.0, gutter.bottom() + 1.0),
+                        );
+                        ui.painter().rect_filled(bar, 1.0, colour);
+                    }
+                }
                 let (handle, handle_response) = ui.allocate_exact_size(egui::vec2(HANDLE_WIDTH, row_height), egui::Sense::drag());
                 ui.painter().text(
                     handle.center(),
@@ -263,12 +343,14 @@ impl DataGrid {
                 }
             })
             .response;
-        let rect = response.rect;
+        let rect = egui::Rect::from_min_size(response.rect.min, egui::vec2(self.row_width(widths), response.rect.height()));
         if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.any_pressed()) {
             *selected = Some(index);
         }
         let fill = if *selected == Some(index) {
             Some(ui.visuals().selection.bg_fill.gamma_multiply(0.35))
+        } else if let Some(colour) = group {
+            Some(colour.gamma_multiply(0.16))
         } else if band {
             Some(ui.visuals().faint_bg_color)
         } else {
@@ -287,7 +369,9 @@ impl DataGrid {
         index: usize,
         name: &str,
         collapsed: bool,
+        row_width: f32,
         row_height: f32,
+        colour: egui::Color32,
         selected: &mut Option<usize>,
         actions: &mut Vec<GridAction>,
         drag_released: Option<bool>,
@@ -295,12 +379,18 @@ impl DataGrid {
         let background = ui.painter().add(egui::Shape::Noop);
         let response = ui
             .horizontal(|ui| {
+                let (gutter, _) = ui.allocate_exact_size(egui::vec2(GROUP_GUTTER, row_height), egui::Sense::hover());
+                let bar = egui::Rect::from_min_max(
+                    egui::pos2(gutter.center().x - 3.0, gutter.top() - 1.0),
+                    egui::pos2(gutter.center().x + 3.0, gutter.bottom() + 1.0),
+                );
+                ui.painter().rect_filled(bar, 1.0, colour);
                 let arrow = if collapsed { "▶" } else { "▼" };
                 if ui.add_sized([HANDLE_WIDTH, row_height], egui::Button::new(arrow).frame(false)).clicked() {
                     actions.push(GridAction::ToggleGroup(index));
                 }
                 let mut edited = name.to_owned();
-                let width = (ui.available_width() - SCROLLBAR_ALLOWANCE).max(60.0);
+                let width = (row_width - GROUP_GUTTER - HANDLE_WIDTH - 2.0 * CELL_GAP).max(60.0);
                 let response = ui.add_sized([width, row_height - 2.0], egui::TextEdit::singleline(&mut edited).font(egui::TextStyle::Button));
                 if name.trim().is_empty() {
                     crate::ui::widgets::value_field::mark_invalid(ui, &response);
@@ -310,14 +400,14 @@ impl DataGrid {
                 }
             })
             .response;
-        let rect = response.rect;
+        let rect = egui::Rect::from_min_size(response.rect.min, egui::vec2(row_width, response.rect.height()));
         if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.any_pressed()) {
             *selected = Some(index);
         }
         let fill = if *selected == Some(index) {
             ui.visuals().selection.bg_fill.gamma_multiply(0.5)
         } else {
-            crate::ui::widgets::shifted(ui.visuals().panel_fill, if ui.visuals().dark_mode { 14 } else { -14 })
+            colour.gamma_multiply(0.5)
         };
         ui.painter().set(background, egui::Shape::rect_filled(rect.expand2(egui::vec2(2.0, 1.0)), 2.0, fill));
         if let Some(released) = drag_released {

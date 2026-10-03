@@ -108,9 +108,8 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
-    /// The Optimization menu's rows: the scenarios list, and loading the saved scenarios.
+    /// The Optimization menu's row that opens the scenarios list.
     OpenOptimizationScenarios,
-    LoadOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -183,7 +182,6 @@ impl MacMenuAction {
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
         Self::OpenOptimizationScenarios,
-        Self::LoadOptimizationScenarios,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -536,14 +534,6 @@ pub(crate) fn install_menu_bar() {
     let optimization_menu = menu(&tr!("ws-optimization"), mtm);
     optimization_menu.setAutoenablesItems(false);
     add_action(&optimization_menu, &tr!("opt-scenarios-button"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
-    add_action(
-        &optimization_menu,
-        &tr!("opt-load-scenarios-button"),
-        "",
-        MacMenuAction::LoadOptimizationScenarios,
-        &target,
-        mtm,
-    );
     let optimization_item = add_submenu(&root, &tr!("ws-optimization"), &optimization_menu, mtm);
     optimization_item.setTag(OPTIMIZATION_MENU_TAG);
 

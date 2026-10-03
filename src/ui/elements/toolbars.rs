@@ -41,8 +41,6 @@ enum LeftToolAction {
     DrillPattern,
     /// Open the Optimization scenarios list.
     OptimizationScenarios,
-    /// Read the saved Optimization scenarios into the list.
-    LoadOptimizationScenarios,
 }
 
 /// One button in the drawing toolbar's run.
@@ -165,25 +163,16 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     ]
 }
 
-/// The Optimization tools: the scenarios list, and loading the scenarios an
-/// earlier session saved into it.
+/// The Optimization tools: the scenarios list, which also holds import and
+/// export.
 fn optimization_tools() -> Vec<LeftTool> {
-    vec![
-        LeftTool {
-            icon: egui::Image::new(unthemed_icon!("optimization_scenarios.svg")),
-            tooltip: tr!("opt-scenarios-button"),
-            action: LeftToolAction::OptimizationScenarios,
-            enabled: true,
-            hint: None,
-        },
-        LeftTool {
-            icon: egui::Image::new(unthemed_icon!("load_scenarios.svg")),
-            tooltip: tr!("opt-load-scenarios-button"),
-            action: LeftToolAction::LoadOptimizationScenarios,
-            enabled: true,
-            hint: None,
-        },
-    ]
+    vec![LeftTool {
+        icon: egui::Image::new(unthemed_icon!("optimization_scenarios.svg")),
+        tooltip: tr!("opt-scenarios-button"),
+        action: LeftToolAction::OptimizationScenarios,
+        enabled: true,
+        hint: None,
+    }]
 }
 
 /// Draw one cell of the drawing toolbar's run.
@@ -197,7 +186,6 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
         LeftToolAction::OptimizationScenarios => editor.optimization.dialog_open(),
-        LeftToolAction::LoadOptimizationScenarios => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -220,7 +208,6 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
         LeftToolAction::OptimizationScenarios => commands.push(UiCommand::OpenOptimizationScenarios),
-        LeftToolAction::LoadOptimizationScenarios => commands.push(UiCommand::LoadOptimizationScenarios),
     }
 }
 

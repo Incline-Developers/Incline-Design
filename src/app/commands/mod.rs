@@ -706,10 +706,21 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SaveOptimizationScenario { scenario, then_close } => self.save_optimization_scenario(*scenario, then_close),
+            UiCommand::ExportOptimizationScenarios => {
+                self.export_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ImportOptimizationScenarios => {
+                self.import_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ChooseOptimizationReportsFolder => {
+                self.choose_optimization_reports_folder();
+                Ok(())
+            }
             UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
             UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
             UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),
-            UiCommand::LoadOptimizationScenarios => self.load_optimization_scenarios(),
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
                 // name exactly which one before the dialog opens on it.

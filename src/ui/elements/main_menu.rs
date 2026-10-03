@@ -545,10 +545,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenOptimizationScenarios);
                     ui.close();
                 }
-                if ContextMenuAction::new(tr!("opt-load-scenarios-button")).show(ui).clicked() {
-                    commands.push(UiCommand::LoadOptimizationScenarios);
-                    ui.close();
-                }
             });
             return;
         }

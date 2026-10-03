@@ -613,7 +613,6 @@ impl<'a> App<'a> {
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
             MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
-            MacMenuAction::LoadOptimizationScenarios => Some(UiCommand::LoadOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),

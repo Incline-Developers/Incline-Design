@@ -3627,14 +3627,18 @@ pub(crate) enum UiCommand {
         then_close: bool,
     },
     DeleteOptimizationScenario(u64),
+    /// Write every scenario to a JSON file the user chooses.
+    ExportOptimizationScenarios,
+    /// Add the scenarios in a JSON file the user chooses to the list.
+    ImportOptimizationScenarios,
+    /// Choose the folder the reports are written to.
+    ChooseOptimizationReportsFolder,
     /// Copy a scenario into a new one beside it, with an amended name.
     DuplicateOptimizationScenario(u64),
     RenameOptimizationScenario {
         id: u64,
         name: String,
     },
-    /// Replace the session's scenarios with the ones in the scenarios file.
-    LoadOptimizationScenarios,
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -3892,6 +3896,7 @@ impl UiCommand {
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
             | Self::RenameOptimizationScenario { .. }
+            | Self::ChooseOptimizationReportsFolder
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4134,9 +4139,10 @@ impl UiCommand {
                 },
             ),
             Self::SaveOptimizationScenario { scenario, .. } => report(tr!("opt-save-scenario"), scenario.name.clone()),
+            Self::ExportOptimizationScenarios => report(tr!("opt-export-json"), tr!("opt-export-summary")),
+            Self::ImportOptimizationScenarios => report(tr!("opt-import-json"), tr!("opt-import-summary")),
             Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
             Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
-            Self::LoadOptimizationScenarios => report(tr!("opt-load-scenarios"), tr!("opt-load-scenarios-summary")),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4534,6 +4540,8 @@ pub(crate) struct ScenarioDraft {
     pub(crate) confirm_close: bool,
     pub(crate) selections: ScenarioGridSelections,
     pub(crate) tab: ScenarioTab,
+    /// The section menu shows names beside its icons.
+    pub(crate) menu_expanded: bool,
 }
 
 impl ScenarioDraft {
@@ -4545,6 +4553,7 @@ impl ScenarioDraft {
             confirm_close: false,
             selections: ScenarioGridSelections::default(),
             tab: ScenarioTab::default(),
+            menu_expanded: false,
         }
     }
 
@@ -4579,8 +4588,8 @@ pub(crate) enum ScenarioStatus {
 
 /// What the Optimization workspace holds while the app runs.
 ///
-/// The scenarios are loaded from, and saved to, one JSON file; nothing here is
-/// read from it until the user asks (Load scenarios). Runs are not saved: what
+/// The scenarios are loaded from, and saved to, one JSON file, read the first
+/// time the list is opened. Runs are not saved: what
 /// a run produced is gone with the session.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OptimizationState {
@@ -4590,6 +4599,9 @@ pub(crate) struct OptimizationState {
     pub(crate) draft: Option<ScenarioDraft>,
     pub(crate) next_scenario_id: u64,
     pub(crate) runs: HashMap<u64, RunState>,
+    /// The saved scenarios file has been read this session. It is read the
+    /// first time the list opens.
+    pub(crate) loaded_from_file: bool,
 }
 
 impl OptimizationState {

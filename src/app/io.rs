@@ -346,10 +346,18 @@ pub(crate) fn load_session() -> io::Result<Session> {
 
 /// Write every scenario to the one scenarios file.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<String> {
     let path = data_path("optimization_scenarios.json")?;
     let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
-    write_atomic(&path, contents.as_bytes())
+    write_atomic(&path, contents.as_bytes())?;
+    Ok(path.display().to_string())
+}
+
+/// Write the scenarios to a file the user chose, to keep or to move to another machine.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_optimization_scenarios(path: &std::path::Path, file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+    let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    write_atomic(path, contents.as_bytes())
 }
 
 /// Read the scenarios file. A missing file is a `NotFound` error, which the
@@ -364,14 +372,15 @@ pub(crate) fn load_optimization_scenarios() -> io::Result<crate::model::optimiza
 const WEB_SCENARIOS_KEY: &str = "incline.optimization_scenarios.v1";
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<String> {
     let json = serde_json::to_string(file).map_err(io::Error::other)?;
     let storage = web_sys::window()
         .and_then(|window| window.local_storage().ok().flatten())
         .ok_or_else(|| io::Error::other("localStorage is unavailable"))?;
     storage
         .set_item(WEB_SCENARIOS_KEY, &json)
-        .map_err(|error| io::Error::other(format!("localStorage write failed: {error:?}")))
+        .map_err(|error| io::Error::other(format!("localStorage write failed: {error:?}")))?;
+    Ok(WEB_SCENARIOS_KEY.to_owned())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -387,7 +396,7 @@ pub(crate) fn load_optimization_scenarios() -> io::Result<crate::model::optimiza
 }
 
 /// Refuse a file written by a newer build rather than misread it.
-fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
+pub(crate) fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
     let file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
     if file.version > crate::model::optimization::SCENARIO_FILE_VERSION {
         return Err(io::Error::other(format!("scenarios file version {} is newer than this build reads", file.version)));

@@ -3,7 +3,7 @@ use std::io;
 use anyhow::Result;
 
 use crate::{
-    app::App,
+    app::{App, commands::file::FileDialogAction},
     i18n::tr,
     model::optimization::{OptimizationScenario, ScenarioFile, unique_name},
     ui::state::ScenarioDraft,
@@ -13,7 +13,16 @@ use crate::{
 impl<'a> App<'a> {
     /// Show the list. With a scenario open in the editor the list stays behind
     /// it: closing the editor is what asks about unsaved changes.
+    ///
+    /// The first time it opens in a session the saved scenarios file is read,
+    /// so scenarios saved earlier are there without asking.
     pub(crate) fn open_optimization_scenarios(&mut self) {
+        if !self.editor.optimization.loaded_from_file {
+            self.editor.optimization.loaded_from_file = true;
+            if let Err(error) = self.load_saved_optimization_scenarios() {
+                userspace_warn!("{error:#}");
+            }
+        }
         self.editor.optimization.list_open = true;
     }
 
@@ -41,13 +50,21 @@ impl<'a> App<'a> {
     /// write the file. The editor stays open, now holding it as saved, unless
     /// the user is closing. A failed write changes nothing the user can see, so
     /// the work is not lost.
-    pub(crate) fn save_optimization_scenario(&mut self, scenario: OptimizationScenario, then_close: bool) -> Result<()> {
+    pub(crate) fn save_optimization_scenario(&mut self, mut scenario: OptimizationScenario, then_close: bool) -> Result<()> {
         let state = &mut self.editor.optimization;
+        // The name is changed in the list only; the editor's copy never wins over it.
+        if let Some(existing) = state.scenarios.iter().find(|existing| existing.id == scenario.id) {
+            scenario.name = existing.name.clone();
+        }
         match state.scenarios.iter_mut().find(|existing| existing.id == scenario.id) {
             Some(existing) => *existing = scenario.clone(),
             None => state.scenarios.push(scenario.clone()),
         }
-        self.write_optimization_scenarios()?;
+        let location = self.write_optimization_scenarios()?;
+        userspace_log!(
+            "{}",
+            tr!("opt-scenarios-saved-to", count = self.editor.optimization.scenarios.len().to_string(), location = location)
+        );
         let state = &mut self.editor.optimization;
         if then_close {
             state.draft = None;
@@ -63,7 +80,7 @@ impl<'a> App<'a> {
     pub(crate) fn delete_optimization_scenario(&mut self, id: u64) -> Result<()> {
         self.editor.optimization.scenarios.retain(|scenario| scenario.id != id);
         self.editor.optimization.runs.remove(&id);
-        self.write_optimization_scenarios()
+        self.write_optimization_scenarios().map(|_| ())
     }
 
     /// Copy a scenario to a new one right after it. The copy has not been run.
@@ -79,7 +96,7 @@ impl<'a> App<'a> {
             &tr!("opt-copy-name", name = copy.name.clone()),
         );
         state.scenarios.insert(position + 1, copy);
-        self.write_optimization_scenarios()
+        self.write_optimization_scenarios().map(|_| ())
     }
 
     pub(crate) fn rename_optimization_scenario(&mut self, id: u64, name: String) -> Result<()> {
@@ -88,29 +105,112 @@ impl<'a> App<'a> {
             Some(scenario) if !name.is_empty() && scenario.name != name => scenario.name = name,
             _ => return Ok(()),
         }
-        self.write_optimization_scenarios()
+        self.write_optimization_scenarios().map(|_| ())
     }
 
-    pub(crate) fn load_optimization_scenarios(&mut self) -> Result<()> {
+    /// Read the saved scenarios file into the list. A file that is not there
+    /// yet is not an error: nothing has been saved.
+    fn load_saved_optimization_scenarios(&mut self) -> Result<()> {
         match crate::app::io::load_optimization_scenarios() {
             Ok(file) => {
                 let count = file.scenarios.len();
                 self.editor.optimization.scenarios = file.scenarios;
-                let kept: std::collections::HashSet<u64> = self.editor.optimization.scenarios.iter().map(|scenario| scenario.id).collect();
-                self.editor.optimization.runs.retain(|id, _| kept.contains(id));
-                self.editor.optimization.list_open = true;
                 userspace_log!("{}", tr!("opt-scenarios-loaded", count = count.to_string()));
+                Ok(())
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                userspace_warn!("{}", tr!("opt-no-scenarios-saved"));
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => anyhow::bail!("{}", tr!("opt-scenarios-load-failed", error = error.to_string())),
         }
+    }
+
+    /// Write the scenarios file, and say where it is.
+    fn write_optimization_scenarios(&self) -> Result<String> {
+        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        crate::app::io::save_optimization_scenarios(&file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))
+    }
+
+    /// Ask where to write the scenarios, and write them there.
+    pub(crate) fn export_optimization_scenarios(&mut self) {
+        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        #[cfg(target_arch = "wasm32")]
+        match serde_json::to_vec_pretty(&file) {
+            Ok(bytes) => Self::trigger_browser_download("optimization_scenarios.json".to_owned(), bytes, "application/json", "optimization scenarios"),
+            Err(error) => userspace_warn!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())),
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = file;
+            self.spawn_file_dialog(async {
+                let handle = rfd::AsyncFileDialog::new()
+                    .add_filter("JSON", &["json"])
+                    .set_file_name("optimization_scenarios.json")
+                    .save_file()
+                    .await?;
+                Some(FileDialogAction::ExportOptimizationScenarios(handle.path().to_owned()))
+            });
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_optimization_scenarios_export(&mut self, mut path: std::path::PathBuf) -> Result<()> {
+        if path.extension().is_none() {
+            path.set_extension("json");
+        }
+        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        crate::app::io::export_optimization_scenarios(&path, &file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))?;
+        userspace_log!(
+            "{}",
+            tr!("opt-scenarios-exported", count = file.scenarios.len().to_string(), path = path.display().to_string())
+        );
         Ok(())
     }
 
-    fn write_optimization_scenarios(&self) -> Result<()> {
-        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
-        crate::app::io::save_optimization_scenarios(&file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))
+    /// Ask for a scenarios file and add what is in it to the list.
+    pub(crate) fn import_optimization_scenarios(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("JSON", &["json"]).pick_file().await?;
+            Some(FileDialogAction::WebImportOptimizationScenarios(crate::model::input::read_browser_handle(handle).await))
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("JSON", &["json"]).pick_file().await?;
+            Some(FileDialogAction::ImportOptimizationScenarios(handle.path().to_owned()))
+        });
+    }
+
+    /// Add the scenarios in `text` to the list, each with a fresh id and a name
+    /// the list does not already use. They have not been run.
+    pub(crate) fn merge_imported_optimization_scenarios(&mut self, text: &str) -> Result<()> {
+        let file = crate::app::io::parse_optimization_scenarios(text).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-import-failed", error = error.to_string())))?;
+        let count = file.scenarios.len();
+        let state = &mut self.editor.optimization;
+        for mut scenario in file.scenarios {
+            scenario.id = state.fresh_id();
+            scenario.name = unique_name(state.scenarios.iter().map(|existing| existing.name.as_str()), &scenario.name);
+            state.scenarios.push(scenario);
+        }
+        state.list_open = true;
+        self.write_optimization_scenarios()?;
+        userspace_log!("{}", tr!("opt-scenarios-imported", count = count.to_string()));
+        Ok(())
+    }
+
+    /// Ask for the folder the open scenario's reports go to.
+    pub(crate) fn choose_optimization_reports_folder(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        userspace_warn!("{}", tr!("opt-reports-browser-unavailable"));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().pick_folder().await?;
+            Some(FileDialogAction::OptimizationReportsFolder(handle.path().to_owned()))
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_optimization_reports_folder(&mut self, path: std::path::PathBuf) {
+        if let Some(draft) = self.editor.optimization.draft.as_mut() {
+            draft.scenario.output.reports_folder = path.display().to_string();
+        }
     }
 }

@@ -20,7 +20,7 @@ use crate::{
     i18n::tr,
     model::optimization::{Constant, ConstantValue, ConstantsRow, FieldValue, ValueKind, ValueType},
     ui::{
-        themed_icon,
+        themed_icon, unthemed_icon,
         widgets::{
             menu::{self, DragableMenu, MenuButton},
             toolbar::ToolbarButton,
@@ -256,7 +256,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
                     }
                 } else if ui
                     .add(
-                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick.svg")), tr!("opt-pick-constant"))
+                        ToolbarButton::new(egui::Image::new(unthemed_icon!("constant_pick.svg")), tr!("opt-pick-constant"))
                             .id_salt(id.with("pick"))
                             .button_side(BUTTON_SIDE),
                     )

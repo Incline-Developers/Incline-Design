@@ -406,14 +406,15 @@ pub(crate) enum SlopeMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct RosetteRow {
-    pub(crate) bearing: FieldValue<f64>,
+    /// A plain number, not a constant.
+    pub(crate) bearing: f64,
     pub(crate) angle: FieldValue<f64>,
 }
 
 impl Default for RosetteRow {
     fn default() -> Self {
         Self {
-            bearing: FieldValue::new(0.0),
+            bearing: 0.0,
             angle: FieldValue::new(DEFAULT_SLOPE_ANGLE),
         }
     }
@@ -465,7 +466,7 @@ impl SlopeSettings {
         let mut rows: Vec<(f64, f64)> = self
             .rosette
             .iter()
-            .filter_map(|row| Some((row.bearing.resolve(constants)?.rem_euclid(360.0), row.angle.resolve(constants)?)))
+            .filter_map(|row| Some((row.bearing.rem_euclid(360.0), row.angle.resolve(constants)?)))
             .collect();
         rows.sort_by(|a, b| a.0.total_cmp(&b.0));
         if rows.is_empty() {
@@ -492,36 +493,57 @@ pub(crate) enum ShellMode {
     Multiple,
 }
 
+/// Where the shell number is written in the block model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ShellFieldMode {
+    /// A field the block model already has.
+    #[default]
+    Existing,
+    /// A new field, named by the user.
+    New,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct OutputSettings {
     pub(crate) mode: ShellMode,
-    pub(crate) factor_from: FieldValue<f64>,
-    pub(crate) factor_to: FieldValue<f64>,
+    /// The revenue factor range of a multiple-shell run: plain numbers, not
+    /// constants.
+    pub(crate) factor_from: f64,
+    pub(crate) factor_to: f64,
     pub(crate) factor_step: f64,
     pub(crate) shell_count: u32,
     pub(crate) create_reports: bool,
-    pub(crate) create_shells: bool,
+    /// Folder the reports are written to; empty until one is chosen.
+    pub(crate) reports_folder: String,
+    /// Shells are made as a solid, a surface, both, or - with neither - not at all.
     pub(crate) shell_as_solid: bool,
     pub(crate) shell_as_surface: bool,
+    /// Name of the layer the shells are put in.
+    pub(crate) shell_layer_name: String,
     pub(crate) write_shell_field: bool,
+    pub(crate) shell_field_mode: ShellFieldMode,
     pub(crate) shell_field: String,
+    pub(crate) shell_new_field: String,
 }
 
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
             mode: ShellMode::Single,
-            factor_from: FieldValue::new(0.5),
-            factor_to: FieldValue::new(1.0),
+            factor_from: 0.5,
+            factor_to: 1.0,
             factor_step: 0.05,
             shell_count: 11,
             create_reports: true,
-            create_shells: true,
+            reports_folder: String::new(),
             shell_as_solid: true,
             shell_as_surface: false,
+            shell_layer_name: tr!("opt-default-shell-layer"),
             write_shell_field: false,
+            shell_field_mode: ShellFieldMode::Existing,
             shell_field: String::new(),
+            shell_new_field: String::new(),
         }
     }
 }
@@ -718,9 +740,15 @@ impl OptimizationScenario {
     }
 }
 
-/// The first of `names` that matches one of `wanted` regardless of case.
+/// The first of `names` that matches one of `wanted` regardless of case, spaces, underscores and hyphens.
 pub(crate) fn first_named(names: &[String], wanted: &[&str]) -> Option<String> {
-    names.iter().find(|name| wanted.iter().any(|wanted| name.trim().eq_ignore_ascii_case(wanted))).cloned()
+    let plain = |text: &str| {
+        text.chars()
+            .filter(|character| !matches!(character, ' ' | '_' | '-'))
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    names.iter().find(|name| wanted.iter().any(|wanted| plain(name) == plain(wanted))).cloned()
 }
 
 /// The fields of a block model, as the scenario's pickers offer them.

@@ -1,5 +1,5 @@
-//! A plan view of a pit's overall slope rosette: an oval split into sectors by
-//! bearing, each coloured and labelled with its wall angle.
+//! A plan view of a pit's overall slope rosette: a circle split into sectors by
+//! bearing, with a small pit drawn inside it, each in its own colour and labelled with its wall angle.
 //!
 //! Bearings run clockwise from north at the top. Each sector is where one
 //! rosette row applies - from its bearing up to the next row's - so the picture
@@ -8,39 +8,70 @@
 
 use crate::{i18n::tr, model::optimization::SlopeSector};
 
-const HEIGHT: f32 = 300.0;
-const MAX_RADIUS_X: f32 = 200.0;
-const MAX_RADIUS_Y: f32 = 105.0;
+pub(crate) const HEIGHT: f32 = 300.0;
+/// Room kept outside the circle for the compass letters and bearings.
+const LABEL_MARGIN: f32 = 36.0;
+/// Crest and toe lines of the pit's benches as fractions of the circle's
+/// radius, from the top crest in to the floor; even entries are crests.
+const PIT_LINES: [f32; 8] = [0.94, 0.80, 0.72, 0.58, 0.50, 0.36, 0.28, 0.14];
+const PIT_STEPS: u32 = 72;
+/// The pit is narrower than it is long (east-west against north-south).
+const PIT_WIDTH: f32 = 0.78;
+/// Keeps the most uneven point of the outline inside the circle.
+const PIT_FIT: f32 = 0.82;
 /// Angle between the points a sector's rim is cut into.
 const RIM_STEP_DEGREES: f64 = 3.0;
-/// Wall angles the colour ramp runs between.
-const RAMP_FROM: f64 = 20.0;
-const RAMP_TO: f64 = 80.0;
+/// Twenty calm, muted colours - neutral earth and slate tones rather than
+/// saturated ones - as unlike each other as that allows, handed out to the sectors in order and
+/// started over after the twentieth. A sector's colour says which zone it is,
+/// not how steep: the angle is printed in it, and two zones a degree or two
+/// apart still have to be told apart at a glance.
+const ZONE_COLOURS: [[u8; 3]; 20] = [
+    [124, 152, 182], // slate blue
+    [203, 168, 126], // sand
+    [133, 168, 140], // sage
+    [190, 140, 138], // dusty rose
+    [152, 140, 182], // lavender grey
+    [168, 152, 130], // taupe
+    [196, 160, 180], // soft mauve
+    [124, 172, 172], // grey teal
+    [180, 180, 130], // olive cream
+    [152, 154, 160], // stone
+    [168, 192, 216], // pale blue
+    [222, 196, 164], // pale sand
+    [176, 202, 182], // pale sage
+    [216, 176, 174], // blush
+    [192, 184, 212], // pale lavender
+    [200, 188, 170], // oat
+    [220, 194, 208], // pale mauve
+    [166, 204, 204], // pale teal
+    [208, 208, 168], // pale olive
+    [196, 198, 204], // pale stone
+];
 
-/// Draw the oval for `sectors` (in bearing order), centred in the width available.
+/// Draw the circle for `sectors` (in bearing order), centred in the width available.
 pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HEIGHT), egui::Sense::hover());
     let centre = rect.center();
-    let radius_x = MAX_RADIUS_X.min(rect.width() / 2.0 - 40.0).max(60.0);
-    let radius_y = MAX_RADIUS_Y.min(radius_x * 0.55);
+    let radius = (rect.width().min(rect.height()) / 2.0 - LABEL_MARGIN).max(40.0);
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
     let line = visuals.widgets.noninteractive.fg_stroke.color;
     let weak = visuals.weak_text_color();
-    let on_oval = |bearing: f64, scale: f32| {
+    let on_circle = |bearing: f64, scale: f32| {
         let angle = bearing.to_radians();
-        centre + egui::vec2(radius_x * scale * angle.sin() as f32, -radius_y * scale * angle.cos() as f32)
+        centre + egui::vec2(radius * scale * angle.sin() as f32, -radius * scale * angle.cos() as f32)
     };
 
     // The sectors, each a fan of triangles from the centre to its rim.
-    for sector in sectors {
-        let colour = angle_colour(sector.angle, visuals.dark_mode);
+    for (zone, sector) in sectors.iter().enumerate() {
+        let colour = zone_colour(zone);
         let steps = (((sector.to - sector.from) / RIM_STEP_DEGREES).ceil() as usize).max(1);
         let mut mesh = egui::Mesh::default();
         mesh.colored_vertex(centre, colour);
         for step in 0..=steps {
             let bearing = sector.from + (sector.to - sector.from) * step as f64 / steps as f64;
-            mesh.colored_vertex(on_oval(bearing, 1.0), colour);
+            mesh.colored_vertex(on_circle(bearing, 1.0), colour);
         }
         for step in 0..steps as u32 {
             mesh.add_triangle(0, step + 1, step + 2);
@@ -49,15 +80,33 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
     }
 
     // The outline, and where each sector starts.
-    let outline: Vec<egui::Pos2> = (0..=120).map(|step| on_oval(f64::from(step) * 3.0, 1.0)).collect();
+    let outline: Vec<egui::Pos2> = (0..=120).map(|step| on_circle(f64::from(step) * 3.0, 1.0)).collect();
     painter.add(egui::Shape::line(outline, egui::Stroke::new(1.5, line)));
-    let boundaries = sectors.len() > 1;
-    for sector in sectors {
-        if boundaries {
-            painter.line_segment([centre, on_oval(sector.from, 1.0)], egui::Stroke::new(1.0, line));
+    if sectors.len() > 1 {
+        for sector in sectors {
+            painter.line_segment([centre, on_circle(sector.from, 1.0)], egui::Stroke::new(1.0, line));
         }
+    }
+
+    // A small pit inside, so it reads as a pit's walls: crest and toe lines of
+    // a few benches, stretched north-south and a little uneven.
+    let ink = egui::Color32::from_rgba_unmultiplied(40, 46, 58, 215);
+    for (index, scale) in PIT_LINES.iter().enumerate() {
+        let is_crest = index % 2 == 0;
+        let points: Vec<egui::Pos2> = (0..=PIT_STEPS)
+            .map(|step| {
+                let angle = f64::from(step) / f64::from(PIT_STEPS) * std::f64::consts::TAU;
+                let wobble = 1.0 + 0.12 * (2.0 * angle + 0.6).sin() + 0.07 * (3.0 * angle + 1.9).sin() + 0.03 * (5.0 * angle).sin();
+                let reach = radius * scale * PIT_FIT * wobble as f32;
+                centre + egui::vec2(reach * PIT_WIDTH * angle.sin() as f32, -reach * angle.cos() as f32)
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, egui::Stroke::new(if is_crest { 2.6 } else { 1.8 }, ink)));
+    }
+
+    for (zone, sector) in sectors.iter().enumerate() {
         painter.text(
-            on_oval(sector.from, 1.0) + (on_oval(sector.from, 1.0) - centre).normalized() * 14.0,
+            on_circle(sector.from, 1.0) + (on_circle(sector.from, 1.0) - centre).normalized() * 14.0,
             egui::Align2::CENTER_CENTER,
             format!("{}°", trim_number(sector.from.rem_euclid(360.0))),
             egui::TextStyle::Small.resolve(ui.style()),
@@ -65,11 +114,11 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
         );
         let middle = (sector.from + sector.to) / 2.0;
         painter.text(
-            on_oval(middle, 0.58),
+            on_circle(middle, 0.9),
             egui::Align2::CENTER_CENTER,
             format!("{}°", trim_number(sector.angle)),
-            egui::FontId::proportional(18.0),
-            line,
+            egui::FontId::proportional(15.0),
+            text_on(zone_colour(zone)),
         );
     }
 
@@ -80,19 +129,27 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
         (180.0, tr!("opt-compass-south")),
         (270.0, tr!("opt-compass-west")),
     ] {
-        let direction = (on_oval(bearing, 1.0) - centre).normalized();
-        let anchor = on_oval(bearing, 1.0) + direction * if bearing == 0.0 || bearing == 180.0 { 30.0 } else { 40.0 };
-        painter.text(anchor, egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(13.0), weak);
+        let direction = (on_circle(bearing, 1.0) - centre).normalized();
+        painter.text(
+            on_circle(bearing, 1.0) + direction * 30.0,
+            egui::Align2::CENTER_CENTER,
+            letter,
+            egui::FontId::proportional(13.0),
+            weak,
+        );
     }
     response.on_hover_text(tr!("opt-rosette-diagram-hover"));
 }
 
-/// Steep walls warm, shallow ones cool, so a rosette's tightest side stands out.
-fn angle_colour(angle: f64, dark_mode: bool) -> egui::Color32 {
-    let t = ((angle - RAMP_FROM) / (RAMP_TO - RAMP_FROM)).clamp(0.0, 1.0) as f32;
-    let hue = 0.58 - 0.5 * t;
-    let value = if dark_mode { 0.85 } else { 0.95 };
-    egui::ecolor::Hsva::new(hue, 0.5, value, 0.55).into()
+fn zone_colour(zone: usize) -> egui::Color32 {
+    let [red, green, blue] = ZONE_COLOURS[zone % ZONE_COLOURS.len()];
+    egui::Color32::from_rgba_unmultiplied(red, green, blue, 210)
+}
+
+/// Black or white, whichever reads better over `fill`.
+fn text_on(fill: egui::Color32) -> egui::Color32 {
+    let luminance = 0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
+    if luminance > 150.0 { egui::Color32::from_gray(20) } else { egui::Color32::WHITE }
 }
 
 fn trim_number(value: f64) -> String {
