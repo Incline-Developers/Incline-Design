@@ -84,9 +84,7 @@
 //!
 //! That ceiling is not close enough to be reached by trimming the encoding:
 //! a twenty-four hour model with a 200 t parcel target is *smaller* than the
-//! twelve hour model that solves, and still returns nothing. The reasoning,
-//! the alternatives measured and the one product approximation that would
-//! change it are in `docs/scheduling-optimisation-backend.md`.
+//! twelve hour model that solves, and still returns nothing.
 //!
 //! An earlier revision was tractable further out only because it pruned
 //! "deep" parcel positions from the FIFO order. That prune was unsound (see

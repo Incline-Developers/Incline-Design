@@ -14,7 +14,7 @@
 //!
 //! Every later solve - Improve, the day-by-day windows - takes the release
 //! times the dispatch found as fixed data (`releases`); see
-//! `docs/activity-sequencing-plan.md`, D7.
+//! `docs/scheduling-drill-blast.md`.
 
 use std::collections::BTreeMap;
 

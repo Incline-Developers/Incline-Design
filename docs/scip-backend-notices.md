@@ -1,4 +1,4 @@
-# Bundled SCIP provenance and notices
+# Bundled solver provenance and notices
 
 Supported development backend: russcip **0.10.0**, scip-sys **0.1.28**, bundled
 SCIP **10.0.2** / SoPlex **8.0.2**, scipoptsuite-deploy **v0.12.0**. Rust
@@ -48,3 +48,22 @@ Linux direct launch and dynamic-library resolution were validated on the host;
 Windows/macOS packaging and a clean Linux installation remain unverified.
 The build's developer RPATH is not an installer. An installer must include the
 matching library/dependencies and notices in its distributable artefact.
+
+## HiGHS
+
+The hourly dispatch LP and the relaxation bound use HiGHS **1.15.0**, built
+from the source vendored in the `highs-sys` 1.15.0 crate and linked
+statically into the Incline binary on every native build. Of its `extern/`
+components only pdqsort is compiled in (header-only); the build sets
+`ZLIB=OFF` and `HIPO` is off, so zstr, AMD, METIS, RCM and the BLAS shim are
+not linked. Texts under `docs/licenses/highs/` are copied without
+modification from that crate:
+
+| Component | Version/source | Local notice |
+| --- | --- | --- |
+| HiGHS | highs-sys 1.15.0 HiGHS/LICENSE.txt (MIT) | HiGHS.txt |
+| pdqsort | highs-sys 1.15.0 HiGHS/extern/pdqsort/license.txt (zlib) | pdqsort.txt |
+
+MIT requires the HiGHS copyright and permission notice in every copy, so a
+distribution must ship `HiGHS.txt` alongside the binary. pdqsort's zlib
+licence asks for no notice in binary form.

@@ -7,7 +7,7 @@
 //! in the next blast window. Its dig blocks are available from that window's
 //! end. Dozers, drills and MPUs are machines like loaders - a machine class
 //! has a [`MachineKind`] - and work the blasts their Gantt bars list, in
-//! order. See `docs/activity-sequencing-plan.md`.
+//! order. See `docs/scheduling-drill-blast.md`.
 
 use serde::{Deserialize, Serialize};
 

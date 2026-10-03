@@ -3,8 +3,7 @@
 A dig block can only be dug once its blast has been prepared, drilled,
 charged and fired. With drill and blast switched on, the schedule works that
 chain out hour by hour beside the loaders, and a loader whose next block has
-not been blasted waits for it. The plan and the decisions behind it are in
-`docs/activity-sequencing-plan.md`.
+not been blasted waits for it.
 
 ## The chain
 
@@ -123,8 +122,8 @@ The hourly dispatch (`optimisation/blended/greedy.rs`) runs the chain
 (`optimisation/blended/drill_blast.rs`) at the start of each hour on the
 ground standing then, so clearance follows what the loaders have dug. Its
 release times are then fixed for Improve and the day-by-day fallback: SCIP
-gets no dig columns before a block's release (D7 in the plan). Improve can
-therefore not move a release earlier by digging the ground above sooner. The
+gets no dig columns before a block's release. Improve can therefore not move
+a release earlier by digging the ground above sooner. The
 independent replay rejects any dig before release, checks the machine work
 and firing window, and confirms that overlying ground was exhausted before
 clearance. Improve also holds those clearance deadlines, so it cannot move
