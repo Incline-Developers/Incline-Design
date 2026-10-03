@@ -477,20 +477,15 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// run. One control in two places rather than two that drift: `salt` keeps
 /// their widget ids apart, because both pages can be laid out in the same
 /// frame.
-///
-/// The browser build shows them disabled with the reason, and refuses the
-/// commands as well: calculation needs the native solver.
 pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
     use crate::ui::{
         elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
         widgets::toolbar::ToolbarButton,
     };
 
-    let available = !cfg!(target_arch = "wasm32");
     let working = editor.schedule_run_working;
-    let startable = available && !working;
+    let startable = !working;
     let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
-    let hint = |note: String| if available { note } else { tr!("schedule-run-desktop-only") };
     let side = ui.available_height();
     let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
     if ui
@@ -498,7 +493,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             startable,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, startable)),
-                hint(tr!("schedule-run-period-note")),
+                tr!("schedule-run-period-note"),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_period")),
@@ -512,7 +507,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             startable,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, startable)),
-                hint(tr!("schedule-run-whole-note")),
+                tr!("schedule-run-whole-note"),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_whole")),
@@ -542,28 +537,31 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     ui.spacing_mut().item_spacing.x = spacing;
     ui.add_space(6.0);
     // The hourly schedule is what every other control produces; this is the
-    // one that spends the solve time looking past it.
-    let improve = egui::Button::new(if editor.schedule_run_improve {
-        tr!("schedule-improving")
-    } else {
-        tr!("schedule-improve")
-    })
-    .corner_radius(GROUP_CORNER_RADIUS)
-    .selected(editor.schedule_run_improve);
-    if ui
-        .add_enabled(startable, improve)
-        .on_hover_text(hint(tr!("schedule-improve-note")))
-        .on_disabled_hover_text(hint(if editor.schedule_run_improve {
-            tr!("schedule-improving-note")
+    // one that spends the solve time looking past it. Only a build with SCIP
+    // can (the `scip` feature).
+    if cfg!(feature = "scip") {
+        let improve = egui::Button::new(if editor.schedule_run_improve {
+            tr!("schedule-improving")
         } else {
-            tr!("schedule-improve-note")
-        }))
-        .clicked()
-    {
-        commands.push(UiCommand::ImproveSchedule);
+            tr!("schedule-improve")
+        })
+        .corner_radius(GROUP_CORNER_RADIUS)
+        .selected(editor.schedule_run_improve);
+        if ui
+            .add_enabled(startable, improve)
+            .on_hover_text(tr!("schedule-improve-note"))
+            .on_disabled_hover_text(if editor.schedule_run_improve {
+                tr!("schedule-improving-note")
+            } else {
+                tr!("schedule-improve-note")
+            })
+            .clicked()
+        {
+            commands.push(UiCommand::ImproveSchedule);
+        }
     }
-    ui.add_enabled(available, egui::Checkbox::new(&mut editor.schedule_auto_recalculate, tr!("schedule-auto")))
-        .on_hover_text(hint(tr!("schedule-auto-note")));
+    ui.checkbox(&mut editor.schedule_auto_recalculate, tr!("schedule-auto"))
+        .on_hover_text(tr!("schedule-auto-note"));
 }
 
 /// The one status line the run controls carry, with the detail behind it on

@@ -42,10 +42,6 @@ impl Rows for ScipRows<'_> {
         &mut self.columns
     }
 
-    fn sizes(&mut self) -> &mut BlendSizes {
-        &mut self.sizes
-    }
-
     fn cancelled(&self) -> bool {
         if let Some(checks) = self.checks {
             checks.fetch_add(1, Ordering::Relaxed);
@@ -114,11 +110,6 @@ impl Rows for ScipRows<'_> {
         let mut coefs = [scale, -scale];
         self.model.add_cons_quadratic(Vec::new(), &mut [], q1, q2, &mut coefs, 0.0, 0.0, name);
     }
-}
-
-/// Build the blended model for SCIP.
-pub(crate) fn formulate_scip(input: &BlendInput) -> BlendFormulation {
-    formulate_scip_with_cancel(input, None, None).expect("uncancelled formulation")
 }
 
 pub(crate) fn formulate_scip_with_cancel(input: &BlendInput, cancel: Option<&AtomicBool>, checks: Option<&AtomicU64>) -> Result<BlendFormulation, FormulationCancelled> {

@@ -1,11 +1,11 @@
-//! The blended model itself: one builder, written once, used by both
-//! experimental solvers.
+//! The blended model itself: one builder, written once.
 //!
-//! Reading this file is reading the model. The SCIP backend and the iterative
-//! HiGHS backend each supply a [`Rows`] implementation and then call
+//! Reading this file is reading the model. Improve's SCIP backend and the
+//! HiGHS relaxation bound each supply a [`Rows`] implementation and then call
 //! [`formulate`]; nothing else about the constraints differs between them.
-//! That is what makes the §7 comparison a comparison of *methods* rather than
-//! of two independently drifting formulations.
+//! Only Improve builds the model, so without the `scip` feature only
+//! [`BlendSizes`] is read.
+#![cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve builds the model"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -106,15 +106,12 @@ pub(crate) struct BlendSizes {
 /// abstraction, no lifecycle. A backend that cannot express one of these
 /// cannot express the blended model at all.
 pub(crate) trait Rows {
-    /// An opaque column handle. `russcip::Variable` for SCIP, a `good_lp`
-    /// variable for the iterative method.
+    /// An opaque column handle: `russcip::Variable` for SCIP.
     type Var: Clone;
 
     fn columns(&mut self) -> &mut BlendColumns<Self::Var>;
-    fn sizes(&mut self) -> &mut BlendSizes;
-
-    /// A cheap cooperative checkpoint. The iterative backend uses the
-    /// default; a cancellable SCIP worker supplies its atomic signal.
+    /// A cheap cooperative checkpoint. A cancellable SCIP worker supplies
+    /// its atomic signal.
     fn cancelled(&self) -> bool {
         false
     }
@@ -2423,7 +2420,6 @@ pub(crate) struct FamilySize {
 /// on a real project without paying for a solver build.
 struct FamilyRows {
     columns: BlendColumns<()>,
-    sizes: BlendSizes,
     families: BTreeMap<String, FamilySize>,
 }
 
@@ -2442,10 +2438,6 @@ impl Rows for FamilyRows {
 
     fn columns(&mut self) -> &mut BlendColumns<()> {
         &mut self.columns
-    }
-
-    fn sizes(&mut self) -> &mut BlendSizes {
-        &mut self.sizes
     }
 
     fn valued(&mut self, _upper: f64, _value: f64, name: &str) {
@@ -2482,7 +2474,6 @@ impl Rows for FamilyRows {
 pub(crate) fn family_sizes(input: &BlendInput) -> Vec<(String, FamilySize)> {
     let mut rows = FamilyRows {
         columns: BlendColumns::new(),
-        sizes: BlendSizes::default(),
         families: BTreeMap::new(),
     };
     formulate(&mut rows, input).expect("the counting sink never cancels");

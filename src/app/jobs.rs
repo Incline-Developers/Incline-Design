@@ -155,7 +155,6 @@ impl CancelFlag {
         self.0.load(Ordering::Acquire)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }

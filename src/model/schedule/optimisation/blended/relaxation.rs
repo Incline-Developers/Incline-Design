@@ -106,10 +106,6 @@ impl Rows for LpRows<'_> {
         &mut self.columns
     }
 
-    fn sizes(&mut self) -> &mut BlendSizes {
-        &mut self.sizes
-    }
-
     fn cancelled(&self) -> bool {
         (self.stop)()
     }

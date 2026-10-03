@@ -27,7 +27,7 @@ jobs:
       - run: cargo fmt --all --check
 
   check:
-    name: Check and Clippy (${{ matrix.target }})
+    name: Check and Clippy (${{ matrix.target }}${{ matrix.features && ' with ' || '' }}${{ matrix.features }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,6 +36,11 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cargo-targets: --all-targets
+          # The native solvers are off by default; keep their code building.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            cargo-targets: --all-targets
+            features: scip-source,highs
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             cargo-targets: --all-targets
@@ -55,7 +60,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang mold libgtk-3-dev libxkbcommon-dev
+          # libclang-dev: the scip-source row generates SCIP bindings with bindgen.
+          sudo apt-get install -y --no-install-recommends clang libclang-dev mold libgtk-3-dev libxkbcommon-dev
       - name: Install Windows GNU cross tools
         if: matrix.target == 'x86_64-pc-windows-gnu'
         run: sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
@@ -64,6 +70,6 @@ jobs:
       - name: Install target
         run: rustup target add ${{ matrix.target }}
       - name: Check
-        run: cargo check --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }}
+        run: cargo check --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} ${{ matrix.features && '--features' || '' }} ${{ matrix.features }}
       - name: Clippy
-        run: cargo clippy --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} -- -D warnings
+        run: cargo clippy --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} ${{ matrix.features && '--features' || '' }} ${{ matrix.features }} -- -D warnings

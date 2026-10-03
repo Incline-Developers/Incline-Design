@@ -1,11 +1,10 @@
-//! The blended-stockpile scenario contract, shared by both experimental
-//! blended solvers and by the independent replay.
+//! The blended-stockpile scenario contract, shared by the hourly dispatch,
+//! Improve's SCIP formulation and the independent replay.
 //!
 //! Nothing in this file knows about a solver. [`BlendInput`] is the scenario;
-//! [`super::replay`] is the verdict on a schedule. The SCIP formulation in
-//! [`crate::model::schedule::optimisation::scip::blend`] and the iterative
-//! HiGHS method in [`super::iterative`] are two ways of getting from one to
-//! the other, and the comparison between them is only meaningful because they
+//! [`super::replay`] is the verdict on a schedule. The hourly dispatch in
+//! [`super::greedy`] and the SCIP formulation behind Improve are two ways of
+//! getting from one to the other, and they are only comparable because they
 //! are handed the *same* `BlendInput`.
 //!
 //! # The blended-stockpile semantics this contract encodes
@@ -214,34 +213,6 @@ impl BlendPile {
             self.chunk_closed.get(c).copied().unwrap_or(false)
         }
     }
-
-    /// Combine authored opening lots explicitly. The caller must pass the
-    /// lots' material grades; this never guesses one.
-    pub(crate) fn combine(id: StockpileId, capacity_t: f64, lots: &[(f64, Vec<f64>)], grades: usize) -> Self {
-        let mut opening_t = 0.0;
-        let mut opening_q = vec![0.0; grades];
-        for (tonnes, fractions) in lots {
-            opening_t += tonnes;
-            for (slot, fraction) in opening_q.iter_mut().zip(fractions) {
-                *slot += tonnes * fraction;
-            }
-        }
-        Self {
-            id,
-            capacity_t,
-            opening_t,
-            opening_q,
-            chunks: Vec::new(),
-            order: ReclaimOrder::Fifo,
-            chunk_opening: Vec::new(),
-            chunk_closed: Vec::new(),
-            modes: Vec::new(),
-            exclusive: false,
-            rest_h: 0.0,
-            last_receipt_h: None,
-            chunk_closed_h: Vec::new(),
-        }
-    }
 }
 
 /// One end of a grade interval in the captured numeric scale.
@@ -289,6 +260,7 @@ impl GradeHalfSpace {
     /// Exact set complement: the negation of `>= v` is `< v`, and the
     /// negation of `> v` is `<= v`. Inclusivity flips with the direction, so
     /// nothing is lost and no boundary is quietly reassigned to both sides.
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn negated(self) -> Self {
         Self {
             grade: self.grade,
@@ -360,6 +332,7 @@ impl GradePredicate {
         self.bounds.iter().all(|bound| bound.holds(blend))
     }
 
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.bounds.is_empty()
     }
@@ -412,6 +385,7 @@ impl GradeQualification {
 
     /// Whether some alternative permits unconditionally, in which case the
     /// model needs no rows at all for this destination.
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.alternatives.iter().any(GradePredicate::unconditional)
     }
@@ -600,6 +574,7 @@ pub(crate) fn grade_ceilings(input: &BlendInput) -> Vec<f64> {
     ceilings
 }
 
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn flat_cell(interval: usize, segment: usize, segments: usize) -> usize {
     interval * segments + segment
 }
@@ -650,6 +625,7 @@ pub(crate) const WINDOW_TOLERANCE_H: f64 = 1e-9;
 /// Whether the loader can physically perform this bar's activity in this
 /// interval. A zero rate means the bar has no work available, exactly as in
 /// the accepted backend.
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bool {
     let Some(rate) = interval_rate(loader, interval) else { return false };
     match task.kind {
@@ -672,6 +648,7 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
     }
 }
 
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn delivers_to_pile(candidate: &MovementCandidate, pile: StockpileId, destinations: &BTreeMap<DestinationId, &Destination>) -> bool {
     destinations
         .get(&candidate.destination)

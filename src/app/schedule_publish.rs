@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, scip_blend::ScipCompletion},
+    app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, schedule_solve::ScheduleCompletion},
     model::schedule::{
         BarId, DestinationId as ProjectDestinationId, LoaderAgentId,
         cashflow::Activity as ProjectActivity,
@@ -49,7 +49,7 @@ pub(crate) struct PublishMeta<'a> {
     pub(crate) semantic: u64,
     pub(crate) generation: u64,
     pub(crate) requested_end_h: f64,
-    pub(crate) completion: &'a ScipCompletion,
+    pub(crate) completion: &'a ScheduleCompletion,
     pub(crate) capture_s: f64,
     pub(crate) model_identity: u64,
     pub(crate) candidates: usize,
@@ -460,7 +460,7 @@ pub(crate) fn publish(
     let completion = meta.completion;
     let report = SolveReport {
         quality: Some(match completion.termination {
-            crate::app::scip_blend::ScipTermination::Optimal => SolveQuality::Optimal,
+            crate::app::schedule_solve::SolveTermination::Optimal => SolveQuality::Optimal,
             _ => SolveQuality::Limited,
         }),
         objective: replay.replayed_objective,

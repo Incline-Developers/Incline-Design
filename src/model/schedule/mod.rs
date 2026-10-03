@@ -2018,16 +2018,6 @@ impl SchedulePlan {
         }
     }
 
-    /// Test-only: pretend the id allocators were never advanced, so plan
-    /// snapshots taken across an undo (which never rewinds them) compare on
-    /// content alone.
-    #[cfg(test)]
-    pub(crate) fn rewind_allocators_for_test(&mut self) {
-        self.next_class_id = 0;
-        self.next_agent_id = 0;
-        self.next_bar_id = 0;
-    }
-
     /// An estimate of what one snapshot of this plan costs the undo history.
     pub(crate) fn estimated_bytes(&self) -> usize {
         size_of::<Self>()

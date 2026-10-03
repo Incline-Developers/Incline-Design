@@ -19,10 +19,7 @@ pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field
 pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod schedule;
-/// Real-project capture for the experimental blended optimiser. Native only
-/// and off by default; nothing in the ordinary schedule run reaches it.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod schedule_capture;
+pub(crate) mod schedule_capture; // Captures the project into the blended model a schedule run solves
 pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.

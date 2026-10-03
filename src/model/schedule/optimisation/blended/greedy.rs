@@ -66,11 +66,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use highs::{Col, HighsModelStatus, RowProblem, Sense};
-
 use super::{
     drill_blast::Chain,
     input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, authored_tasks, interval_rate, task_active, task_authorises},
+    lp::{Col, LinearProgram},
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow},
 };
 use crate::model::schedule::optimisation::{
@@ -408,7 +407,7 @@ impl<'a> State<'a> {
     /// The interval's linear program over `bars`, solved.
     fn solve(&self, interval: Interval, bars: &[Bar]) -> Result<Plan, String> {
         let input = self.input;
-        let mut problem = RowProblem::default();
+        let mut problem = LinearProgram::default();
         let mut columns: Vec<(usize, Col)> = Vec::new();
         let mut extractions: Vec<((usize, GroundId), Col)> = Vec::new();
         let mut block_total: BTreeMap<GroundId, Vec<(Col, f64)>> = BTreeMap::new();
@@ -517,18 +516,10 @@ impl<'a> State<'a> {
                 problem.add_row(..=-direction * (opening_q - boundary * opening_t), terms);
             }
         }
-        let mut model = problem.optimise(Sense::Maximise);
-        model.make_quiet();
-        // One thread, so the same input always gives the same schedule.
-        model.set_option("threads", 1);
-        let solved = model.try_solve().map_err(|status| format!("HiGHS failed on interval {}: {status:?}", interval.index))?;
-        if solved.status() != HighsModelStatus::Optimal {
-            return Err(format!("interval {}: HiGHS ended {:?}", interval.index, solved.status()));
-        }
-        let solution = solved.get_solution();
+        let solution = problem.maximise().map_err(|reason| format!("interval {}: {reason}", interval.index))?;
         Ok(Plan {
-            rows: columns.into_iter().map(|(index, col)| (index, solution[col].max(0.0))).collect(),
-            extracted: extractions.into_iter().map(|(key, col)| (key, solution[col].max(0.0))).collect(),
+            rows: columns.into_iter().map(|(index, col)| (index, solution[col.index()].max(0.0))).collect(),
+            extracted: extractions.into_iter().map(|(key, col)| (key, solution[col.index()].max(0.0))).collect(),
         })
     }
 

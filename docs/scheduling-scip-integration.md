@@ -1,10 +1,15 @@
-# Desktop scheduling with SCIP
+# Scheduling with SCIP
 
-Run Period and Run All Periods use one path: owned project capture → SCIP →
-extraction → independent physical/grade/value replay → immutable calculated
-schedule. Gantt, Calendar and animation consume that same result. There is no
-dispatcher or iterative-HiGHS fallback. WASM edits and saves settings, but does
-not calculate schedules.
+Run Period and Run All Periods use one path: owned project capture → hourly
+dispatch → independent physical/grade/value replay → immutable calculated
+schedule. Gantt, Calendar and animation consume that same result. Every build
+calculates that first schedule, the browser included: the dispatch's
+per-hour linear programs go to microlp, a pure-Rust solver, or to HiGHS in a
+native build with the `highs` feature (`src/model/schedule/optimisation/blended/lp.rs`).
+
+Improve, the whole-horizon SCIP solve this document describes, exists only in
+a native build with the `scip` feature (`scip-source` or `scip-system`). Without it the Improve button is not shown. With it, Improve
+continues from the first schedule: SCIP → extraction → the same replay.
 
 ## Horizons and lifecycle
 
@@ -99,17 +104,22 @@ an exact discontinuous authored-value problem.
 
 ## Build and distribution
 
-`cargo run` uses exact russcip 0.10.0 and scip-sys 0.1.28 with bundled SCIP
-10.0.2 / SoPlex 8.0.2 from scipoptsuite-deploy v0.12.0. Native system builds use
-`--no-default-features --features scip-system` and `SCIPOPTDIR`; those versions
-must be validated separately. `blend-experiment` enables developer comparisons.
+The default build has no SCIP. `cargo run --features scip-source` uses exact
+russcip 0.10.0 and scip-sys 0.1.28 to build SCIP 10.0.2 and SoPlex 8.0.2 from
+the SCIP source release with cmake (a clean release build takes about five
+minutes) and links them statically, without Ipopt: the executable needs no
+SCIP library beside it, only the C++ runtime. Notices are in
+[backend notices and provenance](scip-backend-notices.md). Native system
+builds use `--features scip-system` and `SCIPOPTDIR`; those versions must be
+validated separately, and the executable embeds the link directory plus
+`$ORIGIN` (Linux) or `@executable_path` (macOS) for them. Windows and macOS
+builds of either are not verified.
 
-The executable embeds the link directory plus `$ORIGIN` (Linux) or
-`@executable_path` (macOS). Linux direct launch was checked outside cargo.
-Ship the matching shared library beside a packaged executable; Windows needs
-the DLL beside it or on PATH. The Linux bundle also requires libgfortran.so.5,
-libquadmath, libstdc++, zlib and platform runtime libraries. Windows/macOS
-installers and runtime dependency packaging are not verified.
+The earlier prebuilt scipoptsuite-deploy library (`scip-bundled`) was dropped
+on 2026-10-03: it had to be shipped beside the executable with its Fortran
+and Ipopt dependencies, whose licences were never fully audited. On the
+project measured then, Improve behaved the same in both builds (presolve
+took 42 s of a 60 s limit and the first schedule was kept).
 
 See [backend notices and provenance](scip-backend-notices.md). A distribution
 must carry all applicable dependency notices, not only SCIP's Apache licence.
@@ -184,16 +194,10 @@ No-incumbent limited attempts also retain the root explanation in their details.
    include compilation time in solver comparisons. Record compiler and SCIP
    versions, machine, model identity, horizon, interval, event capacity, time
    limit, gap target, pile representation and all authored coefficients.
-2. Run individual developer fixtures serially (not concurrently). For example:
-
-   ```sh
-   cargo test --features blend-experiment known_blend_is_preserved -- --nocapture --test-threads=1
-   cargo test --features blend-experiment empty_pile_and_release_timing -- --nocapture --test-threads=1
-   cargo test --features blend-experiment chunks_fill_close_and_reclaim_from_empty -- --nocapture --test-threads=1
-   ```
-
-   Output includes `DIAGNOSTICS`, `SOLVE`, replay issues and residuals. Existing
-   ignored comparison benchmarks are opt-in; they may run several long solves.
+2. The scenario fixtures and developer checks that used to run here were
+   removed on 2026-10-03 with the rest of the standing tests (see
+   `AGENTS.md`). Write a focused temporary test against the fixture in
+   question, run it serially (`--test-threads=1`), and delete it afterwards.
 3. For a real-project run, start the already-built desktop binary with
    `INCLINE_SCIP_LOG=1`, open the same project, run Solids, and apply identical
    schedule settings without saving over the original project. Compare Run
@@ -1004,9 +1008,10 @@ Limitations:
 SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,
 such as the METIS heap corruption above, is not a panic the job queue can
 catch. Inside the app it took the whole app down, unsaved edits included. So
-Run Period and Run All Periods now solve in a second copy of the app's own
-binary, started as `incline-design --schedule-solver`
-(`src/app/solver_process.rs`). Capture and publication stay in the app.
+a build with the `scip` feature solves every run in a second copy of the app's
+own binary, started as `incline-design --schedule-solver`
+(`src/app/solver_process.rs`). Capture and publication stay in the app. A
+build without it runs the hourly dispatch in the app's own job queue.
 
 - The app writes the captured input, run identity and options to the
   process's stdin as one line of JSON. The process runs the same solve as

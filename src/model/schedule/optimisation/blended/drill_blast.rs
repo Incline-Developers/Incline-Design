@@ -267,11 +267,6 @@ impl<'a> Chain<'a> {
             .is_none_or(|&blast| self.events[blast].fired_h.is_some_and(|fired| fired <= at_h + 1e-9))
     }
 
-    /// The blast `ground` belongs to, if any.
-    pub(crate) fn blast_of(&self, ground: GroundId) -> Option<usize> {
-        self.owner.get(&ground).copied()
-    }
-
     /// Whether a blast is ready for `activity` at `at_h`: clear for prep,
     /// the step before finished by then otherwise, and this step not done.
     fn ready(&self, blast: usize, activity: BlastActivity, at_h: f64) -> bool {

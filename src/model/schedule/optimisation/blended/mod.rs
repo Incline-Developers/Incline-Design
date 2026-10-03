@@ -11,7 +11,6 @@
 //! | [`replay`] | an independent physical replay of a published schedule |
 //! | [`greedy`] | the hourly dispatch schedule, one LP per interval: a run's first schedule and SCIP's start |
 //! | [`rolling`] | windows, carried state and stitching for day-by-day solving, the fallback when the dispatcher fails |
-//! | [`iterative`] | the iterative fixed-grade HiGHS method |
 //! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
 //! | [`drill_blast`] | the drill and blast chain the dispatch simulates, and the release times later solves keep |
 //!
@@ -47,8 +46,9 @@ pub(crate) mod formulation;
 pub(crate) mod grade;
 pub(crate) mod greedy;
 pub(crate) mod input;
-#[cfg(feature = "blend-experiment")]
-pub(crate) mod iterative;
+pub(crate) mod lp;
+#[cfg(feature = "scip")]
 pub(crate) mod relaxation;
 pub(crate) mod replay;
+#[cfg(feature = "scip")]
 pub(crate) mod rolling;

@@ -1,26 +1,25 @@
-//! The SCIP solve of one owned blended model, run inside the solver process
-//! (see [`super::solver_process`]).
+//! Improve: the SCIP solve of one owned blended model, run inside the solver
+//! process (see [`super::solver_process`]). Built only with the `scip`
+//! feature.
 //!
-//! [`execute_scip_blend`] validates the input, builds the model, solves it,
-//! extracts owned rows and runs the independent replay, polling cancellation
-//! throughout. A horizon longer than one day-by-day window is first solved a
-//! day at a time; the stitched schedule is replayed against the whole
-//! horizon and seeds the whole-horizon solve, and whichever replayed schedule
-//! is worth more is the one kept. Beside such a run, HiGHS solves the
-//! model's linear relaxation for a bound SCIP may not reach in time. No SCIP
-//! model, pointer or solution wrapper leaves it; only owned, replayed rows
-//! do. Run Period and Run All Periods reach it through
-//! [`crate::app::schedule_run`], which owns the job, currentness and
-//! publication, and [`super::solver_process`], which runs it in a child
-//! process and has the app replay what comes back.
+//! [`improve`] takes over from [`super::schedule_solve::execute_schedule`] once the first schedule
+//! is in hand: it builds the whole-horizon model, solves it seeded with that
+//! schedule, extracts owned rows and runs the independent replay, polling
+//! cancellation throughout. When the hourly dispatch found no schedule, a
+//! horizon longer than one day-by-day window is first solved a day at a
+//! time; the stitched schedule is replayed against the whole horizon and
+//! seeds the whole-horizon solve, and whichever replayed schedule is worth
+//! more is the one kept. Beside such a run, HiGHS solves the model's linear
+//! relaxation for a bound SCIP may not reach in time. No SCIP model, pointer
+//! or solution wrapper leaves it; only owned, replayed rows do.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     io::Write,
     path::PathBuf,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -28,7 +27,13 @@ use std::{
 
 use russcip::{Model, ProblemCreated, Status, Variable, ffi, prelude::*};
 
-use super::{jobs::CancelFlag, schedule_pipeline::ScheduleRunInputs};
+use super::{
+    jobs::CancelFlag,
+    schedule_solve::{
+        BackendStatus, DayByDay, PhaseTimings, ScheduleActivity, ScheduleCompletion, ScheduleRunIdentity, ScheduleSolveOptions, Seed, SolveTermination, adopt_seed,
+        consistent_relaxation, exceeds_bound, log_outcome, relative_gap, validate_input,
+    },
+};
 use crate::model::schedule::{
     optimisation::{
         Activity, DestinationKind, SourceId, TaskKind,
@@ -36,12 +41,13 @@ use crate::model::schedule::{
             formulation::{BlendColumns, BlendSizes},
             greedy,
             input::BlendInput,
+            lp,
             relaxation::{RelaxationBound, relaxation_bound},
             replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
         },
         scip::{
-            adapter::{self, InterruptAudit, SolveReport},
+            adapter::{self, SolveReport},
             blend::formulate_scip_with_cancel,
             experiments::extract_solution,
         },
@@ -49,148 +55,16 @@ use crate::model::schedule::{
     result::{BoundSource, DayByDayRole, DayByDaySummary, StartMethod},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ScipRunIdentity {
-    pub(crate) run_id: u64,
-    pub(crate) inputs: ScheduleRunInputs,
-    pub(crate) plan_revision: u64,
-    pub(crate) document_revision: u64,
-    /// The complete experimental-run identity: every authored input that can
-    /// change feasibility, the objective or the encoded model, plus the run
-    /// options, and no presentation name. See [`App::experimental_blend_key`].
-    ///
-    /// Stage 5A carried only the dig-only Setup inputs and the bar revision,
-    /// which say nothing about stockpile representation, grade units, truck
-    /// calendars or cashflow coefficients - so an edit to any of those could
-    /// not retire a run that had read them.
-    pub(crate) semantic: u64,
-}
+/// The binding Improve is built against, for the run's report.
+const WRAPPER_VERSION: &str = "russcip 0.10.0";
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ScipSolveOptions {
-    pub(crate) time_limit: Option<Duration>,
-    pub(crate) relative_gap: Option<f64>,
-    pub(crate) diagnostic_logging: bool,
-    /// Stop at the hourly dispatch schedule: no relaxation bound and no
-    /// whole-horizon solve. What a recalculation after an edit asks for; an
-    /// Improve run leaves it off. Only a dispatcher that fails falls through
-    /// to the solver path, since that is the only way to get a schedule.
-    #[serde(default)]
-    pub(crate) first_schedule_only: bool,
-}
-
-impl Default for ScipSolveOptions {
-    fn default() -> Self {
-        Self {
-            time_limit: Some(Duration::from_secs(60)),
-            relative_gap: Some(1e-4),
-            diagnostic_logging: false,
-            first_schedule_only: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum ScipTermination {
-    Optimal,
-    FeasibleLimit,
-    LimitNoIncumbent,
-    Infeasible,
-    Unbounded,
-    Cancelled,
-    InvalidInput,
-    ValidationFailure,
-    BackendFailure,
-}
-
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ScipPhaseTimings {
-    pub(crate) input_validation: Duration,
-    pub(crate) formulation: Duration,
-    pub(crate) solver: Duration,
-    pub(crate) extraction: Duration,
-    pub(crate) replay: Duration,
-}
-
-pub(crate) struct ScipCompletion {
-    pub(crate) identity: ScipRunIdentity,
-    /// The options this run was solved under, held with the result so a
-    /// currentness check can ask the same question the request did.
-    pub(crate) options: ScipSolveOptions,
-    pub(crate) input: Arc<BlendInput>,
-    pub(crate) termination: ScipTermination,
-    pub(crate) backend_status: Option<Status>,
-    pub(crate) diagnostic: Option<String>,
-    pub(crate) solution: Option<Arc<BlendSolution>>,
-    pub(crate) replay: Option<Arc<ReplayReport>>,
-    pub(crate) published_objective: Option<f64>,
-    pub(crate) raw_objective: Option<f64>,
-    pub(crate) primary_bound: Option<f64>,
-    pub(crate) primary_gap: Option<f64>,
-    /// Which solve proved `primary_bound`.
-    pub(crate) bound_source: BoundSource,
-    pub(crate) adjustments: Option<ExtractionAdjustments>,
-    pub(crate) sizes: BlendSizes,
-    pub(crate) timings: ScipPhaseTimings,
-    pub(crate) diagnostics: crate::model::schedule::result::SolveDiagnostics,
-    pub(crate) solver_limit_overshoot: Option<Duration>,
-    pub(crate) backend_version: String,
-    pub(crate) wrapper_version: &'static str,
-    pub(crate) event_callbacks: u64,
-    pub(crate) interrupt_calls: u64,
-    /// Present when the horizon was first solved day by day.
-    pub(crate) day_by_day: Option<DayByDaySummary>,
-}
-
-impl ScipCompletion {
-    pub(crate) fn new(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>) -> Self {
-        Self {
-            identity,
-            options,
-            input,
-            termination: ScipTermination::BackendFailure,
-            backend_status: None,
-            diagnostic: None,
-            solution: None,
-            replay: None,
-            published_objective: None,
-            raw_objective: None,
-            primary_bound: None,
-            primary_gap: None,
-            bound_source: BoundSource::Scip,
-            adjustments: None,
-            sizes: BlendSizes::default(),
-            timings: ScipPhaseTimings::default(),
-            diagnostics: Default::default(),
-            solver_limit_overshoot: None,
-            backend_version: adapter::version(),
-            wrapper_version: "russcip 0.10.0",
-            event_callbacks: 0,
-            interrupt_calls: 0,
-            day_by_day: None,
-        }
-    }
-
-    pub(crate) fn stop(&mut self, reason: ScipTermination, diagnostic: impl Into<String>) {
-        self.termination = reason;
-        self.diagnostic = Some(diagnostic.into());
-        self.solution = None;
-        self.published_objective = None;
-        log_outcome(self);
-    }
-
-    pub(crate) fn usable(&self) -> bool {
-        matches!(self.termination, ScipTermination::Optimal | ScipTermination::FeasibleLimit)
-            && self.solution.is_some()
-            && self.replay.as_ref().is_some_and(|report| report.is_valid())
-    }
-
+impl ScheduleCompletion {
     /// What the solver process sends back for this completion.
     pub(crate) fn report(&self) -> ReportedCompletion {
         let issues = |pick: fn(&ReplayReport) -> &Vec<String>| self.replay.as_deref().map(pick).cloned().unwrap_or_default();
         ReportedCompletion {
             termination: self.termination,
-            backend_status: self.backend_status.map(StatusName),
+            backend_status: self.backend_status,
             diagnostic: self.diagnostic.clone(),
             solution: self.solution.as_deref().cloned(),
             replay_issues: issues(|report| &report.issues),
@@ -216,10 +90,13 @@ impl ScipCompletion {
     /// schedule again here rather than taking the process's word for it: the
     /// process is the part of the app a native fault can corrupt, so what it
     /// says is checked like any other solver claim.
-    pub(crate) fn from_report(identity: ScipRunIdentity, options: ScipSolveOptions, input: Arc<BlendInput>, report: ReportedCompletion, cancel: &CancelFlag) -> Self {
+    pub(crate) fn from_report(identity: ScheduleRunIdentity, options: ScheduleSolveOptions, input: Arc<BlendInput>, report: ReportedCompletion, cancel: &CancelFlag) -> Self {
         let mut out = Self::new(identity, options, input);
         out.termination = report.termination;
-        out.backend_status = report.backend_status.map(|status| status.0);
+        out.backend_status = report.backend_status;
+        if out.backend_version != lp::backend_name() {
+            out.wrapper_version = WRAPPER_VERSION;
+        }
         out.diagnostic = report.diagnostic;
         out.raw_objective = report.raw_objective;
         out.primary_bound = report.primary_bound;
@@ -250,7 +127,7 @@ impl ScipCompletion {
         let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
         out.timings.replay += started.elapsed();
         let Some(checked) = checked else {
-            out.stop(ScipTermination::Cancelled, "cancelled during replay");
+            out.stop(SolveTermination::Cancelled, "cancelled during replay");
             return out;
         };
         let replayed = checked.replayed_objective;
@@ -258,14 +135,14 @@ impl ScipCompletion {
         let valid = checked.is_valid();
         out.replay = Some(Arc::new(checked));
         if !valid {
-            out.stop(ScipTermination::ValidationFailure, "independent blended replay rejected the solver process's schedule");
+            out.stop(SolveTermination::ValidationFailure, "independent blended replay rejected the solver process's schedule");
             return out;
         }
         let claimed = report.published_objective.unwrap_or(f64::NAN);
         let agrees = (claimed - replayed).abs() <= REPORT_AGREEMENT * replayed.abs().max(1.0);
         if !agrees {
             out.stop(
-                ScipTermination::ValidationFailure,
+                SolveTermination::ValidationFailure,
                 format!("the solver process reported a schedule worth {claimed}, which replays to {replayed}"),
             );
             return out;
@@ -273,7 +150,7 @@ impl ScipCompletion {
         if let Some(bound) = out.primary_bound
             && let Some(problem) = exceeds_bound(replayed - slack, bound)
         {
-            out.stop(ScipTermination::ValidationFailure, problem);
+            out.stop(SolveTermination::ValidationFailure, problem);
             return out;
         }
         out.published_objective = Some(replayed);
@@ -288,14 +165,14 @@ impl ScipCompletion {
 /// sent something other than what it replayed.
 const REPORT_AGREEMENT: f64 = 1e-9;
 
-/// A [`ScipCompletion`] as the solver process reports it (see
+/// A [`ScheduleCompletion`] as the solver process reports it (see
 /// [`super::solver_process`]): the input stays with the app, which sent it,
 /// and the replay is repeated by the app, so only its findings travel, to
 /// explain a schedule that was not published.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct ReportedCompletion {
-    termination: ScipTermination,
-    backend_status: Option<StatusName>,
+    termination: SolveTermination,
+    backend_status: Option<BackendStatus>,
     diagnostic: Option<String>,
     solution: Option<BlendSolution>,
     replay_issues: Vec<String>,
@@ -307,7 +184,7 @@ pub(crate) struct ReportedCompletion {
     bound_source: BoundSource,
     adjustments: Option<ExtractionAdjustments>,
     sizes: BlendSizes,
-    timings: ScipPhaseTimings,
+    timings: PhaseTimings,
     diagnostics: crate::model::schedule::result::SolveDiagnostics,
     solver_limit_overshoot: Option<Duration>,
     backend_version: String,
@@ -316,98 +193,51 @@ pub(crate) struct ReportedCompletion {
     day_by_day: Option<DayByDaySummary>,
 }
 
-/// russcip's status, which has no serde support of its own.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StatusName(#[serde(with = "StatusDef")] Status);
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(remote = "Status")]
-enum StatusDef {
-    Unknown,
-    UserInterrupt,
-    NodeLimit,
-    TotalNodeLimit,
-    StallNodeLimit,
-    TimeLimit,
-    MemoryLimit,
-    GapLimit,
-    PrimalLimit,
-    DualLimit,
-    SolutionLimit,
-    BestSolutionLimit,
-    RestartLimit,
-    Optimal,
-    Infeasible,
-    Unbounded,
-    Inforunbd,
-    Terminate,
-}
-
-/// Observable worker phase for developer lifecycle checks. SCIP objects are
-/// never stored here; only atomics cross between the worker and poller.
-#[derive(Default)]
-pub(crate) struct ScipActivity {
-    phase: AtomicU8,
-    pub(crate) formulation_checks: std::sync::atomic::AtomicU64,
-    pub(crate) interrupt: Arc<InterruptAudit>,
-}
-
-impl ScipActivity {
-    #[allow(dead_code, reason = "read by the developer lifecycle checks")]
-    pub(crate) fn phase(&self) -> u8 {
-        self.phase.load(Ordering::Acquire)
-    }
-    fn set(&self, phase: u8) {
-        self.phase.store(phase, Ordering::Release);
+impl From<Status> for BackendStatus {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Unknown => Self::Unknown,
+            Status::UserInterrupt => Self::UserInterrupt,
+            Status::NodeLimit => Self::NodeLimit,
+            Status::TotalNodeLimit => Self::TotalNodeLimit,
+            Status::StallNodeLimit => Self::StallNodeLimit,
+            Status::TimeLimit => Self::TimeLimit,
+            Status::MemoryLimit => Self::MemoryLimit,
+            Status::GapLimit => Self::GapLimit,
+            Status::PrimalLimit => Self::PrimalLimit,
+            Status::DualLimit => Self::DualLimit,
+            Status::SolutionLimit => Self::SolutionLimit,
+            Status::BestSolutionLimit => Self::BestSolutionLimit,
+            Status::RestartLimit => Self::RestartLimit,
+            Status::Optimal => Self::Optimal,
+            Status::Infeasible => Self::Infeasible,
+            Status::Unbounded => Self::Unbounded,
+            Status::Inforunbd => Self::Inforunbd,
+            Status::Terminate => Self::Terminate,
+        }
     }
 }
 
-/// Runs on one thread, the solver process's main one. No SCIP model, pointer or
-/// solution wrapper leaves this function; only owned, replayed rows do.
+/// Improve the first schedule `attempt` holds, within what is left of the
+/// run's budget since `budget_started`. Reached from
+/// [`super::schedule_solve::execute_schedule`]
+/// for a run that did not ask for the first schedule only.
 ///
-/// `early` is handed the day-by-day schedule, completed as a publishable
-/// answer, as soon as it has passed the whole-horizon replay and before the
-/// whole-horizon solve starts, so a caller can show it while the rest of the
-/// run looks for a better one. It is called at most once, and never for a
-/// run that is not solved day by day.
-pub(crate) fn execute_scip_blend(
-    input: Arc<BlendInput>,
-    identity: ScipRunIdentity,
-    options: ScipSolveOptions,
+/// `early` is handed the first schedule, completed as a publishable answer,
+/// before the whole-horizon solve starts.
+pub(crate) fn improve(
+    mut out: ScheduleCompletion,
+    mut attempt: DayByDay,
+    budget_started: Instant,
     cancel: &CancelFlag,
-    activity: &ScipActivity,
-    early: &dyn Fn(&ScipCompletion),
-) -> ScipCompletion {
-    let mut out = ScipCompletion::new(identity, options, input);
-    if cancel.is_cancelled() {
-        out.stop(ScipTermination::Cancelled, "cancelled before validation");
-        return out;
-    }
-
-    activity.set(1);
-    let started = Instant::now();
-    let validation = validate_input(&out.input, None, options, cancel);
-    out.timings.input_validation = started.elapsed();
-    if cancel.is_cancelled() {
-        out.stop(ScipTermination::Cancelled, "cancelled during input validation");
-        return out;
-    }
-    if let Err(problem) = validation {
-        out.stop(ScipTermination::InvalidInput, problem);
-        return out;
-    }
-
-    // The whole run shares one solve budget. The hourly dispatch schedule
-    // comes first (see `greedy`): it takes milliseconds, is shown at once and
-    // seeds the whole-horizon solve. Only when it fails - HiGHS failing on an
-    // interval, or the replay refusing its schedule - is the horizon solved
-    // day by day instead, when it is long enough to need it. The whole
-    // horizon then gets whatever is left.
-    let budget_started = Instant::now();
+    activity: &ScheduleActivity,
+    early: &dyn Fn(&ScheduleCompletion),
+) -> ScheduleCompletion {
+    let options = out.options;
+    out.backend_version = adapter::version();
+    out.wrapper_version = WRAPPER_VERSION;
     let mut seed = None;
     let mut relaxation = None;
-    activity.set(3);
-    let mut attempt = hourly_dispatch(&mut out, cancel);
     let mut windows = None;
     if let DayByDay::Failed(reason) = &attempt {
         log::info!("schedule run {}: no hourly dispatch schedule: {reason}", out.identity.run_id);
@@ -415,7 +245,7 @@ pub(crate) fn execute_scip_blend(
         // up to the whole solve budget, which an edit should never cost.
         if options.first_schedule_only {
             let reason = crate::i18n::tr!("schedule-first-schedule-failed", reason = reason.clone());
-            out.stop(ScipTermination::BackendFailure, reason);
+            out.stop(SolveTermination::BackendFailure, reason);
             return out;
         }
         if let Some(planned) = rolling::plan(&out.input, 0.0) {
@@ -455,7 +285,7 @@ pub(crate) fn execute_scip_blend(
         }
         DayByDay::Seed(found) => {
             let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
-            let mut shown = ScipCompletion::new(out.identity, options, Arc::clone(&out.input));
+            let mut shown = ScheduleCompletion::new(out.identity, options, Arc::clone(&out.input));
             shown.sizes = out.sizes;
             shown.timings = out.timings;
             adopt_seed(&mut shown, (*found).clone(), None, proved, DayByDayRole::Early);
@@ -507,7 +337,7 @@ pub(crate) fn execute_scip_blend(
                 completed = Some(values);
             }
             Err(_) if cancel.is_cancelled() => {
-                out.stop(ScipTermination::Cancelled, "cancelled while completing the first schedule into a seed");
+                out.stop(SolveTermination::Cancelled, "cancelled while completing the first schedule into a seed");
                 return out;
             }
             Err(problem) => log::warn!("schedule run {}: first schedule not offered to SCIP: {problem}", out.identity.run_id),
@@ -526,7 +356,7 @@ pub(crate) fn execute_scip_blend(
     let built = formulate_scip_with_cancel(&out.input, Some(&cancel.signal()), Some(&activity.formulation_checks));
     out.timings.formulation += started.elapsed();
     if cancel.is_cancelled() || built.is_err() {
-        out.stop(ScipTermination::Cancelled, "cancelled during formulation");
+        out.stop(SolveTermination::Cancelled, "cancelled during formulation");
         return out;
     }
     let built = built.expect("checked formulation result");
@@ -555,7 +385,7 @@ pub(crate) fn execute_scip_blend(
     let mut model = match configure(model, remaining.or(options.time_limit), options.relative_gap) {
         Ok(model) => model,
         Err(problem) => {
-            out.stop(ScipTermination::BackendFailure, problem);
+            out.stop(SolveTermination::BackendFailure, problem);
             return out;
         }
     };
@@ -568,7 +398,7 @@ pub(crate) fn execute_scip_blend(
                 model
             }
             Err(problem) => {
-                out.stop(ScipTermination::BackendFailure, problem);
+                out.stop(SolveTermination::BackendFailure, problem);
                 return out;
             }
         };
@@ -578,7 +408,7 @@ pub(crate) fn execute_scip_blend(
     let interrupt = Arc::new(AtomicBool::new(false));
     adapter::install_cancellation(&mut model, Arc::clone(&interrupt), Arc::clone(&activity.interrupt));
     if cancel.is_cancelled() {
-        out.stop(ScipTermination::Cancelled, "cancelled before solve");
+        out.stop(SolveTermination::Cancelled, "cancelled before solve");
         return out;
     }
 
@@ -612,18 +442,18 @@ pub(crate) fn execute_scip_blend(
     }
     let report = SolveReport::read(&solved);
     out.diagnostics = adapter::diagnostics(&solved, &activity.interrupt);
-    out.backend_status = Some(report.status);
+    out.backend_status = Some(report.status.into());
     out.raw_objective = report.objective;
     out.primary_bound = report.bound.is_finite().then_some(report.bound);
     out.primary_gap = report.gap;
     out.event_callbacks = activity.interrupt.callbacks.load(Ordering::Acquire);
     out.interrupt_calls = activity.interrupt.calls.load(Ordering::Acquire);
     if activity.interrupt.failed.load(Ordering::Acquire) {
-        out.stop(ScipTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback");
+        out.stop(SolveTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback");
         return out;
     }
     if cancel.is_cancelled() {
-        out.stop(ScipTermination::Cancelled, format!("cancelled during solve; backend status {:?}", report.status));
+        out.stop(SolveTermination::Cancelled, format!("cancelled during solve; backend status {:?}", report.status));
         return out;
     }
 
@@ -632,7 +462,7 @@ pub(crate) fn execute_scip_blend(
     let extracted = extract_solution(&solved, &columns, || cancel.is_cancelled());
     out.timings.extraction += started.elapsed();
     if cancel.is_cancelled() || extracted.is_err() {
-        out.stop(ScipTermination::Cancelled, "cancelled during extraction");
+        out.stop(SolveTermination::Cancelled, "cancelled during extraction");
         return out;
     }
     let Some(mut solution) = extracted.expect("checked extraction result") else {
@@ -657,7 +487,7 @@ pub(crate) fn execute_scip_blend(
     let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
     out.timings.replay += started.elapsed();
     if cancel.is_cancelled() || checked.is_none() {
-        out.stop(ScipTermination::Cancelled, "cancelled during replay");
+        out.stop(SolveTermination::Cancelled, "cancelled during replay");
         return out;
     }
     let checked = checked.expect("checked replay result");
@@ -675,7 +505,7 @@ pub(crate) fn execute_scip_blend(
     out.published_objective = Some(checked.replayed_objective);
     out.replay = Some(Arc::new(checked));
     if !valid {
-        out.stop(ScipTermination::ValidationFailure, "independent blended replay rejected the incumbent");
+        out.stop(SolveTermination::ValidationFailure, "independent blended replay rejected the incumbent");
         return out;
     }
     if let Some(bound) = out.primary_bound {
@@ -685,7 +515,7 @@ pub(crate) fn execute_scip_blend(
         let slack = out.replay.as_ref().map_or(0.0, |report| report.boundary_value_slack);
         let published = out.published_objective.expect("replayed objective") - slack;
         if let Some(problem) = exceeds_bound(published, bound) {
-            out.stop(ScipTermination::ValidationFailure, problem);
+            out.stop(SolveTermination::ValidationFailure, problem);
             return out;
         }
     }
@@ -698,14 +528,14 @@ pub(crate) fn execute_scip_blend(
             out.primary_bound = Some(bound);
             out.primary_gap = out.raw_objective.and_then(|raw| relative_gap(raw, bound));
             out.bound_source = BoundSource::Relaxation;
-            if termination == ScipTermination::FeasibleLimit && out.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
-                termination = ScipTermination::Optimal;
+            if termination == SolveTermination::FeasibleLimit && out.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+                termination = SolveTermination::Optimal;
             }
         }
     }
     if let Some(found) = seed {
         let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
-        if !improved && termination != ScipTermination::Optimal {
+        if !improved && termination != SolveTermination::Optimal {
             let bound = out.primary_bound.filter(|_| out.bound_source == BoundSource::Scip);
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
@@ -715,7 +545,7 @@ pub(crate) fn execute_scip_blend(
         out.day_by_day = Some(found.summary);
     }
     out.termination = termination;
-    if matches!(out.termination, ScipTermination::Optimal | ScipTermination::FeasibleLimit) {
+    if matches!(out.termination, SolveTermination::Optimal | SolveTermination::FeasibleLimit) {
         out.solution = Some(Arc::new(solution));
     }
     activity.set(6);
@@ -840,86 +670,23 @@ impl Drop for RelaxationJob {
     }
 }
 
-/// The stitched day-by-day schedule, replayed against the whole horizon.
-#[derive(Clone)]
-struct Seed {
-    solution: BlendSolution,
-    replay: ReplayReport,
-    summary: DayByDaySummary,
-}
-
-enum DayByDay {
-    Seed(Box<Seed>),
-    /// No usable start; the whole-horizon solve runs unseeded.
-    Failed(String),
-    /// Cancelled, or a backend failure the whole run cannot continue past.
-    Stop(ScipTermination, String),
-}
-
-/// The hourly dispatch schedule (see [`greedy`]), replayed against the
-/// whole horizon.
-fn hourly_dispatch(out: &mut ScipCompletion, cancel: &CancelFlag) -> DayByDay {
-    let started = Instant::now();
-    let solution = match greedy::dispatch(&out.input) {
-        Ok(solution) => solution,
-        Err(reason) => return DayByDay::Failed(reason),
-    };
-    out.timings.solver += started.elapsed();
-    let phase = Instant::now();
-    let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
-    out.timings.replay += phase.elapsed();
-    let Some(checked) = checked else {
-        return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
-    };
-    if !checked.is_valid() {
-        for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
-            log::warn!("schedule run {}: hourly dispatch schedule: {issue}", out.identity.run_id);
-        }
-        let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
-        return DayByDay::Failed(format!("the replay rejected it: {issue}"));
-    }
-    let summary = DayByDaySummary {
-        method: StartMethod::Hourly,
-        windows: out.input.intervals.len(),
-        seconds: started.elapsed().as_secs_f64(),
-        value: Some(checked.replayed_objective),
-        role: DayByDayRole::Improved,
-        failure: None,
-    };
-    log::info!(
-        "schedule run {}: hourly dispatch schedule of {} intervals worth {:.2} in {:.2?}",
-        out.identity.run_id,
-        summary.windows,
-        checked.replayed_objective,
-        started.elapsed()
-    );
-    // Drill and blast: every later solve keeps the release times the
-    // dispatch found (`blended::drill_blast`).
-    if let (Some(_), Some(timeline)) = (out.input.drill_blast.as_ref(), solution.drill_blast.as_ref()) {
-        let fixed = timeline.clone();
-        let mut input = (*out.input).clone();
-        if let Some(chain) = input.drill_blast.as_mut() {
-            chain.fixed = Some(fixed);
-        }
-        out.input = Arc::new(input);
-    }
-    DayByDay::Seed(Box::new(Seed {
-        solution,
-        replay: checked,
-        summary,
-    }))
-}
-
 /// Solve the horizon a day at a time (see [`rolling`]) and stitch the kept
 /// days into one schedule for the whole horizon, all within `budget`.
-fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option<Duration>, options: ScipSolveOptions, cancel: &CancelFlag, activity: &ScipActivity) -> DayByDay {
+fn solve_day_by_day(
+    out: &mut ScheduleCompletion,
+    windows: &[Window],
+    budget: Option<Duration>,
+    options: ScheduleSolveOptions,
+    cancel: &CancelFlag,
+    activity: &ScheduleActivity,
+) -> DayByDay {
     let started = Instant::now();
     let full = Arc::clone(&out.input);
     let mut carry = Carry::opening(&full);
     let mut stitched = Stitched::new();
     for (position, &window) in windows.iter().enumerate() {
         if cancel.is_cancelled() {
-            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into());
         }
         let label = format!("window {}/{}", position + 1, windows.len());
         let limit = budget.map(|budget| budget.saturating_sub(started.elapsed()) / (windows.len() - position) as u32);
@@ -930,7 +697,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         // A window's input is derived, not captured, so it is held to the
         // same checks before SCIP sees it.
         match validate_input(&input, Some(&full), options, cancel) {
-            Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into()),
             Ok(()) => {}
             Err(problem) => return DayByDay::Failed(format!("{label}: invalid window input: {problem}")),
         }
@@ -940,7 +707,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         let built = formulate_scip_with_cancel(&input, Some(&cancel.signal()), Some(&activity.formulation_checks));
         out.timings.formulation += phase.elapsed();
         let Ok(built) = built else {
-            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during formulation".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during formulation".into());
         };
         if built.sizes.variables > out.sizes.variables {
             out.sizes = built.sizes;
@@ -959,7 +726,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
                 );
                 Some(values)
             }
-            Err(_) if cancel.is_cancelled() => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Err(_) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into()),
             Err(problem) => {
                 log::warn!("schedule run {}: {label} has no dispatch start: {problem}", out.identity.run_id);
                 None
@@ -975,7 +742,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         };
         let mut model = match configure(model, limit, options.relative_gap) {
             Ok(model) => model,
-            Err(problem) => return DayByDay::Stop(ScipTermination::BackendFailure, problem),
+            Err(problem) => return DayByDay::Stop(SolveTermination::BackendFailure, problem),
         };
         if let Some(values) = start.as_ref() {
             model = match offer_seed(model, values) {
@@ -985,7 +752,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
                     }
                     model
                 }
-                Err(problem) => return DayByDay::Stop(ScipTermination::BackendFailure, problem),
+                Err(problem) => return DayByDay::Stop(SolveTermination::BackendFailure, problem),
             };
         }
         // The window's own progress record: the published diagnostics
@@ -999,10 +766,10 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         let solve_time = phase.elapsed();
         out.timings.solver += solve_time;
         if audit.failed.load(Ordering::Acquire) {
-            return DayByDay::Stop(ScipTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback".into());
+            return DayByDay::Stop(SolveTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback".into());
         }
         if cancel.is_cancelled() {
-            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during a day-by-day window".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into());
         }
         let status = solved.status();
         let gap = adapter::gap(&solved);
@@ -1022,7 +789,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         out.timings.extraction += phase.elapsed();
         drop(solved);
         let solution = match extracted {
-            Err(()) => return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during extraction".into()),
+            Err(()) => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during extraction".into()),
             Ok(None) => return DayByDay::Failed(format!("{label}: no schedule within {limit:?} ({status:?})")),
             Ok(Some(solution)) => solution,
         };
@@ -1032,7 +799,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
         let checked = replay_cancellable(&input, &solution, &cancel.signal());
         out.timings.replay += phase.elapsed();
         let Some(checked) = checked else {
-            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during replay".into());
         };
         if !checked.is_valid() {
             let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
@@ -1057,7 +824,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
     let mut solution = stitched.finish();
     if !full.grade_targets.is_empty() {
         let Some(checked) = replay_cancellable(&full, &solution, &cancel.signal()) else {
-            return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during target scoring".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during target scoring".into());
         };
         solution.reported_objective -= checked.grade_target_penalty;
     }
@@ -1065,7 +832,7 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
     let checked = replay_cancellable(&full, &solution, &cancel.signal());
     out.timings.replay += phase.elapsed();
     let Some(checked) = checked else {
-        return DayByDay::Stop(ScipTermination::Cancelled, "cancelled during replay".into());
+        return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during replay".into());
     };
     if !checked.is_valid() {
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
@@ -1096,71 +863,6 @@ fn solve_day_by_day(out: &mut ScipCompletion, windows: &[Window], budget: Option
     }))
 }
 
-/// Publish the day-by-day schedule. `bound` is a whole-horizon SCIP dual
-/// bound that still stands, and `proved` the relaxation's, if there are any;
-/// the tighter is published.
-fn adopt_seed(out: &mut ScipCompletion, found: Seed, bound: Option<f64>, proved: Option<f64>, role: DayByDayRole) {
-    let published = found.replay.replayed_objective;
-    let raw = found.solution.reported_objective;
-    let checked = published - found.replay.boundary_value_slack;
-    if let Some(bound) = bound
-        && let Some(problem) = exceeds_bound(checked, bound)
-    {
-        out.stop(ScipTermination::ValidationFailure, problem);
-        return;
-    }
-    let proved = consistent_relaxation(proved, checked, out.identity.run_id);
-    let (bound, source) = match (bound, proved) {
-        (scip, Some(proved)) if scip.is_none_or(|scip| proved < scip) => (Some(proved), BoundSource::Relaxation),
-        (scip, _) => (scip, BoundSource::Scip),
-    };
-    out.raw_objective = Some(raw);
-    out.primary_bound = bound;
-    out.bound_source = source;
-    out.primary_gap = bound.and_then(|bound| relative_gap(raw, bound));
-    out.published_objective = Some(published);
-    out.adjustments = Some(found.solution.adjustments);
-    out.replay = Some(Arc::new(found.replay));
-    out.solution = Some(Arc::new(found.solution));
-    out.day_by_day = Some(DayByDaySummary { role, ..found.summary });
-    out.termination = if role == DayByDayRole::Proven {
-        ScipTermination::Optimal
-    } else {
-        ScipTermination::FeasibleLimit
-    };
-    // Shown early, it is not the run's outcome yet.
-    if role != DayByDayRole::Early {
-        log_outcome(out);
-    }
-}
-
-/// SCIP's own definition, so the figure reads the same as a solver gap.
-fn relative_gap(raw: f64, bound: f64) -> Option<f64> {
-    let smaller = raw.abs().min(bound.abs());
-    (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
-}
-
-/// The relaxation bound, unless a replayed schedule is worth more than it.
-///
-/// That cannot happen with a correct relaxation, so it is reported; but the
-/// schedule was replayed on its own and the relaxation is only a second
-/// opinion on its quality, so the bound is dropped rather than the schedule.
-fn consistent_relaxation(proved: Option<f64>, published: f64, run_id: u64) -> Option<f64> {
-    let proved = proved?;
-    match exceeds_bound(published, proved) {
-        None => Some(proved),
-        Some(problem) => {
-            log::warn!("schedule run {run_id}: relaxation bound not used: {problem}");
-            None
-        }
-    }
-}
-
-fn exceeds_bound(published: f64, bound: f64) -> Option<String> {
-    let tolerance = 1e-4_f64.max(bound.abs() * 1e-8);
-    (published > bound + tolerance).then(|| format!("published objective {published} exceeds SCIP bound {bound} beyond {tolerance}"))
-}
-
 /// The run's limits and LP settings; everything else is SCIP's default.
 ///
 /// # Primal simplex with devex pricing
@@ -1188,7 +890,11 @@ fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relativ
             return Err(format!("setting SCIP {name:?}: retcode {code}"));
         }
     }
-    if let Some(file) = ipopt_options_file() {
+    // A SCIP built from source here (`scip-source`) has no Ipopt, and so no
+    // Ipopt parameters to set.
+    // SAFETY: a parameter lookup on the thread that owns the model.
+    let has_ipopt = unsafe { !ffi::SCIPgetParam(model.scip_ptr(), c"nlpi/ipopt/optfile".as_ptr()).is_null() };
+    if has_ipopt && let Some(file) = ipopt_options_file() {
         model = model
             .set_str_param("nlpi/ipopt/optfile", file)
             .map_err(|error| format!("setting SCIP's Ipopt options file: {error:?}"))?;
@@ -1207,7 +913,9 @@ fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relativ
 /// Ipopt's options for every SCIP solve: MUMPS orders its factorisations
 /// with AMD rather than METIS.
 ///
-/// The bundled build's METIS path is broken. Called by MUMPS through
+/// Only a SCIP with Ipopt has these: `scip-source` has none, but a
+/// `scip-system` installation may. The prebuilt scipoptsuite-deploy
+/// library's METIS path is broken. Called by MUMPS through
 /// `mumps_metis_nodend_mixedto32`, it corrupts the heap: glibc then either
 /// aborts the process (`free(): invalid size` in `gk_malloc_cleanup`) or
 /// leaves the solver thread hanging in `malloc`. Any Ipopt solve can reach
@@ -1431,8 +1139,25 @@ fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColum
 /// before storing it, so a seed it would not accept is reported rather than
 /// half-used.
 ///
-/// A seed makes weak dual reductions unsafe on this nonlinear model; see
-/// [`adapter::SolveTuning::apply`] for the reproducer.
+/// # Weak dual reductions are switched off: a correctness fix
+///
+/// Seeding a model with nonlinear constraints makes SCIP 10.0.2 stop at the
+/// *seeded* objective and report it as `Optimal`, with a dual bound equal to
+/// it, zero gap and zero nodes. The reproducer: maximise `c` subject to
+/// `c * t = m`, `t = 10 + 10 b`, `m = 6`, `b` binary. The optimum is `c = 0.6`
+/// at `b = 0`; seed `b = 1` (`c = 0.3`) and SCIP returns 0.3 as proven optimal.
+///
+/// | configuration | result |
+/// |---|---|
+/// | no seed | 0.6, correct |
+/// | seeded, defaults | **0.3 reported optimal, bound 0.3, 0 nodes** |
+/// | seeded, `presolving/maxrounds = 0` | 0.6, correct |
+/// | seeded, `misc/allowweakdualreds = false` | 0.6, correct |
+/// | seeded, `misc/allowstrongdualreds = false` | still 0.3 |
+///
+/// It is sign-independent and does not occur on a purely linear MILP seeded
+/// the same way. Because the wrong run reports a zero gap, no status check
+/// can catch it, and replay checks feasibility, not optimality certificates.
 fn offer_seed(model: Model<ProblemCreated>, values: &HashMap<String, f64>) -> Result<(Model<ProblemCreated>, bool), String> {
     let solution = model.create_orig_sol();
     for variable in model.orig_vars() {
@@ -1542,35 +1267,12 @@ fn log_model_structure(run_id: u64, input: &BlendInput) {
     }
 }
 
-fn log_outcome(out: &ScipCompletion) {
-    log::info!(
-        "schedule run {} diagnostics: {:?}; posted linear coefficient entries {}; objective {:?}, bound {:?}, gap {:?}",
-        out.identity.run_id,
-        out.diagnostics,
-        out.sizes.linear_coefficient_entries,
-        out.raw_objective,
-        out.primary_bound,
-        out.primary_gap
-    );
-    log::info!(
-        "schedule run {}: {:?} (backend {:?}) under a {:?} limit and {:?} gap target; solve {:?}, replay {:?}; reason {:?}",
-        out.identity.run_id,
-        out.termination,
-        out.backend_status,
-        out.options.time_limit,
-        out.options.relative_gap,
-        out.timings.solver,
-        out.timings.replay,
-        out.diagnostic
-    );
-}
-
-fn classify_status(status: Status, usable: bool) -> ScipTermination {
+fn classify_status(status: Status, usable: bool) -> SolveTermination {
     match status {
-        Status::Optimal | Status::GapLimit if usable => ScipTermination::Optimal,
-        Status::Infeasible => ScipTermination::Infeasible,
-        Status::Unbounded => ScipTermination::Unbounded,
-        Status::UserInterrupt => ScipTermination::Cancelled,
+        Status::Optimal | Status::GapLimit if usable => SolveTermination::Optimal,
+        Status::Infeasible => SolveTermination::Infeasible,
+        Status::Unbounded => SolveTermination::Unbounded,
+        Status::UserInterrupt => SolveTermination::Cancelled,
         Status::TimeLimit
         | Status::NodeLimit
         | Status::TotalNodeLimit
@@ -1582,575 +1284,12 @@ fn classify_status(status: Status, usable: bool) -> ScipTermination {
         | Status::PrimalLimit
         | Status::DualLimit => {
             if usable {
-                ScipTermination::FeasibleLimit
+                SolveTermination::FeasibleLimit
             } else {
-                ScipTermination::LimitNoIncumbent
+                SolveTermination::LimitNoIncumbent
             }
         }
-        Status::Optimal | Status::GapLimit => ScipTermination::LimitNoIncumbent,
-        Status::Unknown | Status::Inforunbd | Status::Terminate => ScipTermination::BackendFailure,
+        Status::Optimal | Status::GapLimit => SolveTermination::LimitNoIncumbent,
+        Status::Unknown | Status::Inforunbd | Status::Terminate => SolveTermination::BackendFailure,
     }
-}
-
-/// Whether the answer that just came back still describes the project.
-///
-/// Three questions, not one: the request must still be the pending one, the
-/// Setup gate must still name the same run, and every authored input the
-/// model encoded must still hash the same. A rename changes none of them,
-/// which is the point - and an edit to a chunk capacity, a truck roster or a
-/// cashflow coefficient changes the last one, which is also the point.
-#[cfg(all(test, feature = "blend-experiment"))]
-fn request_current(pending: Option<ScipRunIdentity>, completed: ScipRunIdentity, current_inputs: Option<ScheduleRunInputs>, current_plan: u64, current_semantic: u64) -> bool {
-    pending == Some(completed) && current_inputs == Some(completed.inputs) && current_plan == completed.plan_revision && current_semantic == completed.semantic
-}
-
-/// `horizon` is the whole horizon a day-by-day window was cut from, or `None`
-/// when `input` is the captured horizon itself. A window may still name a
-/// block its horizon holds and an earlier window finished: the window leaves
-/// that block out, and the formulation gives it no columns. A block neither
-/// holds is an error either way.
-fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: ScipSolveOptions, cancel: &CancelFlag) -> Result<(), String> {
-    if options.time_limit.is_some_and(|limit| limit.is_zero() || !limit.as_secs_f64().is_finite()) {
-        return Err("SCIP time limit must be positive and finite".into());
-    }
-    if options.relative_gap.is_some_and(|gap| !gap.is_finite() || !(0.0..=1.0).contains(&gap)) {
-        return Err("SCIP relative gap must lie in 0..=1".into());
-    }
-    if input.segments_per_interval == 0 || input.intervals.is_empty() {
-        return Err("the blended event grid is empty".into());
-    }
-    for (position, interval) in input.intervals.iter().enumerate() {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if interval.index != position
-            || !interval.start_h.is_finite()
-            || !interval.end_h.is_finite()
-            || interval.start_h < 0.0
-            || interval.end_h <= interval.start_h
-            || (position > 0 && (interval.start_h - input.intervals[position - 1].end_h).abs() > 1e-9)
-        {
-            return Err(format!("invalid interval at position {position}"));
-        }
-    }
-    if let Some(chain) = &input.drill_blast
-        && (!chain.window_end_h.is_finite()
-            || chain.window_end_h <= 0.0
-            || chain.window_end_h > 24.0
-            || chain.blasts.iter().any(|blast| blast.quantity.iter().any(|amount| !amount.is_finite() || *amount < 0.0))
-            || chain
-                .agents
-                .iter()
-                .any(|agent| agent.rates.len() != input.intervals.len() || agent.rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0))
-            || chain.tasks.iter().any(|task| {
-                task.agent >= chain.agents.len()
-                    || !task.start_h.is_finite()
-                    || !task.end_h.is_finite()
-                    || task.start_h < 0.0
-                    || task.end_h <= task.start_h
-                    || task.sequence.iter().any(|blast| *blast >= chain.blasts.len())
-            })
-            || chain.fixed.as_ref().is_some_and(|timeline| timeline.blasts.len() != chain.blasts.len()))
-    {
-        return Err("invalid drill and blast input".to_owned());
-    }
-    let grades = input.grades.count();
-    let mut pile_ids = BTreeSet::new();
-    for pile in &input.piles {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if !pile_ids.insert(pile.id) || !pile.capacity_t.is_finite() || pile.capacity_t <= 0.0 {
-            return Err(format!("invalid or duplicate pile {}", pile.id.0));
-        }
-        if !pile.opening_t.is_finite()
-            || pile.opening_t < 0.0
-            || pile.opening_q.len() != grades
-            || pile.opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (pile.opening_t == 0.0 && *q != 0.0))
-        {
-            return Err(format!("invalid opening data on pile {}", pile.id.0));
-        }
-        if pile.chunks.is_empty() && !pile.chunk_opening.is_empty() {
-            return Err(format!("chunk opening without chunks on pile {}", pile.id.0));
-        }
-        if !pile.chunk_closed.is_empty() && pile.chunk_closed.len() != pile.chunks.len() {
-            return Err(format!("chunk closure flags do not match the chunks on pile {}", pile.id.0));
-        }
-        if pile.chunk_opening.len() > pile.chunks.len() || pile.chunks.iter().any(|cap| !cap.is_finite() || *cap <= 0.0) {
-            return Err(format!("invalid chunks on pile {}", pile.id.0));
-        }
-        for (position, (tonnes, contained)) in pile.chunk_opening.iter().enumerate() {
-            if contained.len() != grades
-                || !tonnes.is_finite()
-                || *tonnes < 0.0
-                || *tonnes > pile.chunks[position]
-                || contained.iter().any(|q| !q.is_finite() || *q < 0.0 || (*tonnes == 0.0 && *q != 0.0))
-            {
-                return Err(format!("invalid opening on pile {} chunk {position}", pile.id.0));
-            }
-        }
-        let (opening_t, opening_q) = pile.total_opening(grades);
-        if !opening_t.is_finite()
-            || opening_t < 0.0
-            || opening_t > pile.capacity_t
-            || opening_q.len() != grades
-            || opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (opening_t == 0.0 && *q != 0.0))
-        {
-            return Err(format!("invalid opening on pile {}", pile.id.0));
-        }
-    }
-    let mut ground_ids = BTreeSet::new();
-    for source in &input.ground {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if !ground_ids.insert(source.id) || !source.tonnes_t.is_finite() || source.tonnes_t < 0.0 {
-            return Err(format!("invalid or duplicate ground source {}", source.id.0));
-        }
-        if source.material.is_empty()
-            || source.material.iter().any(|share| !share.fraction.is_finite() || !(0.0..=1.0).contains(&share.fraction))
-            || (source.material.iter().map(|share| share.fraction).sum::<f64>() - 1.0).abs() > 1e-9
-        {
-            return Err(format!("invalid material shares on ground source {}", source.id.0));
-        }
-    }
-    let referable: BTreeSet<_> = ground_ids
-        .iter()
-        .copied()
-        .chain(horizon.into_iter().flat_map(|full| full.ground.iter().map(|source| source.id)))
-        .collect();
-    let loaders: BTreeSet<_> = input.loaders.iter().map(|loader| loader.id).collect();
-    if loaders.len() != input.loaders.len() {
-        return Err("duplicate loader".into());
-    }
-    for loader in &input.loaders {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if loader
-            .rates
-            .iter()
-            .any(|rate| rate.interval >= input.intervals.len() || !rate.dig_tph.is_finite() || rate.dig_tph < 0.0 || !rate.reclaim_tph.is_finite() || rate.reclaim_tph < 0.0)
-        {
-            return Err(format!("invalid rates for loader {}", loader.id.0));
-        }
-    }
-    let destinations: BTreeSet<_> = input.destinations.iter().map(|destination| destination.id).collect();
-    if destinations.len() != input.destinations.len() {
-        return Err("duplicate destination".into());
-    }
-    for destination in &input.destinations {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if destination.capacity_t.is_some_and(|cap| !cap.is_finite() || cap < 0.0)
-            || destination.crusher_daily_t.iter().flatten().any(|cap| !cap.is_finite() || *cap < 0.0)
-            || matches!(destination.kind, DestinationKind::Stockpile(pile) if !pile_ids.contains(&pile))
-        {
-            return Err(format!("invalid destination {}", destination.id.0));
-        }
-    }
-    let mut target_ids = BTreeSet::new();
-    let mut marginal_cost = 0.0;
-    let ceilings = crate::model::schedule::optimisation::blended::input::grade_ceilings(input);
-    for (index, target) in input.grade_targets.iter().enumerate() {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        let specification = &target.specification;
-        if target.grade >= grades
-            || !destinations.contains(&target.destination)
-            || !target_ids.insert((target.destination, target.grade, target.day))
-            || specification.validate().is_err()
-        {
-            return Err(format!("invalid grade target {index}"));
-        }
-        marginal_cost += specification
-            .hinges()
-            .iter()
-            .map(|&(boundary, _, slope)| slope * boundary.abs().max((ceilings[target.grade] - boundary).abs()))
-            .sum::<f64>();
-        use crate::model::schedule::grade_targets::{TARGET_PERIOD_H, target_day};
-        if input
-            .intervals
-            .iter()
-            .any(|interval| interval.end_h > (f64::from(target_day(interval.start_h)) + 1.0) * TARGET_PERIOD_H + 1e-9)
-        {
-            return Err(format!("an interval crosses grade target {index}'s period boundary"));
-        }
-    }
-    if !marginal_cost.is_finite() {
-        return Err("grade target marginal costs cannot be represented".into());
-    }
-    let mut opening_ids = BTreeSet::new();
-    for &(target, period, tonnes, contained) in &input.target_opening {
-        if target >= input.grade_targets.len()
-            || !opening_ids.insert((target, period))
-            || !tonnes.is_finite()
-            || tonnes < 0.0
-            || !contained.is_finite()
-            || contained < 0.0
-            || (tonnes == 0.0 && contained != 0.0)
-        {
-            return Err("invalid carried grade target receipts".into());
-        }
-    }
-    let trucks: BTreeSet<_> = input.trucks.iter().map(|truck| truck.id).collect();
-    if trucks.len() != input.trucks.len() {
-        return Err("duplicate truck class".into());
-    }
-    for truck in &input.trucks {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if truck.hours.len() < input.intervals.len() || truck.hours.iter().any(|hours| !hours.is_finite() || *hours < 0.0) {
-            return Err(format!("invalid truck class {}", truck.id.0));
-        }
-    }
-    let mut task_ids = BTreeSet::new();
-    for task in &input.tasks {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if !task_ids.insert(task.id)
-            || !loaders.contains(&task.loader)
-            || !task.window_start_h.is_finite()
-            || !task.window_end_h.is_finite()
-            || task.window_end_h <= task.window_start_h
-        {
-            return Err(format!("invalid task {}", task.id.0));
-        }
-        match &task.kind {
-            TaskKind::Dig { sequence } if sequence.is_empty() || sequence.iter().any(|id| !referable.contains(id)) => {
-                return Err(format!("invalid dig sequence on task {}", task.id.0));
-            }
-            TaskKind::Reclaim { approved_sources, maximum_t }
-                if approved_sources.is_empty() || approved_sources.iter().any(|id| !pile_ids.contains(id)) || maximum_t.is_some_and(|value| !value.is_finite() || value < 0.0) =>
-            {
-                return Err(format!("invalid reclaim sources or cap on task {}", task.id.0));
-            }
-            _ => {}
-        }
-    }
-    for (index, movement) in input.movements.iter().enumerate() {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        let source_exists = match movement.source {
-            SourceId::Ground(id) => referable.contains(&id),
-            SourceId::Stockpile(id) => pile_ids.contains(&id),
-        };
-        if !source_exists
-            || !matches!(
-                (movement.activity, movement.source),
-                (Activity::Dig, SourceId::Ground(_)) | (Activity::Reclaim, SourceId::Stockpile(_))
-            )
-            || !loaders.contains(&movement.loader)
-            || !destinations.contains(&movement.destination)
-            || !trucks.contains(&movement.truck)
-            || !movement.truck_hours_per_tonne.is_finite()
-            || movement.truck_hours_per_tonne < 0.0
-            || movement.value_per_tonne().is_err()
-            || (movement.activity == Activity::Dig && (0..grades).any(|g| input.grades.fraction(movement.material, g).is_none()))
-        {
-            return Err(format!("invalid movement candidate {index}"));
-        }
-    }
-    for limit in &input.grade_limits {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        if !destinations.contains(&limit.destination) || limit.grade >= grades || !limit.minimum.is_finite() || limit.minimum < 0.0 {
-            return Err("invalid grade limit".into());
-        }
-    }
-    let valid_bounds = |bounds: &[crate::model::schedule::optimisation::blended::input::GradeBound]| {
-        bounds.iter().all(|bound| {
-            bound.grade < grades
-                && (bound.lower.is_some() || bound.upper.is_some())
-                && [bound.lower, bound.upper].into_iter().flatten().all(|end| end.value.is_finite() && end.value >= 0.0)
-                && match (bound.lower, bound.upper) {
-                    (Some(lower), Some(upper)) => lower.value <= upper.value,
-                    _ => true,
-                }
-        })
-    };
-    for qualification in &input.qualifications {
-        if !loaders.contains(&qualification.loader)
-            || !pile_ids.contains(&qualification.pile)
-            || !destinations.contains(&qualification.destination)
-            || qualification.alternatives.is_empty()
-            || qualification.alternatives.iter().any(|alternative| !valid_bounds(&alternative.bounds))
-        {
-            return Err("invalid reclaim grade qualification".into());
-        }
-    }
-    for payment in &input.conditional_values {
-        if !input.movements.get(payment.candidate).is_some_and(|candidate| candidate.activity == Activity::Reclaim)
-            || !payment.value_per_tonne.is_finite()
-            || payment.bounds.is_empty()
-            || !valid_bounds(&payment.bounds)
-        {
-            return Err("invalid conditional reclaim cashflow".into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(all(test, feature = "blend-experiment"))]
-mod developer_checks {
-    use std::{sync::mpsc, time::Duration};
-
-    use super::*;
-    use crate::model::{
-        ReserveFieldId,
-        schedule::optimisation::scip::scenarios::{competition_world, graded_blend_world},
-    };
-
-    fn identity(run_id: u64) -> ScipRunIdentity {
-        ScipRunIdentity {
-            run_id,
-            inputs: ScheduleRunInputs {
-                runtime: 1,
-                generation: 1,
-                fleet_revision: 1,
-                tonnage_field: ReserveFieldId(1),
-            },
-            plan_revision: 1,
-            document_revision: 1,
-            semantic: 7,
-        }
-    }
-
-    #[test]
-    fn developer_scip_worker_validates_and_reports_limits() {
-        let input = Arc::new(graded_blend_world(3));
-        let result = execute_scip_blend(input, identity(1), ScipSolveOptions::default(), &CancelFlag::default(), &ScipActivity::default(), &|_| {});
-        assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
-        // The hourly dispatch schedule is optimal here, so either SCIP stops
-        // at the gap target or the relaxation proves the schedule first.
-        assert_eq!(result.termination, ScipTermination::Optimal);
-        let proven = result
-            .day_by_day
-            .as_ref()
-            .is_some_and(|start| start.method == StartMethod::Hourly && start.role == DayByDayRole::Proven);
-        assert!(
-            proven || matches!(result.backend_status, Some(Status::Optimal | Status::GapLimit)),
-            "{:?}",
-            result.backend_status
-        );
-        assert!(result.replay.as_ref().is_some_and(|report| report.is_valid()));
-        assert!(result.timings.solver > Duration::ZERO);
-
-        let mut invalid = graded_blend_world(3);
-        invalid.segments_per_interval = 0;
-        let rejected = execute_scip_blend(
-            Arc::new(invalid),
-            identity(2),
-            ScipSolveOptions::default(),
-            &CancelFlag::default(),
-            &ScipActivity::default(),
-            &|_| {},
-        );
-        assert_eq!(rejected.termination, ScipTermination::InvalidInput);
-        assert_eq!(rejected.timings.solver, Duration::ZERO);
-
-        let cancelled = CancelFlag::default();
-        cancelled.cancel();
-        cancelled.cancel();
-        let before = execute_scip_blend(
-            Arc::new(graded_blend_world(3)),
-            identity(3),
-            ScipSolveOptions::default(),
-            &cancelled,
-            &ScipActivity::default(),
-            &|_| {},
-        );
-        assert_eq!(before.termination, ScipTermination::Cancelled);
-        assert_eq!(before.sizes.variables, 0);
-        assert_eq!(before.timings.solver, Duration::ZERO);
-        assert!(!before.usable());
-
-        assert_eq!(classify_status(Status::TimeLimit, true), ScipTermination::FeasibleLimit);
-        assert_eq!(classify_status(Status::TimeLimit, false), ScipTermination::LimitNoIncumbent);
-        assert_eq!(classify_status(Status::Infeasible, false), ScipTermination::Infeasible);
-        assert_eq!(classify_status(Status::Unbounded, false), ScipTermination::Unbounded);
-    }
-
-    #[test]
-    fn developer_scip_real_time_limits_report_incumbent_separately() {
-        let input = Arc::new(competition_world(24));
-        for (run_id, limit) in [(40, Duration::from_millis(1)), (41, Duration::from_millis(250))] {
-            let result = execute_scip_blend(
-                Arc::clone(&input),
-                identity(run_id),
-                ScipSolveOptions {
-                    time_limit: Some(limit),
-                    ..Default::default()
-                },
-                &CancelFlag::default(),
-                &ScipActivity::default(),
-                &|_| {},
-            );
-            println!(
-                "SCIP limit={limit:?} status={:?} termination={:?} usable={} objective={:?} solver={:?} overshoot={:?}",
-                result.backend_status,
-                result.termination,
-                result.usable(),
-                result.published_objective,
-                result.timings.solver,
-                result.solver_limit_overshoot
-            );
-            // The hourly dispatch schedule is there before SCIP starts, so a
-            // limit too short for SCIP keeps it rather than ending empty.
-            assert!(result.usable(), "{:?}: {:?}", result.termination, result.diagnostic);
-            assert!(matches!(result.backend_status, None | Some(Status::TimeLimit)), "{:?}", result.backend_status);
-            assert!(
-                matches!(result.termination, ScipTermination::FeasibleLimit | ScipTermination::Optimal),
-                "{:?}",
-                result.termination
-            );
-        }
-    }
-
-    #[test]
-    fn developer_scip_currentness_and_invalid_replay_are_rejected() {
-        let id = identity(10);
-        assert!(request_current(Some(id), id, Some(id.inputs), id.plan_revision, id.semantic));
-        assert!(!request_current(None, id, Some(id.inputs), id.plan_revision, id.semantic));
-        assert!(!request_current(Some(identity(11)), id, Some(id.inputs), id.plan_revision, id.semantic));
-        assert!(!request_current(Some(id), id, Some(id.inputs), id.plan_revision + 1, id.semantic));
-        // An edit that changes no bar and no Setup input but does change a
-        // coefficient the model encoded still retires the request.
-        assert!(!request_current(Some(id), id, Some(id.inputs), id.plan_revision, id.semantic + 1));
-        let result = execute_scip_blend(
-            Arc::new(graded_blend_world(3)),
-            id,
-            ScipSolveOptions::default(),
-            &CancelFlag::default(),
-            &ScipActivity::default(),
-            &|_| {},
-        );
-        assert!(result.usable());
-        let mut replay = (**result.replay.as_ref().expect("replay")).clone();
-        replay.issues.push("injected physical breach".into());
-        let mut rejected = result;
-        rejected.replay = Some(Arc::new(replay));
-        assert!(!rejected.usable());
-    }
-
-    /// A reproducible, bounded developer check of cancellation during the
-    /// actual solve. The phase and event counters prevent a pre-solve false
-    /// positive; `try_recv` exercises nonblocking application-side polling.
-    #[test]
-    fn developer_scip_interrupts_an_active_solve() {
-        let input = Arc::new(competition_world(48));
-        let cancel = CancelFlag::default();
-        let worker_cancel = cancel.clone();
-        let activity = Arc::new(ScipActivity::default());
-        let worker_activity = Arc::clone(&activity);
-        let (tx, rx) = mpsc::channel();
-        super::super::jobs::spawn_pool_task(move || {
-            let result = execute_scip_blend(
-                input,
-                identity(20),
-                ScipSolveOptions {
-                    time_limit: Some(Duration::from_secs(12)),
-                    ..Default::default()
-                },
-                &worker_cancel,
-                &worker_activity,
-                &|_| {},
-            );
-            tx.send(result).expect("developer receiver");
-        });
-        let waiting = Instant::now();
-        while activity.phase() < 3 || activity.interrupt.callbacks.load(Ordering::Acquire) < 2 {
-            assert!(waiting.elapsed() < Duration::from_secs(5), "SCIP never entered an observable solve");
-            assert!(rx.try_recv().is_err(), "worker completed before cancellation request");
-            std::thread::yield_now();
-        }
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-        let requested = Instant::now();
-        cancel.cancel();
-        let result = rx.recv_timeout(Duration::from_secs(10)).expect("SCIP did not return after cancellation");
-        let latency = requested.elapsed();
-        println!(
-            "SCIP active-solve cancellation latency={latency:?} status={:?} callbacks={} interrupts={} solver={:?}",
-            result.backend_status, result.event_callbacks, result.interrupt_calls, result.timings.solver
-        );
-        assert_eq!(result.termination, ScipTermination::Cancelled);
-        assert!(!result.usable());
-        assert!(result.interrupt_calls > 0, "cancellation did not reach SCIPinterruptSolve");
-    }
-
-    #[test]
-    fn developer_scip_stops_during_formulation() {
-        let input = Arc::new(competition_world(1000));
-        let cancel = CancelFlag::default();
-        let worker_cancel = cancel.clone();
-        let activity = Arc::new(ScipActivity::default());
-        let worker_activity = Arc::clone(&activity);
-        let (tx, rx) = mpsc::channel();
-        super::super::jobs::spawn_pool_task(move || {
-            tx.send(execute_scip_blend(
-                input,
-                identity(30),
-                ScipSolveOptions::default(),
-                &worker_cancel,
-                &worker_activity,
-                &|_| {},
-            ))
-            .expect("developer receiver");
-        });
-        let waiting = Instant::now();
-        while activity.formulation_checks.load(Ordering::Acquire) < 4 {
-            assert!(waiting.elapsed() < Duration::from_secs(5), "formulation did not begin");
-            std::thread::yield_now();
-        }
-        assert_eq!(activity.phase(), 2, "formulation completed before cancellation");
-        let requested = Instant::now();
-        cancel.cancel();
-        let result = rx.recv_timeout(Duration::from_secs(5)).expect("formulation ignored cancellation");
-        assert_eq!(result.termination, ScipTermination::Cancelled);
-        assert_eq!(result.backend_status, None);
-        println!(
-            "SCIP formulation cancellation latency={:?} after {} checkpoints",
-            requested.elapsed(),
-            activity.formulation_checks.load(Ordering::Acquire)
-        );
-    }
-}
-
-/// Totals a reader asks for first, recomputed from the *replayed* rows rather
-/// than from the solver's own report.
-#[cfg(test)]
-pub(crate) struct BlendTotals {
-    pub(crate) mined_t: f64,
-    pub(crate) reclaimed_t: f64,
-    pub(crate) processed_t: f64,
-}
-
-#[cfg(test)]
-pub(crate) fn totals(input: &BlendInput, solution: &BlendSolution) -> BlendTotals {
-    let mut out = BlendTotals {
-        mined_t: 0.0,
-        reclaimed_t: 0.0,
-        processed_t: 0.0,
-    };
-    for row in &solution.movements {
-        let Some(candidate) = input.movements.get(row.candidate) else { continue };
-        match candidate.activity {
-            Activity::Dig => out.mined_t += row.tonnes_t,
-            Activity::Reclaim => out.reclaimed_t += row.tonnes_t,
-        }
-        if input
-            .destinations
-            .iter()
-            .any(|destination| destination.id == candidate.destination && destination.kind == DestinationKind::Crusher)
-        {
-            out.processed_t += row.tonnes_t;
-        }
-    }
-    out
 }

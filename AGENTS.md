@@ -30,9 +30,9 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Movement value | `model/schedule/cashflow.rs` → `app/commands/schedule.rs` → `ui/elements/schedule_cashflow.rs`; capture, conditional-grade formulation and replay value movements. Matching values add |
 | Soft grade targets | `model/schedule/grade_targets.rs` (`CrusherGradeCalendar`: daily crusher bands, Default plus overrides) → `app/commands/schedule_capture.rs` (one target per crusher, grade and day) → crusher grade rows in `ui/elements/schedule_calendar.rs`; blended formulation, hourly dispatch, rolling carry and replay price receipts. See `docs/scheduling-grade-targets.md` |
 | Stockpile modes and operating settings | `model/schedule/stockpile_operation.rs` (`StockpileOperation`: daily Build & reclaim / Build only / Reclaim only / Off, Default plus overrides; build-and-reclaim-at-once and rest hours, edited in Setup → Stockpiles via `ui/elements/schedule_destinations.rs`) → `app/commands/schedule_capture.rs` (`BlendPile::modes`) → Mode row in `ui/elements/schedule_calendar.rs`; hourly dispatch, formulation, replay and idle reasons enforce it. See `docs/scheduling-stockpile-modes.md` |
-| Schedule optimisation backend | `model/schedule/optimisation/blended/` (contract, `Rows` formulation, independent replay, hourly dispatch LP (the first schedule) in `greedy.rs`, day-by-day windows as its fallback in `rolling.rs`, HiGHS relaxation bound in `relaxation.rs`) and `optimisation/scip/` (native nonlinear backend). Normal desktop SCIP; optional `blend-experiment` iterative HiGHS comparison. `optimisation/highs.rs` is the historical parcel baseline. See `docs/scheduling-scip-integration.md` |
-| Schedule optimisation settings | `model/schedule/experiment.rs` (persisted horizon, limits, event capacity, tracked grade fields, pile representation) → `app/commands/schedule.rs` → `ui/elements/schedule_optimisation.rs`. Editable in native and WASM builds; solver dependencies native only |
-| Schedule calculation from a real project | `app/commands/schedule_capture.rs` → `app/solver_process.rs` (child process; the app replays its answer again) → `app/scip_blend.rs` (solve/extract/replay, inside that process) → `app/schedule_publish.rs` → `model/schedule/result.rs`. `app/schedule_run.rs` owns currentness, jobs and normal run commands |
+| Schedule optimisation backend | `model/schedule/optimisation/blended/` (contract, `Rows` formulation, independent replay, hourly dispatch LP (the first schedule) in `greedy.rs`, solved by microlp or, with the `highs` feature, HiGHS in `lp.rs`, day-by-day windows as its fallback in `rolling.rs`, HiGHS relaxation bound in `relaxation.rs`) and `optimisation/scip/` (native nonlinear backend). SCIP (Improve) only with the `scip` feature. See `docs/scheduling-scip-integration.md` |
+| Schedule optimisation settings | `model/schedule/experiment.rs` (persisted horizon, limits, event capacity, tracked grade fields, pile representation) → `app/commands/schedule.rs` → `ui/elements/schedule_optimisation.rs`. Editable in native and WASM builds |
+| Schedule calculation from a real project | `app/commands/schedule_capture.rs` → `app/schedule_solve.rs` (validation, hourly dispatch, replay; every build, the browser included) → `app/schedule_publish.rs` → `model/schedule/result.rs`. With the `scip` feature the solve runs in `app/solver_process.rs` (child process; the app replays its answer again) and Improve continues in `app/scip_blend.rs`. `app/schedule_run.rs` owns currentness, jobs and normal run commands |
 | Background work | `app/jobs.rs`; normal schedule lifecycle in `app/schedule_run.rs`, solver-process kill and orphan handling in `app/solver_process.rs`, SCIP solver-thread cancellation in `app/scip_blend.rs` |
 | Asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, `history_storage.rs` move payloads to temporary backing in `asset_storage.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
@@ -51,7 +51,8 @@ Toolchain is pinned **nightly**; `.cargo/config.toml` sets `build-std`, so a col
 ```bash
 cargo check                 # fast loop
 cargo clippy
-cargo run                   # desktop app
+cargo run                   # desktop app (pure Rust; no Improve)
+cargo run --features scip-source    # with SCIP built from source, for Improve (`highs`, `scip-system`: see Cargo.toml)
 cargo build --release
 cargo fmt
 cargo test

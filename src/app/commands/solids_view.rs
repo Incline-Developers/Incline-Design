@@ -451,142 +451,6 @@ impl ViewSolid {
         hasher.finish()
     }
 
-    #[cfg(test)]
-    fn stage_mut(&mut self, kind: SolidArtifact) -> &mut dyn StageSlot {
-        match kind {
-            SolidArtifact::Envelope => &mut self.envelope,
-            SolidArtifact::Body => &mut self.body,
-            SolidArtifact::Blasting => &mut self.blasting,
-            SolidArtifact::Partition => &mut self.partition,
-            SolidArtifact::BenchReserves => &mut self.bench_reserves,
-            SolidArtifact::DigReserves => &mut self.reserves,
-        }
-    }
-
-    /// A cache entry with no artifacts, as one starts life.
-    #[cfg(test)]
-    pub(crate) fn empty_for_test(id: SolidId) -> Self {
-        Self {
-            key: 7,
-            runtime: 1,
-            stamp: Default::default(),
-            solid: Solid {
-                id,
-                name: format!("Solid {}", id.0),
-                kind: crate::model::SolidKind::Pit,
-                surface: None,
-                topography: None,
-                block_model: None,
-                color: [0.0; 4],
-                benching: Default::default(),
-                blasting: Default::default(),
-                exclusions: Default::default(),
-            },
-            sources: [None, None],
-            envelope: Stage::default(),
-            body: Stage::default(),
-            blasting: Stage::default(),
-            partition: Stage::default(),
-            bench_reserves: Stage::default(),
-            reserves: Stage::default(),
-        }
-    }
-
-    /// Settle an artifact with a product built for a test.
-    #[cfg(test)]
-    pub(crate) fn settle_for_test(&mut self, kind: SolidArtifact, benches: usize, blocks: usize) {
-        let bench_parts = (0..benches).map(|index| test_part(index as f64 * 12.0)).collect::<Vec<_>>();
-        match kind {
-            SolidArtifact::Envelope => {
-                self.envelope.begin(1);
-                // The envelope's own mesh is never read by the evaluator.
-                self.envelope.settle(Arc::new(test_mesh()));
-            }
-            SolidArtifact::Body => {
-                self.body.begin(1);
-                self.body.settle(Arc::new(SolidBody {
-                    bench_parts,
-                    flitch_parts: Vec::new(),
-                    bench_footprints: Default::default(),
-                    flitch_footprints: Default::default(),
-                    occupied_bands: Vec::new(),
-                }));
-            }
-            SolidArtifact::Blasting => {
-                self.blasting.begin(1);
-                self.blasting.settle(Arc::new(SolidBlasting { blast_faces: Vec::new() }));
-            }
-            SolidArtifact::Partition => {
-                self.partition.begin(1);
-                self.partition.settle(SolidPartition {
-                    parts: (0..blocks).map(|index| test_part(index as f64 * 4.0)).collect(),
-                    blast_parts: Vec::new(),
-                });
-            }
-            SolidArtifact::BenchReserves | SolidArtifact::DigReserves => {
-                let scope = if kind == SolidArtifact::BenchReserves { ReserveScope::Bench } else { ReserveScope::Dig };
-                let stage = scope.slot(self);
-                stage.begin(1);
-                stage.settle(ReserveProduct {
-                    totals: vec![Default::default(); benches.max(blocks)],
-                    resolution: None,
-                    availability: ReserveAvailability::Measured,
-                    material: None,
-                });
-            }
-        }
-    }
-
-    /// Settle a reserve scope as a deliberate capacity-only result.
-    #[cfg(test)]
-    pub(crate) fn settle_capacity_only(&mut self, scope: ReserveScope) {
-        let stage = scope.slot(self);
-        stage.begin(1);
-        stage.settle(ReserveProduct {
-            totals: Vec::new(),
-            resolution: None,
-            availability: ReserveAvailability::CapacityOnly,
-            material: None,
-        });
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_for_test(&mut self, kind: SolidArtifact, message: &str) {
-        match kind {
-            SolidArtifact::Envelope => {
-                self.envelope.begin(1);
-                self.envelope.fail(message.to_owned());
-            }
-            SolidArtifact::Body => {
-                self.body.begin(1);
-                self.body.fail(message.to_owned());
-            }
-            SolidArtifact::Blasting => {
-                self.blasting.begin(1);
-                self.blasting.fail(message.to_owned());
-            }
-            SolidArtifact::Partition => {
-                self.partition.begin(1);
-                self.partition.fail(message.to_owned());
-            }
-            SolidArtifact::BenchReserves | SolidArtifact::DigReserves => {
-                let scope = if kind == SolidArtifact::BenchReserves { ReserveScope::Bench } else { ReserveScope::Dig };
-                let stage = scope.slot(self);
-                stage.begin(1);
-                stage.fail(message.to_owned());
-            }
-        }
-    }
-
-    /// Leave an artifact waiting on deferred inputs.
-    #[cfg(test)]
-    pub(crate) fn await_inputs_for_test(&mut self, kind: SolidArtifact) {
-        if kind == SolidArtifact::Envelope {
-            self.envelope.begin(1);
-            self.envelope.await_inputs();
-        }
-    }
-
     /// Does this solid's request for `kind` accept a result bearing `token`?
     pub(crate) fn accepts(&self, kind: SolidArtifact, token: u64) -> bool {
         match kind {
@@ -597,58 +461,6 @@ impl ViewSolid {
             SolidArtifact::BenchReserves => self.bench_reserves.accepts(token),
             SolidArtifact::DigReserves => self.reserves.accepts(token),
         }
-    }
-}
-
-/// Begin an attempt on a slot without naming its product type, so one test
-/// can walk every artifact kind through the same submission path.
-#[cfg(test)]
-pub(crate) trait StageSlot {
-    fn begin(&mut self, key: u64) -> u64;
-}
-
-#[cfg(test)]
-impl<T> StageSlot for Stage<T> {
-    fn begin(&mut self, key: u64) -> u64 {
-        Stage::begin(self, key)
-    }
-}
-
-/// A one-triangle closed-enough mesh; nothing the evaluator reads looks at it.
-#[cfg(test)]
-fn test_mesh() -> OpenTriangulation {
-    use crate::model::formats::mesh_data::Vertex;
-    let mesh = Arc::new(
-        Triangulation::from_vertices_and_faces(
-            vec![Vertex { x: 0.0, y: 0.0, z: 0.0 }, Vertex { x: 1.0, y: 0.0, z: 0.0 }, Vertex { x: 0.0, y: 1.0, z: 0.0 }],
-            vec![[0, 1, 2]],
-        )
-        .expect("test mesh"),
-    );
-    let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
-    let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
-    preview_triangulation("test".to_owned(), mesh, spatial, Vec::new(), order, [1.0; 4], [0.0; 4])
-}
-
-/// A measured part at one elevation, for building committed artifacts.
-#[cfg(test)]
-fn test_part(base: f64) -> SolidPart {
-    let band = CutBand {
-        selection: BenchSelection {
-            base,
-            top: base + 12.0,
-            is_flitch: false,
-        },
-        interval: 0,
-        position: 0,
-    };
-    SolidPart {
-        mesh: test_mesh(),
-        band,
-        bench: band.selection,
-        blast: None,
-        block: None,
-        volume: Some(100.0),
     }
 }
 
@@ -2441,7 +2253,6 @@ pub(crate) struct DigBlockRecord {
     /// mapped values, grouped, as the scan retained them. `None` for a block
     /// nothing was measured against - a capacity-only solid, or a project with
     /// no reserve schema - which is not the same as a block made of nothing.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) portions: Option<BlockPortions>,
 }
 
@@ -2451,14 +2262,12 @@ pub(crate) struct DigBlockRecord {
 /// copy of that slot: a snapshot is rebuilt whenever the report cache is, and a
 /// capture is the size of the model's intersections with the partition.
 #[derive(Clone)]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 pub(crate) struct BlockPortions {
     pub(crate) capture: Arc<crate::model::solid_reserves::MaterialCapture>,
     pub(crate) slot: usize,
 }
 
 impl BlockPortions {
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn portions(&self) -> &[crate::model::solid_reserves::MaterialPortion] {
         self.capture.portions.get(self.slot).map_or(&[][..], Vec::as_slice)
     }

@@ -12,7 +12,7 @@
 //!
 //! The app writes one [`Request`] to the process's stdin as a line of JSON:
 //! the captured [`BlendInput`], the run identity and the options. The
-//! process runs [`execute_scip_blend`] on it exactly as the app used to, and
+//! process runs [`execute_schedule`] on it exactly as the app used to, and
 //! writes [`Message`]s back on stdout, one per line: forwarded log records,
 //! the day-by-day schedule when there is one, and the finished run. Every
 //! message line carries [`FRAME`], so anything a native library prints to
@@ -21,7 +21,7 @@
 //! too, and its last lines explain a process that died.
 //!
 //! The app does not take the process's word for a schedule: each one is
-//! replayed again on the app's side (see [`ScipCompletion::from_report`]).
+//! replayed again on the app's side (see [`ScheduleCompletion::from_report`]).
 //!
 //! # Stopping
 //!
@@ -43,7 +43,8 @@ use std::{
 
 use super::{
     jobs::CancelFlag,
-    scip_blend::{ReportedCompletion, ScipActivity, ScipCompletion, ScipRunIdentity, ScipSolveOptions, ScipTermination, execute_scip_blend},
+    schedule_solve::{ScheduleActivity, ScheduleCompletion, ScheduleRunIdentity, ScheduleSolveOptions, SolveTermination, execute_schedule},
+    scip_blend::ReportedCompletion,
 };
 use crate::{i18n::tr, model::schedule::optimisation::blended::input::BlendInput};
 
@@ -70,8 +71,8 @@ const STDERR_TAIL: usize = 12;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request<I> {
-    identity: ScipRunIdentity,
-    options: ScipSolveOptions,
+    identity: ScheduleRunIdentity,
+    options: ScheduleSolveOptions,
     input: I,
 }
 
@@ -92,14 +93,20 @@ pub(crate) fn is_solver_invocation() -> bool {
     std::env::args_os().nth(1).as_deref() == Some(OsStr::new(SOLVER_FLAG))
 }
 
-/// Solve in a solver process, with [`execute_scip_blend`]'s contract: the
+/// Solve in a solver process, with [`execute_schedule`]'s contract: the
 /// same completion, and `early` called at most once with a usable
 /// day-by-day schedule. Returns once the run has finished, failed or been
 /// cancelled; the process is gone by then.
-pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: ScipSolveOptions, cancel: &CancelFlag, early: &dyn Fn(&ScipCompletion)) -> ScipCompletion {
+pub(crate) fn solve(
+    input: Arc<BlendInput>,
+    identity: ScheduleRunIdentity,
+    options: ScheduleSolveOptions,
+    cancel: &CancelFlag,
+    early: &dyn Fn(&ScheduleCompletion),
+) -> ScheduleCompletion {
     let run_id = identity.run_id;
-    let failed = |termination: ScipTermination, diagnostic: String| {
-        let mut out = ScipCompletion::new(identity, options, Arc::clone(&input));
+    let failed = |termination: SolveTermination, diagnostic: String| {
+        let mut out = ScheduleCompletion::new(identity, options, Arc::clone(&input));
         out.stop(termination, diagnostic);
         out
     };
@@ -107,7 +114,7 @@ pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: 
         Ok(process) => process,
         Err(error) => {
             log::error!("schedule run {run_id}: the solver process did not start: {error}");
-            return failed(ScipTermination::BackendFailure, tr!("schedule-solver-not-started", reason = error.to_string()));
+            return failed(SolveTermination::BackendFailure, tr!("schedule-solver-not-started", reason = error.to_string()));
         }
     };
     log::info!("schedule run {run_id}: solving in process {}", process.child.id());
@@ -124,7 +131,7 @@ pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: 
         loop {
             if cancel.is_cancelled() {
                 process.kill();
-                return failed(ScipTermination::Cancelled, "cancelled while the solver process ran".into());
+                return failed(SolveTermination::Cancelled, "cancelled while the solver process ran".into());
             }
             match process.messages.recv_timeout(POLL) {
                 Ok(Message::Log { level, target, text }) => {
@@ -132,7 +139,7 @@ pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: 
                     log::log!(target: &target, level, "{text}");
                 }
                 Ok(Message::Early(report)) => {
-                    let shown = ScipCompletion::from_report(identity, options, Arc::clone(&input), *report, cancel);
+                    let shown = ScheduleCompletion::from_report(identity, options, Arc::clone(&input), *report, cancel);
                     if shown.usable() {
                         early(&shown);
                     } else {
@@ -151,8 +158,8 @@ pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: 
 
     let status = process.finish(answer.is_some());
     match answer {
-        Some(report) => ScipCompletion::from_report(identity, options, input, *report, cancel),
-        None if cancel.is_cancelled() => failed(ScipTermination::Cancelled, "cancelled while the solver process ran".into()),
+        Some(report) => ScheduleCompletion::from_report(identity, options, input, *report, cancel),
+        None if cancel.is_cancelled() => failed(SolveTermination::Cancelled, "cancelled while the solver process ran".into()),
         None => {
             let tail = process.stderr_tail();
             let ended = status.map_or_else(|| "still running; killed".to_owned(), describe_exit);
@@ -163,7 +170,7 @@ pub(crate) fn solve(input: Arc<BlendInput>, identity: ScipRunIdentity, options: 
             for line in &tail {
                 log::error!("schedule run {run_id}: solver process: {line}");
             }
-            failed(ScipTermination::BackendFailure, tr!("schedule-solver-crashed", status = ended))
+            failed(SolveTermination::BackendFailure, tr!("schedule-solver-crashed", status = ended))
         }
     }
 }
@@ -357,8 +364,8 @@ pub(crate) fn run_solver() -> i32 {
         std::process::abort();
     });
 
-    let early = |completion: &ScipCompletion| send(&output, &Message::Early(Box::new(completion.report())));
-    let completion = execute_scip_blend(Arc::new(request.input), request.identity, request.options, &cancel, &ScipActivity::default(), &early);
+    let early = |completion: &ScheduleCompletion| send(&output, &Message::Early(Box::new(completion.report())));
+    let completion = execute_schedule(Arc::new(request.input), request.identity, request.options, &cancel, &ScheduleActivity::default(), &early);
     send(&output, &Message::Done(Box::new(completion.report())));
     0
 }

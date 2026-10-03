@@ -114,7 +114,6 @@ pub(crate) struct PendingScheduleRun {
 
 /// Why the last attempt published nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "produced by the native schedule run; the browser build does not calculate"))]
 pub(crate) enum AttemptOutcome {
     /// The project could not be resolved into a model.
     Refused,
@@ -139,7 +138,6 @@ pub(crate) struct ScheduleAttempt {
 }
 
 /// What the worker hands back.
-#[cfg(not(target_arch = "wasm32"))]
 enum RunOutcome {
     Published(Arc<CalculatedSchedule>),
     NotPublished {
@@ -366,23 +364,11 @@ impl crate::app::App<'_> {
     /// is refused with the reason rather than by a dead button: the button is
     /// what the user pressed, and it has to answer.
     pub(crate) fn start_schedule_run(&mut self, mode: ScheduleRunMode) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = mode;
-            crate::userspace_warn!("{}", tr!("schedule-run-desktop-only"));
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.start_native_schedule_run(mode);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn start_native_schedule_run(&mut self, mode: ScheduleRunMode) {
         use super::{
             commands::schedule_capture,
             jobs::JobKey,
             schedule_publish::{PublishMeta, publish},
-            scip_blend::{ScipRunIdentity, ScipSolveOptions},
-            solver_process,
+            schedule_solve::{ScheduleRunIdentity, ScheduleSolveOptions},
         };
 
         let auto = mode == ScheduleRunMode::Auto;
@@ -438,7 +424,7 @@ impl crate::app::App<'_> {
         let document_revision = project.project.document.revision();
         let options = {
             let settings = project.project.document.schedule().experiment();
-            ScipSolveOptions {
+            ScheduleSolveOptions {
                 time_limit: Some(std::time::Duration::from_secs_f64(settings.solve_seconds)),
                 relative_gap: Some(settings.relative_gap),
                 // Developer aid: SCIP's own progress log on stdout.
@@ -466,7 +452,7 @@ impl crate::app::App<'_> {
             early: early_slot,
             showing_early: false,
         });
-        let identity = ScipRunIdentity {
+        let identity = ScheduleRunIdentity {
             run_id: serial,
             inputs,
             plan_revision,
@@ -500,7 +486,7 @@ impl crate::app::App<'_> {
                 if capture.stats.event_budget_restricted {
                     notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
                 }
-                let publish_completion = |completion: &super::scip_blend::ScipCompletion| {
+                let publish_completion = |completion: &super::schedule_solve::ScheduleCompletion| {
                     let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
                         return Err("the run holds no replayed schedule".to_owned());
                     };
@@ -520,7 +506,7 @@ impl crate::app::App<'_> {
                     };
                     publish(&input, solution, replay, &capture.identities, meta, cancel)
                 };
-                let early = |completion: &super::scip_blend::ScipCompletion| {
+                let early = |completion: &super::schedule_solve::ScheduleCompletion| {
                     if !completion.usable() {
                         return;
                     }
@@ -537,7 +523,14 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                let completion = solver_process::solve(Arc::clone(&input), identity, options, cancel, &early);
+                // SCIP and the libraries under it are native code, and a fault
+                // in them would take the app down with it, so a build with
+                // Improve runs every solve in a solver process. Without it the
+                // run is the hourly dispatch alone, and runs here.
+                #[cfg(feature = "scip")]
+                let completion = super::solver_process::solve(Arc::clone(&input), identity, options, cancel, &early);
+                #[cfg(not(feature = "scip"))]
+                let completion = super::schedule_solve::execute_schedule(Arc::clone(&input), identity, options, cancel, &Default::default(), &early);
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }
@@ -629,12 +622,7 @@ impl crate::app::App<'_> {
     /// something changes.
     pub(crate) fn auto_recalculate_schedule(&mut self) {
         self.schedule_auto_deadline = None;
-        if cfg!(target_arch = "wasm32")
-            || !self.editor.schedule_auto_recalculate
-            || self.workspace.active_project().is_none()
-            || self.pending_schedule_run.is_some()
-            || self.schedule_calculation_is_current()
-        {
+        if !self.editor.schedule_auto_recalculate || self.workspace.active_project().is_none() || self.pending_schedule_run.is_some() || self.schedule_calculation_is_current() {
             self.schedule_auto_settle = None;
             return;
         }
@@ -825,7 +813,7 @@ impl crate::app::App<'_> {
                 .filter(|bar| bar.agent.is_some())
                 .all(|bar| bar.dig_order().is_some_and(|order| order.members().is_empty()) || bar.delay().is_some())
             && bars.iter().any(|bar| bar.agent.is_some() && bar.dig_order().is_some());
-        let starting = !cfg!(target_arch = "wasm32") && self.schedule_run_blocker().is_none();
+        let starting = self.schedule_run_blocker().is_none();
         let status = match (running, attempt, held_status) {
             _ if recalculating => tr!("schedule-run-updating"),
             (None, _, None) if no_assigned_bars && starting => tr!("schedule-run-no-bars"),
@@ -839,17 +827,11 @@ impl crate::app::App<'_> {
             }
             (None, Some(attempt), None) => attempt_headline(attempt),
             (None, _, Some(held)) => held,
-            (None, _, None) => {
-                if cfg!(target_arch = "wasm32") {
-                    tr!("schedule-run-desktop-only")
-                } else {
-                    match self.schedule_run_blocker() {
-                        None => tr!("schedule-run-never"),
-                        Some(ScheduleNotReady::NotRun(ScheduleStep::Readiness)) => tr!("schedule-run-needs-solids"),
-                        Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
-                    }
-                }
-            }
+            (None, _, None) => match self.schedule_run_blocker() {
+                None => tr!("schedule-run-never"),
+                Some(ScheduleNotReady::NotRun(ScheduleStep::Readiness)) => tr!("schedule-run-needs-solids"),
+                Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
+            },
         };
         let mut details = Vec::new();
         if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial)) {
@@ -903,16 +885,15 @@ impl crate::app::App<'_> {
 }
 
 /// Translate a finished solve that produced nothing publishable.
-#[cfg(not(target_arch = "wasm32"))]
-fn not_published(completion: &super::scip_blend::ScipCompletion) -> RunOutcome {
-    use super::scip_blend::ScipTermination;
+fn not_published(completion: &super::schedule_solve::ScheduleCompletion) -> RunOutcome {
+    use super::schedule_solve::SolveTermination;
 
     let outcome = match completion.termination {
-        ScipTermination::LimitNoIncumbent => AttemptOutcome::NoSolution,
-        ScipTermination::Infeasible => AttemptOutcome::Infeasible,
-        ScipTermination::Cancelled => AttemptOutcome::Cancelled,
-        ScipTermination::InvalidInput => AttemptOutcome::Refused,
-        ScipTermination::Optimal | ScipTermination::FeasibleLimit | ScipTermination::Unbounded | ScipTermination::ValidationFailure | ScipTermination::BackendFailure => {
+        SolveTermination::LimitNoIncumbent => AttemptOutcome::NoSolution,
+        SolveTermination::Infeasible => AttemptOutcome::Infeasible,
+        SolveTermination::Cancelled => AttemptOutcome::Cancelled,
+        SolveTermination::InvalidInput => AttemptOutcome::Refused,
+        SolveTermination::Optimal | SolveTermination::FeasibleLimit | SolveTermination::Unbounded | SolveTermination::ValidationFailure | SolveTermination::BackendFailure => {
             AttemptOutcome::Failed
         }
     };
@@ -921,7 +902,7 @@ fn not_published(completion: &super::scip_blend::ScipCompletion) -> RunOutcome {
         if let Some(reason) = completion.diagnostic.as_ref() {
             messages.push(reason.clone());
         }
-        if completion.termination == ScipTermination::LimitNoIncumbent && completion.diagnostics.presolved_variables.is_some() && !completion.diagnostics.root_node_finished {
+        if completion.termination == SolveTermination::LimitNoIncumbent && completion.diagnostics.presolved_variables.is_some() && !completion.diagnostics.root_node_finished {
             messages.push(if completion.diagnostics.root_initial_lp_s.is_some() {
                 tr!("schedule-detail-root-unfinished")
             } else {

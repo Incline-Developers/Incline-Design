@@ -8,7 +8,7 @@
 //! That is not defensive ceremony. On the exact constraint class this module
 //! investigates, SCIP 10.0.2 was observed reporting a suboptimal answer as
 //! `Optimal` with a matching dual bound and a zero gap (see
-//! [`super::super::scip::adapter::SolveTuning::apply`]). A backend's own verdict is
+//! `offer_seed` in `app/scip_blend.rs`). A backend's own verdict is
 //! evidence, not proof.
 //!
 //! The blended grade is recomputed here by *division* - `Q / T` on the
@@ -97,12 +97,14 @@ pub(crate) struct ExtractionAdjustments {
 }
 
 impl ExtractionAdjustments {
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn movement(&mut self, tonnes: f64) {
         self.movement_count += 1;
         self.movement_total_t += tonnes.abs();
         self.movement_max_t = self.movement_max_t.max(tonnes.abs());
     }
 
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn chunk_receipt(&mut self, tonnes: f64) {
         self.chunk_receipt_count += 1;
         self.chunk_receipt_total_t += tonnes.abs();
@@ -156,7 +158,7 @@ pub(crate) struct ReplayReport {
     pub(crate) objective_difference: f64,
     /// Material delivered below a grade boundary by an amount small enough to
     /// be explained by the formulation's own indicator tolerance (see
-    /// [`INDICATOR_LEAK`]). Published rather than discarded: it is a
+    /// [`indicator_leak`]). Published rather than discarded: it is a
     /// quantified modelling artefact, not a clean result.
     pub(crate) negligible_grade_deliveries: usize,
     pub(crate) negligible_grade_tonnes_t: f64,
@@ -228,12 +230,6 @@ impl ReplayReport {
     /// Publishable: every physical *and* grade check passed.
     pub(crate) fn is_valid(&self) -> bool {
         self.issues.is_empty() && self.grade_issues.is_empty()
-    }
-
-    /// The timeline is physically replayable. It may still have been routed
-    /// against a grade it did not reach.
-    pub(crate) fn is_physically_valid(&self) -> bool {
-        self.issues.is_empty()
     }
 }
 
@@ -312,11 +308,6 @@ impl<'a> Checker<'a> {
             self.report.issues.push(format!("{label}: {used:.6} exceeds {limit:.6}"));
         }
     }
-}
-
-/// Replay `solution` against `input`.
-pub(crate) fn replay(input: &BlendInput, solution: &BlendSolution) -> ReplayReport {
-    replay_inner(input, solution, None).expect("replay without cancellation")
 }
 
 pub(crate) fn replay_cancellable(input: &BlendInput, solution: &BlendSolution, cancel: &AtomicBool) -> Option<ReplayReport> {

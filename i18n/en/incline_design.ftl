@@ -1519,7 +1519,6 @@ idle-no-trucks-note = Every truck class that can haul for this machine is fully 
 idle-not-worth-it = not worth moving
 idle-not-worth-it-note = Ground, room and trucks were all there, but moving the material was worth less than leaving it. Check the Cashflow values for this material and destination.
 schedule-run-needs-solids = Cannot run until the Solids pipeline has been run: the schedule digs the blocks it makes.
-schedule-run-desktop-only = Schedule calculation is currently available on desktop only.
 schedule-run-at-end = The schedule already reaches the planning end day (day { $day }). Use Run All Periods to recalculate it, or move the planning end.
 schedule-run-cancelled = Run { $run } was cancelled. The last calculated schedule is unchanged.
 schedule-run-superseded = The schedule changed while it was being calculated. That run was discarded; run it again.

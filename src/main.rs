@@ -37,6 +37,7 @@ pub(crate) const APP_RELEASE: &str = env!("CARGO_PKG_VERSION");
 fn main() -> Result<()> {
     // A schedule solve started by the app (see `app::solver_process`): no
     // window, no app state, and its own logging.
+    #[cfg(feature = "scip")]
     if app::solver_process::is_solver_invocation() {
         std::process::exit(app::solver_process::run_solver());
     }

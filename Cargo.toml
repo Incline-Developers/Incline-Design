@@ -24,27 +24,29 @@ exclude = [
 winresource = "0.1.31"
 
 [features]
-default = ["scip-bundled"]
-# Schedule calculation links SCIP on every native build; wasm never sees it
-# (the dependency is declared native-only below). Pick exactly one of the two
-# linking features:
+# The default build is pure Rust on every platform, the browser included:
+# the first schedule's hourly dispatch solves its linear programs with
+# microlp. Native builds can add:
 #
-#   scip-bundled  the supported default. russcip's `bundled` path downloads the
-#                 pinned scipoptsuite-deploy v0.12.0 build (SCIP 10.0.2, SoPlex
-#                 8.0.2) at build time and embeds an rpath to it, so `cargo run`
-#                 needs no SCIP install and no library path.
+#   highs         solve the dispatch with HiGHS instead (built from source by
+#                 highs-sys, so it needs cmake and a C++ compiler).
+#   scip          Improve: the whole-horizon SCIP solve, the day-by-day
+#                 fallback and the HiGHS relaxation bound, run in a solver
+#                 process. The relaxation bound links HiGHS whether or not
+#                 `highs` is on. Enable it through one of the two linking
+#                 features:
+#
+#   scip-source   build SCIP 10.0.2 and SoPlex 8.0.2 from source (cmake, a
+#                 C++ compiler and libclang) and link them statically, without
+#                 Ipopt. Licence notices: docs/scip-backend-notices.md.
 #   scip-system   link whatever SCIP the environment provides, through
-#                 russcip's `bindgen` path and $SCIPOPTDIR. Build it with
-#                 `--no-default-features --features scip-system`; the runtime
+#                 russcip's `bindgen` path and $SCIPOPTDIR; the runtime
 #                 library path must then reach that installation.
-#
-# Enabling both leaves `bundled` in charge, because scip-sys checks it first.
-scip-bundled = ["russcip/bundled"]
-scip-system = ["russcip/bindgen"]
-# Developer comparison only: the iterative fixed-grade HiGHS method for the
-# blended model, and the solver scenario and benchmark checks built on it.
-# Off by default and never reachable from Run Period or Run All Periods.
-blend-experiment = []
+default = []
+highs = ["dep:highs", "dep:highs-sys"]
+scip = ["dep:highs-sys", "dep:russcip", "dep:scip-sys"]
+scip-source = ["scip", "russcip/from-source"]
+scip-system = ["scip", "russcip/bindgen"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -64,6 +66,7 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.34"
 lyon = "1.0.19"
+microlp = "0.6.0"
 #mineflow = { path = "crates/mineflow" } # Crate is ready to be implemented
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
@@ -92,13 +95,12 @@ winit = "0.30.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
 egui-winit = "0.36.2"
-good_lp = { version = "1.15.0", default-features = false, features = ["highs"] }
-highs = "2.4.0"
-highs-sys = "1.15.0"
-russcip = { version = "=0.10.0", default-features = false }
+highs = { version = "2.4.0", optional = true }
+highs-sys = { version = "1.15.0", optional = true }
+russcip = { version = "=0.10.0", default-features = false, optional = true }
 # Not called directly: declared so its `links = "scip"` metadata reaches
 # build.rs, which puts SCIP's library directory on the binary's runtime path.
-scip-sys = { version = "=0.1.28", default-features = false }
+scip-sys = { version = "=0.1.28", default-features = false, optional = true }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
