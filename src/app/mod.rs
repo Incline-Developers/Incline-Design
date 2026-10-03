@@ -447,6 +447,16 @@ pub(crate) struct App<'a> {
     /// The Schedule Setup pipeline's state for the active project; see
     /// [`crate::app::schedule_pipeline`]. `None` until a project is open.
     pub(crate) schedule_pipeline: Option<crate::app::schedule_pipeline::SchedulePipeline>,
+    /// The step a Run Step started from, so the step list moves on to the
+    /// next one once it succeeds. Cleared when that step settles either way.
+    pub(crate) planning_advance_after: Option<crate::ui::state::SolidsStep>,
+    pub(crate) schedule_advance_after: Option<crate::ui::state::ScheduleStep>,
+    /// Set on opening a cut step, until it has picked ground to open on or
+    /// found the user already had some.
+    pub(crate) planning_entry_pending: bool,
+    /// The cut step last opened - `Some(true)` for Dig Strips - so moving
+    /// between Blasting and Dig Strips picks ground for the new one too.
+    pub(crate) planning_entry_step: Option<bool>,
     /// What the last accepted Run Period or Run All Periods calculated. Kept
     /// across edits and failed runs - an edit marks it stale, nothing but a
     /// newer accepted run or the project closing replaces it - so the pages
@@ -624,6 +634,10 @@ impl<'a> Default for App<'a> {
             dig_block_identities: Default::default(),
             planning_pipeline: None,
             schedule_pipeline: None,
+            planning_advance_after: None,
+            schedule_advance_after: None,
+            planning_entry_pending: false,
+            planning_entry_step: None,
             schedule_calculation: None,
             pending_schedule_run: None,
             schedule_run_diagnostics: None,

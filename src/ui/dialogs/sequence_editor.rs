@@ -360,50 +360,11 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     changed |= editor.solid_preview_size_px != size_px;
     editor.solid_preview_size_px = size_px;
 
-    // The main viewport's own mapping, which the Solids View page also uses:
-    // middle drag pans, right drag orbits, and left click selects without ever
-    // moving the camera.
-    let delta = response.drag_delta() * pixels_per_point;
-    if delta != egui::Vec2::ZERO {
-        let delta = [f64::from(delta.x), f64::from(delta.y)];
-        if response.dragged_by(egui::PointerButton::Middle) {
-            draft.view.pan_by_pixels(delta, f64::from(size_px[1]));
-            changed = true;
-        } else if response.dragged_by(egui::PointerButton::Secondary) {
-            draft.view.orbit_by_pixels(delta, f64::from(size_px[1]));
-            changed = true;
-        }
-    }
-    if response.hovered() || response.dragged() {
-        ui.ctx().set_cursor_icon(if response.dragged() {
-            egui::CursorIcon::Grabbing
-        } else {
-            egui::CursorIcon::PointingHand
-        });
-    }
-    // Hovering survives the inert sense above, so the wheel is gated here:
-    // a scroll behind the discard question must not move the camera of a
-    // draft the user is being asked whether to keep.
-    if response.hovered() && !confirming {
-        let scroll = ui.input(|input| {
-            input
-                .events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                        egui::MouseWheelUnit::Point => f64::from(delta.y * pixels_per_point),
-                        egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
-                        egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(size_px[1]),
-                    }),
-                    _ => None,
-                })
-                .sum::<f64>()
-        });
-        if scroll != 0.0 {
-            draft.view.zoom_by_scroll(scroll);
-            changed = true;
-        }
-    }
+    // The main viewport's own mapping, which the Solids pages also use:
+    // middle drag pans, right drag orbits about the ground under the pointer,
+    // and left click selects without ever moving the camera. While the
+    // discard question is up the camera of the draft being asked about stays put.
+    changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut draft.view, editor, !confirming);
     // A left press picks the block under it, and a left drag keeps picking as
     // it travels: one stroke takes every block it crosses. Which blocks those
     // may be is not decided here - the pane knows where the pointer is, and

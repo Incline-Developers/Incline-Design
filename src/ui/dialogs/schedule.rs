@@ -715,36 +715,7 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
         editor.solid_preview_size_px = size;
         ui.ctx().request_repaint();
     }
-    let delta = response.drag_delta() * scale;
-    if delta != egui::Vec2::ZERO {
-        if response.dragged_by(egui::PointerButton::Middle) {
-            draft.view.pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], f64::from(size[1]));
-        }
-        if response.dragged_by(egui::PointerButton::Secondary) {
-            draft.view.orbit_by_pixels([f64::from(delta.x), f64::from(delta.y)], f64::from(size[1]));
-        }
-        ui.ctx().request_repaint();
-    }
-    if response.hovered() {
-        let scroll = ui.input(|input| {
-            input
-                .events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                        egui::MouseWheelUnit::Point => f64::from(delta.y * scale),
-                        egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
-                        egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(size[1]),
-                    }),
-                    _ => None,
-                })
-                .sum::<f64>()
-        });
-        if scroll != 0.0 {
-            draft.view.zoom_by_scroll(scroll);
-            ui.ctx().request_repaint();
-        }
-    }
+    crate::ui::widgets::preview_navigation::navigate(ui, &response, rect, &mut draft.view, editor, true);
     if ready
         && response.clicked()
         && let Some(pointer) = response.interact_pointer_pos()

@@ -243,6 +243,8 @@ impl<'a> App<'a> {
         };
         open_model.ensure_color_transfer_for_active_variable();
         self.block_models.push(open_model);
+        // A project open replaces this with the file's own mapping.
+        self.auto_map_reserve_columns(Some(id));
         self.touch_active_project_content();
         if should_fit {
             self.fit_view_to_extents();

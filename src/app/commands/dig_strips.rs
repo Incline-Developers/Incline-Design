@@ -129,7 +129,26 @@ impl crate::app::App<'_> {
                     };
                     let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
                     let faces = dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), bench_cuts);
+                    // The bench's blasts, as Blasting named them, so each block
+                    // can be listed under the blast it lies in.
+                    let blasts: Vec<(&str, Vec<Vec<DVec2>>)> = self
+                        .editor
+                        .blasting_outlines
+                        .iter()
+                        .filter(|outline| outline.solid == solid.id && (outline.bench_base - bench.base).abs() < 1e-6)
+                        .map(|outline| {
+                            (
+                                outline.name.as_str(),
+                                outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect(),
+                            )
+                        })
+                        .collect();
+                    let first = outlines.len();
                     for (index, (face, anchor)) in faces.into_iter().enumerate() {
+                        let blast = blasts
+                            .iter()
+                            .find(|(_, rings)| arrangement::point_in_face(rings, anchor))
+                            .map(|(name, _)| (*name).to_owned());
                         let area = face
                             .iter()
                             .enumerate()
@@ -142,12 +161,22 @@ impl crate::app::App<'_> {
                             name: (index + 1).to_string(),
                             anchor: anchor.to_array(),
                             area,
+                            blast,
                             rings: face
                                 .into_iter()
                                 .map(|ring| ring.into_iter().map(|p| DVec3::new(p.x, p.y, flitch.top())).collect())
                                 .collect(),
                         });
                     }
+                    // Grouped by blast, numbered blasts in number order, as the
+                    // panel nests them.
+                    let number = |name: Option<&str>| name.and_then(|name| name.parse::<u64>().ok()).unwrap_or(u64::MAX);
+                    outlines[first..].sort_by(|a, b| {
+                        number(a.blast.as_deref())
+                            .cmp(&number(b.blast.as_deref()))
+                            .then_with(|| a.blast.cmp(&b.blast))
+                            .then_with(|| number(Some(&a.name)).cmp(&number(Some(&b.name))))
+                    });
                 }
             }
         }

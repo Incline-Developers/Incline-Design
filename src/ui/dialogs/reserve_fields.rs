@@ -36,13 +36,13 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
         .min_width(300.0)
         .show(ui.ctx(), |ui| {
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_reserve_field_name)
-                .hint_text(tr!("dialog-rename-field-hint"))
+                .hint_text(tr!("reserve-field-name-hint"))
                 .show(ui);
             const KINDS: [ReserveFieldKind; 3] = [ReserveFieldKind::Sum, ReserveFieldKind::WeightedAverage, ReserveFieldKind::Category];
             let selected_kind_text = kind_label(editor.new_reserve_field_kind);
             MenuFieldCombo::new(
                 "new_reserve_field_kind",
-                tr!("destination-type"),
+                tr!("planning-combines-as"),
                 &mut editor.new_reserve_field_kind,
                 selected_kind_text,
                 KINDS.into_iter().map(|kind| (kind, kind_label(kind).into())),
@@ -53,7 +53,14 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 .iter()
                 .filter(|field| matches!(field.aggregation, ReserveAggregation::Sum))
                 .collect();
-            if editor.new_reserve_field_kind == ReserveFieldKind::WeightedAverage {
+            let note = match editor.new_reserve_field_kind {
+                ReserveFieldKind::Sum => tr!("reserve-kind-sum-note"),
+                ReserveFieldKind::WeightedAverage if sum_fields.is_empty() => tr!("reserve-kind-average-needs-sum"),
+                ReserveFieldKind::WeightedAverage => tr!("reserve-kind-average-note"),
+                ReserveFieldKind::Category => tr!("reserve-kind-category-note"),
+            };
+            menu::menu_note(ui, note);
+            if editor.new_reserve_field_kind == ReserveFieldKind::WeightedAverage && !sum_fields.is_empty() {
                 if editor.new_reserve_field_weight_field.is_none_or(|id| !sum_fields.iter().any(|field| field.id == id)) {
                     editor.new_reserve_field_weight_field = sum_fields.first().map(|field| field.id);
                 }

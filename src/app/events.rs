@@ -255,6 +255,7 @@ impl<'a> App<'a> {
                     self.sync_planning_pipeline();
                     self.auto_run_planning();
                     self.auto_recalculate_schedule();
+                    self.pick_entry_ground();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
                     self.sync_reserve_setup_stats();

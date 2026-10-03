@@ -1576,6 +1576,11 @@ impl<'a> Graphics<'a> {
         self.orbit_marker = None;
     }
 
+    /// Whether a [`Self::set_view_direction`] swing is still under way.
+    pub(crate) fn view_transition_running(&self) -> bool {
+        self.camera_controller.has_view_transition()
+    }
+
     pub(crate) fn camera_orientation(&self) -> (DVec3, DVec3) {
         (self.camera.forward(), self.camera.up())
     }

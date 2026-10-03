@@ -391,6 +391,11 @@ impl ViewSolid {
         self.envelope.product().is_some()
     }
 
+    /// The built solid, once the Solids stage has made it.
+    pub(crate) fn envelope(&self) -> Option<&OpenTriangulation> {
+        self.envelope.product().map(Arc::as_ref)
+    }
+
     pub(crate) fn blast_faces(&self) -> Option<&[BlastFace]> {
         self.blasting.product().map(|blasting| blasting.blast_faces.as_slice())
     }
@@ -2242,8 +2247,6 @@ pub(crate) struct DigBlockRecord {
     /// `None` when the block did not come out closed, so it has no volume
     /// rather than a volume of zero.
     pub(crate) volume: Option<f64>,
-    /// Identities this block's ground was previously held under.
-    pub(crate) replaces: Vec<DigBlockId>,
     /// What is known about the material in this block. Deliberately not an
     /// `Option`: "no block model by design" and "the reserve run has not
     /// finished" are different answers, and a scheduler must not read either
@@ -2359,7 +2362,6 @@ impl crate::app::App<'_> {
                     ground: block.face.clone(),
                     anchor: block.key.anchor(),
                     volume: part.volume,
-                    replaces: block.replaces.clone(),
                     portions: cache
                         .reserves
                         .product()

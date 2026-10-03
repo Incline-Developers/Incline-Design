@@ -13,10 +13,112 @@ impl crate::app::App<'_> {
             return;
         };
         let name = crate::model::project::unique_item_name(name, document.reserve_fields().iter().map(|field| field.name.as_str()));
-        document.add_reserve_field(name, aggregation);
+        let field = document.add_reserve_field(name, aggregation);
+        self.drop_stale_reserve_mappings(field);
+        self.auto_map_reserve_columns(None);
         self.touch_active_project_content();
         self.recompute_all_reserve_totals();
         self.invalidate_geometry();
+    }
+
+    /// Map each field that a block model has not mapped onto that model's
+    /// column of the same name, when the column is the field's kind: a
+    /// category for a Category field, a number otherwise. A field already
+    /// mapped, to anything, is left alone. `only` limits it to one model.
+    pub(crate) fn auto_map_reserve_columns(&mut self, only: Option<BlockModelId>) {
+        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource};
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let fields: Vec<_> = document
+            .reserve_fields()
+            .iter()
+            .map(|field| (field.id, field.name.clone(), field.aggregation == ReserveAggregation::Category))
+            .collect();
+        for model in self.block_models.iter_mut().filter(|model| only.is_none_or(|id| model.id == id)) {
+            let numeric: Vec<_> = model.model.numeric_variables().into_iter().map(|variable| variable.name.clone()).collect();
+            let categorical: Vec<_> = model.model.categorical_variables().into_iter().map(|variable| variable.name.clone()).collect();
+            let mut mapped = false;
+            for (field, name, is_category) in &fields {
+                let columns = if *is_category { &categorical } else { &numeric };
+                if model.reserve_mapping.iter().any(|mapping| mapping.field == *field) || !columns.contains(name) {
+                    continue;
+                }
+                model.reserve_mapping.push(ReserveFieldMapping {
+                    field: *field,
+                    source: ReserveMappingSource::Column(name.clone()),
+                });
+                mapped = true;
+            }
+            if mapped {
+                model.state.touch();
+                clear_reserve_totals(model);
+            }
+        }
+    }
+
+    /// Add a field named after a block model column, and map it onto the
+    /// column of that name in every block model that has one.
+    ///
+    /// A category column becomes a Category field. A number is summed when its
+    /// name says it is a quantity - tonnes, volume, mass, metal - and is
+    /// otherwise a grade, averaged by the Sum field most likely to be tonnes.
+    /// The Field List can change that afterwards.
+    pub(crate) fn add_reserve_field_from_column(&mut self, column: String, categorical: bool) {
+        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource};
+        let Some(document) = self.workspace.active_document_mut() else {
+            return;
+        };
+        let aggregation = if categorical {
+            ReserveAggregation::Category
+        } else {
+            column_aggregation(&column, document.reserve_fields())
+        };
+        let name = crate::model::project::unique_item_name(column.clone(), document.reserve_fields().iter().map(|field| field.name.as_str()));
+        let field = document.add_reserve_field(name, aggregation);
+        self.drop_stale_reserve_mappings(field);
+        for model in &mut self.block_models {
+            let variables = if categorical {
+                model.model.categorical_variables()
+            } else {
+                model.model.numeric_variables()
+            };
+            if variables.iter().any(|variable| variable.name == column) {
+                model.reserve_mapping.push(ReserveFieldMapping {
+                    field,
+                    source: ReserveMappingSource::Column(column.clone()),
+                });
+                model.state.touch();
+            }
+        }
+        self.touch_active_project_content();
+        self.recompute_all_reserve_totals();
+        self.invalidate_geometry();
+    }
+
+    /// Clear any block model mapping already naming a just-created field's
+    /// id. A new field has no mappings; one that does is left over from a
+    /// field that was removed outside the Field List, and would otherwise be
+    /// read as this field's.
+    fn drop_stale_reserve_mappings(&mut self, field: ReserveFieldId) {
+        for model in &mut self.block_models {
+            let before = model.reserve_mapping.len();
+            model.reserve_mapping.retain(|mapping| mapping.field != field);
+            if model.reserve_mapping.len() != before {
+                model.state.touch();
+            }
+        }
+    }
+
+    pub(crate) fn set_reserve_field_aggregation(&mut self, id: ReserveFieldId, aggregation: ReserveAggregation) {
+        let Some(document) = self.workspace.active_document_mut() else {
+            return;
+        };
+        if document.set_reserve_field_aggregation(id, aggregation) {
+            self.touch_active_project_content();
+            self.recompute_all_reserve_totals();
+            self.invalidate_geometry();
+        }
     }
 
     pub(crate) fn rename_reserve_field(&mut self, id: ReserveFieldId, new_name: String) {
@@ -25,6 +127,7 @@ impl crate::app::App<'_> {
         };
         let new_name = crate::model::project::unique_item_name(new_name, document.reserve_fields().iter().filter(|field| field.id != id).map(|field| field.name.as_str()));
         document.rename_reserve_field(id, new_name);
+        self.auto_map_reserve_columns(None);
         self.touch_active_project_content();
         self.invalidate_geometry();
     }
@@ -258,4 +361,19 @@ fn clear_reserve_totals(model: &mut crate::model::block_model::OpenBlockModel) {
     model.reserve_totals_awaiting_restore = false;
     model.reserve_totals_error = None;
     model.reserve_totals_error_key = None;
+}
+
+/// How a numeric column added straight to the Field List combines. See
+/// [`crate::app::App::add_reserve_field_from_column`].
+fn column_aggregation(column: &str, fields: &[crate::model::ReserveField]) -> ReserveAggregation {
+    const QUANTITIES: [&str; 5] = ["ton", "volume", "vol_", "mass", "metal"];
+    let lower = column.to_lowercase();
+    if QUANTITIES.iter().any(|word| lower.contains(word)) || lower == "vol" || lower == "t" {
+        return ReserveAggregation::Sum;
+    }
+    let sums = || fields.iter().filter(|field| field.aggregation == ReserveAggregation::Sum);
+    match sums().find(|field| field.name.to_lowercase().contains("ton")).or_else(|| sums().next()) {
+        Some(weight) => ReserveAggregation::WeightedAverage { weight_field: weight.id },
+        None => ReserveAggregation::Sum,
+    }
 }

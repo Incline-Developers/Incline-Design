@@ -165,23 +165,6 @@ impl EditorState {
         }
     }
 
-    /// The one bench the Blasting step is working on, if the selection names
-    /// exactly one.
-    ///
-    /// Drawing a cut needs a single bench to draw it on: a cut line belongs to
-    /// one bench's layer, and its RL is the elevation the tools place vertices
-    /// at. Selecting a whole solid, or several benches, is a way of looking at
-    /// the outlines rather than a way of editing them, so it arms nothing.
-    pub(crate) fn blasting_bench(&self) -> Option<(crate::model::SolidId, BenchSelection)> {
-        if !self.is_blasting_step() {
-            return None;
-        }
-        match self.solids_view_selection.as_slice() {
-            [row] => row.band.filter(|band| !band.is_flitch).map(|band| (row.solid, band)),
-            _ => None,
-        }
-    }
-
     pub(crate) fn is_planning_viewport(&self) -> bool {
         self.active_workspace == Workspace::Planning
             && (!matches!(
@@ -532,6 +515,8 @@ pub(crate) struct BlastOutline {
     pub(crate) rings: Vec<Vec<glam::DVec3>>,
     /// Plan area, outer ring less its holes.
     pub(crate) area: f64,
+    /// The blast a dig block lies in, by name; `None` for a blast itself.
+    pub(crate) blast: Option<String>,
 }
 
 /// What the Blasting step borrows from the rest of the editor while it is
@@ -804,8 +789,11 @@ impl SolidPreviewView {
     /// Widest elevation either side of the horizon. Stopping short of
     /// straight down keeps the camera's up vector well defined.
     const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+    /// Room left round the mesh at a zoom of one: the image's half-height is
+    /// this many framing radii.
+    pub(crate) const FRAMING_MARGIN: f64 = 1.15;
 
-    pub(crate) fn orbit_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
+    fn orbit_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
         // A drag across the full frame is half a turn, so the whole solid can
         // be walked around without the pointer leaving the panel.
         let scale = std::f64::consts::PI / frame_height.max(1.0);
@@ -815,6 +803,41 @@ impl SolidPreviewView {
 
     pub(crate) fn zoom_by_scroll(&mut self, scroll: f64) {
         self.zoom_multiplier = (self.zoom_multiplier * (scroll / 400.0).exp()).clamp(0.1, 40.0);
+    }
+
+    /// Orbit as the main viewport does: about `pivot`, a point given in
+    /// framing radii from the mesh's centre, which holds its place on screen
+    /// while the view turns round it. Without one, about the framed centre.
+    pub(crate) fn orbit_about(&mut self, delta: [f64; 2], frame_height: f64, pivot: Option<glam::DVec3>) {
+        // Where the pivot sits on screen, in framing radii from the image's
+        // centre: its offset along the view's right and up axes, less the pan.
+        let held = pivot.map(|pivot| {
+            let (right, up) = self.screen_basis();
+            (pivot, [pivot.dot(right) - self.pan[0], pivot.dot(up) - self.pan[1]])
+        });
+        self.orbit_by_pixels(delta, frame_height);
+        if let Some((pivot, screen)) = held {
+            let (right, up) = self.screen_basis();
+            self.pan = [pivot.dot(right) - screen[0], pivot.dot(up) - screen[1]];
+        }
+    }
+
+    /// Zoom with the point under `anchor` held still, as the main viewport's
+    /// zoom towards the cursor does. `anchor` is the pointer's place in the
+    /// image, `0..1` across and down, and `aspect` the image's width over its
+    /// height.
+    pub(crate) fn zoom_at(&mut self, scroll: f64, anchor: [f64; 2], aspect: f64) {
+        // The pointer's offset from the image's centre, in framing radii:
+        // the image is `FRAMING_MARGIN / zoom` radii from its centre to its top.
+        let offset = |zoom: f64| {
+            let half_height = Self::FRAMING_MARGIN / zoom.max(0.05);
+            [(anchor[0] - 0.5) * 2.0 * half_height * aspect, (0.5 - anchor[1]) * 2.0 * half_height]
+        };
+        let before = offset(self.zoom_multiplier);
+        self.zoom_by_scroll(scroll);
+        let after = offset(self.zoom_multiplier);
+        self.pan[0] += before[0] - after[0];
+        self.pan[1] += before[1] - after[1];
     }
 
     /// Slide the view across the frame. The drag is divided by the zoom, so
@@ -2184,6 +2207,12 @@ pub(crate) struct EditorState {
     /// clicking empty space in the viewport does, which an
     /// `Option<TriangulationId>` could not express.
     pub(crate) solid_preview_pick_result: Option<SolidPreviewPickResult>,
+    /// Where a right-drag on the solid preview started, `0..1` across and
+    /// down the image, waiting for the renderer to find the ground under it.
+    pub(crate) solid_preview_pivot_request: Option<[f32; 2]>,
+    /// The point that drag orbits about, in framing radii from the mesh's
+    /// centre - see [`SolidPreviewView::orbit_about`].
+    pub(crate) solid_preview_pivot: Option<glam::DVec3>,
     /// The content revision of the image currently in the preview texture.
     /// Incremented by the renderer whenever it actually redraws to new content
     /// (geometry, surrounding scene or camera), so a click can name the exact
@@ -2208,6 +2237,12 @@ pub(crate) struct EditorState {
     /// The bench the active layer and working elevation were last pointed at,
     /// so they follow the selection without being reapplied every frame.
     pub(crate) blasting_bench_key: Option<u64>,
+    /// The bench or flitch a cut step is drawing on, named by its ground
+    /// path, for the viewport bar, which has no document to name it from.
+    pub(crate) planning_cut_name: Option<String>,
+    /// Open the Benches tree down to the selection on its next draw: set when
+    /// a cut step picks ground itself, which may be under closed rows.
+    pub(crate) solids_tree_reveal: bool,
     /// The six-stage pipeline's status, mirrored out of `App` each frame so
     /// the step tree can mark each step without reaching into the pipeline.
     /// Indexed by [`SolidsStep::index`].
@@ -2871,6 +2906,9 @@ pub(crate) struct EditorState {
     /// by default, like the schedule's: only the stale steps run, and an
     /// edit made meanwhile restarts them.
     pub(crate) planning_auto_run: bool,
+    /// Whether Blasting and Dig Strips name their blasts and dig blocks over
+    /// the viewport. On by default; one switch serves both steps.
+    pub(crate) planning_cut_labels: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
@@ -3793,6 +3831,8 @@ impl EditorState {
             selected_dig_block: None,
             solid_preview_pick: None,
             solid_preview_pick_result: None,
+            solid_preview_pivot_request: None,
+            solid_preview_pivot: None,
             solid_preview_image_revision: 0,
             selected_dig_block_info: None,
             dig_clipboard: Vec::new(),
@@ -3803,6 +3843,8 @@ impl EditorState {
             blasting_framed_key: None,
             blasting_restore: None,
             blasting_bench_key: None,
+            planning_cut_name: None,
+            solids_tree_reveal: false,
             planning_stages: Default::default(),
             planning_run_active: false,
             planning_snapshot_status: String::new(),
@@ -4143,6 +4185,7 @@ impl EditorState {
             schedule_run_improve: false,
             schedule_auto_recalculate: true,
             planning_auto_run: true,
+            planning_cut_labels: true,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden: SolidsVisibility::default(),
@@ -4827,6 +4870,17 @@ pub(crate) enum UiCommand {
         aggregation: crate::model::ReserveAggregation,
     },
     DeleteReserveField(crate::model::ReserveFieldId),
+    /// Add a field named after a block model column, mapped onto that column
+    /// in every block model that has one by that name.
+    AddReserveFieldFromColumn {
+        column: String,
+        categorical: bool,
+    },
+    /// Change how a field combines: summed, or averaged by a Sum field.
+    SetReserveFieldAggregation {
+        field: crate::model::ReserveFieldId,
+        aggregation: crate::model::ReserveAggregation,
+    },
     /// Map one block model's own column, or a constant, onto one Reserves
     /// field. `None` clears an existing mapping.
     SetReserveMapping {
@@ -4851,8 +4905,6 @@ pub(crate) enum UiCommand {
     ResetBlastName(BlastShapeRef),
     SelectBlast(Option<BlastShapeRef>),
     SelectDigBlock(BlastShapeRef),
-    CopyDigStrips,
-    PasteDigStrips,
     DeleteSolid(crate::model::SolidId),
     /// Add the solid currently being previewed to the project as a
     /// triangulation, so it can be rendered, edited and saved like any other.
@@ -5470,6 +5522,7 @@ impl UiCommand {
             | Self::RequestDeleteLayer(_)
             | Self::RequestDeleteItem(_)
             | Self::SetReserveMapping { .. }
+            | Self::SetReserveFieldAggregation { .. }
             | Self::SetReserveModelIncluded { .. }
             | Self::SetSolidsTopography { .. }
             | Self::UpdateSolid { .. }
@@ -5561,6 +5614,7 @@ impl UiCommand {
             Self::ExitWithoutSaving => report(tr!("common-exit-without-saving"), tr!("state-discarding-unsaved-changes")),
             Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
             Self::AddReserveField { name, .. } => report(tr!("reserve-add-field"), name.clone()),
+            Self::AddReserveFieldFromColumn { column, .. } => report(tr!("reserve-add-field"), column.clone()),
             Self::DeleteReserveField(id) => report(tr!("planning-delete-field"), format!("{id:?}")),
             Self::AddSolid { name, .. } => report(tr!("solids-add-solid"), name.clone()),
             // The fleet editors report additions and deletions, which are
@@ -5712,7 +5766,7 @@ impl UiCommand {
                 | ScheduleEdit::SetStockpileChunks { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!("planning-delete-solid"), format!("{id:?}")),
-            Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
+            Self::SelectBlast(_) | Self::SelectDigBlock(_) => None,
             Self::ResetBlastName(blast) => report(tr!("planning-reset-blast-name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
             Self::SaveSolidPreviewToProject => report(tr!("planning-save-solid-project"), tr!("state-solids-preview")),
             Self::CreateFolder(section) => report(

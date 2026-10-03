@@ -70,15 +70,6 @@ impl StageState {
         matches!(self, Self::Queued | Self::Running)
     }
 
-    /// The icon the step tree marks this state with.
-    pub(crate) fn icon(self) -> &'static str {
-        match self {
-            Self::Complete => "step_complete.svg",
-            Self::Failed | Self::Blocked => "step_error.svg",
-            _ => "step_pending.svg",
-        }
-    }
-
     pub(crate) fn label(self) -> String {
         match self {
             Self::NotRun => tr!("stage-state-not-run"),
@@ -541,6 +532,24 @@ impl crate::app::App<'_> {
             Ok(snapshot) => tr!("planning-snapshot-ready", blocks = snapshot.blocks.len().to_string()),
             Err(reason) => reason.describe(),
         };
+        // Run Step moves the list on to the next step once the step it ran
+        // succeeds, so setup reads top to bottom. Only while the user is still
+        // looking at that step: having picked another, they have moved on.
+        if let Some(stage) = self.planning_advance_after {
+            match views[stage.index()].state {
+                StageState::Queued | StageState::Running => {}
+                state => {
+                    self.planning_advance_after = None;
+                    let next = SolidsStep::ALL.get(stage.index() + 1).copied();
+                    if let (StageState::Complete, Some(next)) = (state, next)
+                        && self.editor.planning_solids_step == stage
+                    {
+                        self.editor.planning_solids_step = next;
+                        self.redraw_requested = true;
+                    }
+                }
+            }
+        }
         if self.editor.planning_stages != views || self.editor.planning_run_active != running || self.editor.planning_snapshot_status != snapshot {
             self.editor.planning_stages = views;
             self.editor.planning_run_active = running;
@@ -684,19 +693,21 @@ impl crate::app::App<'_> {
     }
 
     /// Reset the pipeline and run from the first step through the selected step.
-    pub(crate) fn run_planning_stage(&mut self, stage: SolidsStep) {
+    /// Whether the run started.
+    pub(crate) fn run_planning_stage(&mut self, stage: SolidsStep) -> bool {
         self.sync_planning_pipeline();
         let Some(pipeline) = self.planning_pipeline.as_mut() else {
-            return;
+            return false;
         };
         if pipeline.is_running() {
-            return;
+            return false;
         }
         if !pipeline.restart_through(stage) {
-            return;
+            return false;
         }
         self.retry_failed_solid_requests();
         self.advance_planning_run();
+        true
     }
 
     /// Rerun the stale steps on their own once edits have settled, while the
@@ -946,8 +957,8 @@ impl crate::app::App<'_> {
             has_schema: self.workspace.active_document().is_some_and(|document| !document.reserve_fields().is_empty()),
         }
         .evaluate_geometry_stage(stage);
-        // Only the Dig Strips summary needs the app: it reports through the
-        // record API and reconciles against the bench measurements.
+        // Only Dig Strips needs the app: it reads the blocks through the
+        // record API and reconciles them against the bench measurements.
         match outcome {
             StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => {
                 let records = match self.planning_dig_blocks() {
@@ -958,28 +969,7 @@ impl crate::app::App<'_> {
                         return StageOutcome::Working { message: Some(reason.describe()) };
                     }
                 };
-                let measured: f64 = records.iter().filter_map(|record| record.volume).sum();
-                let unmeasured = records.iter().filter(|record| record.volume.is_none()).count();
-                let solid_count = records.iter().map(|record| record.solid).collect::<std::collections::HashSet<_>>().len();
                 diagnostics.extend(self.reconcile_dig_blocks(&records));
-                let relineaged = records.iter().filter(|record| !record.replaces.is_empty()).count();
-                if relineaged > 0 {
-                    diagnostics.push(StageDiagnostic {
-                        entity: None,
-                        message: tr!("stage-blocks-relineaged", count = relineaged.to_string()),
-                        blocking: false,
-                    });
-                }
-                crate::userspace_log!(
-                    "{}",
-                    tr!(
-                        "stage-dig-blocks-summary",
-                        blocks = records.len().to_string(),
-                        solids = solid_count.to_string(),
-                        volume = format!("{measured:.1}"),
-                        unmeasured = unmeasured.to_string()
-                    )
-                );
                 let _ = entities;
                 StageOutcome::Settled {
                     entities: records.len(),

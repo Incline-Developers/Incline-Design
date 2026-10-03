@@ -6,9 +6,9 @@
 //! model's own columns or constants onto the list, with the resulting
 //! totals.
 //!
-//! Schedule's Setup is the loader fleet, which lives in
-//! [`super::schedule_setup`]; this module supplies the panes it is arranged
-//! in. Haulage uses its dedicated Layout panel. The grids are the reusable
+//! Schedule's and Haulage's Setup steps live in [`super::schedule_setup`]
+//! and their own modules; this one supplies the step lists, run controls and
+//! the panes they are arranged in. The grids are the reusable
 //! [`data_grid`](crate::ui::widgets::data_grid) widgets.
 use thousands::Separable;
 
@@ -21,15 +21,18 @@ use crate::{
     ui::{
         EditorState, UiProjectView, chrome,
         dialogs::solids::{block_model_label, block_model_options, kind_label, triangulation_label, triangulation_options},
+        elements::solids_view::format_rl,
         fonts::bold,
         state::{PlanningPage, SolidsStep, UiCommand},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_choice_row, grid_color_row, grid_row, grid_separator_row, grid_value_row, property_table_height},
-            explorer::{ExplorerEntry, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            data_grid::{
+                CELL_WARNING_WIDTH, CellOption, DataGrid, GridRow, grid_add_action_row, grid_add_row, grid_cell_color, grid_cell_combo, grid_cell_fixed, grid_cell_number,
+                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height,
+            },
+            explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
-            menu::{MenuFieldCombo, MenuFieldF64, committed},
         },
     },
 };
@@ -59,14 +62,17 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
     use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
     let mut step = editor.haulage_setup_step;
     for entry in HaulageStep::ALL {
-        let state = match entry {
-            HaulageStep::Network => StageState::Complete,
-            HaulageStep::TruckClasses => editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()].state,
+        let (state, diagnostics) = match entry {
+            HaulageStep::Network => (StageState::Complete, &[][..]),
+            HaulageStep::TruckClasses => {
+                let status = &editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()];
+                (status.state, &status.diagnostics[..])
+            }
         };
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
             let mut response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
-                .leading_icon(step_icon(state), stage_tint(ui, state))
+                .leading_icon(StepBadge::of(state, diagnostics).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == entry)
                 .show(ui)
@@ -79,7 +85,6 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
                         status.state,
                         status.blocked_by.map(crate::ui::state::ScheduleStep::label),
                         status.message.as_deref(),
-                        status.last_success.as_ref(),
                         &status.diagnostics,
                     );
                 });
@@ -101,7 +106,7 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
             ui.horizontal(|ui| {
                 ui.add_space(ui.spacing().indent);
                 let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
-                    .leading_icon(step_icon(status.state), stage_tint(ui, status.state))
+                    .leading_icon(StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                     .header_aligned_icon()
                     .selected(step == entry)
                     .show(ui);
@@ -161,72 +166,63 @@ pub(crate) const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
 /// so it is a button rather than an alarm.
 pub(crate) const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
 
-/// Contents of the separate run-control island at the top of the sidebar.
-pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{app::planning_pipeline::StageState, ui::widgets::toolbar::ToolbarButton};
+/// What a run bar's buttons asked for this frame.
+enum RunAction {
+    Step,
+    All,
+    Cancel,
+}
 
-    // The icons are white line art, so the tint is the button's whole colour.
-    // A disabled run is dimmed rather than greyed: the colour still says which
-    // button it is while it waits for the run to finish.
-    let run_enabled = !editor.planning_run_active;
-    let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
+/// A pipeline's run buttons. Idle, Run Step (where the page has a step to run)
+/// and Run All; running, Stop alone in their place, so the one control that
+/// can act is the only one shown rather than sitting beside two dimmed ones.
+fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_step: bool) -> Option<RunAction> {
+    use crate::ui::widgets::toolbar::ToolbarButton;
 
     let side = ui.available_height();
+    let button = |icon: egui::ImageSource<'static>, tint: egui::Color32, tooltip: String, id: &'static str| {
+        ToolbarButton::new(egui::Image::new(icon).tint(tint), tooltip).button_side(side).id_salt((salt, id))
+    };
+    if running {
+        return ui
+            .add(button(unthemed_icon!("stop.svg"), CANCEL_TINT, tr!("stage-cancel"), "cancel"))
+            .clicked()
+            .then_some(RunAction::Cancel);
+    }
+    let mut action = None;
+    if run_step && ui.add(button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step")).clicked() {
+        action = Some(RunAction::Step);
+    }
+    if ui.add(button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all")).clicked() {
+        action = Some(RunAction::All);
+    }
+    action
+}
+
+/// Contents of the separate run-control island at the top of the sidebar.
+pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::app::planning_pipeline::StageState;
+
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let step = editor.planning_solids_step;
-        if !editor.is_solids_view()
-            && ui
-                .add_enabled(
-                    !editor.planning_run_active,
-                    ToolbarButton::new(
-                        egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, run_enabled)),
-                        tr!("stage-run-step"),
-                    )
-                    .button_side(side)
-                    .id_salt("planning_run_through"),
-                )
-                .clicked()
-        {
-            commands.push(UiCommand::RunPlanningStage(step));
+        match draw_run_buttons(ui, "planning_run", editor.planning_run_active, !editor.is_solids_view()) {
+            Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
+            Some(RunAction::All) => commands.push(UiCommand::RunAllPlanningStages),
+            Some(RunAction::Cancel) => commands.push(UiCommand::CancelPlanningRun),
+            None => {}
         }
-        if ui
-            .add_enabled(
-                !editor.planning_run_active,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, run_enabled)),
-                    tr!("stage-run-all"),
-                )
-                .button_side(side)
-                .id_salt("planning_run_all"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::RunAllPlanningStages);
-        }
-        if ui
-            .add_enabled(
-                editor.planning_run_active,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, editor.planning_run_active)),
-                    tr!("stage-cancel"),
-                )
-                .button_side(side)
-                .id_salt("planning_run_cancel"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::CancelPlanningRun);
-        }
-        ui.add_space(6.0);
-        ui.checkbox(&mut editor.planning_auto_run, tr!("planning-auto")).on_hover_text(tr!("planning-auto-note"));
+        ui.add_space(10.0);
+        ui.add(crate::ui::widgets::toggle::Toggle::new(&mut editor.planning_auto_run, tr!("planning-auto")))
+            .on_hover_text(tr!("planning-auto-note"));
         let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
         let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
         let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
         let status = &editor.planning_stages[reported.index()];
-        let label = tr!("stage-progress", done = completed, total = SolidsStep::ALL.len());
+        let label = tr!("stage-progress-short", done = completed, total = SolidsStep::ALL.len());
+        let fraction = completed as f32 / SolidsStep::ALL.len() as f32;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, completed as f32 / SolidsStep::ALL.len() as f32);
+            crate::ui::widgets::progress::draw_planning_progress(ui, &label, fraction);
         })
         .response
         .on_hover_ui(|ui| {
@@ -240,86 +236,38 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
     });
 }
 
-/// The Schedule Setup page's run controls: the same three buttons and the same
-/// progress readout as the Solids page, over its own four-step pipeline.
+/// The Schedule Setup page's run controls: the same buttons and the same
+/// progress readout as the Solids page, over its own pipeline.
 ///
 /// Kept beside the Solids controls rather than merged with them: the two
 /// pipelines run different things, and one control that switched which
 /// pipeline it drove on a page change would be one Cancel that could stop the
 /// wrong run.
 pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{
-        app::planning_pipeline::StageState,
-        ui::{state::ScheduleStep, widgets::toolbar::ToolbarButton},
-    };
+    use crate::{app::planning_pipeline::StageState, ui::state::ScheduleStep};
 
-    let run_enabled = !editor.schedule_run_active;
-    let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
-    let side = ui.available_height();
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let step = editor.schedule_setup_step;
-        if ui
-            .add_enabled(
-                run_enabled,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, run_enabled)),
-                    tr!("stage-run-step"),
-                )
-                .button_side(side)
-                .id_salt("schedule_run_through"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::RunScheduleStage(step));
-        }
-        if ui
-            .add_enabled(
-                run_enabled,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, run_enabled)),
-                    tr!("stage-run-all"),
-                )
-                .button_side(side)
-                .id_salt("schedule_run_all"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::RunAllScheduleStages);
-        }
-        if ui
-            .add_enabled(
-                editor.schedule_run_active,
-                ToolbarButton::new(
-                    egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, editor.schedule_run_active)),
-                    tr!("stage-cancel"),
-                )
-                .button_side(side)
-                .id_salt("schedule_run_cancel"),
-            )
-            .clicked()
-        {
-            commands.push(UiCommand::CancelScheduleRun);
+        match draw_run_buttons(ui, "schedule_run", editor.schedule_run_active, true) {
+            Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
+            Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
+            Some(RunAction::Cancel) => commands.push(UiCommand::CancelScheduleRun),
+            None => {}
         }
         let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
         let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
         let reported = active.unwrap_or(step);
         let status = &editor.schedule_stages[reported.index()];
-        let label = tr!("stage-progress", done = completed, total = ScheduleStep::ALL.len());
+        let label = tr!("stage-progress-short", done = completed, total = ScheduleStep::ALL.len());
+        let fraction = completed as f32 / ScheduleStep::ALL.len() as f32;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, completed as f32 / ScheduleStep::ALL.len() as f32);
+            crate::ui::widgets::progress::draw_planning_progress(ui, &label, fraction);
         })
         .response
         .on_hover_ui(|ui| {
             ui.label(reported.label());
-            stage_tooltip_parts(
-                ui,
-                status.state,
-                status.blocked_by.map(ScheduleStep::label),
-                status.message.as_deref(),
-                status.last_success.as_ref(),
-                &status.diagnostics,
-            );
+            stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
             // What the Gantt would be told if it asked to calculate now,
             // where the buttons that change that answer are.
             if !editor.schedule_calculation_status.is_empty() {
@@ -330,37 +278,46 @@ pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &EditorState
     });
 }
 
-pub(crate) fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSource<'static> {
-    match state.icon() {
-        "step_complete.svg" => unthemed_icon!("step_complete.svg"),
-        "step_error.svg" => unthemed_icon!("step_error.svg"),
-        _ => unthemed_icon!("step_pending.svg"),
-    }
+/// What a step's badge says. Grey has not run yet, amber ran but needs a
+/// look - edited since, or done with warnings - and red cannot finish.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepBadge {
+    NotRun,
+    Complete,
+    Warning,
+    Stale,
+    Error,
 }
 
-/// Preserve the SVG colours for pending and completed badges.
-pub(crate) fn stage_tint(ui: &egui::Ui, state: crate::app::planning_pipeline::StageState) -> egui::Color32 {
-    use crate::app::planning_pipeline::StageState;
-    match state {
-        StageState::Complete => egui::Color32::WHITE,
-        StageState::Failed | StageState::Blocked => ui.visuals().error_fg_color,
-        _ => egui::Color32::WHITE,
+impl StepBadge {
+    pub(crate) fn of(state: crate::app::planning_pipeline::StageState, diagnostics: &[crate::app::planning_pipeline::StageDiagnostic]) -> Self {
+        use crate::app::planning_pipeline::StageState;
+        match state {
+            StageState::Complete if diagnostics.iter().any(|diagnostic| !diagnostic.blocking) => Self::Warning,
+            StageState::Complete => Self::Complete,
+            StageState::Stale | StageState::Cancelled => Self::Stale,
+            StageState::Failed | StageState::Blocked => Self::Error,
+            StageState::NotRun | StageState::Queued | StageState::Running => Self::NotRun,
+        }
+    }
+
+    pub(crate) fn icon(self) -> egui::ImageSource<'static> {
+        match self {
+            Self::NotRun => unthemed_icon!("step_not_run.svg"),
+            Self::Complete => unthemed_icon!("step_complete.svg"),
+            Self::Warning => unthemed_icon!("step_warning.svg"),
+            Self::Stale => unthemed_icon!("step_pending.svg"),
+            Self::Error => unthemed_icon!("step_error.svg"),
+        }
     }
 }
 
 fn stage_tooltip(ui: &mut egui::Ui, status: &crate::ui::state::PlanningStageView) {
-    stage_tooltip_parts(
-        ui,
-        status.state,
-        status.blocked_by.map(SolidsStep::label),
-        status.message.as_deref(),
-        status.last_success.as_ref(),
-        &status.diagnostics,
-    );
+    stage_tooltip_parts(ui, status.state, status.blocked_by.map(SolidsStep::label), status.message.as_deref(), &status.diagnostics);
 }
 
-/// One step badge's hover: where it stands, what stopped it, what its last
-/// successful run covered, and everything that run had to say.
+/// One step badge's hover: where it stands, what stopped it, and everything
+/// its last run had to say.
 ///
 /// Takes the parts rather than a view, so the Solids and Schedule step trees
 /// say the same things in the same order about their own stages.
@@ -369,7 +326,6 @@ pub(crate) fn stage_tooltip_parts(
     state: crate::app::planning_pipeline::StageState,
     blocked_by: Option<String>,
     message: Option<&str>,
-    last_success: Option<&crate::app::planning_pipeline::StageSummary>,
     diagnostics: &[crate::app::planning_pipeline::StageDiagnostic],
 ) {
     ui.label(bold(&state.label()));
@@ -381,9 +337,6 @@ pub(crate) fn stage_tooltip_parts(
     }
     if let Some(message) = message {
         ui.label(message);
-    }
-    if let Some(summary) = last_success {
-        ui.label(tr!("stage-last-run", entities = summary.entities.to_string()));
     }
     if diagnostics.is_empty() {
         return;
@@ -420,27 +373,97 @@ fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, running: bool, 
     });
 }
 
-/// One-line summary of how a field aggregates, for the Field List grid and
-/// the tonnage-field combo.
-pub(crate) fn aggregation_summary(document: &Document, aggregation: &ReserveAggregation) -> String {
+/// Field List's helper column: every block model's columns, each with a +
+/// that adds it to the Field List already mapped, or greyed once a field of
+/// that name is there.
+fn draw_column_tree(ui: &mut egui::Ui, rect: egui::Rect, document: &Document, block_models: &[OpenBlockModel], commands: &mut Vec<UiCommand>) {
+    DataGrid::new("reserve_column_tree", rect, &tr!("planning-model-columns")).show(ui, |ui| {
+        if block_models.is_empty() {
+            grid_empty_state(ui, &tr!("planning-no-block-models-project"), None);
+        }
+        let tooltip = tr!("planning-add-column");
+        let category = tr!("csv-block-model-category");
+        for model in block_models {
+            let numeric = model.model.numeric_variables();
+            let categorical = model.model.categorical_variables();
+            let columns: Vec<_> = numeric
+                .iter()
+                .map(|variable| (variable, false))
+                .chain(categorical.iter().map(|variable| (variable, true)))
+                .filter(|(variable, _)| !variable.special)
+                .collect();
+            let detail = columns.len().to_string();
+            if !grid_group_row(ui, ("reserve_column_model", model.id), &model.name, &detail, 0) {
+                continue;
+            }
+            for (variable, categorical) in columns {
+                let added = document.reserve_fields().iter().any(|field| field.name == variable.name);
+                let detail = if categorical { category.as_str() } else { "" };
+                if grid_add_row(ui, ("reserve_add_column", model.id, &variable.name), &variable.name, detail, added, &tooltip) {
+                    commands.push(UiCommand::AddReserveFieldFromColumn {
+                        column: variable.name.clone(),
+                        categorical,
+                    });
+                }
+            }
+        }
+    });
+}
+
+/// How a field combines, as the Field List and the Schedule's tonnage choice
+/// read it.
+pub(crate) fn aggregation_label(document: &Document, aggregation: &ReserveAggregation) -> String {
     match aggregation {
         ReserveAggregation::Sum => tr!("planning-stat-sum"),
-        ReserveAggregation::WeightedAverage { weight_field } => {
-            let weight_name = document.reserve_field(*weight_field).map_or_else(|| String::from("?"), |field| field.name.clone());
-            tr!("planning-weighted-avg", name = weight_name.to_string())
-        }
+        ReserveAggregation::WeightedAverage { weight_field } => tr!(
+            "planning-average-by",
+            field = document.reserve_field(*weight_field).map_or_else(String::new, |field| field.name.clone())
+        ),
         ReserveAggregation::Category => tr!("csv-block-model-category"),
     }
 }
 
 fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    DataGrid::new("reserve_field_list", rect, &tr!("planning-field-list")).show(ui, |ui| {
-        if document.reserve_fields().is_empty() {
-            explorer_note(ui, tr!("planning-no-fields"));
+    const FRACTIONS: [f32; 2] = [0.5, 0.5];
+    let columns = [(tr!("planning-name"), FRACTIONS[0]), (tr!("planning-combines-as"), FRACTIONS[1])];
+    let add_tooltip = tr!("reserve-new-field");
+    let mut add = false;
+    let fields = document.reserve_fields();
+    let title = tr!("planning-field-list");
+    let mut grid = DataGrid::new("reserve_field_list", rect, &title).add_button(&add_tooltip, &mut add);
+    if !fields.is_empty() {
+        grid = grid.columns(&columns);
+    }
+    let empty_clicked = grid.show(ui, |ui| {
+        if fields.is_empty() {
+            return grid_empty_state(ui, &tr!("planning-no-fields"), Some(&tr!("reserve-new-field")));
         }
-        for field in document.reserve_fields() {
-            let label = format!("{} · {}", field.name, aggregation_summary(document, &field.aggregation));
-            let response = grid_row(ui, GridRow::new(&label));
+        for field in fields {
+            let combines = aggregation_label(document, &field.aggregation);
+            // A weight others average by stays a Sum, and a category stays
+            // one: neither has a choice to offer, so it is read rather than
+            // picked.
+            let weights_others = fields
+                .iter()
+                .any(|other| other.aggregation == ReserveAggregation::WeightedAverage { weight_field: field.id });
+            let weights: Vec<_> = fields.iter().filter(|other| other.id != field.id && other.aggregation == ReserveAggregation::Sum).collect();
+            let fixed = field.aggregation == ReserveAggregation::Category || (weights_others || weights.is_empty()) && field.aggregation == ReserveAggregation::Sum;
+            let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&field.name, if fixed { &combines } else { "" }], false);
+            if !fixed {
+                let mut choice = field.aggregation;
+                let options = std::iter::once((ReserveAggregation::Sum, tr!("planning-stat-sum"))).chain(weights.iter().map(|weight| {
+                    (
+                        ReserveAggregation::WeightedAverage { weight_field: weight.id },
+                        tr!("planning-average-by", field = weight.name.clone()),
+                    )
+                }));
+                if grid_cell_combo(ui, ("reserve_field_combines", field.id), cells[1], &mut choice, options, &combines) {
+                    commands.push(UiCommand::SetReserveFieldAggregation {
+                        field: field.id,
+                        aggregation: choice,
+                    });
+                }
+            }
             context_menu_popup(&response, &field.name, |ui| {
                 if ContextMenuAction::new(tr!("planning-rename-field")).show(ui).clicked() {
                     commands.push(UiCommand::BeginRenameItem(crate::ui::state::RenameTarget::ReserveField(field.id)));
@@ -452,17 +475,11 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                 }
             });
         }
-        let body = ui.available_rect_before_wrap();
-        if body.is_positive() {
-            let response = ui.interact(body, ui.id().with("new_reserve_field_space"), egui::Sense::click());
-            context_menu_popup(&response, tr!("planning-field-list"), |ui| {
-                if ContextMenuAction::new(tr!("reserve-new-field")).show(ui).clicked() {
-                    editor.new_reserve_field_open = true;
-                    ui.close();
-                }
-            });
-        }
+        grid_add_action_row(ui, &tr!("reserve-new-field"))
     });
+    if add || empty_clicked {
+        editor.new_reserve_field_open = true;
+    }
     crate::ui::dialogs::reserve_fields::draw_new_reserve_field_dialog(ui, editor, document, commands);
 }
 
@@ -473,7 +490,7 @@ fn draw_block_model_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edito
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
             if project.block_models.is_empty() {
-                crate::ui::widgets::explorer::explorer_note(ui, tr!("planning-no-block-models-project"));
+                grid_empty_state(ui, &tr!("planning-no-block-models-project"), None);
             }
             for entry in &project.block_models {
                 // Name only: the block count is a property of the model, and
@@ -523,76 +540,119 @@ impl MappingChoice {
     }
 }
 
-/// The Block Models step's right column: the selected model's mapping of the
-/// project's Field List onto its own columns/constants, and the computed
-/// totals that follow from it.
+/// The Block Models step's workspace: one row per field of the project's
+/// Field List, saying where the selected model takes it from and what that
+/// adds up to across the model.
 fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Document, model: &OpenBlockModel, blocks: usize, commands: &mut Vec<UiCommand>) {
-    let header_height = property_table_height(ui, 4).min(rect.height());
-    let header_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_height));
-    let fields_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), header_rect.bottom() + 6.0), rect.max);
-
+    const FRACTIONS: [f32; 5] = [0.22, 0.3, 0.18, 0.15, 0.15];
     // A scan that failed, or one whose inputs could not be loaded, leaves the
     // figures absent; this is how it is asked for again without editing the
-    // mapping to force a new request key. Registered before the table so the
-    // table's own controls, the "Used for reserving" tickbox among them, sit
-    // above it and still take their clicks.
-    let header_response = ui.interact(header_rect, ui.id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
-    context_menu_popup(&header_response, &model.name, |ui| {
-        if ContextMenuAction::new(tr!("planning-recompute-stats")).show(ui).clicked() {
-            commands.push(UiCommand::RecomputeReserveStats(model.id));
-            ui.close();
-        }
-    });
+    // mapping to force a new request key. Registered before the grid, so the
+    // grid's own controls sit above it and take their clicks.
+    let stats_menu = |response: &egui::Response, commands: &mut Vec<UiCommand>| {
+        context_menu_popup(response, &model.name, |ui| {
+            if ContextMenuAction::new(tr!("planning-recompute-stats")).show(ui).clicked() {
+                commands.push(UiCommand::RecomputeReserveStats(model.id));
+                ui.close();
+            }
+        });
+    };
+    let pane = ui.interact(rect, ui.id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
+    stats_menu(&pane, commands);
 
+    let columns = [
+        (tr!("planning-name"), FRACTIONS[0]),
+        (tr!("planning-source"), FRACTIONS[1]),
+        (tr!("planning-stat-sum-avg"), FRACTIONS[2]),
+        (tr!("planning-stat-min"), FRACTIONS[3]),
+        (tr!("planning-stat-max"), FRACTIONS[4]),
+    ];
+    let detail = tr!("planning-block-count", blocks = blocks.separate_with_commas());
+    let toggle = tr!("planning-used-reserving");
     let mut included = model.included_in_reserves;
-    PropertyTable::new("reserve_block_model_mapping", header_rect, &model.name).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        rows.readonly(
-            &tr!("planning-extents-heading"),
-            &format!(
-                "{:.1}, {:.1}, {:.1} → {:.1}, {:.1}, {:.1}",
-                model.model.metadata.lower.x,
-                model.model.metadata.lower.y,
-                model.model.metadata.lower.z,
-                model.model.metadata.upper.x,
-                model.model.metadata.upper.y,
-                model.model.metadata.upper.z
-            ),
-            None,
-            None,
-        );
-        rows.readonly(&tr!("planning-blocks"), &blocks.separate_with_commas(), None, None);
-        rows.checkbox(&tr!("planning-used-reserving"), &mut included);
-    });
-    if included != model.included_in_reserves {
-        commands.push(UiCommand::SetReserveModelIncluded { block_model: model.id, included });
-    }
     let numeric_columns: Vec<_> = model.model.numeric_variables().into_iter().map(|variable| variable.name.clone()).collect();
     let categorical_columns: Vec<_> = model.model.categorical_variables().into_iter().map(|variable| variable.name.clone()).collect();
-    ui.scope_builder(egui::UiBuilder::new().max_rect(fields_rect), |ui| {
-        ui.set_clip_rect(ui.clip_rect().intersect(fields_rect));
-        egui::ScrollArea::vertical().id_salt("reserve_mapping_fields").auto_shrink([false; 2]).show(ui, |ui| {
+    DataGrid::new("reserve_block_model_mapping", rect, &model.name)
+        .title_detail(&detail)
+        .title_toggle(&toggle, &mut included)
+        .columns(&columns)
+        .show(ui, |ui| {
+            if document.reserve_fields().is_empty() {
+                grid_empty_state(ui, &tr!("planning-no-fields"), None);
+            }
             for field in document.reserve_fields() {
                 let is_category = matches!(field.aggregation, ReserveAggregation::Category);
+                let stats = (!is_category).then(|| model.reserve_totals.get(&field.id)).flatten();
+                let [total, min, max] = match stats {
+                    Some(stats) => [stats.total, stats.min, stats.max].map(stat_text),
+                    None => Default::default(),
+                };
+                let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&field.name, "", &total, &min, &max], false);
+                stats_menu(&response, commands);
+
+                // Anything the figures can't show: why they are absent, or
+                // what they leave out. A wait is said in their place; a
+                // problem is a mark on the field, explained on hover.
+                let mut problems = Vec::new();
+                if !is_category {
+                    match stats {
+                        Some(stats) => {
+                            problems.extend(stats.issue.as_ref().map(crate::model::ReserveFieldIssue::describe));
+                            if stats.missing_values > 0 || stats.unusable_weights > 0 {
+                                problems.push(tr!(
+                                    "stage-model-data-gaps",
+                                    missing = stats.missing_values.to_string(),
+                                    weights = stats.unusable_weights.to_string()
+                                ));
+                            }
+                        }
+                        None => {
+                            if let Some(error) = &model.reserve_totals_error {
+                                problems.push(tr!("planning-stat-scan-failed", error = error.clone()));
+                            } else {
+                                let waiting = if model.reserve_totals_awaiting_restore {
+                                    tr!("planning-stat-loading")
+                                } else if model.reserve_totals_key.is_some() {
+                                    tr!("planning-stat-scanning")
+                                } else {
+                                    tr!("planning-stat-not-scanned")
+                                };
+                                grid_cell_fixed(ui, cells[2].union(cells[4]), &waiting);
+                            }
+                        }
+                    }
+                }
+                if !problems.is_empty() {
+                    grid_cell_warning(ui, ("reserve_mapping_warning", model.id, field.id), cells[0], &problems.join("\n"));
+                }
+
                 let current = MappingChoice::of(&model.reserve_mapping, field.id);
                 let mut choice = current.clone();
-                let mut options = vec![(MappingChoice::Unmapped, tr!("io-unmapped").into())];
+                let mut options = vec![CellOption::Choice(MappingChoice::Unmapped, tr!("io-unmapped"))];
                 if !is_category {
-                    options.push((MappingChoice::Constant, tr!("planning-constant").into()));
+                    options.push(CellOption::Choice(MappingChoice::Constant, tr!("planning-constant")));
                 }
-                let columns = if is_category { &categorical_columns } else { &numeric_columns };
-                options.extend(columns.iter().map(|name| (MappingChoice::Column(name.clone()), name.clone().into())));
+                let model_columns = if is_category { &categorical_columns } else { &numeric_columns };
+                options.push(CellOption::Heading(tr!("planning-columns-heading")));
+                options.extend(model_columns.iter().map(|name| CellOption::Choice(MappingChoice::Column(name.clone()), name.clone())));
                 // A summed quantity can also come from a per-volume column -
-                // tonnes from density - after the plain columns.
-                if field.aggregation == ReserveAggregation::Sum {
-                    options.extend(columns.iter().map(|name| {
-                        let choice = MappingChoice::PerVolume(name.clone());
-                        let label = choice.label();
-                        (choice, label.into())
-                    }));
+                // tonnes from density - grouped after the plain columns.
+                if field.aggregation == ReserveAggregation::Sum && !model_columns.is_empty() {
+                    options.push(CellOption::Heading(tr!("planning-per-m3-heading")));
+                    options.extend(model_columns.iter().map(|name| CellOption::Choice(MappingChoice::PerVolume(name.clone()), name.clone())));
                 }
-                MenuFieldCombo::new(("reserve_mapping_kind", model.id, field.id), field.name.clone(), &mut choice, current.label(), options).show(ui);
-                if choice != current {
+                // A constant's value shares the cell with the choice.
+                let source = cells[1];
+                let (combo_cell, value_cell) = if matches!(current, MappingChoice::Constant) {
+                    let split = source.left() + source.width() * 0.5;
+                    (
+                        egui::Rect::from_min_max(source.min, egui::pos2(split, source.bottom())),
+                        Some(egui::Rect::from_min_max(egui::pos2(split, source.top()), source.max)),
+                    )
+                } else {
+                    (source, None)
+                };
+                if grid_cell_combo(ui, ("reserve_mapping_kind", model.id, field.id), combo_cell, &mut choice, options, &current.label()) && choice != current {
                     let source = match &choice {
                         MappingChoice::Unmapped => None,
                         MappingChoice::Constant => Some(ReserveMappingSource::Constant(0.0)),
@@ -605,7 +665,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                         source,
                     });
                 }
-                if matches!(current, MappingChoice::Constant) {
+                if let Some(value_cell) = value_cell {
                     let mut value = model
                         .reserve_mapping
                         .iter()
@@ -615,8 +675,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                             ReserveMappingSource::Column(_) | ReserveMappingSource::PerVolume(_) => None,
                         })
                         .unwrap_or(0.0);
-                    let response = MenuFieldF64::new(tr!("planning-value"), &mut value, f64::MIN..=f64::MAX).show(ui);
-                    if committed(&response) {
+                    if grid_cell_number(ui, ("reserve_mapping_constant", model.id, field.id), value_cell, &mut value, "") {
                         commands.push(UiCommand::SetReserveMapping {
                             block_model: model.id,
                             field: field.id,
@@ -624,64 +683,23 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                         });
                     }
                 }
-                if !is_category {
-                    let stats = model.reserve_totals.get(&field.id);
-                    let number = |value: Option<f64>| value.map_or_else(|| "—".to_owned(), |value| format!("{value:.2}"));
-                    let label = if matches!(field.aggregation, ReserveAggregation::WeightedAverage { .. }) {
-                        tr!("planning-stat-avg")
-                    } else {
-                        tr!("planning-stat-sum")
-                    };
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add_space(ui.spacing().indent);
-                        ui.label(format!("{label}: {}", number(stats.and_then(|s| s.total))));
-                        ui.label(format!("{}: {}", tr!("planning-stat-min"), number(stats.and_then(|s| s.min))));
-                        ui.label(format!("{}: {}", tr!("planning-stat-max"), number(stats.and_then(|s| s.max))));
-                    });
-                    // A dash says which of the several possible reasons it is:
-                    // unmapped, an absent column, a length mismatch, an
-                    // unusable weight, a failed scan, one still running, or
-                    // simply not scanned yet.
-                    let reason = match stats {
-                        Some(stats) => stats.issue.as_ref().map(crate::model::ReserveFieldIssue::describe),
-                        None => Some(if let Some(error) = &model.reserve_totals_error {
-                            tr!("planning-stat-scan-failed", error = error.clone())
-                        } else if model.reserve_totals_awaiting_restore {
-                            tr!("planning-stat-loading")
-                        } else if model.reserve_totals_key.is_some() {
-                            tr!("planning-stat-scanning")
-                        } else {
-                            tr!("planning-stat-not-scanned")
-                        }),
-                    };
-                    if let Some(reason) = reason {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add_space(ui.spacing().indent);
-                            ui.label(egui::RichText::new(reason).color(ui.visuals().warn_fg_color));
-                        });
-                    }
-                    if let Some(stats) = stats.filter(|stats| stats.missing_values > 0 || stats.unusable_weights > 0) {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add_space(ui.spacing().indent);
-                            ui.label(
-                                egui::RichText::new(tr!(
-                                    "stage-model-data-gaps",
-                                    missing = stats.missing_values.to_string(),
-                                    weights = stats.unusable_weights.to_string()
-                                ))
-                                .color(ui.visuals().weak_text_color()),
-                            );
-                        });
-                    }
-                }
-                ui.separator();
             }
         });
-    });
+    if included != model.included_in_reserves {
+        commands.push(UiCommand::SetReserveModelIncluded { block_model: model.id, included });
+    }
 }
 
-/// The Solids step's left column: the project's solids, each with the kind of
-/// volume it is. Selecting one drives the property table beside it.
+/// One of a field's figures: whole numbers once they reach the thousands,
+/// where the decimals are noise, and two places below that.
+fn stat_text(value: Option<f64>) -> String {
+    match value {
+        None => "—".to_owned(),
+        Some(value) if value.abs() >= 1000.0 => format!("{value:.0}").separate_with_commas(),
+        Some(value) => format!("{value:.2}"),
+    }
+}
+
 /// Which list a Solids Setup step reads beside its workspace, and so which
 /// pane the explorer column stacks under the step list.
 ///
@@ -720,16 +738,24 @@ pub(crate) fn draw_step_list(
     }
 }
 
+/// The Solids and Benching steps' list: the project's solids, each with the
+/// kind of volume it is. Selecting one drives the panes beside it.
 fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    DataGrid::new("planning_solid_list", rect, &tr!("planning-solids"))
-        .column_header(&tr!("planning-name"))
+    const FRACTIONS: [f32; 2] = [0.6, 0.4];
+    let columns = [(tr!("planning-name"), FRACTIONS[0]), (tr!("destination-type"), FRACTIONS[1])];
+    let add_tooltip = tr!("solids-new-solid");
+    let mut add = false;
+    let added = DataGrid::new("planning_solid_list", rect, &tr!("planning-solids"))
+        .columns(&columns)
+        .add_button(&add_tooltip, &mut add)
         .show(ui, |ui| {
+            let mut add = false;
             if document.solids().is_empty() {
-                explorer_note(ui, tr!("planning-no-solids"));
+                add |= grid_empty_state(ui, &tr!("planning-no-solids"), Some(&add_tooltip));
             }
             for solid in document.solids() {
-                let label = format!("{} · {}", solid.name, kind_label(solid.kind));
-                let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_solid == Some(solid.id)));
+                let kind = kind_label(solid.kind);
+                let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&solid.name, &kind], editor.planning_selected_solid == Some(solid.id));
                 if response.clicked() && editor.planning_selected_solid != Some(solid.id) {
                     editor.planning_selected_solid = Some(solid.id);
                     editor.planning_selected_bench = None;
@@ -750,6 +776,9 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                     }
                 });
             }
+            if !document.solids().is_empty() {
+                add |= grid_add_action_row(ui, &add_tooltip);
+            }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
                 let response = ui.interact(body, ui.id().with("new_solid_space"), egui::Sense::click());
@@ -768,7 +797,11 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                     }
                 });
             }
+            add
         });
+    if add || added {
+        editor.new_solid_open = true;
+    }
 }
 
 /// The Solids step's right column: the selected solid's surfaces, kind and
@@ -776,91 +809,79 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
 /// is flagged on the row; a dump or stockpile is placed material and needs
 /// none.
 fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjectView, solid: &crate::model::Solid, commands: &mut Vec<UiCommand>) {
-    PropertyTable::new("planning_solid_properties", rect, &solid.name).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        rows.readonly(&tr!("planning-name"), &solid.name, None, None);
+    const FRACTIONS: [f32; 2] = [0.4, 0.6];
+    let columns = [(tr!("planning-property"), FRACTIONS[0]), (tr!("planning-value"), FRACTIONS[1])];
+    let mut edits = Vec::new();
+    DataGrid::new("planning_solid_properties", rect, &solid.name).columns(&columns).show(ui, |ui| {
+        grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-name"), &solid.name], false);
 
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("common-colour"), ""], false);
         let mut color = solid.color;
-        if rows.color(&tr!("common-colour"), &mut color).changed() {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: SolidEdit::Color(color),
-            });
+        if grid_cell_color(ui, ("solid_color", solid.id), cells[1], &mut color) {
+            edits.push(SolidEdit::Color(color));
         }
 
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("destination-type"), ""], false);
         let mut kind = solid.kind;
-        if rows
-            .combo(
-                ("solid_kind", solid.id),
-                &tr!("destination-type"),
-                &mut kind,
-                &kind_label(solid.kind),
-                SolidKind::ALL.into_iter().map(|kind| (kind, kind_label(kind))),
-            )
-            .changed()
+        if grid_cell_combo(
+            ui,
+            ("solid_kind", solid.id),
+            cells[1],
+            &mut kind,
+            SolidKind::ALL.into_iter().map(|kind| (kind, kind_label(kind))),
+            &kind_label(solid.kind),
+        ) && kind != solid.kind
         {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: SolidEdit::Kind(kind),
-            });
+            edits.push(SolidEdit::Kind(kind));
         }
 
         let surfaces = triangulation_options(project);
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("tri-type-open-surface"), ""], false);
         let mut surface = solid.surface;
-        if rows
-            .combo(
-                ("solid_surface", solid.id),
-                &tr!("tri-type-open-surface"),
-                &mut surface,
-                &triangulation_label(project, solid.surface),
-                surfaces.clone(),
-            )
-            .changed()
+        if grid_cell_combo(
+            ui,
+            ("solid_surface", solid.id),
+            cells[1],
+            &mut surface,
+            surfaces.clone(),
+            &triangulation_label(project, solid.surface),
+        ) && surface != solid.surface
         {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: SolidEdit::Surface(surface),
-            });
+            edits.push(SolidEdit::Surface(surface));
         }
 
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("solids-topography"), ""], false);
         let mut topography = solid.topography;
-        if rows
-            .combo(
-                ("solid_topography", solid.id),
-                &tr!("solids-topography"),
-                &mut topography,
-                &triangulation_label(project, solid.topography),
-                surfaces,
-            )
-            .changed()
+        if grid_cell_combo(
+            ui,
+            ("solid_topography", solid.id),
+            cells[1],
+            &mut topography,
+            surfaces,
+            &triangulation_label(project, solid.topography),
+        ) && topography != solid.topography
         {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: SolidEdit::Topography(topography),
-            });
+            edits.push(SolidEdit::Topography(topography));
         }
 
-        let mut block_model = solid.block_model;
-        if rows
-            .combo(
-                ("solid_block_model", solid.id),
-                &tr!("ws-menubar-block-model"),
-                &mut block_model,
-                &block_model_label(project, solid.block_model),
-                block_model_options(project),
-            )
-            .changed()
-        {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: SolidEdit::BlockModel(block_model),
-            });
-        }
-
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("ws-menubar-block-model"), ""], false);
         if solid.kind.requires_block_model() && solid.block_model.is_none() {
-            rows.readonly(&tr!("planning-reserve-status"), &tr!("planning-set-block-model-reserve"), None, None);
+            grid_cell_warning(ui, ("solid_block_model_warning", solid.id), cells[0], &tr!("planning-set-block-model-reserve"));
+        }
+        let mut block_model = solid.block_model;
+        if grid_cell_combo(
+            ui,
+            ("solid_block_model", solid.id),
+            cells[1],
+            &mut block_model,
+            block_model_options(project),
+            &block_model_label(project, solid.block_model),
+        ) && block_model != solid.block_model
+        {
+            edits.push(SolidEdit::BlockModel(block_model));
         }
     });
+    commands.extend(edits.into_iter().map(|edit| UiCommand::UpdateSolid { solid: solid.id, edit }));
 }
 
 /// The Solids step's render pane: the solid itself, drawn by the renderer into
@@ -869,7 +890,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
 ///
 /// A solid with only a design surface shows that surface; one that also names
 /// a topography shows the closed volume between the two, with its enclosed
-/// volume captioned. Drag to orbit, scroll to zoom.
+/// volume captioned. Right drag orbits, middle drag pans, the wheel zooms.
 pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) {
     let title = tr!("charging-preview");
     framed_render_pane(ui, rect, &title, |ui, body| {
@@ -913,39 +934,14 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         let mut view_changed = editor.solid_preview_size_px != size_px;
         editor.solid_preview_size_px = size_px;
 
-        // The main viewport's own mapping: middle drag pans, right drag
-        // orbits, left click selects and never moves the camera. Setup's
-        // inspection previews keep left-drag orbit, having nothing to select.
+        // Middle drag pans, right drag orbits about the ground under the
+        // pointer and the wheel zooms, as in the main viewport. Left click
+        // selects - in View, the one page here with anything to select - and
+        // never moves the camera.
         let selects = editor.is_solids_view();
-        let delta = response.drag_delta() * pixels_per_point;
-        if delta != egui::Vec2::ZERO {
-            let delta = [f64::from(delta.x), f64::from(delta.y)];
-            if response.dragged_by(egui::PointerButton::Middle) {
-                editor.solid_preview_view.pan_by_pixels(delta, f64::from(size_px[1]));
-                view_changed = true;
-            } else if response.dragged_by(egui::PointerButton::Secondary) || (!selects && response.dragged_by(egui::PointerButton::Primary)) {
-                editor.solid_preview_view.orbit_by_pixels(delta, f64::from(size_px[1]));
-                view_changed = true;
-            }
-        }
-        if response.hovered() || response.dragged() {
-            // In View a click picks the solid under it, so hovering reads as
-            // something to click; the grab hand is for the drag that orbits.
-            ui.ctx().set_cursor_icon(if response.dragged() {
-                egui::CursorIcon::Grabbing
-            } else if selects {
-                egui::CursorIcon::PointingHand
-            } else {
-                egui::CursorIcon::Grab
-            });
-        }
-        // Double click resets the camera only where left click is not a
-        // selection. Fit and Reset are explicit buttons in View, so a fast
-        // second click on a dig block cannot throw the camera away.
-        if !selects && response.double_clicked() {
-            editor.solid_preview_view = crate::ui::state::SolidPreviewView::default();
-            view_changed = true;
-        }
+        let mut view = editor.solid_preview_view;
+        view_changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut view, editor, true);
+        editor.solid_preview_view = view;
         // A click that did not drag selects the solid under it. In View that is
         // how a dig block, which the tree does not list, is picked out for its
         // own figures. The click is addressed from the moment it is made - this
@@ -957,37 +953,14 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
             && selects
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            let local = pointer - image_rect.min;
             editor.solid_preview_pick = Some(crate::ui::state::SolidPreviewPickRequest {
                 session,
                 owner: crate::ui::state::SolidPreviewPickOwner::SolidsView,
                 generation: None,
                 image: editor.solid_preview_image_revision,
-                uv: [local.x / image_rect.width().max(1.0), local.y / image_rect.height().max(1.0)],
+                uv: crate::ui::widgets::preview_navigation::image_uv(image_rect, pointer),
             });
             ui.ctx().request_repaint();
-        }
-        if response.hovered() {
-            let scroll = ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .filter_map(|event| match event {
-                        egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                            egui::MouseWheelUnit::Point => f64::from(delta.y * pixels_per_point),
-                            // One wheel line is about a hundred physical
-                            // pixels, matching the main camera's convention.
-                            egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
-                            egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(size_px[1]),
-                        }),
-                        _ => None,
-                    })
-                    .sum::<f64>()
-            });
-            if scroll != 0.0 {
-                editor.solid_preview_view.zoom_by_scroll(scroll);
-                view_changed = true;
-            }
         }
         if view_changed {
             ui.ctx().request_repaint();
@@ -1028,13 +1001,14 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         let caption_rect = egui::Rect::from_min_max(egui::pos2(body.left() + 8.0, image_rect.bottom()), body.max);
         let caption = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::NotRun => tr!("planning-not-run"),
+            crate::ui::state::SolidPreviewSummary::Empty if !editor.is_solids_view() && editor.planning_selected_solid.is_none() => tr!("planning-no-solid-selected"),
             crate::ui::state::SolidPreviewSummary::Empty => tr!("planning-set-surface-inspect-solid"),
             crate::ui::state::SolidPreviewSummary::Unloaded => tr!("planning-load-solid-surfaces-inspect"),
             crate::ui::state::SolidPreviewSummary::LoadingInputs { .. } => tr!("planning-loading-solid-surfaces"),
             crate::ui::state::SolidPreviewSummary::Building { showing_previous: true } => tr!("planning-rebuilding-solid"),
             crate::ui::state::SolidPreviewSummary::Building { .. } => tr!("planning-building-solid"),
-            crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), faces, .. } => {
-                tr!("planning-faces", volume = format!("{volume:.1}"), faces = faces.to_string())
+            crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => {
+                tr!("planning-solid-volume", volume = format!("{volume:.0}").separate_with_commas())
             }
             crate::ui::state::SolidPreviewSummary::Ready { volume: None, .. } if editor.is_solids_view() => tr!("planning-volume-unavailable"),
             crate::ui::state::SolidPreviewSummary::Ready {
@@ -1042,8 +1016,8 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
                 waiting_on_unloaded: true,
                 ..
             } => tr!("planning-surface-only-other-surface"),
-            crate::ui::state::SolidPreviewSummary::Ready { volume: None, faces, .. } => {
-                tr!("planning-surface-only-faces", faces = faces.to_string())
+            crate::ui::state::SolidPreviewSummary::Ready { volume: None, .. } => {
+                tr!("planning-surface-only")
             }
             crate::ui::state::SolidPreviewSummary::Failed(message) => message.clone(),
         };
@@ -1219,6 +1193,10 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
     // The solid list is in the explorer column under the step list; what is
     // read *about* the solid picked there belongs beside the objects it
     // describes, so it stacks under the object tree.
+    // Open on a solid rather than an empty preview.
+    if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
+        editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
+    }
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
     objects_column(
         ui,
@@ -1229,9 +1207,12 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
         "planning_solids_properties_island",
         |ui, rect, _editor, commands| match selected {
             Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
-            None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            }),
+            None => {
+                let columns = [(tr!("planning-property"), 0.4), (tr!("planning-value"), 0.6)];
+                DataGrid::new("planning_solid_properties_empty", rect, &tr!("planning-properties"))
+                    .columns(&columns)
+                    .show(ui, |_| {});
+            }
         },
     );
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
@@ -1239,60 +1220,86 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
     crate::ui::dialogs::solids::draw_topography_update_dialog(ui, editor, project, document.solids(), commands);
 }
 
-/// The Benching step's first column: the RL the solid is benched down from,
-/// and the bench height for each range beneath it.
+/// Shares of the benching grid's columns: the RLs a range runs between, then
+/// the bench and flitch heights it is cut at.
+const RANGE_FRACTIONS: [f32; 4] = [0.25, 0.25, 0.25, 0.25];
+
+/// What is wrong with a range's flitch height, if anything.
+fn flitch_warning(interval: &BenchInterval) -> Option<String> {
+    if interval.flitch > 0.0 && (interval.bench / interval.flitch).ceil() > 64.0 {
+        return Some(tr!("planning-too-many-flitches"));
+    }
+    (!interval.flitch_divides_bench()).then(|| {
+        tr!(
+            "planning-bench-not-whole-number",
+            bench = format!("{:.2}", interval.bench),
+            flitch = format!("{:.2}", interval.flitch)
+        )
+    })
+}
+
+/// A range named by the RLs it runs between, top first.
+fn range_label(top: f64, base: f64) -> String {
+    format!("{} – {}", format_rl(top), format_rl(base))
+}
+
+/// The Benching step's upper pane: one row per elevation range, top down,
+/// with the bench and flitch heights it is cut at.
 ///
-/// The list reads top down, the way a pit is described: an RL, the bench
-/// height that applies below it indented under it, then the RL that range
-/// ends at - so adding a range adds one height row and one RL row. Every
-/// value carries its unit, because an elevation and a height are both bare
-/// numbers and telling them apart by position alone is a trap.
+/// Ranges are contiguous, so only the plan's own top RL is typed; every
+/// other range starts at the base of the one above it, shown greyed.
 fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, changed: &mut bool) {
-    DataGrid::new("planning_bench_list", rect, &tr!("planning-benching"))
-        .column_header(&tr!("planning-elevation-height"))
+    let columns = [
+        (tr!("planning-top-rl"), RANGE_FRACTIONS[0]),
+        (tr!("planning-base-rl"), RANGE_FRACTIONS[1]),
+        (tr!("planning-bench-column"), RANGE_FRACTIONS[2]),
+        (tr!("planning-flitch-column"), RANGE_FRACTIONS[3]),
+    ];
+    let add_tooltip = tr!("planning-add-range");
+    let mut add = false;
+    let added = DataGrid::new("planning_bench_list", rect, &tr!("planning-benching"))
+        .columns(&columns)
+        .add_button(&add_tooltip, &mut add)
         .show(ui, |ui| {
-            let count = plan.intervals.len();
-            *changed |= grid_value_row(
-                ui,
-                ("bench_top", 0usize),
-                &tr!("planning-top-rl"),
-                GridNumber::Edit(&mut plan.top),
-                &tr!("planning-rl"),
-                0,
-                None,
-            )
-            .1;
+            if plan.intervals.is_empty() {
+                return grid_empty_state(ui, &tr!("planning-no-ranges"), Some(&add_tooltip));
+            }
+            let mut top = plan.top;
+            let mut above = plan.top;
             let mut edit = None;
             for (index, interval) in plan.intervals.iter_mut().enumerate() {
-                let (height_row, edited) = grid_value_row(
-                    ui,
-                    ("bench_height", index),
-                    &tr!("edit-bench-height"),
-                    GridNumber::Edit(&mut interval.bench),
-                    &String::from("m"),
-                    1,
-                    None,
-                );
-                *changed |= edited;
-                let label = if index + 1 == count { tr!("planning-bottom-rl") } else { tr!("planning-rl") };
-                let (base_row, edited) = grid_value_row(ui, ("bench_base", index), &label, GridNumber::Edit(&mut interval.base), &tr!("planning-rl"), 0, None);
-                *changed |= edited;
-                // Both rows describe the same range, so both carry its menu:
-                // whichever one the user happens to be on is the one they
-                // right-click.
-                for row in [&height_row, &base_row] {
-                    context_menu_popup(row, tr!("destination-condition-range"), |ui| {
-                        if ContextMenuAction::new(tr!("planning-insert-range-below")).show(ui).clicked() {
-                            edit = Some((index, true));
-                            ui.close();
-                        }
-                        if ContextMenuAction::new(tr!("planning-delete-range")).show(ui).clicked() {
-                            edit = Some((index, false));
-                            ui.close();
-                        }
-                    });
+                let (response, cells) = grid_columns_row(ui, &RANGE_FRACTIONS, &["", "", "", ""], false);
+                if index == 0 {
+                    *changed |= grid_cell_number(ui, ("bench_top", 0usize), cells[0], &mut top, "");
+                } else {
+                    grid_cell_fixed(ui, cells[0], &format_rl(above));
                 }
+                *changed |= grid_cell_number(ui, ("bench_base", index), cells[1], &mut interval.base, "");
+                *changed |= grid_cell_number(ui, ("bench_height", index), cells[2], &mut interval.bench, " m");
+                let warning = flitch_warning(interval);
+                // The mark takes the end of the cell, so the number stops short of it.
+                let flitch_cell = if warning.is_some() {
+                    cells[3].with_max_x(cells[3].right() - CELL_WARNING_WIDTH)
+                } else {
+                    cells[3]
+                };
+                *changed |= grid_cell_number(ui, ("bench_flitch", index), flitch_cell, &mut interval.flitch, " m");
+                if let Some(message) = &warning {
+                    grid_cell_warning(ui, ("bench_flitch_warning", index), cells[3], message);
+                }
+                context_menu_popup(&response, range_label(above, interval.base), |ui| {
+                    if ContextMenuAction::new(tr!("planning-insert-range-below")).show(ui).clicked() {
+                        edit = Some((index, true));
+                        ui.close();
+                    }
+                    if ContextMenuAction::new(tr!("planning-delete-range")).show(ui).clicked() {
+                        edit = Some((index, false));
+                        ui.close();
+                    }
+                });
+                above = interval.base;
             }
+            plan.top = top;
             match edit {
                 // Splitting a range halves it: the new row takes the lower
                 // part and inherits the heights, which is the edit a reader
@@ -1310,24 +1317,18 @@ fn draw_benching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
                 }
                 None => {}
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_bench_range"), egui::Sense::click());
-                context_menu_popup(&response, tr!("planning-benching"), |ui| {
-                    if ContextMenuAction::new(tr!("planning-add-range")).show(ui).clicked() {
-                        let base = plan.intervals.last().map_or(plan.top, |interval| interval.base);
-                        plan.intervals.push(BenchInterval {
-                            base: base - DEFAULT_RANGE_DEPTH,
-                            bench: BenchingPlan::DEFAULT_BENCH,
-                            flitch: BenchingPlan::DEFAULT_FLITCH,
-                            styles: Vec::new(),
-                        });
-                        *changed = true;
-                        ui.close();
-                    }
-                });
-            }
+            grid_add_action_row(ui, &add_tooltip)
         });
+    if add || added {
+        let base = plan.intervals.last().map_or(plan.top, |interval| interval.base);
+        plan.intervals.push(BenchInterval {
+            base: base - DEFAULT_RANGE_DEPTH,
+            bench: BenchingPlan::DEFAULT_BENCH,
+            flitch: BenchingPlan::DEFAULT_FLITCH,
+            styles: Vec::new(),
+        });
+        *changed = true;
+    }
 }
 
 /// What one flitch position is called: the ends are named, the rest counted.
@@ -1338,7 +1339,9 @@ fn flitch_position_label(position: usize, count: usize) -> String {
     if position + 1 == count {
         return tr!("planning-bottom-flitch");
     }
-    tr!("planning-flitch", index = (position + 1).to_string())
+    // A number, not a string: the catalog picks the ordinal ending by it.
+    let index = position as u64 + 1;
+    tr!("planning-flitch", index = index)
 }
 
 fn pattern_label(pattern: crate::model::FillStyle) -> String {
@@ -1350,55 +1353,35 @@ fn pattern_label(pattern: crate::model::FillStyle) -> String {
     }
 }
 
-/// The Benching step's second column: the flitch height for each of the same
-/// ranges, and how each flitch position in them is drawn.
-///
-/// The RLs are the benching list's and are shown greyed, because a flitch
-/// divides a bench and cannot start anywhere else. A height that is not a
-/// whole number of flitches to the bench is painted in the error colour.
-///
-/// Styling is a list rather than a row: fill, pattern and pattern colour each
-/// get a line of their own under the flitch they belong to, beneath a rule
-/// that separates them from the heights above. Three controls crammed into one
-/// row fit no column width worth having.
-fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, solid_color: [f32; 4], changed: &mut bool) {
-    DataGrid::new("planning_flitch_list", rect, &tr!("planning-flitching"))
-        .column_header(&tr!("planning-elevation-height"))
-        .show(ui, |ui| {
-            let top = plan.top;
-            let count = plan.intervals.len();
-            grid_value_row(ui, ("flitch_top", 0usize), &tr!("planning-top-rl"), GridNumber::Fixed(top), &tr!("planning-rl"), 0, None);
-            for (index, interval) in plan.intervals.iter_mut().enumerate() {
-                let error = if interval.flitch > 0.0 && (interval.bench / interval.flitch).ceil() > 64.0 {
-                    Some(tr!("planning-too-many-flitches"))
-                } else {
-                    (!interval.flitch_divides_bench()).then(|| {
-                        tr!(
-                            "planning-bench-not-whole-number",
-                            bench = format!("{:.2}", interval.bench),
-                            flitch = format!("{:.2}", interval.flitch)
-                        )
-                    })
-                };
-                *changed |= grid_value_row(
-                    ui,
-                    ("flitch_height", index),
-                    &tr!("planning-flitch-height"),
-                    GridNumber::Edit(&mut interval.flitch),
-                    &String::from("m"),
-                    1,
-                    error.as_deref(),
-                )
-                .1;
+/// Shares of the flitch style grid's columns. The pattern cell holds both the
+/// pattern and the colour it is drawn in.
+const STYLE_FRACTIONS: [f32; 3] = [0.3, 0.2, 0.5];
+/// Share of the pattern cell its dropdown takes; the colour has the rest.
+const PATTERN_SPLIT: f32 = 0.62;
 
-                // One group per flitch position in the range's bench, top
-                // down, carrying how that position is drawn wherever it
-                // recurs.
+/// The Benching step's lower pane: how each flitch position is drawn, one row
+/// per position, top down, under a rule naming its range when there are
+/// several.
+///
+/// The position, not the flitch: every bench in a range is flitched the same
+/// way, so its top flitches share one style.
+fn draw_flitch_styles(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPlan, solid_color: [f32; 4], changed: &mut bool) {
+    let columns = [
+        (tr!("planning-flitch-column"), STYLE_FRACTIONS[0]),
+        (tr!("planning-fill"), STYLE_FRACTIONS[1]),
+        (tr!("planning-pattern"), STYLE_FRACTIONS[2]),
+    ];
+    DataGrid::new("planning_flitch_list", rect, &tr!("planning-flitch-styles"))
+        .columns(&columns)
+        .show(ui, |ui| {
+            let ranges = plan.intervals.len();
+            let mut above = plan.top;
+            for (index, interval) in plan.intervals.iter_mut().enumerate() {
                 let flitches = interval.flitch_count();
                 if interval.styles.len() != flitches {
                     // Changing a height changes how many flitches a bench has.
-                    // Positions that survive keep what they were given; new
-                    // ones take the default shade for where they now sit.
+                    // Positions that survive keep what they were given; new ones
+                    // take the default shade for where they now sit.
                     interval.styles = (0..flitches)
                         .map(|position| {
                             interval
@@ -1410,87 +1393,88 @@ fn draw_flitching_list(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingP
                         .collect();
                     *changed = true;
                 }
-                if flitches > 0 {
-                    grid_separator_row(ui, &tr!("planning-styling"), 1);
+                if ranges > 1 {
+                    grid_separator_row(ui, &range_label(above, interval.base), 0);
                 }
                 for (position, style) in interval.styles.iter_mut().enumerate() {
-                    grid_value_row(
-                        ui,
-                        ("flitch_name", index, position),
-                        &flitch_position_label(position, flitches),
-                        GridNumber::Blank,
-                        "",
-                        1,
-                        None,
-                    );
-                    *changed |= grid_color_row(ui, ("flitch_fill", index, position), &tr!("planning-fill-colour"), &mut style.color, 2);
-                    *changed |= grid_choice_row(
+                    let name = flitch_position_label(position, flitches);
+                    let (_, cells) = grid_columns_row(ui, &STYLE_FRACTIONS, &[&name, "", ""], false);
+                    *changed |= grid_cell_color(ui, ("flitch_fill", index, position), cells[1], &mut style.color);
+                    let split = cells[2].left() + cells[2].width() * PATTERN_SPLIT;
+                    let current = pattern_label(style.pattern);
+                    *changed |= grid_cell_combo(
                         ui,
                         ("flitch_pattern", index, position),
-                        &tr!("planning-pattern"),
+                        cells[2].with_max_x(split),
                         &mut style.pattern,
-                        crate::model::FillStyle::ALL,
-                        pattern_label,
-                        2,
+                        crate::model::FillStyle::ALL.map(|pattern| (pattern, pattern_label(pattern))),
+                        &current,
                     );
-                    *changed |= grid_color_row(ui, ("flitch_pattern_color", index, position), &tr!("planning-pattern-colour"), &mut style.pattern_color, 2);
+                    // A clear flitch draws no pattern, so has no colour to pick for one.
+                    if style.pattern != crate::model::FillStyle::Clear {
+                        *changed |= grid_cell_color(ui, ("flitch_pattern_color", index, position), cells[2].with_min_x(split), &mut style.pattern_color);
+                    }
                 }
-
-                let label = if index + 1 == count { tr!("planning-bottom-rl") } else { tr!("planning-rl") };
-                grid_value_row(ui, ("flitch_base", index), &label, GridNumber::Fixed(interval.base), &tr!("planning-rl"), 0, None);
+                above = interval.base;
             }
         });
 }
 
-/// The Benching step's third column: every bench the plan produces, bottom up,
-/// with its flitches grouped underneath it.
+/// Shares of the results grid's columns.
+const RESULT_FRACTIONS: [f32; 3] = [0.35, 0.35, 0.3];
+
+/// The Benching step's pane under the object tree: every bench the plan
+/// produces that holds some of the solid, bottom up, with its flitches beneath
+/// it, each named by its base RL as the rest of the app names them.
 ///
 /// Selecting a row picks that slice out in the preview.
 fn draw_bench_results(ui: &mut egui::Ui, rect: egui::Rect, plan: &BenchingPlan, editor: &mut EditorState) {
-    DataGrid::new("planning_bench_results", rect, &tr!("planning-results"))
-        .column_header(&tr!("planning-bench-flitch"))
-        .show(ui, |ui| {
-            // A plan may run past the solid at either end - it is snapped out
-            // to whole benches, and the topography cuts the solid short of the
-            // design. Only the slices that actually hold some of it are worth
-            // listing, or picking out in the preview.
-            let occupied = editor.solid_preview_z_range;
-            let holds_solid = |base: f64, top: f64| occupied.is_none_or(|(lowest, highest)| top > lowest + BAND_EPSILON && base < highest - BAND_EPSILON);
-            let benches: Vec<_> = plan.benches().into_iter().filter(|bench| holds_solid(bench.base, bench.top())).collect();
-            if benches.is_empty() {
-                let note = if plan.intervals.is_empty() {
-                    tr!("planning-no-benches-yet-add")
-                } else {
-                    tr!("planning-no-bench-holds-any")
-                };
-                crate::ui::widgets::explorer::explorer_note(ui, note);
-                return;
+    let columns = [
+        (tr!("planning-bench-column"), RESULT_FRACTIONS[0]),
+        (tr!("planning-flitch-column"), RESULT_FRACTIONS[1]),
+        (tr!("planning-height"), RESULT_FRACTIONS[2]),
+    ];
+    DataGrid::new("planning_bench_results", rect, &tr!("planning-results")).columns(&columns).show(ui, |ui| {
+        // A plan may run past the solid at either end - it is snapped out to
+        // whole benches, and the topography cuts the solid short of the
+        // design. Only the slices that actually hold some of it are worth
+        // listing, or picking out in the preview.
+        let occupied = editor.solid_preview_z_range;
+        let holds_solid = |base: f64, top: f64| occupied.is_none_or(|(lowest, highest)| top > lowest + BAND_EPSILON && base < highest - BAND_EPSILON);
+        let benches: Vec<_> = plan.benches().into_iter().filter(|bench| holds_solid(bench.base, bench.top())).collect();
+        if benches.is_empty() {
+            let note = if plan.intervals.is_empty() {
+                tr!("planning-no-ranges")
+            } else {
+                tr!("planning-no-bench-holds-any")
+            };
+            grid_empty_state(ui, &note, None);
+            return;
+        }
+        let mut row = |ui: &mut egui::Ui, cells: [&str; 3], selection: crate::ui::state::BenchSelection| {
+            let selected = editor.planning_selected_bench == Some(selection);
+            if grid_columns_row(ui, &RESULT_FRACTIONS, &cells, selected).0.clicked() {
+                editor.planning_selected_bench = (!selected).then_some(selection);
             }
-            // Bottom up, so the list reads the way a pit is mined and the way
-            // its benches are named.
-            for bench in benches.iter().rev() {
+        };
+        // Bottom up, so the list reads the way a pit is mined.
+        for bench in benches.iter().rev() {
+            let selection = crate::ui::state::BenchSelection {
+                base: bench.base,
+                top: bench.top(),
+                is_flitch: false,
+            };
+            row(ui, [&format_rl(bench.base), "", &format!("{} m", format_rl(bench.height))], selection);
+            for flitch in bench.flitches.iter().rev().filter(|flitch| holds_solid(flitch.base, flitch.top())) {
                 let selection = crate::ui::state::BenchSelection {
-                    base: bench.base,
-                    top: bench.top(),
-                    is_flitch: false,
+                    base: flitch.base,
+                    top: flitch.top(),
+                    is_flitch: true,
                 };
-                let label = format!("{:.2} → {:.2} ({:.2} m)", bench.base, bench.top(), bench.height);
-                if grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_bench == Some(selection))).clicked() {
-                    editor.planning_selected_bench = (editor.planning_selected_bench != Some(selection)).then_some(selection);
-                }
-                for flitch in bench.flitches.iter().rev().filter(|flitch| holds_solid(flitch.base, flitch.top())) {
-                    let selection = crate::ui::state::BenchSelection {
-                        base: flitch.base,
-                        top: flitch.top(),
-                        is_flitch: true,
-                    };
-                    let label = format!("    {:.2} → {:.2}", flitch.base, flitch.top());
-                    if grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_bench == Some(selection))).clicked() {
-                        editor.planning_selected_bench = (editor.planning_selected_bench != Some(selection)).then_some(selection);
-                    }
-                }
+                row(ui, ["", &format_rl(flitch.base), &format!("{} m", format_rl(flitch.height))], selection);
             }
-        });
+        }
+    });
 }
 
 /// Slack on the solid's own extent when deciding whether a bench holds any of
@@ -1503,6 +1487,9 @@ const BAND_EPSILON: f64 = 1e-3;
 const DEFAULT_RANGE_DEPTH: f64 = 120.0;
 
 fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
+        editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
+    }
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
     let solid_id = selected.map(|solid| solid.id);
     let solid_color = selected.map_or([1.0; 4], |solid| solid.color);
@@ -1516,9 +1503,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &results, editor);
         } else {
-            PropertyTable::new("planning_bench_results_empty", rect, &tr!("planning-results")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            });
+            DataGrid::new("planning_bench_results_empty", rect, &tr!("planning-results")).show(ui, |_| {});
         }
     });
 
@@ -1526,26 +1511,23 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     // frame of its own and they halve its height between them. It still closes
     // as a whole: the seam down its side drags both of them shut.
     let settings = Island::new("planning_bench_settings_column", Side::Left)
-        .default_width(240.0)
+        .default_width(300.0)
         .min_width(140.0)
         .bare()
         .show(ui, |ui, _| {
             let (flitching, seam) = stacked_lower(ui, "planning_flitching_island", |ui, rect| {
                 if solid_id.is_some() {
-                    draw_flitching_list(ui, rect, &mut plan, solid_color, &mut changed);
+                    draw_flitch_styles(ui, rect, &mut plan, solid_color, &mut changed);
                 } else {
-                    PropertyTable::new("planning_flitching_empty", rect, &tr!("planning-flitching")).show(ui, |rows| {
-                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-                    });
+                    DataGrid::new("planning_flitching_empty", rect, &tr!("planning-flitch-styles")).show(ui, |_| {});
                 }
             });
             let benching = central_pane(ui, |ui, rect| {
                 if solid_id.is_some() {
                     draw_benching_list(ui, rect, &mut plan, &mut changed);
                 } else {
-                    PropertyTable::new("planning_benching_empty", rect, &tr!("planning-benching")).show(ui, |rows| {
-                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-                        rows.readonly(&tr!("planning-solids"), &tr!("planning-select-solid"), None, None);
+                    DataGrid::new("planning_benching_empty", rect, &tr!("planning-benching")).show(ui, |ui| {
+                        grid_empty_state(ui, &tr!("planning-no-solid-selected"), None);
                     });
                 }
             });
@@ -1580,14 +1562,27 @@ fn draw_solids_details(
 ) {
     match editor.planning_solids_step {
         SolidsStep::Blasting | SolidsStep::DigStrips => {}
-        // One table with nothing beside it, so it is the workspace rather
-        // than a column of it.
-        SolidsStep::FieldList => central_island(ui, layout, |ui, rect| draw_field_list(ui, rect, editor, document, commands)),
+        // The list is the workspace; the columns it is added from are a
+        // helper beside it.
+        SolidsStep::FieldList => {
+            let columns = Island::new("reserve_column_island", Side::Right)
+                .default_width(300.0)
+                .min_width(160.0)
+                .flush()
+                .show(ui, |ui, rect| draw_column_tree(ui, rect, document, block_models, commands));
+            layout.regions.extend(columns.regions);
+            layout.grips.push(columns.grip);
+            central_island(ui, layout, |ui, rect| draw_field_list(ui, rect, editor, document, commands));
+        }
         SolidsStep::Solids => draw_solids_step(ui, layout, editor, project, document, commands),
         SolidsStep::Benching => draw_benching_step(ui, layout, editor, project, document, commands),
         // The model list is in the explorer column under the step list, so the
         // mapping has the workspace to itself.
         SolidsStep::BlockModels => {
+            // Open on a model rather than an empty pane.
+            if editor.planning_selected_block_model.is_none_or(|id| block_models.iter().all(|model| model.id != id)) {
+                editor.planning_selected_block_model = project.block_models.first().map(|entry| entry.id);
+            }
             central_island(ui, layout, |ui, rect| {
                 if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
                     // The count is the project view's own, the same figure the
@@ -1595,8 +1590,8 @@ fn draw_solids_details(
                     let blocks = project.block_models.iter().find(|entry| entry.id == model.id).map_or(0, |entry| entry.block_count);
                     draw_block_model_mapping(ui, rect, document, model, blocks, commands);
                 } else {
-                    PropertyTable::new("reserve_block_model_mapping_empty", rect, &tr!("planning-block-models")).show(ui, |rows| {
-                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                    DataGrid::new("reserve_block_model_mapping_empty", rect, &tr!("planning-block-models")).show(ui, |ui| {
+                        grid_empty_state(ui, &tr!("planning-no-block-models-project"), None);
                     });
                 }
             });

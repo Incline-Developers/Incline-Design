@@ -134,6 +134,8 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::AddReserveField { .. }
+                | UiCommand::AddReserveFieldFromColumn { .. }
+                | UiCommand::SetReserveFieldAggregation { .. }
                 | UiCommand::DeleteReserveField(_)
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
@@ -398,6 +400,14 @@ impl<'a> App<'a> {
                 self.add_reserve_field(name, aggregation);
                 Ok(())
             }
+            UiCommand::AddReserveFieldFromColumn { column, categorical } => {
+                self.add_reserve_field_from_column(column, categorical);
+                Ok(())
+            }
+            UiCommand::SetReserveFieldAggregation { field, aggregation } => {
+                self.set_reserve_field_aggregation(field, aggregation);
+                Ok(())
+            }
             UiCommand::DeleteReserveField(id) => {
                 self.delete_reserve_field(id);
                 Ok(())
@@ -467,14 +477,6 @@ impl<'a> App<'a> {
                 self.apply_schedule_edit(project, edit);
                 Ok(())
             }
-            UiCommand::CopyDigStrips => {
-                self.copy_dig_strips();
-                Ok(())
-            }
-            UiCommand::PasteDigStrips => {
-                self.paste_dig_strips();
-                Ok(())
-            }
             UiCommand::SelectDigBlock(block) => {
                 self.editor.selected_dig_block = Some(block);
                 self.invalidate_overlay();
@@ -504,7 +506,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::RunPlanningStage(stage) => {
-                self.run_planning_stage(stage);
+                self.planning_advance_after = self.run_planning_stage(stage).then_some(stage);
                 Ok(())
             }
             UiCommand::RunAllPlanningStages => {
@@ -516,7 +518,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::RunScheduleStage(step) => {
-                self.run_schedule_step(step);
+                // Set before the run: a step that finishes at once settles in
+                // the run's own mirror pass.
+                self.schedule_advance_after = Some(step);
+                if !self.run_schedule_step(step) {
+                    self.schedule_advance_after = None;
+                }
                 Ok(())
             }
             UiCommand::RunAllScheduleStages => {

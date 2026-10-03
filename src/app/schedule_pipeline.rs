@@ -792,6 +792,20 @@ impl crate::app::App<'_> {
             Ok(_) => tr!("schedule-calculation-ready"),
             Err(reason) => tr!("schedule-calculation-blocked", reason = reason.describe()),
         };
+        // As on Solids: a step run on its own that succeeds moves the list on.
+        // Truck classes are listed on the Haulage page, not in this list.
+        if let Some(step) = self.schedule_advance_after
+            && !matches!(views.get(step.index()).map(|view| view.state), Some(StageState::Queued | StageState::Running))
+        {
+            self.schedule_advance_after = None;
+            let next = ScheduleStep::ALL.into_iter().skip(step.index() + 1).find(|next| *next != ScheduleStep::TruckClasses);
+            if let (Some(StageState::Complete), Some(next)) = (views.get(step.index()).map(|view| view.state), next)
+                && self.editor.schedule_setup_step == step
+            {
+                self.editor.schedule_setup_step = next;
+                self.redraw_requested = true;
+            }
+        }
         if self.editor.schedule_stages != views || self.editor.schedule_run_active != running || self.editor.schedule_calculation_status != calculation {
             self.editor.schedule_stages = views;
             self.editor.schedule_run_active = running;
@@ -802,16 +816,18 @@ impl crate::app::App<'_> {
 
     /// Reset the Schedule Setup pipeline and run from its first step through
     /// the selected one.
-    pub(crate) fn run_schedule_step(&mut self, step: ScheduleStep) {
+    /// Whether the run started.
+    pub(crate) fn run_schedule_step(&mut self, step: ScheduleStep) -> bool {
         self.sync_schedule_pipeline();
         let Some(pipeline) = self.schedule_pipeline.as_mut() else {
-            return;
+            return false;
         };
         if !pipeline.restart_through(step) {
-            return;
+            return false;
         }
         self.advance_schedule_run();
         self.mirror_schedule_stages();
+        true
     }
 
     pub(crate) fn run_all_schedule_steps(&mut self) {

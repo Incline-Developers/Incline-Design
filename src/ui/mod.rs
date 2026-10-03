@@ -714,7 +714,7 @@ fn draw_ui(
         Some(if editor.is_dig_strips_step() {
             elements::dig_strips::draw_panel(root_ui, editor, document, commands)
         } else {
-            elements::blasting::draw_panel(root_ui, editor, commands)
+            elements::blasting::draw_panel(root_ui, editor, document, commands)
         })
     } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
         Some(elements::haulage::draw_panel(root_ui, editor, document, project, commands))
@@ -1306,7 +1306,7 @@ fn draw_ui(
         }
     }
 
-    if editor.is_planning_cut_step() {
+    if editor.is_planning_cut_step() && editor.planning_cut_labels {
         let painter = root_ui.painter().with_clip_rect(canvas_rect);
         let scale = root_ui.ctx().pixels_per_point();
         for (name, (x, y), selected) in &editor.blast_labels {

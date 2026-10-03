@@ -192,7 +192,7 @@ fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str
 /// the cursor, and the fixed centre the C tool pins - because they mean the
 /// same thing to the eye. What separates them is how long they stay: the
 /// transient one lives only for the drag, the fixed one stays up between drags.
-fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
+pub(crate) fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
     let halo = egui::Stroke::new(3.2, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140));
     let core = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 235));
     let r = 6.0;

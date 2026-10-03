@@ -30,9 +30,6 @@ pub(crate) struct SolidPreviewScene<'frame> {
     pub(crate) rasters: &'frame [OpenRasterTexture],
 }
 
-/// Fraction of the framed mesh's radius left as margin around it.
-const FRAMING_MARGIN: f64 = 1.15;
-
 pub(super) struct SolidPreviewTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -309,7 +306,7 @@ impl Graphics<'_> {
         // its own - and the pick is resolved against the camera this sets up.
         // Left to the key alone, a picked block stayed unhighlighted until some
         // unrelated change happened to redraw the preview.
-        let pick_pending = editor.solid_preview_pick.is_some();
+        let pick_pending = editor.solid_preview_pick.is_some() || editor.solid_preview_pivot_request.is_some();
         let content_changed = resized || self.solid_preview_key != Some(key);
         if content_changed {
             self.solid_preview_key = Some(key);
@@ -336,23 +333,9 @@ impl Graphics<'_> {
     /// Always returns a completed result. A miss has to be distinguishable
     /// from "not resolved yet", because a miss clears the selection.
     fn pick_preview_solid(&self, preview: &[OpenTriangulation], uv: [f32; 2]) -> crate::ui::state::SolidPick {
-        // A click outside the image is not a miss on the scene; the caller
-        // only ever hands over points inside it, so clamping keeps a click
-        // exactly on the right or bottom edge from reading as off-image.
-        let uv = uv.map(|value| f64::from(value).clamp(0.0, 1.0));
-        let matrix = crate::rendering::camera::scene_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
-        let inverse = matrix.inverse();
-        let at_depth = |depth: f64| {
-            let clip = glam::DVec4::new(2.0 * uv[0] - 1.0, 1.0 - 2.0 * uv[1], depth, 1.0);
-            let point = inverse * clip;
-            point.truncate() / point.w + self.scene_origin
-        };
-        // Reversed-Z: the near plane is at one.
-        let origin = at_depth(1.0);
-        let direction = (at_depth(0.0) - origin).normalize_or_zero();
-        if direction == glam::DVec3::ZERO {
+        let Some((origin, direction)) = self.preview_ray(uv) else {
             return crate::ui::state::SolidPick::Miss;
-        }
+        };
         let mut nearest: Option<(f64, crate::model::triangulation::TriangulationId)> = None;
         for item in preview {
             let Some(hit) = item.spatial.ray_hit(&item.mesh, origin, direction) else {
@@ -364,6 +347,25 @@ impl Graphics<'_> {
             }
         }
         nearest.map_or(crate::ui::state::SolidPick::Miss, |(_, id)| crate::ui::state::SolidPick::Hit(id))
+    }
+
+    /// The ray through a point of the preview image, `0..1` across and down,
+    /// unprojected through the camera the preview is being drawn with.
+    fn preview_ray(&self, uv: [f32; 2]) -> Option<(glam::DVec3, glam::DVec3)> {
+        // The image only ever hands over points inside it, so clamping keeps
+        // a point exactly on the right or bottom edge from reading as off it.
+        let uv = uv.map(|value| f64::from(value).clamp(0.0, 1.0));
+        let matrix = crate::rendering::camera::scene_view_proj(&self.camera, &self.projection, self.scene_origin, 1.0);
+        let inverse = matrix.inverse();
+        let at_depth = |depth: f64| {
+            let clip = glam::DVec4::new(2.0 * uv[0] - 1.0, 1.0 - 2.0 * uv[1], depth, 1.0);
+            let point = inverse * clip;
+            point.truncate() / point.w + self.scene_origin
+        };
+        // Reversed-Z: the near plane is at one.
+        let origin = at_depth(1.0);
+        let direction = (at_depth(0.0) - origin).normalize_or_zero();
+        (direction != glam::DVec3::ZERO).then_some((origin, direction))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -386,7 +388,7 @@ impl Graphics<'_> {
         // view direction's Z is the negative of it.
         let forward = glam::DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch).normalize();
         let distance = radius * 4.0;
-        target.projection.zoom = radius * FRAMING_MARGIN / view.zoom_multiplier.max(0.05);
+        target.projection.zoom = radius * SolidPreviewView::FRAMING_MARGIN / view.zoom_multiplier.max(0.05);
         let framed = view.framed_center(center, radius);
         target.camera.look_to(framed - forward * distance, forward, glam::DVec3::Z, distance);
 
@@ -412,6 +414,20 @@ impl Graphics<'_> {
         self.camera_uniform.set_interaction_quality(1.0, 1.0);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
 
+        if let Some(uv) = editor.solid_preview_pivot_request.take() {
+            // Ground under the pointer, else the point at the framed centre's
+            // depth along the same ray - an orbit begun over empty space
+            // still turns about where the pointer is, as the main view does.
+            let pivot = self.preview_ray(uv).map(|(origin, direction)| {
+                let hit = preview
+                    .iter()
+                    .filter_map(|item| item.spatial.ray_hit(&item.mesh, origin, direction))
+                    .min_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
+                let framed = view.framed_center(center, radius);
+                hit.unwrap_or_else(|| origin + direction * (framed - origin).dot(direction))
+            });
+            editor.solid_preview_pivot = pivot.map(|point| (point - center) / radius);
+        }
         if let Some(request) = editor.solid_preview_pick.take() {
             // Resolved against the target actually drawn to, which the clamp
             // above may have sized differently from the pane the click landed

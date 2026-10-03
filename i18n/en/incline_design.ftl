@@ -225,8 +225,12 @@ planning-solid-geometry-pending = Preparing occupied benches…
 planning-empty-category = (Empty)
 planning-computing-reserves = Computing selected reserves…
 planning-mapping-per-volume = { $column } × block volume
-planning-no-fields = No fields yet. Right-click to add one.
-planning-no-solids = No solids yet. Right-click to add one.
+planning-no-fields = No fields yet
+planning-model-columns = Block Model Columns
+planning-add-column = Add to the Field List
+planning-average-by = Average by { $field }
+planning-combines-as = Combines As
+planning-no-solids = No solids yet
 triangulation-picker-loaded-only = Only loaded surfaces are listed. Load one in the explorer to offer it here.
 planning-reserve-needs-model = Assign a block model to compute reserve fields
 planning-reserve-open-solid = Reserve fields need a closed solid, and this one is open: its surfaces do not meet all the way round. Rebuild it from a design that meets the topography everywhere; Build Solid from Surfaces reports how many edges are open.
@@ -1736,17 +1740,26 @@ planning-stat-sum = Sum
 planning-stat-avg = Avg
 planning-stat-min = Min
 planning-stat-max = Max
-planning-select-solid = Select a solid from the list
 planning-blast-name-taken = { $blast } already exists
 planning-blasts = Blasts
 planning-blasts-empty = Select a bench to see its blasts
-planning-blasts-one-bench = Select a single bench to draw cuts on it
-planning-blast-row = { $name } · { $area } m²
+planning-blasts-one-bench = Select one bench to draw cuts
+planning-dig-one-flitch = Select one flitch to draw strips
+planning-blast-count =
+    { $count ->
+        [one] { $count } blast
+       *[other] { $count } blasts
+    }
 planning-dig-strips = Dig Strips
 planning-dig-blocks = Dig Blocks
-planning-dig-select-flitch = Select a flitch to draw dig strips.
-planning-dig-copy = Copy Strips
-planning-dig-paste = Paste Strips
+planning-dig-blocks-empty = Select a flitch to see its dig blocks
+planning-dig-block = Block
+planning-dig-blast-group = Blast { $name }
+planning-dig-block-count =
+    { $count ->
+        [one] { $count } block
+       *[other] { $count } blocks
+    }
 
 ## Reserve field diagnostics
 
@@ -1762,8 +1775,13 @@ reserve-issue-weight-not-summed = Weighting field "{ $name }" must be a summed f
 reserve-issue-weight-unresolved = The weighting field could not be resolved on this block model
 reserve-issue-all-missing = Every block in range was missing a value for this field
 reserve-issue-model-excluded = This block model is excluded from the project's reserves. Tick Used for reserving for it in Planning → Block Models.
-reserve-weighted-average = Weighted average
+reserve-weighted-average = Weighted Average
 reserve-new-field = New Field
+reserve-field-name-hint = e.g. Fe
+reserve-kind-sum-note = Added up across blocks: tonnes, volume.
+reserve-kind-average-note = Averaged over blocks by a Sum field: grades.
+reserve-kind-average-needs-sum = Add a Sum field to average by first.
+reserve-kind-category-note = A label per block: rock type.
 reserve-weighted = Weighted by
 reserve-add-field = Add Field
 planning-reserve-capacity-only = Geometry only · no block model assigned, so there is no measured content
@@ -1790,14 +1808,12 @@ stage-waiting-models = Waiting on { $count } block models
 stage-waiting-solids = Waiting on { $count } solids
 stage-no-occupied-bands = The benching plan reaches no material in this solid
 stage-run-step = Run
-stage-progress = { $done } of { $total } steps
+stage-progress-short = { $done }/{ $total }
 stage-run-all = Run All
 stage-cancel = Cancel Run
-stage-last-run = { $entities } entities
 stage-diagnostics = Diagnostics
 planning-reserve-coverage = Model coverage
 planning-reserve-coverage-note = Block-model volume measured into the shown geometry, as a share of its geometric volume
-stage-dig-blocks-summary = Dig Strips complete · { $blocks } blocks across { $solids } solids · { $volume } m³ measured · { $unmeasured } without a closed volume
 stage-block-not-closed = Dig block { $block } ({ $area } m²) did not come out closed, so it has no volume
 stage-volume-mismatch = { $blocks } dig blocks total { $children } m³ against the bench's own { $parent } m³
 stage-duplicate-block-id = Two dig blocks share identity { $id }
@@ -1820,7 +1836,6 @@ planning-not-run = Not run · use Run All to build this solid's benches and dig 
 planning-reserve-partial = Partial · { $contributed } blocks contributed, { $missing } could not
 planning-reserve-none-contributed = No block in this ground carried a value ({ $missing } missing)
 planning-block-replaces = Replaces { $ids }
-stage-blocks-relineaged = { $count } dig blocks replaced ground that previously held other identities
 planning-snapshot-no-project = No project is open
 planning-snapshot-not-run = { $stage } has not been run
 planning-snapshot-stale = { $stage } is out of date; run it again
@@ -2023,15 +2038,10 @@ planning-topography-update-note = Measure several solids against a new topograph
 planning-topography-update-solids = Solids
 planning-topography-update-row = { $name } (now { $current })
 planning-topography-update-apply = Apply
-planning-dig-block-row = { $name } · { $area } m²
-planning-dig-block-excluded = { $name } · { $area } m² · excluded
 planning-blast-cuts = Blast cuts
 planning-double-click-rename = Double-click to rename
 planning-rename-blast = Rename Blast
 planning-reset-blast-name = Reset Blast Name
-planning-shortcut-copy = Ctrl+C
-planning-shortcut-paste = Ctrl+V
-planning-weighted-avg = Weighted avg. by { $name }
 planning-rename-field = Rename Field
 planning-delete-field = Delete Field
 planning-no-block-models-project = No block models in this project
@@ -2040,6 +2050,11 @@ planning-constant = Constant
 planning-extents-heading = Extents
 planning-blocks = Blocks
 planning-used-reserving = Used for reserving
+planning-source = Source
+planning-stat-sum-avg = Sum / Avg
+planning-block-count = { $blocks } blocks
+planning-columns-heading = Columns
+planning-per-m3-heading = Per m³ × block volume
 planning-rename-solid = Rename Solid
 planning-delete-solid = Delete Solid
 planning-set-block-model-reserve = Set a block model to reserve this pit
@@ -2049,29 +2064,49 @@ planning-load-solid-surfaces-inspect = Load this solid's surfaces to inspect it
 planning-loading-solid-surfaces = Loading this solid's surfaces…
 planning-rebuilding-solid = Rebuilding solid…
 planning-building-solid = Building solid…
-planning-faces = { $volume } m³ · { $faces } faces
+planning-solid-volume = { $volume } m³
 planning-surface-only-other-surface = Surface only · the other surface is not loaded
-planning-surface-only-faces = Surface only · { $faces } faces
-planning-elevation-height = Elevation · Height
+planning-surface-only = Surface only
+planning-no-solid-selected = No solid selected
 planning-top-rl = Top RL
-planning-rl = RL
-planning-bottom-rl = Bottom RL
+planning-base-rl = Base RL
+planning-bench-column = Bench
+planning-flitch-column = Flitch
+planning-no-ranges = No ranges yet
+planning-flitch-styles = Flitch Styles
+planning-fill = Fill
+planning-height = Height
 planning-insert-range-below = Insert Range Below
 planning-delete-range = Delete Range
 planning-add-range = Add Range
-planning-top-flitch = Top flitch
-planning-bottom-flitch = Bottom flitch
-planning-flitch = Flitch { $index }
-planning-flitching = Flitching
+planning-top-flitch = Top
+planning-bottom-flitch = Bottom
+# A flitch position between the top and bottom one, counted from the top.
+# English ordinals: st/nd/rd listed by number, th for everything else.
+planning-flitch =
+    { $index ->
+        [2] { $index }nd
+        [3] { $index }rd
+        [21] { $index }st
+        [22] { $index }nd
+        [23] { $index }rd
+        [31] { $index }st
+        [32] { $index }nd
+        [33] { $index }rd
+        [41] { $index }st
+        [42] { $index }nd
+        [43] { $index }rd
+        [51] { $index }st
+        [52] { $index }nd
+        [53] { $index }rd
+        [61] { $index }st
+        [62] { $index }nd
+        [63] { $index }rd
+       *[other] { $index }th
+    }
 planning-bench-not-whole-number = A { $bench } m bench is not a whole number of { $flitch } m flitches
-planning-flitch-height = Flitch height
-planning-styling = Styling
-planning-fill-colour = Fill colour
 planning-pattern = Pattern
-planning-pattern-colour = Pattern colour
 planning-results = Results
-planning-bench-flitch = Bench · Flitch
-planning-no-benches-yet-add = No benches yet - add a range
 planning-no-bench-holds-any = No bench holds any of this solid
 schedule-capture-excluded = { $bar }: { $count } excluded blocks skipped
 gantt-palette-dig = Dig
@@ -3556,6 +3591,8 @@ viewport-widen-panel-show-density = Widen the panel to show density
 viewport-widen-panel-show-density-gamma = Widen the panel to show density and gamma
 viewport-widen-panel-show-gamma = Widen the panel to show gamma
 viewport-bench = Bench:
+viewport-flitch = Flitch:
+viewport-labels = Labels
 
 ## Charging dialogs
 

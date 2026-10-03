@@ -83,7 +83,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
             let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
-                .leading_icon(super::planning_setup::step_icon(status.state), super::planning_setup::stage_tint(ui, status.state))
+                .leading_icon(super::planning_setup::StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == entry)
                 .show(ui);
@@ -92,14 +92,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             }
             // The badge's reason, where the badge is.
             let response = entry_response.response.on_hover_ui(|ui| {
-                super::planning_setup::stage_tooltip_parts(
-                    ui,
-                    status.state,
-                    status.blocked_by.map(ScheduleStep::label),
-                    status.message.as_deref(),
-                    status.last_success.as_ref(),
-                    &status.diagnostics,
-                );
+                super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
             });
             if response.clicked() {
                 step = entry;
@@ -199,7 +192,7 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
 /// because only a summed field can be read as tonnes and the choice should
 /// not look like it can.
 fn field_option_label(document: &Document, field: &ReserveField) -> String {
-    format!("{} · {}", field.name, super::planning_setup::aggregation_summary(document, &field.aggregation))
+    format!("{} · {}", field.name, super::planning_setup::aggregation_label(document, &field.aggregation))
 }
 
 /// The schedule's own settings: what it is called, and which reserve field is

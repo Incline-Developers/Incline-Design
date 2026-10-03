@@ -337,14 +337,35 @@ pub(crate) fn preview_triangulation(
 }
 
 impl crate::app::App<'_> {
-    /// Keep the Solids Setup page's preview in step with what it is showing.
+    /// Give each solid with no benching plan the default one, covering its
+    /// built solid, as soon as the Solids stage has built it - on whatever
+    /// page is open. Benching runs from anywhere, and run before anyone had
+    /// opened its page it found no plan at all and reached no material.
     ///
-    /// Called once per frame before rendering. A solid with only a design
-    /// surface previews that surface directly - there is no volume to build
-    /// from one sheet - and one with a topography as well previews the solid
-    /// between them, built on a worker so a large pair of surfaces does not
-    /// stall the page.
-    /// Seed a plan covering the complete built solid once geometry is ready.
+    /// Before the slabs are synced, so they are first cut against this plan
+    /// rather than against none and then again.
+    fn seed_benching_plans(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let seeds: Vec<_> = document
+            .solids()
+            .iter()
+            .filter(|solid| solid.benching.intervals.is_empty())
+            .filter_map(|solid| {
+                let envelope = self.solid_view_cache.get(&solid.id)?.envelope()?;
+                let (lowest, highest) = mesh_z_extent(&envelope.mesh)?;
+                Some((solid.id, crate::model::BenchingPlan::covering(lowest, highest)))
+            })
+            .collect();
+        for (solid, plan) in seeds {
+            self.update_solid(solid, crate::model::SolidEdit::Benching(plan));
+        }
+    }
+
+    /// Seed the open Benching page's solid from its own preview, which can be
+    /// built before the Solids stage has run - with Auto off, say - and so
+    /// before [`Self::seed_benching_plans`] has a solid to cover.
     fn seed_benching_plan(&mut self) {
         if self.editor.planning_solids_step != crate::ui::state::SolidsStep::Benching {
             return;
@@ -492,6 +513,13 @@ impl crate::app::App<'_> {
         }
     }
 
+    /// Keep the Solids Setup page's preview in step with what it is showing.
+    ///
+    /// Called once per frame before rendering. A solid with only a design
+    /// surface previews that surface directly - there is no volume to build
+    /// from one sheet - and one with a topography as well previews the solid
+    /// between them, built on a worker so a large pair of surfaces does not
+    /// stall the page.
     pub(crate) fn sync_solid_preview(&mut self) {
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
         if self.solid_view_cache.values().any(|cache| Some(cache.runtime) != runtime) {
@@ -503,6 +531,7 @@ impl crate::app::App<'_> {
             self.dig_block_identities.clear();
             self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { .. }));
         }
+        self.seed_benching_plans();
         // Blasting reads the same per-solid geometry cache as View; it only
         // styles and frames it differently. Neither *starts* anything: the
         // artifacts are built when a stage is run, and these pages show what
@@ -770,8 +799,8 @@ impl crate::app::App<'_> {
                 return;
             }
             let status = match result {
-                Ok((generated, volume)) => SolidPreviewStatus::Ready {
-                    mesh: Box::new(preview_triangulation(
+                Ok((generated, volume)) => {
+                    let mut mesh = preview_triangulation(
                         generated.name,
                         generated.mesh,
                         generated.spatial,
@@ -779,9 +808,15 @@ impl crate::app::App<'_> {
                         generated.surface_face_order,
                         color,
                         line_color,
-                    )),
-                    volume: Some(volume),
-                },
+                    );
+                    // Crosshatched as Benching draws a flitch: in one flat
+                    // colour the solid's faces run together.
+                    mesh.flitch_style = Some(crate::model::FlitchStyle::default_for(color, 0, 1));
+                    SolidPreviewStatus::Ready {
+                        mesh: Box::new(mesh),
+                        volume: Some(volume),
+                    }
+                }
                 Err(error) => SolidPreviewStatus::Failed(format!("{error:#}")),
             };
             // The outgoing cut stays on screen until the incoming mesh has

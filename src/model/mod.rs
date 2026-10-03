@@ -679,6 +679,13 @@ impl Bench {
     pub(crate) fn top(&self) -> f64 {
         self.base + self.height
     }
+
+    /// Whether an RL falls in this bench: its base, up to but not its top,
+    /// which is the next bench's base. A flitch is found in its bench by its
+    /// own base this way.
+    pub(crate) fn contains_rl(&self, rl: f64) -> bool {
+        rl >= self.base - 1e-6 && rl < self.top() - 1e-6
+    }
 }
 
 impl Flitch {
@@ -1817,6 +1824,32 @@ impl Document {
         self.reserve_fields.push(ReserveField { id, name, aggregation });
         self.touch();
         id
+    }
+
+    /// Change how a field combines. Refused where it would break a weighted
+    /// average: a field others weight by stays a Sum, and a field can only
+    /// be weighted by a Sum other than itself.
+    pub(crate) fn set_reserve_field_aggregation(&mut self, id: ReserveFieldId, aggregation: ReserveAggregation) -> bool {
+        let weights_others = self
+            .reserve_fields
+            .iter()
+            .any(|field| field.aggregation == ReserveAggregation::WeightedAverage { weight_field: id });
+        let valid = match aggregation {
+            ReserveAggregation::Sum => true,
+            ReserveAggregation::WeightedAverage { weight_field } => {
+                !weights_others && weight_field != id && self.reserve_field(weight_field).is_some_and(|field| field.aggregation == ReserveAggregation::Sum)
+            }
+            ReserveAggregation::Category => !weights_others,
+        };
+        let Some(field) = self.reserve_fields.iter_mut().find(|field| field.id == id) else {
+            return false;
+        };
+        if !valid || field.aggregation == aggregation {
+            return false;
+        }
+        field.aggregation = aggregation;
+        self.touch();
+        true
     }
 
     pub(crate) fn rename_reserve_field(&mut self, id: ReserveFieldId, new_name: String) {

@@ -288,6 +288,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
     // Banded and full-height like every other tree: its island is a region of
     // its own, so a short list has to fill it rather than shrink it away.
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+    let reveal = std::mem::take(&mut editor.solids_tree_reveal);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -295,56 +296,92 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
         if document.solids().is_empty() {
             explorer_note(ui, tr!("solids-no-solids-yet-add"));
         }
-        for solid in document.solids() {
-            let occupied = editor.solid_view_bands.get(&solid.id);
-            let benches: Vec<_> = solid
-                .benching
-                .benches()
-                .into_iter()
-                .rev()
-                .filter(|bench| holds(occupied, bench.base, bench.top()))
+        let mut clicked = None;
+        for kind in SolidKind::ALL {
+            let solids: Vec<_> = document
+                .solids()
+                .iter()
+                .filter(|solid| solid.kind == kind)
+                .filter(|solid| {
+                    let occupied = editor.solid_view_bands.get(&solid.id);
+                    occupied.is_none() || solid.benching.benches().iter().any(|bench| holds(occupied, bench.base, bench.top()))
+                })
                 .collect();
-            if benches.is_empty() && occupied.is_some() {
+            if solids.is_empty() {
                 continue;
             }
-            egui::CollapsingHeader::new(&solid.name).id_salt(("strip_solid", solid.id)).show(ui, |ui| {
-                if occupied.is_none() {
-                    explorer_note(ui, tr!("planning-solid-geometry-pending"));
-                }
-                for bench in &benches {
-                    egui::CollapsingHeader::new(format_rl(bench.base))
-                        .id_salt(("strip_bench", solid.id, bench.base.to_bits()))
-                        .show(ui, |ui| {
-                            for flitch in bench.flitches.iter().rev().filter(|flitch| holds(occupied, flitch.base, flitch.top())) {
-                                let row = SolidsViewRow {
-                                    solid: solid.id,
-                                    band: Some(BenchSelection {
-                                        base: flitch.base,
-                                        top: flitch.top(),
-                                        is_flitch: true,
-                                    }),
-                                };
-                                if leaf_row(
-                                    ui,
-                                    egui::Id::new(("strip_flitch", solid.id, flitch.base.to_bits())),
-                                    &format_rl(flitch.base),
-                                    editor.solids_view_selection == [row],
-                                ) {
-                                    editor.solids_view_selection = vec![row];
-                                    editor.selected_blast = None;
-                                    ui.ctx().request_repaint();
-                                }
+            let kind_id = egui::Id::new(("strip_kind", kind as u8));
+            if reveal && solids.iter().any(|solid| editor.solids_view_selection.iter().any(|row| row.solid == solid.id)) {
+                open_row(ui, kind_id);
+            }
+            ExplorerHeader::new(kind_id, kind_label(kind)).icon(unthemed_icon!("layer.svg")).show(ui, |ui| {
+                for solid in solids {
+                    let occupied = editor.solid_view_bands.get(&solid.id);
+                    let solid_id = egui::Id::new(("strip_solid", solid.id.0));
+                    let picked = editor.solids_view_selection.iter().find(|row| row.solid == solid.id).and_then(|row| row.band);
+                    if reveal && picked.is_some() {
+                        open_row(ui, solid_id);
+                    }
+                    ExplorerHeader::new(solid_id, solid.name.clone()).icon(unthemed_icon!("triangulation.svg")).show(ui, |ui| {
+                        if occupied.is_none() {
+                            explorer_note(ui, tr!("planning-solid-geometry-pending"));
+                        }
+                        for bench in solid.benching.benches().iter().rev().filter(|bench| holds(occupied, bench.base, bench.top())) {
+                            let bench_id = egui::Id::new(("strip_bench", solid.id.0, bench.base.to_bits()));
+                            if reveal && picked.is_some_and(|band| bench.contains_rl(band.base)) {
+                                open_row(ui, bench_id);
                             }
-                        });
+                            // Only a flitch is drawn on, so the bench row just
+                            // opens and closes.
+                            let response = collapsible_row(ui, bench_id, &format_rl(bench.base), false, |ui| {
+                                for flitch in bench.flitches.iter().rev().filter(|flitch| holds(occupied, flitch.base, flitch.top())) {
+                                    let row = SolidsViewRow {
+                                        solid: solid.id,
+                                        band: Some(BenchSelection {
+                                            base: flitch.base,
+                                            top: flitch.top(),
+                                            is_flitch: true,
+                                        }),
+                                    };
+                                    if leaf_row(
+                                        ui,
+                                        egui::Id::new(("strip_flitch", solid.id.0, flitch.base.to_bits())),
+                                        &format_rl(flitch.base),
+                                        editor.solids_view_selection == [row],
+                                    ) {
+                                        clicked = Some(row);
+                                    }
+                                }
+                            });
+                            if response.clicked() {
+                                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), bench_id, false);
+                                state.toggle(ui);
+                                state.store(ui.ctx());
+                            }
+                        }
+                    });
                 }
             });
         }
         paint_fixed_stripes(ui, slot, top, crate::ui::widgets::tree_row_colors(ui).1);
+        if let Some(row) = clicked {
+            editor.solids_view_selection = vec![row];
+            editor.selected_blast = None;
+            ui.ctx().request_repaint();
+        }
     });
+}
+
+/// Open a closed row, for a selection made from outside the tree.
+fn open_row(ui: &egui::Ui, id: egui::Id) {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    state.set_open(true);
+    state.store(ui.ctx());
 }
 
 fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, show_flitches: bool, commands: &mut Vec<UiCommand>) {
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+    let reveal = std::mem::take(&mut editor.solids_tree_reveal);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -365,7 +402,11 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                 .iter()
                 .flat_map(|solid| descendants(solid, editor.solid_view_bands.get(&solid.id), show_flitches))
                 .collect();
-            let (_, kind_heading, _) = ExplorerHeader::new(egui::Id::new(("solids_view_kind", kind as u8)), kind_label(kind))
+            let kind_id = egui::Id::new(("solids_view_kind", kind as u8));
+            if reveal && solids.iter().any(|solid| selection.iter().any(|row| row.solid == solid.id)) {
+                open_row(ui, kind_id);
+            }
+            let (_, kind_heading, _) = ExplorerHeader::new(kind_id, kind_label(kind))
                 .icon(unthemed_icon!("layer.svg"))
                 .collapse_on_click(false)
                 .selected(group_selected(selection, &kind_rows))
@@ -375,7 +416,11 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                         let solid_rows = descendants(solid, occupied, show_flitches);
                         // `.1` is the heading itself; its `.inner` is the clickable
                         // label, where `.response` is only the row's hover area.
-                        let (_, heading, _) = ExplorerHeader::new(egui::Id::new(("solids_view_solid", solid.id.0)), solid.name.clone())
+                        let solid_id = egui::Id::new(("solids_view_solid", solid.id.0));
+                        if reveal && selection.iter().any(|row| row.solid == solid.id) {
+                            open_row(ui, solid_id);
+                        }
+                        let (_, heading, _) = ExplorerHeader::new(solid_id, solid.name.clone())
                             .icon(unthemed_icon!("triangulation.svg"))
                             .collapse_on_click(false)
                             .selected(group_selected(selection, &solid_rows))
@@ -495,7 +540,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
 
 /// Whether a band of the solid was actually generated, so the tree lists the
 /// RLs the solid occupies rather than every RL the plan could name.
-fn holds(occupied: Option<&Vec<BenchSelection>>, base: f64, top: f64) -> bool {
+pub(crate) fn holds(occupied: Option<&Vec<BenchSelection>>, base: f64, top: f64) -> bool {
     occupied.is_some_and(|bands| bands.iter().any(|band| band.top > base + 1e-6 && band.base < top - 1e-6))
 }
 
@@ -546,6 +591,18 @@ pub(crate) fn bench_path(solid: &str, bench: f64) -> String {
 /// A blast by [`ground_path`]: its name is only unique on its bench.
 pub(crate) fn blast_path(solid: &str, bench: f64, blast: &str) -> String {
     ground_path(&[solid, &format_rl(bench), blast])
+}
+
+/// A flitch by [`ground_path`]. A flitch runs under every blast of its bench,
+/// so the blast's place in the path is a wildcard: `Pit A/348/*/344`.
+pub(crate) fn flitch_path(solid: &str, bench: f64, flitch: f64) -> String {
+    ground_path(&[solid, &format_rl(bench), "*", &format_rl(flitch)])
+}
+
+/// A plan area to the square metre, thousands separated: `1,124 m²`.
+pub(crate) fn format_area(square_metres: f64) -> String {
+    use thousands::Separable;
+    format!("{} m²", format!("{square_metres:.0}").separate_with_commas())
 }
 
 /// An RL with no more decimals than it needs: 348, 348.5, 348.25.

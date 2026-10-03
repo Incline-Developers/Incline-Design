@@ -74,6 +74,7 @@ impl crate::app::App<'_> {
     pub(crate) fn sync_blasting_bench(&mut self) {
         if !self.editor.is_planning_cut_step() {
             self.editor.blasting_bench_key = None;
+            self.editor.planning_cut_name = None;
             return;
         }
         let bench = self.editor.planning_cut_target();
@@ -100,11 +101,94 @@ impl crate::app::App<'_> {
         }
         let Some((solid, band)) = bench else {
             self.editor.active_layer = None;
+            self.editor.planning_cut_name = None;
             return;
         };
+        self.editor.planning_cut_name = self.workspace.active_document().and_then(|document| document.solid(solid)).map(|solid| {
+            use crate::ui::elements::solids_view::{bench_path, flitch_path};
+            if !band.is_flitch {
+                return bench_path(&solid.name, band.base);
+            }
+            let bench = solid
+                .benching
+                .benches()
+                .into_iter()
+                .find(|bench| bench.contains_rl(band.base))
+                .map_or(band.base, |bench| bench.base);
+            flitch_path(&solid.name, bench, band.base)
+        });
         self.editor.z_level = band.top;
         self.editor.z_input = band.top;
         self.editor.active_layer = self.bench_cut_layer(solid, band.base);
+    }
+
+    /// Open each cut step on something to draw on rather than an empty view:
+    /// Blasting on a bench, Dig Strips on a flitch. A bench already picked
+    /// carries over - Dig Strips opens on its top flitch, Blasting on the
+    /// bench of a picked flitch - and otherwise the first solid's top bench is
+    /// used, once Benching has said which benches hold any of it. A selection
+    /// the step can already draw on is left alone.
+    ///
+    /// Run before the solid view syncs, as a click in the tree would be, so
+    /// the ground is drawn and framed on the same frame it is picked.
+    pub(crate) fn pick_entry_ground(&mut self) {
+        let step = self.editor.is_planning_cut_step().then(|| self.editor.is_dig_strips_step());
+        if step != self.planning_entry_step {
+            self.planning_entry_step = step;
+            self.planning_entry_pending = step.is_some();
+        }
+        if !self.planning_entry_pending {
+            return;
+        }
+        let dig = step == Some(true);
+        let selection = &self.editor.solids_view_selection;
+        let keeps = self.editor.planning_cut_target().is_some() || (!dig && !selection.is_empty() && selection.iter().all(|row| row.band.is_none_or(|band| !band.is_flitch)));
+        if keeps {
+            self.planning_entry_pending = false;
+            self.editor.solids_tree_reveal = true;
+            return;
+        }
+        let Some(document) = self.workspace.active_document() else {
+            self.planning_entry_pending = false;
+            return;
+        };
+        let picked = selection.iter().find_map(|row| row.band.map(|band| (row.solid, band.base)));
+        let Some(solid) = picked.and_then(|(solid, _)| document.solid(solid)).or_else(|| document.solids().first()) else {
+            self.planning_entry_pending = false;
+            return;
+        };
+        // Wait for the bands rather than give up: they arrive with the body.
+        let Some(occupied) = self.editor.solid_view_bands.get(&solid.id) else {
+            return;
+        };
+        self.planning_entry_pending = false;
+        let holds = |base: f64, top: f64| crate::ui::elements::solids_view::holds(Some(occupied), base, top);
+        let benches: Vec<_> = solid.benching.benches().into_iter().rev().filter(|bench| holds(bench.base, bench.top())).collect();
+        let carried = picked
+            .filter(|(id, _)| *id == solid.id)
+            .and_then(|(_, base)| benches.iter().find(|bench| bench.contains_rl(base)));
+        let Some(bench) = carried.or(benches.first()) else { return };
+        let band = if dig {
+            bench.flitches.iter().rev().find(|flitch| holds(flitch.base, flitch.top())).map(|flitch| BenchSelection {
+                base: flitch.base,
+                top: flitch.top(),
+                is_flitch: true,
+            })
+        } else {
+            Some(BenchSelection {
+                base: bench.base,
+                top: bench.top(),
+                is_flitch: false,
+            })
+        };
+        if let Some(band) = band {
+            self.editor.solids_view_selection = vec![crate::ui::state::SolidsViewRow {
+                solid: solid.id,
+                band: Some(band),
+            }];
+            self.editor.selected_blast = None;
+            self.editor.solids_tree_reveal = true;
+        }
     }
 
     /// This bench's cut layer, if it has one that still exists.
@@ -176,6 +260,12 @@ impl crate::app::App<'_> {
             bounds = Some(bounds.map_or((low, high), |(min, max)| (min.min(low), max.max(high))));
         }
         let Some((min, max)) = bounds else { return };
+        // Nor while the swing into plan view is still running: it holds the
+        // camera on the target it started from until it lands, so a frame
+        // taken now would be undone.
+        if self.graphics.as_ref().is_some_and(|graphics| graphics.view_transition_running()) {
+            return;
+        }
         self.editor.blasting_framed_key = Some(key);
         let document = &self.scene_document;
         let triangulations = &self.solid_view_body;
@@ -286,6 +376,7 @@ impl crate::app::App<'_> {
                         name,
                         anchor: face.anchor,
                         area: face.area,
+                        blast: None,
                         rings: face
                             .face
                             .iter()

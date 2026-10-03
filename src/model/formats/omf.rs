@@ -2304,8 +2304,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .attributes
                     .iter()
                     .filter(|attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }))
+                    // Typed now, before the values load, so lists of a deferred
+                    // model's columns can tell numbers from categories. Loading
+                    // replaces these with the full variables.
                     .map(|attribute| BlockVariable {
                         name: attribute.name.clone(),
+                        physical_type: if matches!(attribute.data, omf_crate::AttributeData::Category { .. }) { "namedshort" } else { "double" }.to_owned(),
                         ..Default::default()
                     })
                     .collect();

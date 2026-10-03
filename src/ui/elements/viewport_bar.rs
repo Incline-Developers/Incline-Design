@@ -239,7 +239,7 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         return;
     }
     if editor.is_planning_cut_step() {
-        draw_blasting_settings(ui, editor, project);
+        draw_cut_step_settings(ui, editor);
         return;
     }
     match editor.active_workspace {
@@ -340,33 +340,30 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     }
 }
 
-/// What the Blasting step's tools will use next.
-///
-/// The layer is shown rather than offered: a cut line is a cut line because it
-/// is on the selected bench's cut layer, so letting the user aim the tools at
-/// another layer would only produce lines that cut nothing. It reads "None"
-/// until the first tool is armed, which is when the layer is created. The
-/// elevation stays editable - the shapes are worked out in plan, so a cut line
-/// off the bench plane still cuts, and being able to lift one is occasionally
-/// how a user gets a snap they want.
-fn draw_blasting_settings(ui: &mut egui::Ui, editor: &mut EditorState, _project: &UiProjectView) {
+/// The cut steps name what is being cut, with a switch for the blast and
+/// block labels over the viewport. Cuts are drawn at the bench's own crest and
+/// over the solid, so a working elevation or a line colour would only be a way
+/// to draw one wrong.
+fn draw_cut_step_settings(ui: &mut egui::Ui, editor: &mut EditorState) {
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
-    ui.label(tr!("viewport-bench"));
-    ui.label(
-        editor
-            .planning_cut_target()
-            .map_or_else(|| tr!("grade-calendar-none"), |(_, band)| super::solids_view::format_rl(band.base)),
-    );
-
-    centre_part(ui);
-    draw_z_setting(ui, editor);
-
-    centre_part(ui);
-    ui.label(tr!("viewport-bar-color"));
-    let mut line_c32 = rgba_to_color32(editor.tool_line_color);
-    if ColorSquarePicker::new(&mut line_c32).show(ui).changed() {
-        editor.tool_line_color = color32_to_rgba(line_c32);
+    match &editor.planning_cut_name {
+        Some(name) => {
+            ui.label(if editor.is_dig_strips_step() { tr!("viewport-flitch") } else { tr!("viewport-bench") });
+            ui.label(name);
+        }
+        // The tools grey out without one bench to draw on - see
+        // `EditorState::planning_cut_target` - so say so where it would be named.
+        None => {
+            let hint = if editor.is_dig_strips_step() {
+                tr!("planning-dig-one-flitch")
+            } else {
+                tr!("planning-blasts-one-bench")
+            };
+            ui.label(egui::RichText::new(hint).color(ui.visuals().weak_text_color()));
+        }
     }
+    centre_part(ui);
+    ui.add(crate::ui::widgets::toggle::Toggle::new(&mut editor.planning_cut_labels, tr!("viewport-labels")));
 }
 
 /// What the drawing tools will use next: layer, elevation, line colour, fill.
@@ -800,12 +797,17 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     }
 }
 
-/// Ordered page steps replace the discipline menus in Planning.
+/// Planning's pages, then the chosen page's own tabs, in place of the
+/// discipline menus the other workspaces carry here.
 fn draw_planning_subpages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    for (index, subpage) in editor.planning_page.subpages().iter().copied().enumerate() {
-        if index > 0 {
-            ui.label(egui::RichText::new(">").weak());
-        }
+    use crate::ui::state::PlanningPage;
+    let labels = PlanningPage::ALL.map(PlanningPage::label);
+    let selected = PlanningPage::ALL.iter().position(|page| *page == editor.planning_page).unwrap_or(0);
+    if let Some(index) = crate::ui::widgets::toolbar::segmented(ui, "planning_pages", &labels, selected) {
+        commands.push(UiCommand::SetPlanningPage(PlanningPage::ALL[index]));
+    }
+    ui.add_space(12.0);
+    for subpage in editor.planning_page.subpages().iter().copied() {
         let label = subpage.label();
         let selected = editor.planning_subpage() == subpage;
         let font = egui::TextStyle::Button.resolve(ui.style());
