@@ -26,7 +26,8 @@ the slider's instant:
 
 - **Loaders:** what each machine is doing, at what rate, from where and to where.
   When it isn't working, it shows its delay type or its idle reason, plus the
-  piles or destinations behind that reason.
+  piles or destinations behind that reason. A machine with no bar open says
+  when its next bar starts; one with no bars at all says so.
 - **Stockpiles:** tonnes held, with a fill bar when a capacity is set. Also:
   - whether the pile is building, reclaiming, standing or full;
   - its Mode, when the Mode isn't the default;

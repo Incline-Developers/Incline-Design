@@ -93,6 +93,9 @@ pub(crate) struct SolidBlasting {
 pub(crate) struct SolidPartition {
     /// Flitch-level parts, cut into dig blocks. What View draws.
     pub(crate) parts: Vec<SolidPart>,
+    /// Bench-high parts, one per blast, so the blast sequence editor outlines
+    /// blasts rather than the dig blocks inside them.
+    pub(crate) blast_parts: Vec<SolidPart>,
 }
 
 /// One solid's artifacts, one per stage that owns one.
@@ -363,6 +366,11 @@ impl ViewSolid {
         self.body.product().map(|body| &body.flitch_footprints)
     }
 
+    /// One bench-high part per blast, committed with the dig blocks.
+    pub(crate) fn blast_parts(&self) -> Option<&[SolidPart]> {
+        self.partition.product().map(|partition| partition.blast_parts.as_slice())
+    }
+
     /// The dig blocks, once every artifact behind them is committed too.
     ///
     /// The terminal product, and the one thing that does need all four: a
@@ -512,6 +520,7 @@ impl ViewSolid {
                 self.partition.begin(1);
                 self.partition.settle(SolidPartition {
                     parts: (0..blocks).map(|index| test_part(index as f64 * 4.0)).collect(),
+                    blast_parts: Vec::new(),
                 });
             }
             SolidArtifact::BenchReserves | SolidArtifact::DigReserves => {
@@ -1413,17 +1422,30 @@ impl crate::app::App<'_> {
                 self.pick_into_sequence_draft(block, generation);
             }
             PickRouting::BlastSequence => {
-                if let Some((_, key)) = hit {
+                // Through the part's own blast, not the block key: a block is
+                // keyed by its flitch base, which is the bench base only for a
+                // bench's lowest flitch.
+                let blast = match result.outcome {
+                    crate::ui::state::SolidPick::Hit(id) => self.blast_of_preview_mesh(id),
+                    crate::ui::state::SolidPick::Miss => None,
+                };
+                if let Some(shape) = blast {
                     let reference = crate::model::schedule::BlastRef {
-                        solid: key.solid,
-                        bench: key.bench_base(),
-                        anchor: key.anchor(),
+                        solid: shape.solid,
+                        bench: shape.bench_base(),
+                        anchor: shape.anchor(),
                     };
+                    // Inserted at the slider, which then steps over it: the
+                    // blast is fired, leaves the pane, and the next pick lands
+                    // after it - as a dig block picked in the dig sequence
+                    // editor does.
                     if let Some(blast) = self.editor.schedule_blasts.iter().find(|blast| blast.holds(&reference)).map(|blast| blast.reference)
                         && let Some(draft) = self.editor.blast_bar_dialog.as_mut()
                         && !draft.members.iter().any(|member| member.same(&blast))
                     {
-                        draft.members.push(blast);
+                        let at = draft.preview.min(draft.members.len());
+                        draft.members.insert(at, blast);
+                        draft.preview = at + 1;
                     }
                 }
             }
@@ -1446,6 +1468,15 @@ impl crate::app::App<'_> {
                     .map(|block| (block.id, block.key))
             })
             .next()
+    }
+
+    /// The blast a preview mesh lies in, whatever flitch it was cut from.
+    fn blast_of_preview_mesh(&self, id: crate::model::triangulation::TriangulationId) -> Option<BlastShapeRef> {
+        self.solid_view_cache.values().find_map(|cache| {
+            let blasts = cache.blast_parts().unwrap_or_default();
+            let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
+            blasts.iter().chain(partition).find(|part| part.mesh.id == id).and_then(|part| part.blast)
+        })
     }
 
     /// Rebuild the display list from the artifacts. Pure presentation: which
@@ -1490,7 +1521,7 @@ impl crate::app::App<'_> {
         sequencing.hash(&mut hasher);
         blast_sequencing.hash(&mut hasher);
         if let Some(draft) = &blast_draft {
-            draft.bench.hash(&mut hasher);
+            draft.preview.hash(&mut hasher);
             for member in &draft.members {
                 member.hash_content(&mut hasher);
             }
@@ -1527,7 +1558,7 @@ impl crate::app::App<'_> {
 
         // Ramp across what is actually on screen rather than the whole pit,
         // so one bench is not a single flat shade of its solid's colour.
-        let depth_shade = blasting
+        let depth_shade = (blasting || blast_sequencing)
             .then(|| {
                 let mut range: Option<[f64; 2]> = None;
                 for solid in solids {
@@ -1535,7 +1566,7 @@ impl crate::app::App<'_> {
                         .solid_view_cache
                         .get(&solid.id)
                         .filter(|_| selected_solid(&view_selection, solid.id))
-                        .and_then(|cache| cache.display_parts(demand))
+                        .and_then(|cache| if blast_sequencing { cache.blast_parts() } else { cache.display_parts(demand) })
                     else {
                         continue;
                     };
@@ -1559,11 +1590,7 @@ impl crate::app::App<'_> {
         let mut errors = Vec::new();
         let has_fields = self.workspace.active_document().is_some_and(|doc| !doc.reserve_fields().is_empty());
         for solid in solids {
-            let wanted = if blast_sequencing {
-                blast_draft.as_ref().and_then(|draft| draft.bench).is_none_or(|(id, _)| id == solid.id)
-            } else {
-                selected_solid(&view_selection, solid.id)
-            };
+            let wanted = selected_solid(&view_selection, solid.id);
             let Some(cache) = self.solid_view_cache.get(&solid.id) else {
                 // Nothing has been built for this solid. Opening a page is not
                 // a calculation, so this says so rather than starting one.
@@ -1583,7 +1610,10 @@ impl crate::app::App<'_> {
                 }
                 None => {}
             }
-            let Some(parts) = cache.display_parts(demand) else {
+            // The blast sequence editor draws whole blasts, so their outlines
+            // are the blasts' own rather than the dig blocks inside them.
+            let parts = if blast_sequencing { cache.blast_parts() } else { cache.display_parts(demand) };
+            let Some(parts) = parts else {
                 if wanted {
                     match cache.error_through(demand) {
                         Some(error) => errors.push(error.to_owned()),
@@ -1615,19 +1645,11 @@ impl crate::app::App<'_> {
                     self.editor.solid_view_reserve_status = Some(crate::i18n::tr!("planning-reserve-capacity-only"));
                 }
             }
-            let reserves = (demand == GeometryDemand::Partition)
+            let reserves = (demand == GeometryDemand::Partition && !blast_sequencing)
                 .then(|| cache.reserves.product().map(|product| &product.totals))
                 .flatten();
             for (index, part) in parts.iter().enumerate() {
-                if blast_sequencing {
-                    if blast_draft
-                        .as_ref()
-                        .and_then(|draft| draft.bench)
-                        .is_some_and(|(_, base)| part.bench.base.to_bits() != base)
-                    {
-                        continue;
-                    }
-                } else if !selected(&view_selection, solid.id, Some(part.band.selection)) {
+                if !selected(&view_selection, solid.id, Some(part.band.selection)) {
                     continue;
                 }
                 // Selecting a blast narrows what is shown, not what is built.
@@ -1659,6 +1681,17 @@ impl crate::app::App<'_> {
                     mesh.flitch_style = None;
                     mesh.color = solid.color;
                     mesh.depth_shade = depth_shade;
+                } else if blast_sequencing {
+                    // Whole blasts, bench high: a flitch's hatching would
+                    // stripe across them and say nothing about the blast.
+                    // Height carries the benches apart instead, as it does on
+                    // the Blasting step, and the outline is a heavy, near black
+                    // line so each blast reads apart from its neighbours.
+                    mesh.flitch_style = None;
+                    mesh.color = solid.color;
+                    mesh.depth_shade = depth_shade;
+                    mesh.line_color = blended(solid.color, [0.0, 0.0, 0.0, 1.0], 0.92);
+                    mesh.line_weight = Some(4.5);
                 } else {
                     mesh.flitch_style = solid
                         .benching
@@ -1689,6 +1722,10 @@ impl crate::app::App<'_> {
                     mesh.line_color = crate::ui::SELECTION_COLOR_F32;
                     mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
                 }
+                // The blast sequence editor's own states, as the dig
+                // sequence editor's: fired at the slider's position and off
+                // the pane, uncovering the bench below; in the order and still
+                // to come; or not in this bar at all.
                 if let Some(draft) = &blast_draft
                     && let Some(blast) = part.blast
                 {
@@ -1697,15 +1734,20 @@ impl crate::app::App<'_> {
                         bench: blast.bench_base(),
                         anchor: blast.anchor(),
                     };
-                    if self
+                    let position = self
                         .editor
                         .schedule_blasts
                         .iter()
                         .find(|entry| entry.holds(&reference))
-                        .is_some_and(|entry| draft.members.iter().any(|member| entry.holds(member)))
-                    {
+                        .and_then(|entry| draft.members.iter().position(|member| entry.holds(member)));
+                    if let Some(position) = position {
+                        if position < draft.preview {
+                            continue;
+                        }
+                        // A dark outline still, or two neighbouring blasts in
+                        // the order would merge into one purple patch.
                         mesh.flitch_style = None;
-                        mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                        mesh.line_color = blended(crate::ui::SELECTION_COLOR_F32, [0.0, 0.0, 0.0, 1.0], 0.85);
                         mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
                     }
                 }
@@ -2023,8 +2065,56 @@ fn build_solid_partition(
         }
     }
     progress.set_items(body.flitch_parts.len() as u64, body.flitch_parts.len() as u64);
+    let blast_parts = build_blast_parts(solid, body, blasting, cancel)?;
 
-    Ok(SolidPartition { parts })
+    Ok(SolidPartition { parts, blast_parts })
+}
+
+/// How sharply a blast's surface must turn for the turn to be outlined.
+const BLAST_CREASE_ANGLE: f64 = 30.0_f64.to_radians();
+
+/// Each bench clipped to its blasts, whole benches high, so a blast draws as
+/// one piece with its own outline. Clipped the way the dig blocks are, from
+/// the committed bench meshes and blast faces - a bench that is one blast
+/// too, since the clip is what gives a piece its rim rather than every
+/// triangle edge of the bench.
+fn build_blast_parts(solid: &Solid, body: &SolidBody, blasting: &SolidBlasting, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<SolidPart>> {
+    let mut parts = Vec::new();
+    for bench in &body.bench_parts {
+        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        let faces = blasting.blast_faces.iter().filter(|blast| blast.bench == bench.band.selection);
+        let source_closed = bench.volume.is_some();
+        for face in faces {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let clipped = super::triangulation::solid_between::clip_solid_to_plan(&bench.mesh.mesh, &face.face, cancel)?;
+            if clipped.slab.1.is_empty() {
+                continue;
+            }
+            // The crest, the toe and the cut walls' rims, so each blast reads
+            // as a shape - not the cut rims alone, which a bench that is one
+            // blast does not have.
+            let edges = super::triangulation::solid_between::crease_outline(&clipped.slab, &clipped.internal_wall, BLAST_CREASE_ANGLE);
+            let volume = clipped.volume;
+            let (vertices, triangles) = clipped.slab;
+            let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, triangles)?);
+            let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+            let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
+            let mut piece = preview_triangulation(bench.mesh.name.clone(), mesh, spatial, edges, order, bench.mesh.color, bench.mesh.line_color);
+            piece.cull_back_faces = true;
+            piece.always_show_edges = true;
+            piece.line_weight = Some(1.5);
+            piece.id = next_view_id();
+            parts.push(SolidPart {
+                mesh: piece,
+                band: bench.band,
+                bench: bench.bench,
+                blast: Some(face.shape_ref(solid.id)),
+                block: None,
+                volume: source_closed.then_some(volume),
+            });
+        }
+    }
+    Ok(parts)
 }
 
 /// A measured volume, or `None` when the piece did not come out closed.
@@ -2499,6 +2589,7 @@ impl crate::app::App<'_> {
                     .map_or_else(String::new, |blast| blast.name.clone());
                 records.push(BlastRecord {
                     solid: solid.id,
+                    solid_name: solid.name.clone(),
                     bench: face.bench,
                     face: Arc::new(face.face.clone()),
                     anchor: face.anchor,
@@ -2608,6 +2699,7 @@ fn natural_key(name: &str) -> (u64, String) {
 #[derive(Clone, Debug)]
 pub(crate) struct BlastRecord {
     pub(crate) solid: SolidId,
+    pub(crate) solid_name: String,
     pub(crate) bench: BenchSelection,
     pub(crate) face: Arc<Face>,
     pub(crate) anchor: [f64; 2],

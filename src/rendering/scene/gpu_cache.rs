@@ -60,6 +60,7 @@ pub(crate) struct CachedTriangulationGpu {
     scene_origin: DVec3,
     flitch_style: Option<crate::model::FlitchStyle>,
     depth_shade: Option<[f64; 2]>,
+    pattern_from: Option<[f64; 3]>,
     /// The scene origin the depth range was reduced by. Rebasing moves it,
     /// and the uniform holds the reduced values, not the world ones.
     depth_origin_z: f64,
@@ -144,7 +145,9 @@ struct SurfaceStyleUniform {
     params: [f32; 4],
     wire_color: [f32; 4],
     pattern_color: [f32; 4],
-    /// x: hatch pattern (0 clear, 1 slashes, 2 crosses); remaining lanes reserved.
+    /// x: hatch pattern (0 clear, 1 slashes, 2 crosses); yz: plan direction
+    /// and w: scene-relative threshold the pattern is drawn from (zero
+    /// direction draws it everywhere).
     pattern: [f32; 4],
 }
 
@@ -1387,7 +1390,9 @@ impl TriangulationGpuCache {
                 ],
                 wire_color: line_color,
                 pattern_color,
-                pattern: [pattern, 0.0, 0.0, 0.0],
+                pattern: triangulation.pattern_from.map_or([pattern, 0.0, 0.0, 0.0], |[x, y, from]| {
+                    [pattern, x as f32, y as f32, (from - x * scene_origin.x - y * scene_origin.y) as f32]
+                }),
             };
 
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
@@ -1408,6 +1413,8 @@ impl TriangulationGpuCache {
                 let surface_dirty = cached.depth_shade != triangulation.depth_shade
                     || (triangulation.depth_shade.is_some() && cached.depth_origin_z != scene_origin.z)
                     || cached.flitch_style != triangulation.flitch_style
+                    || cached.pattern_from != triangulation.pattern_from
+                    || (triangulation.pattern_from.is_some() && origin_dirty)
                     || cached.color != color
                     || cached.raster_texture != raster_texture
                     || cached.raster_opacity != triangulation.raster_opacity
@@ -1431,6 +1438,7 @@ impl TriangulationGpuCache {
                 if surface_dirty {
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&surface_style));
                     cached.flitch_style = triangulation.flitch_style;
+                    cached.pattern_from = triangulation.pattern_from;
                     cached.depth_shade = triangulation.depth_shade;
                     cached.depth_origin_z = scene_origin.z;
                     cached.color = color;
@@ -1508,6 +1516,7 @@ impl TriangulationGpuCache {
                         mesh: triangulation.mesh.clone(),
                         scene_origin,
                         flitch_style: triangulation.flitch_style,
+                        pattern_from: triangulation.pattern_from,
                         depth_shade: triangulation.depth_shade,
                         depth_origin_z: scene_origin.z,
                         surface_chunks,

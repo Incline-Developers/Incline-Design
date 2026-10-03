@@ -120,6 +120,7 @@ pub(crate) struct DrillBlastResult {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PublishedBlast {
     pub(crate) reference: super::BlastRef,
+    pub(crate) solid_name: String,
     pub(crate) name: String,
     pub(crate) bench_base: f64,
     pub(crate) bench_top: f64,
@@ -133,6 +134,63 @@ pub(crate) struct PublishedBlast {
     pub(crate) done_h: [Option<f64>; 3],
     /// Its ground available: the end of the window it fired in.
     pub(crate) fired_h: Option<f64>,
+    /// Standing ground above it, within the buffer, is in no dig bar, so it
+    /// never clears.
+    pub(crate) never_clear: bool,
+    /// The first step it still needs that no machine bar works.
+    pub(crate) unworked: Option<super::BlastActivity>,
+    /// The blasts whose ground has to be dug before it is clear, by position
+    /// in [`DrillBlastResult::blasts`].
+    pub(crate) above: Vec<usize>,
+}
+
+/// What one blast is waiting for at an instant: why a loader waiting on it
+/// is still waiting.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BlastHold {
+    /// Ground above it that no bar digs stands for good.
+    NeverClears,
+    /// Ground above it is still being dug: these blasts' ground, by position.
+    AboveStanding(Vec<usize>),
+    /// The step it is ready for has no machine bar working it.
+    NoMachine(super::BlastActivity),
+    /// A machine is on this step now.
+    Working(super::BlastActivity),
+    /// Ready for this step, but its machines are busy elsewhere or not yet
+    /// rostered on.
+    Queued(super::BlastActivity),
+    /// Charged, and waiting for a blast window.
+    AwaitingWindow,
+    Fired,
+}
+
+impl DrillBlastResult {
+    /// What the blast at `index` is waiting for at `hour`.
+    pub(crate) fn hold(&self, index: usize, hour: f64) -> Option<BlastHold> {
+        let blast = self.blasts.get(index)?;
+        let by = |at: Option<f64>| at.is_some_and(|at| at <= hour + 1e-9);
+        if by(blast.fired_h) {
+            return Some(BlastHold::Fired);
+        }
+        let Some(step) = super::BlastActivity::ALL.into_iter().find(|step| !by(blast.done_h[*step as usize])) else {
+            return Some(BlastHold::AwaitingWindow);
+        };
+        if step == super::BlastActivity::Prep && !by(blast.cleared_h) {
+            return Some(if blast.never_clear {
+                BlastHold::NeverClears
+            } else {
+                BlastHold::AboveStanding(blast.above.clone())
+            });
+        }
+        if blast.unworked == Some(step) {
+            return Some(BlastHold::NoMachine(step));
+        }
+        let working = self
+            .work
+            .iter()
+            .any(|work| work.blast == index && work.activity == step && work.start_h <= hour + 1e-9 && hour < work.end_h - 1e-9);
+        Some(if working { BlastHold::Working(step) } else { BlastHold::Queued(step) })
+    }
 }
 
 /// A stretch of one machine on one step of one blast.
@@ -547,6 +605,9 @@ pub(crate) struct SolveReport {
     /// The derived execution-event budget hit its ceiling, so some source
     /// transitions inside an interval may have been unavailable.
     pub(crate) event_budget_restricted: bool,
+    /// Blasts a dig bar needs that no machine bar works, so their loaders
+    /// wait on them all horizon.
+    pub(crate) unworked_blasts: usize,
     pub(crate) chunk_slots: usize,
     /// Every receiving chunk of some pile filled, which is the point at which
     /// non-reusable slots can start to limit receipts.

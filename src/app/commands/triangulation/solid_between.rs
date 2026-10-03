@@ -1071,6 +1071,9 @@ pub(crate) struct ClippedSolid {
     /// rather than the body's original surfaces or an internal wall between
     /// decomposition cells. Parallel to `slab.1`.
     pub(crate) boundary_wall: Vec<bool>,
+    /// Which faces are wall the clip cut along a decomposition diagonal:
+    /// inside the body, shared with the cell next door. Parallel to `slab.1`.
+    pub(crate) internal_wall: Vec<bool>,
 }
 
 /// Intersect a slab with a vertical polygon (including holes).
@@ -1107,7 +1110,9 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
     // others, so the cells run in parallel. They are joined in earcut order,
     // and the volume summed in that order, so the result is the same one a
     // sequential walk produces.
-    let clip_cell = |triangle: &[usize; 3]| -> Result<Option<(Slab, Vec<bool>, f64)>> {
+    /// One cell's body, its boundary-wall and internal-wall masks, and its volume.
+    type Cell = (Slab, Vec<bool>, Vec<bool>, f64);
+    let clip_cell = |triangle: &[usize; 3]| -> Result<Option<Cell>> {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
         let mut cell = [points[triangle[0]], points[triangle[1]], points[triangle[2]]];
         if (cell[1] - cell[0]).perp_dot(cell[2] - cell[0]) < 0.0 {
@@ -1121,6 +1126,7 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         let mut slab = original.clone();
         // The body's own surfaces are not walls the clip made.
         let mut wall = vec![false; slab.1.len()];
+        let mut internal = vec![false; slab.1.len()];
         for i in 0..3 {
             if slab.1.is_empty() {
                 break;
@@ -1141,6 +1147,7 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
             let high = local.iter().map(|p| p.z).fold(0.0, f64::max) + 1.0;
             let mut clipped: Slab = (Vec::new(), Vec::new());
             let mut clipped_wall = Vec::new();
+            let mut clipped_internal = Vec::new();
             for (index, indices) in slab.1.iter().enumerate() {
                 if index.is_multiple_of(1024) {
                     anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
@@ -1162,6 +1169,7 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
                     clipped.0.extend(tri);
                     clipped.1.push([start, start + 1, start + 2]);
                     clipped_wall.push(wall[index]);
+                    clipped_internal.push(internal[index]);
                 }
             }
             if !clipped.1.is_empty() {
@@ -1170,12 +1178,14 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
             // Everything `cap_slab` just appended closes this cut plane, so it
             // is wall - and bounds the body only where this edge does.
             clipped_wall.resize(clipped.1.len(), cell_on_boundary[i]);
+            clipped_internal.resize(clipped.1.len(), !cell_on_boundary[i]);
             for p in &mut clipped.0 {
                 let world = origin + glam::DVec3::Z * p.x + tangent * p.y + normal * p.z;
                 *p = mesh_data::Vertex::new(world.x, world.y, world.z);
             }
             slab = clipped;
             wall = clipped_wall;
+            internal = clipped_internal;
         }
         if slab.1.is_empty() {
             return Ok(None);
@@ -1204,15 +1214,17 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
                 face.swap(1, 2);
             }
         }
-        Ok(Some((slab, wall, signed.abs())))
+        Ok(Some((slab, wall, internal, signed.abs())))
     };
     let cells = triangles.as_chunks::<3>().0.par_iter().map(clip_cell).collect::<Result<Vec<_>>>()?;
     let mut result: Slab = (Vec::new(), Vec::new());
     let mut boundary_wall = Vec::new();
+    let mut internal_wall = Vec::new();
     let mut volume = 0.0;
-    for (slab, wall, cell_volume) in cells.into_iter().flatten() {
+    for (slab, wall, internal, cell_volume) in cells.into_iter().flatten() {
         volume += cell_volume;
         boundary_wall.extend(wall);
+        internal_wall.extend(internal);
         let offset = result.0.len() as u32;
         result.0.extend(slab.0);
         result.1.extend(slab.1.into_iter().map(|face| face.map(|index| index + offset)));
@@ -1222,6 +1234,7 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         slab: result,
         volume,
         boundary_wall,
+        internal_wall,
     })
 }
 
@@ -1277,6 +1290,65 @@ fn segment_follows(rings: &[Vec<glam::DVec2>], a: glam::DVec2, b: glam::DVec2) -
                 closest.distance_squared(midpoint) <= TOLERANCE * TOLERANCE
             })
     })
+}
+
+/// The edges where a body turns a corner - a bench's crest and toe, and where
+/// a cut wall meets the ground - rather than every triangle edge across its
+/// flat faces. An edge is kept when the planes either side of it meet at more
+/// than `min_angle` radians.
+///
+/// Welded by position, as [`boundary_wall_outline`] is, because a clipped
+/// body's faces do not share vertex indices. `internal_wall` is the clip's own
+/// mask of the walls between its cells, parallel to the faces.
+pub(crate) fn crease_outline(slab: &Slab, internal_wall: &[bool], min_angle: f64) -> Vec<[u32; 2]> {
+    /// Twice a face's area over its longest side squared, below which the
+    /// face is a sliver: about a 1:1000 height to length.
+    const SLIVER_RATIO: f64 = 1e-3;
+
+    use std::collections::HashMap;
+
+    let (vertices, faces) = slab;
+    let weld = Weld::of(vertices);
+    let position = |index: u32| {
+        let vertex = vertices[index as usize];
+        glam::DVec3::new(vertex.x, vertex.y, vertex.z)
+    };
+    let mut edges: HashMap<EdgeKey, ([u32; 2], Vec<glam::DVec3>), foldhash::fast::RandomState> = HashMap::default();
+    // The walls between the clip's cells are inside the body: where one meets
+    // the ground is a seam of the decomposition, not a corner of the blast.
+    for (face, _) in faces.iter().zip(internal_wall).filter(|(_, internal)| !**internal) {
+        let [a, b, c] = face.map(position);
+        let cross = (b - a).cross(c - a);
+        // A sliver's normal is rounding noise, and the clip leaves fans of
+        // them across flat faces: left in, every one reads as a corner.
+        let longest = (b - a).length_squared().max((c - b).length_squared()).max((a - c).length_squared());
+        if cross.length() <= longest * SLIVER_RATIO {
+            continue;
+        }
+        let normal = cross.normalize();
+        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+            let (ia, ib) = (face[a], face[b]);
+            let (ka, kb) = (weld.key(vertices[ia as usize]), weld.key(vertices[ib as usize]));
+            if ka == kb {
+                continue;
+            }
+            edges
+                .entry(if ka <= kb { (ka, kb) } else { (kb, ka) })
+                .or_insert_with(|| ([ia, ib], Vec::new()))
+                .1
+                .push(normal);
+        }
+    }
+    let threshold = min_angle.cos();
+    edges
+        .into_values()
+        // Unsigned: the clip does not wind every cell's faces the same way,
+        // and two coplanar faces wound apart are no corner. An edge only one
+        // face uses is where the clip's cells meet out of step - a T-junction
+        // across a flat face, not a corner - so it is never drawn.
+        .filter(|(_, normals)| normals.len() > 1 && normals[1..].iter().any(|normal| normals[0].dot(*normal).abs() < threshold))
+        .map(|(edge, _)| edge)
+        .collect()
 }
 
 /// The rim of the walls the clip cut: the outline separating this piece from

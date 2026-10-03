@@ -57,9 +57,18 @@ impl<'a> App<'a> {
             let navigation = self.graphics.as_mut().and_then(|graphics| graphics.touch_input(touch));
             if navigation == Some(true) {
                 self.refresh_snap_index();
+                let drawn = drawn_surfaces(
+                    &self.editor,
+                    self.showing_solid_preview(),
+                    &self.triangulations,
+                    &self.solid_view_body,
+                    &self.schedule_animation,
+                    self.solid_preview.as_ref(),
+                );
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.begin_orbit_at_surface(
-                        &self.triangulations,
+                        drawn.0,
+                        drawn.1,
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         &self.editor.frozen_handles,
@@ -246,6 +255,7 @@ impl<'a> App<'a> {
                     // geometry sync would let one frame's work start against a
                     // demand that the same frame's edit had already retired.
                     self.sync_planning_pipeline();
+                    self.auto_run_planning();
                     self.auto_recalculate_schedule();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
@@ -256,14 +266,6 @@ impl<'a> App<'a> {
                     self.sync_dig_blocks();
                     self.sync_blasting_frame();
                     let showing_solid_preview = self.showing_solid_preview();
-                    // The floating sequence editor draws the same dig-block
-                    // display list the Solids View page does, through the same
-                    // offscreen preview - one renderer, not two.
-                    let showing_solids_view = self.editor.is_solids_view() || self.editor.sequence_editor_active() || self.editor.blast_sequence_active();
-                    let showing_schedule_animation = self.editor.is_schedule_animation();
-                    // Blasting draws into the real viewport, so its bench
-                    // slabs are the scene rather than an offscreen preview.
-                    let blasting = self.editor.is_planning_cut_step();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
                     let mut slice_moving = false;
@@ -286,29 +288,23 @@ impl<'a> App<'a> {
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
+                        let drawn = drawn_surfaces(
+                            &self.editor,
+                            showing_solid_preview,
+                            &self.triangulations,
+                            &self.solid_view_body,
+                            &self.schedule_animation,
+                            self.solid_preview.as_ref(),
+                        );
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
-                            triangulations: if blasting {
-                                &self.solid_view_body
-                            } else if showing_schedule_animation {
-                                self.schedule_animation.scene()
-                            } else {
-                                &self.triangulations
-                            },
+                            triangulations: drawn.0,
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
-                            solid_preview: if blasting {
-                                &[]
-                            } else if showing_solids_view {
-                                &self.solid_view_body
-                            } else if showing_solid_preview {
-                                self.solid_preview.as_ref().map_or(&[][..], |preview| preview.meshes())
-                            } else {
-                                &[]
-                            },
+                            solid_preview: drawn.1,
                             project: &project,
                         }) {
                             Ok(ui_output) => {
@@ -1284,11 +1280,20 @@ impl<'a> App<'a> {
         }
 
         self.refresh_snap_index();
+        let drawn = drawn_surfaces(
+            &self.editor,
+            self.showing_solid_preview(),
+            &self.triangulations,
+            &self.solid_view_body,
+            &self.schedule_animation,
+            self.solid_preview.as_ref(),
+        );
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         graphics.begin_orbit_at_surface(
-            &self.triangulations,
+            drawn.0,
+            drawn.1,
             &self.drill_holes,
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
@@ -1541,6 +1546,17 @@ impl<'a> App<'a> {
                 self.invalidate_overlay();
             }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
+                // The Gantt shows no scene objects, so Delete there is for the
+                // selected bars only - never a prompt to delete objects
+                // selected out of sight. Not while a bar's editor is open over it.
+                if self.editor.is_schedule_gantt() {
+                    if self.editor.sequence_editor.is_none() && self.editor.blast_bar_dialog.is_none() && !self.editor.schedule_selected_bars.is_empty() {
+                        let bars: Vec<_> = self.editor.schedule_selected_bars.iter().copied().collect();
+                        self.delete_bars(&bars);
+                        self.redraw_requested = true;
+                    }
+                    return;
+                }
                 if self.editor.is_haulage_page() && self.delete_selected_haulage() {
                     return;
                 }
@@ -1751,6 +1767,37 @@ impl<'a> App<'a> {
         self.editor.fly_mode_enabled = enabled;
         self.redraw_requested = true;
     }
+}
+
+/// The surfaces the viewport draws: the scene's own, then those drawn over
+/// it as a preview. Rendering and every pick read this one answer, so a
+/// pivot lands on whatever the eye sees - planning solids, Animate's ground -
+/// rather than passing through it.
+pub(crate) fn drawn_surfaces<'s>(
+    editor: &crate::ui::state::EditorState,
+    showing_solid_preview: bool,
+    triangulations: &'s [crate::model::triangulation::OpenTriangulation],
+    solid_view_body: &'s [crate::model::triangulation::OpenTriangulation],
+    schedule_animation: &'s crate::app::schedule_animation::ScheduleAnimation,
+    solid_preview: Option<&'s crate::app::commands::solids::SolidPreview>,
+) -> (&'s [crate::model::triangulation::OpenTriangulation], &'s [crate::model::triangulation::OpenTriangulation]) {
+    // Blasting draws into the real viewport, so its bench slabs are the
+    // scene rather than an offscreen preview.
+    if editor.is_planning_cut_step() {
+        return (solid_view_body, &[]);
+    }
+    let scene = if editor.is_schedule_animation() { schedule_animation.scene() } else { triangulations };
+    // The floating sequence editor draws the same dig-block display list the
+    // Solids View page does, through the same offscreen preview - one
+    // renderer, not two.
+    let preview = if editor.is_solids_view() || editor.sequence_editor_active() || editor.blast_sequence_active() {
+        solid_view_body
+    } else if showing_solid_preview {
+        solid_preview.map_or(&[][..], |preview| preview.meshes())
+    } else {
+        &[]
+    };
+    (scene, preview)
 }
 
 fn bezier_cp_hit(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<u8> {

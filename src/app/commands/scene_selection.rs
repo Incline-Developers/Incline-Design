@@ -74,6 +74,39 @@ impl App<'_> {
             .collect()
     }
 
+    /// The topology and the other surface a topology tool (Trim, Cut Topology
+    /// with Pit Shell, Include Solid) opens on.
+    ///
+    /// The active surface is what the user is working on, but not which slot
+    /// it fills: a pit shell selected before Trim is the surface to trim, not
+    /// the ground. The topology is the ground around everything, so when a
+    /// loaded surface spans clearly more than the active one in plan, that is
+    /// the topology and the active one is the other input. Otherwise the
+    /// active surface is the topology and the other is left to be chosen.
+    pub(crate) fn topology_tool_inputs(&self) -> (Option<TriangulationId>, Option<TriangulationId>) {
+        let Some(active) = self.active_triangulation else { return (None, None) };
+        let footprint = |id: TriangulationId| {
+            self.triangulations
+                .iter()
+                .find(|triangulation| triangulation.id == id && triangulation.state.loaded)
+                .map(|triangulation| {
+                    let bounds = triangulation.mesh.bounds();
+                    (bounds.max.x - bounds.min.x).max(0.0) * (bounds.max.y - bounds.min.y).max(0.0)
+                })
+        };
+        let Some(active_area) = footprint(active) else { return (Some(active), None) };
+        let widest = self
+            .triangulations
+            .iter()
+            .filter(|triangulation| triangulation.id != active)
+            .filter_map(|triangulation| footprint(triangulation.id).map(|area| (triangulation.id, area)))
+            .max_by(|left, right| left.1.total_cmp(&right.1));
+        match widest {
+            Some((topology, area)) if area > active_area * 1.5 => (Some(topology), Some(active)),
+            _ => (Some(active), None),
+        }
+    }
+
     /// Selected point clouds that are loaded, in project order.
     pub(crate) fn selected_point_clouds(&self) -> Vec<PointCloudId> {
         self.point_clouds

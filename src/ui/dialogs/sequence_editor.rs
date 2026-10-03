@@ -36,7 +36,7 @@ use crate::{
 /// one and read in the other without either moving.
 const MIN_SIZE: egui::Vec2 = egui::vec2(820.0, 520.0);
 /// Width of the navigation column: the dig tree and the objects beneath it.
-const NAV_WIDTH: f32 = 280.0;
+pub(crate) const NAV_WIDTH: f32 = 280.0;
 const MIN_LIST_WIDTH: f32 = 360.0;
 const MAX_LIST_WIDTH: f32 = 720.0;
 /// Room beside the longest row for its remove cross, the scroll bar and the
@@ -156,25 +156,7 @@ pub(crate) fn draw_sequence_editor(
             // that column collapses and the dig order beside it is drawn over
             // the image. Each tree brings its own scroll area, so neither is
             // wrapped in one here.
-            ui.allocate_ui_with_layout(egui::vec2(nav_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.set_min_size(egui::vec2(nav_width, body_height));
-                // Both trees band their background across their clip rect,
-                // and a vertical scroll area leaves the horizontal clip
-                // exactly as it found it - so without this the objects tree
-                // stripes the whole dialog and the dig order beside it reads
-                // as sitting on the navigation panel.
-                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                let half = (body_height - ui.spacing().item_spacing.y) * 0.5;
-                ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
-                    ui.label(egui::RichText::new(tr!(literal = "Solids Navigation")).strong());
-                    crate::ui::elements::solids_view::draw_tree(ui, editor, document, commands);
-                });
-                ui.separator();
-                ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
-                    ui.label(egui::RichText::new(tr!(literal = "Objects")).strong());
-                    crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
-                });
-            });
+            draw_navigation_column(ui, editor, project, document, commands, egui::vec2(nav_width, body_height));
             let view_width = (available.width() - nav_width - list_width - ui.spacing().item_spacing.x * 2.0).max(200.0);
             ui.allocate_ui_with_layout(egui::vec2(view_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_min_size(egui::vec2(view_width, body_height));
@@ -251,6 +233,36 @@ pub(crate) fn draw_sequence_editor(
         }
     }
     draw_discard_confirmation(ui, editor, plan);
+}
+
+/// The navigation column the sequence editors share: the Solids Navigation
+/// tree above the Objects tree, each taking half of `size`.
+pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>, size: egui::Vec2) {
+    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_size(size);
+        // Both trees band their background across their clip rect, and a
+        // vertical scroll area leaves the horizontal clip exactly as it found
+        // it - so without this the objects tree stripes the whole dialog and
+        // the order list beside it reads as sitting on the navigation panel.
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+        let half = (size.y - ui.spacing().item_spacing.y) * 0.5;
+        // Each tree under its own id: both bring a scroll area with the
+        // default id, and two children of one parent share a stable id, so
+        // without these the two scroll areas collide.
+        ui.push_id("solids_navigation", |ui| {
+            ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
+                ui.label(egui::RichText::new(tr!(literal = "Solids Navigation")).strong());
+                crate::ui::elements::solids_view::draw_tree(ui, editor, document, commands);
+            });
+        });
+        ui.separator();
+        ui.push_id("objects", |ui| {
+            ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
+                ui.label(egui::RichText::new(tr!(literal = "Objects")).strong());
+                crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
+            });
+        });
+    });
 }
 
 /// Ask before throwing an editing session away.
@@ -458,22 +470,15 @@ fn member_label(view: Option<&crate::ui::state::SequenceMemberView>) -> String {
     if let Some(reason) = &view.unresolved {
         return reason.clone();
     }
-    // Written as a path - `Pit/Pit A/348/1/348/1` - because that is what it
-    // is: each field names the one inside it. Unspaced so a long row still
-    // fits the column, and the two elevations carry no unit, the column
-    // they are read in being nothing but elevations.
-    [
-        view.solid_type.as_deref(),
-        view.solid_name.as_deref(),
-        view.bench.as_deref(),
-        view.blast.as_deref(),
-        view.flitch.as_deref(),
-        view.name.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join("/")
+    // The app's one ground path, `Pit A/336/1/344/3`. Ground outside every
+    // blast arrives with its blast already worded ("Unblasted"). The column
+    // is sized to its longest row.
+    let parts: Vec<&str> = [&view.solid_name, &view.bench, &view.blast, &view.flitch, &view.name]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    crate::ui::elements::solids_view::ground_path(&parts)
 }
 
 /// How wide the dig order has to be for its longest row to fit, plus room for

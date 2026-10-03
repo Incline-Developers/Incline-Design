@@ -1456,9 +1456,9 @@ fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f
     }
 }
 
-fn explicit_text(agent: &LoaderAgent, address: CalendarCellAddress) -> String {
+fn explicit_text(agent: &LoaderAgent, address: CalendarCellAddress, unit: &str) -> String {
     match (address.row.field(), explicit_value(agent, address)) {
-        (Some(field), Some(value)) => format_value(field, value),
+        (Some(field), Some(value)) => format_value(field, value, unit),
         _ => String::new(),
     }
 }
@@ -1548,12 +1548,23 @@ fn parse_crusher(text: &str) -> Result<Option<CrusherOverride>, String> {
 }
 
 fn cell_text(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCellAddress) -> String {
+    let unit = rate_unit(plan, agent);
     if address.cell == CalendarCell::Default
         && let Some(field @ (CalendarField::Rate | CalendarField::ReclaimRate)) = address.row.field()
     {
-        return plan.class(agent.class_id).map(|class| format_value(field, class_rate(class, field))).unwrap_or_default();
+        return plan
+            .class(agent.class_id)
+            .map(|class| format_value(field, class_rate(class, field), unit))
+            .unwrap_or_default();
     }
-    explicit_text(agent, address)
+    explicit_text(agent, address, unit)
+}
+
+/// The unit a machine's rate is authored in: tonnes an hour for a loader, the
+/// type's own work unit for a dozer, drill or MPU.
+fn rate_unit(plan: &SchedulePlan, agent: &LoaderAgent) -> &'static str {
+    plan.class(agent.class_id)
+        .map_or(crate::model::schedule::MachineKind::Loader.rate_unit(), |class| class.kind.rate_unit())
 }
 
 /// Which of a class's two rates a row reads. The shared factors have none, and
@@ -1574,7 +1585,7 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
     if address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate) {
         return tr!(
             "schedule-calendar-class-default",
-            value = format_value(field, class_rate(class, field)),
+            value = format_value(field, class_rate(class, field), class.kind.rate_unit()),
             class = class.name.clone()
         );
     }
@@ -1616,7 +1627,7 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
             },
         ),
     };
-    tr!("schedule-calendar-resolved", value = format_value(field, value), source = source)
+    tr!("schedule-calendar-resolved", value = format_value(field, value, class.kind.rate_unit()), source = source)
 }
 
 /// Percentages are stored as fractions and shown out of a hundred.
@@ -1667,10 +1678,10 @@ pub(crate) fn format_money(value: f64) -> String {
     format!("{rounded:.2}").separate_with_commas()
 }
 
-fn format_value(field: CalendarField, value: f64) -> String {
+fn format_value(field: CalendarField, value: f64, unit: &str) -> String {
     let text = trimmed_number(scaled(field, value)).separate_with_commas();
     match field {
-        CalendarField::Rate | CalendarField::ReclaimRate => format!("{text} t/h"),
+        CalendarField::Rate | CalendarField::ReclaimRate => format!("{text} {unit}"),
         CalendarField::Availability | CalendarField::Utilisation => format!("{text}%"),
     }
 }

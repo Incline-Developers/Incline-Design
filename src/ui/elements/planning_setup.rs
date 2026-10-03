@@ -27,7 +27,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_choice_row, grid_color_row, grid_row, grid_separator_row, grid_value_row, property_table_height},
-            explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
+            explorer::{ExplorerEntry, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
             menu::{MenuFieldCombo, MenuFieldF64, committed},
         },
@@ -65,12 +65,25 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
         };
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            let response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
+            let mut response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
                 .leading_icon(step_icon(state), stage_tint(ui, state))
                 .header_aligned_icon()
                 .selected(step == entry)
                 .show(ui)
                 .response;
+            if entry == HaulageStep::TruckClasses {
+                let status = &editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()];
+                response = response.on_hover_ui(|ui| {
+                    stage_tooltip_parts(
+                        ui,
+                        status.state,
+                        status.blocked_by.map(crate::ui::state::ScheduleStep::label),
+                        status.message.as_deref(),
+                        status.last_success.as_ref(),
+                        &status.diagnostics,
+                    );
+                });
+            }
             if response.clicked() {
                 step = entry;
             }
@@ -95,7 +108,8 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 if let Some(rect) = entry_response.icon_rect {
                     markers.push((rect, status.state));
                 }
-                let response = entry_response.response;
+                // The badge's reason, where the badge is.
+                let response = entry_response.response.on_hover_ui(|ui| stage_tooltip(ui, status));
                 if response.clicked() {
                     step = entry;
                 }
@@ -148,7 +162,7 @@ pub(crate) const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
 pub(crate) const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
 
 /// Contents of the separate run-control island at the top of the sidebar.
-pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::{app::planning_pipeline::StageState, ui::widgets::toolbar::ToolbarButton};
 
     // The icons are white line art, so the tint is the button's whole colour.
@@ -204,6 +218,8 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, 
         {
             commands.push(UiCommand::CancelPlanningRun);
         }
+        ui.add_space(6.0);
+        ui.checkbox(&mut editor.planning_auto_run, tr!("planning-auto")).on_hover_text(tr!("planning-auto-note"));
         let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
         let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
         let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
@@ -357,6 +373,9 @@ pub(crate) fn stage_tooltip_parts(
     diagnostics: &[crate::app::planning_pipeline::StageDiagnostic],
 ) {
     ui.label(bold(&state.label()));
+    if state == crate::app::planning_pipeline::StageState::Stale {
+        ui.label(tr!("stage-stale-hint"));
+    }
     if let Some(blocker) = blocked_by {
         ui.label(tr!("stage-blocked-by", stage = blocker));
     }
@@ -416,6 +435,9 @@ pub(crate) fn aggregation_summary(document: &Document, aggregation: &ReserveAggr
 
 fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
     DataGrid::new("reserve_field_list", rect, &tr!("planning-field-list")).show(ui, |ui| {
+        if document.reserve_fields().is_empty() {
+            explorer_note(ui, tr!("planning-no-fields"));
+        }
         for field in document.reserve_fields() {
             let label = tr_format!(
                 literal = "%name% · %aggregation%",
@@ -481,6 +503,8 @@ enum MappingChoice {
     Unmapped,
     Constant,
     Column(String),
+    /// The column per cubic metre, times each block's volume.
+    PerVolume(String),
 }
 
 impl MappingChoice {
@@ -489,6 +513,7 @@ impl MappingChoice {
             None => Self::Unmapped,
             Some(ReserveMappingSource::Constant(_)) => Self::Constant,
             Some(ReserveMappingSource::Column(name)) => Self::Column(name.clone()),
+            Some(ReserveMappingSource::PerVolume(name)) => Self::PerVolume(name.clone()),
         }
     }
 
@@ -497,6 +522,7 @@ impl MappingChoice {
             Self::Unmapped => tr!(literal = "Unmapped"),
             Self::Constant => tr!(literal = "Constant"),
             Self::Column(name) => name.clone(),
+            Self::PerVolume(name) => tr!("planning-mapping-per-volume", column = name.clone()),
         }
     }
 }
@@ -508,6 +534,19 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
     let header_height = property_table_height(ui, 4).min(rect.height());
     let header_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_height));
     let fields_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), header_rect.bottom() + 6.0), rect.max);
+
+    // A scan that failed, or one whose inputs could not be loaded, leaves the
+    // figures absent; this is how it is asked for again without editing the
+    // mapping to force a new request key. Registered before the table so the
+    // table's own controls, the "Used for reserving" tickbox among them, sit
+    // above it and still take their clicks.
+    let header_response = ui.interact(header_rect, ui.id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
+    context_menu_popup(&header_response, &model.name, |ui| {
+        if ContextMenuAction::new(tr!("planning-recompute-stats")).show(ui).clicked() {
+            commands.push(UiCommand::RecomputeReserveStats(model.id));
+            ui.close();
+        }
+    });
 
     let mut included = model.included_in_reserves;
     PropertyTable::new("reserve_block_model_mapping", header_rect, &model.name).show(ui, |rows| {
@@ -532,17 +571,6 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
     if included != model.included_in_reserves {
         commands.push(UiCommand::SetReserveModelIncluded { block_model: model.id, included });
     }
-    // A scan that failed, or one whose inputs could not be loaded, leaves the
-    // figures absent; this is how it is asked for again without editing the
-    // mapping to force a new request key.
-    let header_response = ui.interact(header_rect, ui.id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
-    context_menu_popup(&header_response, &model.name, |ui| {
-        if ContextMenuAction::new(tr!("planning-recompute-stats")).show(ui).clicked() {
-            commands.push(UiCommand::RecomputeReserveStats(model.id));
-            ui.close();
-        }
-    });
-
     let numeric_columns: Vec<_> = model.model.numeric_variables().into_iter().map(|variable| variable.name.clone()).collect();
     let categorical_columns: Vec<_> = model.model.categorical_variables().into_iter().map(|variable| variable.name.clone()).collect();
     ui.scope_builder(egui::UiBuilder::new().max_rect(fields_rect), |ui| {
@@ -558,12 +586,22 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                 }
                 let columns = if is_category { &categorical_columns } else { &numeric_columns };
                 options.extend(columns.iter().map(|name| (MappingChoice::Column(name.clone()), name.clone().into())));
+                // A summed quantity can also come from a per-volume column -
+                // tonnes from density - after the plain columns.
+                if field.aggregation == ReserveAggregation::Sum {
+                    options.extend(columns.iter().map(|name| {
+                        let choice = MappingChoice::PerVolume(name.clone());
+                        let label = choice.label();
+                        (choice, label.into())
+                    }));
+                }
                 MenuFieldCombo::new(("reserve_mapping_kind", model.id, field.id), field.name.clone(), &mut choice, current.label(), options).show(ui);
                 if choice != current {
                     let source = match &choice {
                         MappingChoice::Unmapped => None,
                         MappingChoice::Constant => Some(ReserveMappingSource::Constant(0.0)),
                         MappingChoice::Column(name) => Some(ReserveMappingSource::Column(name.clone())),
+                        MappingChoice::PerVolume(name) => Some(ReserveMappingSource::PerVolume(name.clone())),
                     };
                     commands.push(UiCommand::SetReserveMapping {
                         block_model: model.id,
@@ -578,7 +616,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                         .find(|entry| entry.field == field.id)
                         .and_then(|entry| match &entry.source {
                             ReserveMappingSource::Constant(value) => Some(*value),
-                            ReserveMappingSource::Column(_) => None,
+                            ReserveMappingSource::Column(_) | ReserveMappingSource::PerVolume(_) => None,
                         })
                         .unwrap_or(0.0);
                     let response = MenuFieldF64::new(tr!(literal = "Value"), &mut value, f64::MIN..=f64::MAX).show(ui);
@@ -690,6 +728,9 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
     DataGrid::new("planning_solid_list", rect, &tr!("planning-solids"))
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
+            if document.solids().is_empty() {
+                explorer_note(ui, tr!("planning-no-solids"));
+            }
             for solid in document.solids() {
                 let label = tr_format!(literal = "%name% · %kind%", name = solid.name.clone(), kind = kind_label(solid.kind));
                 let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_solid == Some(solid.id)));

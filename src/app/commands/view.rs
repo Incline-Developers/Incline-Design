@@ -34,13 +34,22 @@ impl<'a> App<'a> {
             centre
         } else {
             self.refresh_snap_index();
+            let drawn = crate::app::events::drawn_surfaces(
+                &self.editor,
+                self.showing_solid_preview(),
+                &self.triangulations,
+                &self.solid_view_body,
+                &self.schedule_animation,
+                self.solid_preview.as_ref(),
+            );
             let Some(graphics) = self.graphics.as_mut() else {
                 return;
             };
             // No snap caught: one rule for every object, the closest point on
             // it to the cursor.
             let Some(centre) = graphics.pick_rotation_centre(
-                &self.triangulations,
+                drawn.0,
+                drawn.1,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
                 &self.editor.frozen_handles,

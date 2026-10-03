@@ -1280,7 +1280,18 @@ impl<'value> MenuFieldText<'value> {
             hint,
         } = self;
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
-            ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint))
+            let response = ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint));
+            // These fields mostly arrive pre-filled with a suggested name.
+            // Selecting it on focus lets typing replace the suggestion rather
+            // than append to it ("Shell_trimmedShell_trimmed").
+            if response.gained_focus()
+                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id)
+            {
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(value.chars().count()));
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), response.id);
+            }
+            response
         })
     }
 }

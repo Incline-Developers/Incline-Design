@@ -479,7 +479,7 @@ pub(crate) fn draw_rule_editor(
         open_condition_draft(editor, document, ConditionOwner::Cashflow(rule.id), &rule.conditions, action);
     }
     commands.append(&mut edits);
-    draw_condition_dialog(ui, editor, plan, document, &categories, session, commands);
+    draw_condition_dialog(ui, editor, plan, document, ConditionOwner::Cashflow(rule.id), &categories, session, commands);
 }
 
 /// Nothing selected: the page says which half of it to click.

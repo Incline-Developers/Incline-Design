@@ -341,13 +341,20 @@ pub(crate) fn resolve_mapping(
     let Some(entry) = mapping.iter().find(|entry| entry.field == field) else {
         return Err(ReserveFieldIssue::Unmapped);
     };
+    let categorical = fields.iter().any(|entry| entry.id == field && entry.aggregation == ReserveAggregation::Category);
     let name = match &entry.source {
         ReserveMappingSource::Constant(value) => {
             return if value.is_finite() { Ok(()) } else { Err(ReserveFieldIssue::ConstantNotFinite) };
         }
-        ReserveMappingSource::Column(name) => name,
+        // A category has no quantity to scale by volume.
+        ReserveMappingSource::PerVolume(name) if categorical => {
+            return Err(ReserveFieldIssue::WrongColumnKind {
+                column: name.clone(),
+                wanted_categorical: true,
+            });
+        }
+        ReserveMappingSource::Column(name) | ReserveMappingSource::PerVolume(name) => name,
     };
-    let categorical = fields.iter().any(|entry| entry.id == field && entry.aggregation == ReserveAggregation::Category);
     let declared = if categorical { model.categorical_variables() } else { model.numeric_variables() };
     if !declared.iter().any(|variable| variable.name == *name) {
         return Err(if model.variable(name).is_some() {
@@ -420,6 +427,7 @@ pub(crate) fn compute(
         match &mapping.iter().find(|entry| entry.field == id)?.source {
             ReserveMappingSource::Constant(value) => Some(Values::Constant(*value)),
             ReserveMappingSource::Column(name) => model.shared_numeric_values(name).map(Values::Column),
+            ReserveMappingSource::PerVolume(name) => crate::model::block_model::per_volume_values(model, blocks, name).map(Values::Column),
         }
     };
     let mut numeric = Vec::new();

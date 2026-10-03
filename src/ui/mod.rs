@@ -721,8 +721,6 @@ fn draw_ui(
         })
     } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
         Some(elements::haulage::draw_panel(root_ui, editor, document, project, commands))
-    } else if editor.is_planning_viewport() {
-        Some(elements::planning_reserves::draw_data_panel(root_ui))
     } else {
         None
     };

@@ -39,6 +39,12 @@ Movement columns outside all authorising task windows are omitted instead of
 created and constrained to zero. This reduces model size without changing the
 feasible schedules.
 
+Improve refuses to start when the whole-horizon model would exceed about
+4 million movement columns (movements × intervals × event positions), and the
+status line gives the estimate. The first schedule is solved hour by hour and is
+not limited this way: DreamLand at 50 days and 1-hour intervals needs 6.7 million
+columns, so it schedules through day 50 but cannot be improved.
+
 ## Grade thresholds
 
 Project grades and thresholds use stored numeric values without unit conversion.

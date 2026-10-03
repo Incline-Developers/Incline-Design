@@ -78,6 +78,7 @@ impl<'a> App<'a> {
                         cull_back_faces: false,
                         always_show_edges: false,
                         depth_shade: None,
+                        pattern_from: None,
                     });
                     app.touch_active_project_content();
                     if should_fit {
@@ -191,6 +192,7 @@ impl<'a> App<'a> {
                         cull_back_faces: false,
                         always_show_edges: false,
                         depth_shade: None,
+                        pattern_from: None,
                     });
                     self.touch_active_project_content();
                     if should_fit {
@@ -379,6 +381,7 @@ impl<'a> App<'a> {
             cull_back_faces: false,
             always_show_edges: false,
             depth_shade: None,
+            pattern_from: None,
         });
         self.touch_active_project_content();
         self.active_triangulation = Some(id);

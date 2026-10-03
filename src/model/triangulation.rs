@@ -131,6 +131,10 @@ pub(crate) struct OpenTriangulation {
     /// its own colour. Runtime only, for the Blasting step's plan view, where
     /// depth is the only cue a top-down orthographic camera leaves.
     pub(crate) depth_shade: Option<[f64; 2]>,
+    /// Draw `flitch_style`'s pattern only where a plan point's dot product
+    /// with `[x, y]` reaches the third value, in world coordinates. Runtime
+    /// only, for Animate's blasts, whose hatching prep clears away.
+    pub(crate) pattern_from: Option<[f64; 3]>,
 }
 
 impl OpenTriangulation {

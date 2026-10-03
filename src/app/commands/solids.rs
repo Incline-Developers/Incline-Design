@@ -332,6 +332,7 @@ pub(crate) fn preview_triangulation(
         cull_back_faces: false,
         always_show_edges: false,
         depth_shade: None,
+        pattern_from: None,
     }
 }
 

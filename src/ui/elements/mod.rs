@@ -89,7 +89,6 @@ pub(crate) fn bar_strip(ui: &mut egui::Ui, id_salt: &str, height: f32, add_conte
     ui.data_mut(|data| data.insert_temp(width_id, measured));
 }
 
-pub(crate) mod planning_reserves;
 /// Lay one of a bar's clusters out over `rect`, and report what it drew into.
 ///
 /// A bar's clusters are placed against the same strip rather than in

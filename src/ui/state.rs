@@ -259,7 +259,9 @@ impl EditorState {
     pub(crate) fn preview_framing_hold(&self) -> Option<PreviewFramingHold> {
         if let Some(draft) = self.blast_bar_dialog.as_ref().filter(|_| self.is_schedule_gantt()) {
             return Some(PreviewFramingHold {
-                edition: draft.edition ^ draft.bench.map_or(0, |(solid, base)| base ^ solid.0.rotate_left(13)),
+                // Held across bench changes too: the framing only grows, so
+                // stepping down the pit keeps the camera where it was.
+                edition: draft.edition,
                 generation: self.blast_sequence_generation,
             });
         }
@@ -445,6 +447,9 @@ impl EditorState {
         set_key(&self.tri_hover_handles).hash(&mut hasher);
         self.tool_highlight_id.hash(&mut hasher);
         self.editing_labels_id.hash(&mut hasher);
+        // Haul roads are left out of the scene on the Gantt, so arriving
+        // there or leaving has to redraw it.
+        self.is_schedule_gantt().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -1988,6 +1993,9 @@ pub(crate) struct EditorState {
     /// What the block tint was last drawn for: the hidden ground and the
     /// selected block. Compared each frame so a change redraws it.
     pub(crate) haul_display_drawn: (SolidsVisibility, Option<crate::model::DigBlockId>),
+    /// Whether the scene was last built showing the Layout's block tint, so
+    /// leaving the page by any route clears it.
+    pub(crate) haul_page_drawn: bool,
     /// The Layout's own Solids Navigation.
     pub(crate) haul_hidden: SolidsVisibility,
     pub(crate) haul_navigation_selection: Vec<SolidsViewRow>,
@@ -2739,11 +2747,11 @@ pub(crate) struct EditorState {
     /// than free text. A saved selection that no longer occurs is still shown -
     /// see [`crate::model::schedule::ConditionTest::Category`].
     pub(crate) schedule_category_values: std::sync::Arc<std::collections::BTreeMap<crate::model::ReserveFieldId, Vec<String>>>,
-    /// The selected Gantt bar, the selected place in its dig order, and the
-    /// name being typed into it. The selected member is a position rather
-    /// than a block reference: the order is what is being edited, and two
-    /// positions can hold ground that resolves to nothing at all.
-    pub(crate) schedule_selected_bar: Option<crate::model::schedule::BarId>,
+    /// The selected Gantt bars: one from a click, several from a drag box or
+    /// a Ctrl-click. The selected member is a position rather than a block
+    /// reference: the order is what is being edited, and two positions can
+    /// hold ground that resolves to nothing at all.
+    pub(crate) schedule_selected_bars: std::collections::BTreeSet<crate::model::schedule::BarId>,
     /// The delay type, list or roster open on the Delays page.
     pub(crate) schedule_selected_delay: Option<DelaySelection>,
     /// What is being typed on the Delays page, until it is committed.
@@ -2782,6 +2790,11 @@ pub(crate) struct EditorState {
     pub(crate) gantt_palette_drag: Option<GanttPaletteItem>,
     /// A delay bar dropped on the Gantt, waiting for its type to be chosen.
     pub(crate) gantt_delay_drop: Option<DelayDrop>,
+    /// A follow bar dropped on the Gantt, waiting for its leader.
+    pub(crate) gantt_follow_drop: Option<DelayDrop>,
+    /// A drag box being drawn over the Gantt's empty space to select bars:
+    /// where it started, in screen points.
+    pub(crate) gantt_marquee: Option<egui::Pos2>,
     /// Every bar's readiness against the current run, mirrored from
     /// [`crate::app::commands::schedule_readiness`] while the Gantt is on
     /// screen and empty otherwise. Read where the bars and their diagnostics
@@ -2815,6 +2828,10 @@ pub(crate) struct EditorState {
     /// Whether the schedule recalculates on its own once edits settle. On by
     /// default: the first schedule takes a fraction of a second.
     pub(crate) schedule_auto_recalculate: bool,
+    /// Whether the Planning steps rerun on their own once edits settle. On
+    /// by default, like the schedule's: only the stale steps run, and an
+    /// edit made meanwhile restarts them.
+    pub(crate) planning_auto_run: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
@@ -2833,6 +2850,9 @@ pub(crate) struct EditorState {
     /// than the cursor, so the number never claims ground the view is not
     /// showing yet.
     pub(crate) schedule_animation_shown_h: f64,
+    /// How Animate draws each drill and blast blast, by its position in the
+    /// run's blasts: the ground its marks lie on.
+    pub(crate) schedule_animation_blasts: Vec<crate::model::schedule::animation::AnimatedBlast>,
     pub(crate) schedule_animation_horizon_h: f64,
     pub(crate) schedule_animation_enabled: bool,
     pub(crate) schedule_animation_pending: bool,
@@ -3339,7 +3359,7 @@ impl EditorState {
         self.schedule_category_values = Default::default();
         self.new_destination_open = false;
         self.new_destination_name.clear();
-        self.schedule_selected_bar = None;
+        self.schedule_selected_bars.clear();
         self.schedule_selected_member = None;
         self.bar_name_dialog = None;
         self.reclaim_bar_dialog = None;
@@ -3600,6 +3620,7 @@ impl EditorState {
             haul_selected_block: None,
             haul_link_pick: false,
             haul_display_drawn: Default::default(),
+            haul_page_drawn: false,
             haul_hidden: SolidsVisibility::default(),
             haul_navigation_selection: Vec::new(),
             haul_cursor: None,
@@ -3988,7 +4009,7 @@ impl EditorState {
             schedule_agent_draft: None,
             schedule_name_draft: None,
             schedule_bar_height_draft: None,
-            schedule_selected_bar: None,
+            schedule_selected_bars: Default::default(),
             schedule_selected_delay: None,
             schedule_delay_draft: None,
             schedule_selected_member: None,
@@ -4006,6 +4027,8 @@ impl EditorState {
             gantt_drag: None,
             gantt_palette_drag: None,
             gantt_delay_drop: None,
+            gantt_follow_drop: None,
+            gantt_marquee: None,
             schedule_bar_reports: Vec::new(),
             schedule_result: None,
             schedule_run_status: String::new(),
@@ -4015,11 +4038,13 @@ impl EditorState {
             schedule_run_improving: false,
             schedule_run_improve: false,
             schedule_auto_recalculate: true,
+            planning_auto_run: true,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden: SolidsVisibility::default(),
             schedule_time_h: 0.0,
             schedule_animation_shown_h: 0.0,
+            schedule_animation_blasts: Vec::new(),
             schedule_animation_horizon_h: 0.0,
             schedule_animation_enabled: false,
             schedule_animation_pending: false,
@@ -5271,7 +5296,7 @@ impl UiCommand {
                 ScheduleEdit::AddOpeningPortion { tonnes_t, .. } => report(tr!("inventory-new-portion"), format!("{tonnes_t} t")),
                 ScheduleEdit::DeleteOpeningPortion { portion, .. } => report(tr!("inventory-delete-portion"), format!("{portion:?}")),
                 ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
-                ScheduleEdit::DeleteBar(id) => report(tr!("schedule-delete-bar"), format!("{id:?}")),
+                ScheduleEdit::DeleteBars(ids) => report(tr!("schedule-delete-bar"), format!("{ids:?}")),
                 // Applying a sequence edit is a deliberate, single act on a
                 // whole dig order, unlike the per-block edits below it.
                 ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
@@ -5298,6 +5323,7 @@ impl UiCommand {
                 ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
                 ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
+                ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetDrillBlast(_)
@@ -5314,6 +5340,7 @@ impl UiCommand {
                 // Delay cell edits: the Delays page and the bar's menu show
                 // the result in place.
                 ScheduleEdit::SetDelayBarType { .. }
+                | ScheduleEdit::SetFollowLeader { .. }
                 | ScheduleEdit::RenameDelayType { .. }
                 | ScheduleEdit::SetDelayTypeColor { .. }
                 | ScheduleEdit::RenameDelayList { .. }
@@ -6045,9 +6072,12 @@ pub(crate) enum GanttPaletteItem {
     Delay,
     /// A dozer, drill or MPU bar listing blasts.
     Blast,
+    /// A drill and blast bar working another machine's blasts.
+    Follow,
 }
 
-/// Where a delay bar was dropped, held while its type is chosen.
+/// Where a delay or follow bar was dropped, held while its type or the
+/// machine it follows is chosen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DelayDrop {
     pub(crate) session: u32,
@@ -6402,7 +6432,8 @@ pub(crate) enum ScheduleEdit {
         bar: crate::model::schedule::BarId,
         name: String,
     },
-    DeleteBar(crate::model::schedule::BarId),
+    /// Delete bars, all in one edit.
+    DeleteBars(Vec<crate::model::schedule::BarId>),
     /// Copy a bar into an independent one: a fresh identity and its own
     /// membership list, so editing either never reaches the other.
     CopyBar(crate::model::schedule::BarId),
@@ -6833,6 +6864,20 @@ pub(crate) enum ScheduleEdit {
         kind: Option<crate::model::schedule::DelayTypeId>,
         insert_lane: bool,
     },
+    /// Add a follow bar: while it has priority the machine works `leader`'s
+    /// blasts.
+    AddFollowBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        leader: crate::model::schedule::LoaderAgentId,
+        insert_lane: bool,
+    },
+    /// Change which machine a follow bar follows.
+    SetFollowLeader {
+        bar: crate::model::schedule::BarId,
+        leader: crate::model::schedule::LoaderAgentId,
+    },
     /// Change what kind of delay a delay bar is.
     SetDelayBarType {
         bar: crate::model::schedule::BarId,
@@ -6936,8 +6981,11 @@ pub(crate) struct BlastBarDialog {
     pub(crate) insert_lane: bool,
     pub(crate) start_h: f64,
     pub(crate) end_h: f64,
-    /// Which bench the interactive preview shows, by base RL bits.
-    pub(crate) bench: Option<(crate::model::SolidId, u64)>,
+    /// The order-preview slider, `0..=members.len()`: at *k* the first *k*
+    /// blasts draw as fired and are taken off the pane, which uncovers the
+    /// ground under them for the next pick - as the dig sequence editor's
+    /// slider does for dug blocks. Not a time axis.
+    pub(crate) preview: usize,
 }
 
 /// One blast of the Solids run, as the Drill & Blast page lists it.
@@ -6958,9 +7006,9 @@ impl BlastListEntry {
         blast.solid == self.reference.solid && (blast.bench - self.bench_base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&self.face, glam::DVec2::from(blast.anchor))
     }
 
-    /// Bench and name, the way lists show a blast.
+    /// The blast's ground path, the way lists show a blast.
     pub(crate) fn label(&self) -> String {
-        tr!("blast-label", bench = format!("{:.0}", self.bench_top), name = self.name.clone())
+        crate::ui::elements::solids_view::blast_path(&self.solid_name, self.bench_base, &self.name)
     }
 }
 
@@ -7113,6 +7161,15 @@ pub(crate) struct ScheduleMemberView {
     /// Its complete measured tonnage, when everything needed to state one was
     /// there. Never a quiet zero.
     pub(crate) tonnes: Option<f64>,
+}
+
+impl ScheduleMemberView {
+    /// The block's full ground path, `Pit A/336/1/344/3`, when it resolved.
+    pub(crate) fn path(&self) -> Option<String> {
+        let parts = [&self.solid_name, &self.bench, &self.blast, &self.flitch, &self.name];
+        let parts: Option<Vec<&str>> = parts.into_iter().map(|part| part.as_deref()).collect();
+        parts.map(|parts| crate::ui::elements::solids_view::ground_path(&parts))
+    }
 }
 
 /// One bar's readiness as the Gantt draws it, mirrored from the readiness

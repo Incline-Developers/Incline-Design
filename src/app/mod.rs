@@ -464,6 +464,15 @@ pub(crate) struct App<'a> {
     /// When the settled inputs are due a recalculation, so the event loop
     /// wakes for it with no further input.
     pub(crate) schedule_auto_deadline: Option<Instant>,
+    /// The planning inputs Auto last started a run for (or found nothing
+    /// to run), so a failed or cancelled run is not retried until they
+    /// change. See [`Self::auto_run_planning`].
+    pub(crate) planning_auto_attempted: Option<[u64; crate::ui::state::SolidsStep::ALL.len()]>,
+    /// The planning inputs last seen while waiting for edits to settle, and since when.
+    pub(crate) planning_auto_settle: Option<([u64; crate::ui::state::SolidsStep::ALL.len()], Instant)>,
+    /// When the settled planning inputs are due a run, so the event loop
+    /// wakes for it with no further input.
+    pub(crate) planning_auto_deadline: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -599,6 +608,9 @@ impl<'a> Default for App<'a> {
             schedule_auto_attempted: None,
             schedule_auto_settle: None,
             schedule_auto_deadline: None,
+            planning_auto_attempted: None,
+            planning_auto_settle: None,
+            planning_auto_deadline: None,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -2272,6 +2284,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.schedule_auto_deadline = None;
             self.redraw_requested = true;
         }
+        if self.planning_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.planning_auto_deadline = None;
+            self.redraw_requested = true;
+        }
         if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
             self.slice_surface_retry_deadline = None;
             if let Some(graphics) = self.graphics.as_ref() {
@@ -2310,6 +2326,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(self.slice_surface_retry_deadline)
             .chain(resize_settle_deadline)
             .chain(self.schedule_auto_deadline)
+            .chain(self.planning_auto_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));

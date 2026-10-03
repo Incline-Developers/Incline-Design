@@ -5,7 +5,9 @@ struct SurfaceStyle {
     params: vec4<f32>,
     wire_color: vec4<f32>,
     pattern_color: vec4<f32>,
-    // x: hatch pattern (0 clear, 1 slashes, 2 crosses); remaining lanes reserved.
+    // x: hatch pattern (0 clear, 1 slashes, 2 crosses); yz: plan direction
+    // and w: scene-relative threshold the pattern is drawn from (zero
+    // direction draws it everywhere).
     pattern: vec4<f32>,
 };
 @group(1) @binding(0)
@@ -136,7 +138,7 @@ fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @l
             );
         }
     }
-    if surface_style.pattern.x > 0.5 {
+    if surface_style.pattern.x > 0.5 && dot(in.surface_xy, surface_style.pattern.yz) >= surface_style.pattern.w {
         var coverage = strokes.x;
         if surface_style.pattern.x > 1.5 {
             coverage = max(coverage, strokes.y);

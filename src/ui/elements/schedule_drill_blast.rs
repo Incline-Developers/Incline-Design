@@ -55,8 +55,10 @@ pub(crate) fn draw_blast_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                     .iter()
                     .position(|entry| entry.reference.solid != first.reference.solid || (entry.bench_base - first.bench_base).abs() > 1e-6)
                     .map_or(blasts.len(), |offset| index + offset);
-                let heading = tr!("drill-blast-bench", solid = first.solid_name.clone(), bench = format!("{:.0}", first.bench_top));
-                let response = grid_row(ui, GridRow::header(&heading));
+                let heading = super::solids_view::bench_path(&first.solid_name, first.bench_base);
+                // Header rows only sense hover; this one carries the bench's
+                // stage menu, so it has to take the right-click too.
+                let response = grid_row(ui, GridRow::header(&heading)).interact(egui::Sense::click());
                 let members: Vec<BlastRef> = blasts[index..bench_end].iter().map(|entry| entry.reference).collect();
                 context_menu_popup(&response, &heading, |ui| stage_menu(ui, members.clone(), session, commands));
                 for entry in &blasts[index..bench_end] {

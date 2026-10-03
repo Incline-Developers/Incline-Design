@@ -60,6 +60,7 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     static_key.hash(&mut hasher);
     editor.active_workspace.hash(&mut hasher);
     editor.planning_page.hash(&mut hasher);
+    editor.is_schedule_gantt().hash(&mut hasher);
     editor.show_haul_roads.hash(&mut hasher);
     editor.haul_view_revision.hash(&mut hasher);
     for id in editor
@@ -404,7 +405,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             });
         }
     }
-    if editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads {
+    // The Gantt's only 3D view is the sequence editors' preview, which shows
+    // ground to dig or blast; the roads there only cluttered it.
+    if (editor.active_workspace == crate::ui::state::Workspace::Planning || editor.show_haul_roads) && !editor.is_schedule_gantt() {
         draw_ctx.style = STYLE_SLOT_NONE;
         let network = document.haulage();
         for road in &network.roads {
@@ -667,8 +670,13 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
 
 pub(crate) struct FlowSceneBuildInput<'a> {
     pub(crate) flows: &'a [crate::ui::state::HaulFlowSegment],
-    /// Drill and blast at the hour Animate shows.
-    pub(crate) blasts: Option<(&'a crate::model::schedule::result::DrillBlastResult, f64)>,
+    /// Drill and blast at the hour Animate shows, with the ground each blast
+    /// stands on.
+    pub(crate) blasts: Option<(
+        &'a crate::model::schedule::result::DrillBlastResult,
+        f64,
+        &'a [crate::model::schedule::animation::AnimatedBlast],
+    )>,
     pub(crate) flow_strokes: &'a mut Vec<StrokeInstance>,
     pub(crate) view_proj: glam::DMat4,
     pub(crate) scene_origin: DVec3,
@@ -706,8 +714,8 @@ pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
     let mut unused_fill_indices: Vec<u32> = Vec::new();
     let mut ctx = DrawContext::unstyled(flow_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
     if flows.is_empty() {
-        if let Some((result, at_h)) = blasts {
-            draw_blasts(&mut ctx, result, at_h);
+        if let Some((result, at_h, animated)) = blasts {
+            draw_blasts(&mut ctx, result, at_h, animated);
         }
         return 0;
     }
@@ -769,55 +777,85 @@ pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
             k += 1.0;
         }
     }
-    if let Some((result, at_h)) = blasts {
-        draw_blasts(&mut ctx, result, at_h);
+    if let Some((result, at_h, animated)) = blasts {
+        draw_blasts(&mut ctx, result, at_h, animated);
     }
     underlay
 }
 
-/// Each blast under way at `at_h`, on its bench top: its outline in the
+/// The ground a blast's marks are drawn on: its sampled top where there is
+/// one, else a plane at its bench top.
+struct BlastGround<'a> {
+    top: Option<&'a crate::model::schedule::animation::BlastTop>,
+    bench_top: f64,
+}
+
+impl BlastGround<'_> {
+    /// Held just above the ground, so the solid's own face does not fight the
+    /// marks for depth.
+    const LIFT: f64 = 0.4;
+
+    fn at(&self, point: glam::DVec2) -> DVec3 {
+        point.extend(self.top.and_then(|top| top.height(point)).unwrap_or(self.bench_top) + Self::LIFT)
+    }
+
+    /// A line from `a` to `b` laid along the ground, in steps no longer than
+    /// its samples are apart.
+    fn line(&self, ctx: &mut DrawContext<'_>, a: glam::DVec2, b: glam::DVec2, width: f32, color: [f32; 4]) {
+        let steps = self.top.map_or(1, |top| ((a.distance(b) / top.cell()).ceil() as usize).clamp(1, 256));
+        let mut from = self.at(a);
+        for step in 1..=steps {
+            let to = self.at(a.lerp(b, step as f64 / steps as f64));
+            draw_line(ctx, from, to, width, color);
+            from = to;
+        }
+    }
+}
+
+/// Each blast under way at `at_h`, laid on its ground: its outline in the
 /// colour of its stage, and its holes - those drilled so far, in light
-/// grey, and those charged, in red. A blast not yet clear, or fired and
-/// gone, draws nothing; one fired and still standing keeps a thin outline.
-fn draw_blasts(ctx: &mut DrawContext<'_>, result: &crate::model::schedule::result::DrillBlastResult, at_h: f64) {
+/// grey, and those charged, in red. Its hatching until prepped is on its own
+/// mesh (see `ScheduleAnimation::set_blast_prep`). A blast not yet clear, or
+/// fired, draws nothing.
+fn draw_blasts(ctx: &mut DrawContext<'_>, result: &crate::model::schedule::result::DrillBlastResult, at_h: f64, animated: &[crate::model::schedule::animation::AnimatedBlast]) {
     use crate::model::schedule::{BlastActivity, BlastStage};
     const CLEAR: [f32; 4] = [0.80, 0.74, 0.60, 0.9];
     const PREPPED: [f32; 4] = [0.85, 0.66, 0.40, 1.0];
     const DRILLED: [f32; 4] = [0.95, 0.55, 0.20, 1.0];
     const CHARGED: [f32; 4] = [0.85, 0.25, 0.25, 1.0];
-    const FIRED: [f32; 4] = [1.0, 0.82, 0.30, 0.8];
     const HOLE: [f32; 4] = [0.92, 0.92, 0.88, 1.0];
     for (index, blast) in result.blasts.iter().enumerate() {
         let stage = result.stage_at(index, at_h);
         let cleared = blast.cleared_h.is_some_and(|cleared| cleared <= at_h);
-        if stage == BlastStage::NotStarted && !cleared {
+        if (stage == BlastStage::NotStarted && !cleared) || stage == BlastStage::Fired {
             continue;
         }
-        // Held just above the bench top, so the solid's own face does not
-        // fight it for depth.
-        let z = blast.bench_top + 0.3;
+        let ground = BlastGround {
+            top: animated.get(index).and_then(|animation| animation.top.as_deref()),
+            bench_top: blast.bench_top,
+        };
+        let prep = result.done_share(index, BlastActivity::Prep, at_h);
+        let prepping = stage == BlastStage::NotStarted && prep > 0.0;
         let (color, width) = match stage {
+            BlastStage::NotStarted if prepping => (PREPPED, 2.5),
             BlastStage::NotStarted => (CLEAR, 1.5),
             BlastStage::Prepped => (PREPPED, 2.5),
             BlastStage::Drilled => (DRILLED, 2.5),
             BlastStage::Charged => (CHARGED, 3.0),
-            BlastStage::Fired => (FIRED, 1.5),
+            BlastStage::Fired => continue,
         };
         for ring in blast.face.iter() {
             for (i, point) in ring.iter().enumerate() {
                 let next = ring[(i + 1) % ring.len()];
-                draw_line(ctx, point.extend(z), next.extend(z), width, color);
+                ground.line(ctx, *point, next, width, color);
             }
-        }
-        if stage == BlastStage::Fired {
-            continue;
         }
         let holes = blast.collars.len();
         let drilled = (result.done_share(index, BlastActivity::Drill, at_h) * holes as f64).round() as usize;
         let charged = (result.done_share(index, BlastActivity::Charge, at_h) * holes as f64).round() as usize;
         for (position, collar) in blast.collars.iter().enumerate().take(drilled) {
             let color = if position < charged { CHARGED } else { HOLE };
-            draw_round_join(ctx, collar.extend(z), 5.0, color);
+            draw_round_join(ctx, ground.at(*collar), 5.0, color);
         }
     }
 }

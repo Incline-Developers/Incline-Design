@@ -910,6 +910,43 @@ pub(crate) enum ReserveMappingSource {
     /// Fixed value applied to every block, for a model that has no matching
     /// column - e.g. `0` for a waste model with no grade data.
     Constant(f64),
+    /// A numeric variable given per cubic metre, times each block's own
+    /// volume: tonnes from a density column, for a model that carries no
+    /// tonnage of its own. Summed and prorated like any other block value.
+    PerVolume(String),
+}
+
+impl ReserveMappingSource {
+    /// The model column this source reads, if it reads one.
+    pub(crate) fn column(&self) -> Option<&str> {
+        match self {
+            Self::Column(name) | Self::PerVolume(name) => Some(name),
+            Self::Constant(_) => None,
+        }
+    }
+}
+
+/// `column` times each block's world volume, for a
+/// [`ReserveMappingSource::PerVolume`] mapping. `None` when the column is not
+/// resident or does not match the block geometry; the mapping's resolver has
+/// already said which.
+pub(crate) fn per_volume_values(model: &BlockModelData, blocks: &BlockBoundsSource, column: &str) -> Option<Arc<Vec<f64>>> {
+    let values = model.shared_numeric_values(column)?;
+    if values.len() != blocks.len() {
+        return None;
+    }
+    // The same volume the reserve scan measures a block's overlaps against.
+    let stretch = model.rotation().determinant().abs();
+    let scaled = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            blocks
+                .get(index)
+                .map_or(f64::NAN, |bounds| value * (bounds.upper - bounds.lower).element_product() * stretch)
+        })
+        .collect();
+    Some(Arc::new(scaled))
 }
 
 /// This block model's mapping of one project [`crate::model::ReserveField`]
@@ -965,14 +1002,17 @@ pub(crate) struct ReserveFieldStats {
 /// why a figure is absent instead of drawing an unexplained dash.
 pub(crate) fn compute_reserve_totals(
     model: &BlockModelData,
+    blocks: &BlockBoundsSource,
     fields: &[ReserveField],
     mapping: &[ReserveFieldMapping],
     cancel: &crate::app::jobs::CancelFlag,
 ) -> anyhow::Result<HashMap<ReserveFieldId, ReserveFieldStats>> {
+    let geometry = blocks;
     let blocks = model.metadata.n_blocks;
     let resolve = |id| -> Option<ResolvedReserveValues> {
         match &mapping.iter().find(|entry| entry.field == id)?.source {
             ReserveMappingSource::Column(name) => model.shared_numeric_values(name).map(ResolvedReserveValues::Column),
+            ReserveMappingSource::PerVolume(name) => per_volume_values(model, geometry, name).map(ResolvedReserveValues::Column),
             ReserveMappingSource::Constant(value) => Some(ResolvedReserveValues::Constant(*value, blocks)),
         }
     };

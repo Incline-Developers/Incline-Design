@@ -80,6 +80,10 @@ pub(crate) struct BlastTask {
     pub(crate) sequence: Vec<usize>,
     #[serde(default)]
     pub(crate) delay: bool,
+    /// A follow bar: the agent whose blast bars it works, in place of a
+    /// sequence of its own.
+    #[serde(default)]
+    pub(crate) follow: Option<usize>,
 }
 
 /// What the chain did: each machine's work, and each blast's milestones.
@@ -112,6 +116,32 @@ pub(crate) struct BlastEvents {
 }
 
 impl DrillBlastInput {
+    /// Blasts a dig bar needs that no machine will bring to firing, each with
+    /// the first step left that no bar works. A blast is worked only from the
+    /// sequences of machine bars, so one missing from every bar of a step's
+    /// machines stands at its starting stage all horizon, and its loaders
+    /// with it. A follow bar works its leader's sequence, so the leader's
+    /// bars already say whether a blast is covered.
+    pub(crate) fn unworked(&self) -> Vec<(usize, BlastActivity)> {
+        self.blasts
+            .iter()
+            .enumerate()
+            .filter(|(_, blast)| !blast.releases.is_empty() && blast.stage < BlastStage::Fired)
+            .filter_map(|(index, blast)| {
+                BlastActivity::ALL
+                    .into_iter()
+                    .filter(|activity| !blast.stage.has_done(*activity))
+                    .find(|activity| {
+                        !self
+                            .tasks
+                            .iter()
+                            .any(|task| !task.delay && self.agents.get(task.agent).is_some_and(|agent| agent.activity == *activity) && task.sequence.contains(&index))
+                    })
+                    .map(|activity| (index, activity))
+            })
+            .collect()
+    }
+
     /// The end of the first window ending after `charged_h`.
     pub(crate) fn fires_at(&self, charged_h: f64) -> f64 {
         if let Some(windows) = &self.windows {
@@ -291,16 +321,10 @@ impl<'a> Chain<'a> {
                     continue;
                 }
                 let step = agent.activity as usize;
-                let task = input
-                    .tasks
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, task)| task.agent == agent_index && task.start_h <= at + 1e-9 && at < task.end_h - 1e-9)
-                    .filter(|(_, task)| task.delay || task.sequence.iter().any(|&blast| self.left[blast][step] > DONE))
-                    .min_by(|a, b| a.1.priority.cmp(&b.1.priority).then(a.1.start_h.total_cmp(&b.1.start_h)).then(a.0.cmp(&b.0)))
-                    .map(|(_, task)| task);
-                let Some(task) = task.filter(|task| !task.delay) else { continue };
-                let Some(blast) = task.sequence.iter().copied().find(|&blast| self.left[blast][step] > DONE) else {
+                let Some(task) = self.open_task(agent_index, at, step, true).filter(|task| !task.delay) else {
+                    continue;
+                };
+                let Some(blast) = self.sequence_of(task, at, step).iter().copied().find(|&blast| self.left[blast][step] > DONE) else {
                     continue;
                 };
                 if self.ready(blast, agent.activity, at) {
@@ -326,6 +350,31 @@ impl<'a> Chain<'a> {
             }
             at = until;
             self.finish_empty_steps(at);
+        }
+    }
+
+    /// The bar `agent` works at `at` on `step`: its highest-priority open bar
+    /// with work left there, or a delay. Without `follow`, only its own blast
+    /// bars count - what a follower looks for on its leader, so a leader
+    /// standing for a delay, or following someone itself, still leads.
+    fn open_task(&self, agent: usize, at: f64, step: usize, follow: bool) -> Option<&'a BlastTask> {
+        self.input
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.agent == agent && task.start_h <= at + 1e-9 && at < task.end_h - 1e-9)
+            .filter(|(_, task)| follow || (task.follow.is_none() && !task.delay))
+            .filter(|(_, task)| task.delay || self.sequence_of(task, at, step).iter().any(|&blast| self.left[blast][step] > DONE))
+            .min_by(|a, b| a.1.priority.cmp(&b.1.priority).then(a.1.start_h.total_cmp(&b.1.start_h)).then(a.0.cmp(&b.0)))
+            .map(|(_, task)| task)
+    }
+
+    /// The blasts `task` works at `at` on `step`: its own sequence, or a
+    /// follow bar's leader's open blast bar's.
+    fn sequence_of(&self, task: &'a BlastTask, at: f64, step: usize) -> &'a [usize] {
+        match task.follow {
+            None => &task.sequence,
+            Some(leader) => self.open_task(leader, at, step, false).map_or(&[], |task| task.sequence.as_slice()),
         }
     }
 

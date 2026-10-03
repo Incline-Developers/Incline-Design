@@ -160,7 +160,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
-    crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, project, document, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_blast_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
     rect
@@ -574,7 +574,10 @@ pub(crate) fn draw_run_status(ui: &mut egui::Ui, editor: &EditorState) {
         return;
     }
     let text = egui::RichText::new(&editor.schedule_run_status);
-    let text = if editor.schedule_run_stale && editor.schedule_result.is_none() {
+    // A result that leaves loaders waiting on blasts nobody works is a
+    // schedule, but not the one the planner meant: it reads as a warning.
+    let unworked = editor.schedule_result.as_ref().is_some_and(|schedule| schedule.report.unworked_blasts > 0);
+    let text = if (editor.schedule_run_stale && editor.schedule_result.is_none()) || unworked {
         text.color(ui.visuals().warn_fg_color)
     } else {
         text.weak()
@@ -754,7 +757,7 @@ impl TimelineFrame {
 /// The wheel, pinch and middle-drag over a timeline canvas: zoom and pan the
 /// shared view. Returns whether the pointer is over the canvas and how far
 /// the wheel asks the rows to scroll down.
-pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, editor: &mut EditorState, salt: &str) -> (bool, f32) {
+pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, editor: &mut EditorState, salt: &str) -> (bool, f32, egui::Response) {
     // Input is read only while the pointer is over this canvas, so the wheel
     // still scrolls whatever else is on screen and the keyboard is untouched.
     let response = ui.interact(rect, ui.id().with(salt), egui::Sense::click_and_drag());
@@ -781,7 +784,7 @@ pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, ed
     if response.dragged_by(egui::PointerButton::Middle) && body.width() > 0.0 {
         editor.gantt.pan(-f64::from(response.drag_delta().x) / f64::from(body.width()) * editor.gantt.span_seconds);
     }
-    (over_canvas, rows)
+    (over_canvas, rows, response)
 }
 
 /// The header column, the ruler, the rows and the bars, plus the navigation
@@ -794,7 +797,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
         corner,
         day_band,
     } = TimelineFrame::new(editor.gantt, rect);
-    let (over_canvas, rows_scroll) = navigate(ui, rect, body, editor, "gantt_canvas");
+    let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, body, editor, "gantt_canvas");
     editor.gantt.row_scroll += rows_scroll;
     // Laid out after the navigation, so the arrangement drawn this frame is
     // the one this frame's zoom and pan produced. How deep a lane stacks
@@ -835,12 +838,14 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // on a bar is a click on the bar rather than a pan of the timeline, and a
     // right-click on empty lane space is that lane's own menu.
     draw_row_menus(ui, body, editor, plan, &layout.rows, session, commands);
-    draw_bars(ui, body, editor, plan, destinations, &layout, session, commands, schedule.as_deref());
+    let drawn = draw_bars(ui, body, editor, plan, destinations, &layout, session, commands, schedule.as_deref());
+    draw_marquee(ui, body, editor, &canvas, &drawn);
     draw_blasting_row(ui, body, editor, plan, &layout.rows, session, commands, schedule.as_deref());
     // Idle is a row-level indicator, under every lane of the machine.
-    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, schedule.as_deref(), &layout.rows, destinations);
+    draw_idle(ui, body, editor.gantt, editor.gantt.row_scroll, plan, schedule.as_deref(), &layout.rows, destinations);
     draw_palette_drop(ui, body, editor, plan, &layout.rows, session, commands);
     draw_delay_drop_menu(ui, editor, plan, session, commands);
+    draw_follow_drop_menu(ui, editor, plan, session, commands);
     editor.schedule_result = schedule;
     // Over everything, because it marks an instant across all of it, and last
     // so its handle takes the pointer from the bars it crosses.
@@ -867,7 +872,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
                     priority: 0,
                     window: WorkWindow {
                         start_h: 0.0,
-                        end_h: Some(crate::model::schedule::SCHEDULE_PERIOD_H),
+                        end_h: Some(new_bar_end_h(plan, GanttPaletteItem::Dig, 0.0)),
                     },
                     insert_lane: false,
                 },
@@ -1164,20 +1169,18 @@ fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, plan: Option<&
         };
     }
     if bar.has_custom_name() {
-        if bar.reclaim().is_some() {
-            format!("↺ {}", bar.name())
-        } else {
-            bar.name().to_owned()
-        }
+        bar.name().to_owned()
     } else if bar.reclaim().is_some() {
-        format!(
-            "↺ {}",
-            report
-                .map(|report| report.default_name.clone())
-                .unwrap_or_else(|| tr!("reclaim-bar-default-name", stockpile = tr!("destination-unresolved")))
-        )
+        report
+            .map(|report| report.default_name.clone())
+            .unwrap_or_else(|| tr!("reclaim-bar-default-name", stockpile = tr!("destination-unresolved")))
     } else if bar.blast_order().is_some() {
         format!("✹ {}", report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!("blast-bar-default-empty")))
+    } else if let Some(work) = bar.follow() {
+        match work.leader.zip(plan).and_then(|(leader, plan)| plan.agent(leader)) {
+            Some(leader) => tr!("follow-bar-default-name", machine = leader.name.clone()),
+            None => tr!("follow-bar-no-machine"),
+        }
     } else {
         report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!(literal = "Dig sequence"))
     }
@@ -1300,6 +1303,44 @@ pub(super) fn bar_blasts(bar: &ScheduleBar, schedule: &CalculatedSchedule) -> Ve
         .collect()
 }
 
+/// Why a blast is not ready yet at `hour`: a short phrase for a detail line
+/// and the explanation for a hover. `None` once it has fired.
+pub(super) fn blast_hold_text(result: &crate::model::schedule::result::DrillBlastResult, index: usize, hour: f64) -> Option<(String, String)> {
+    use crate::model::schedule::result::BlastHold;
+    let step = |step: crate::model::schedule::BlastActivity| step.label().to_lowercase();
+    Some(match result.hold(index, hour)? {
+        BlastHold::Fired => return None,
+        BlastHold::NeverClears => (tr!("blast-hold-never-clears"), tr!("blast-hold-never-clears-note")),
+        BlastHold::AboveStanding(above) => {
+            let names: Vec<String> = above.iter().filter_map(|index| result.blasts.get(*index)).map(blast_title).collect();
+            let note = if names.is_empty() {
+                tr!("blast-hold-above-note")
+            } else {
+                tr!("blast-hold-above-named", blasts = names.join(", "))
+            };
+            (tr!("blast-hold-above"), note)
+        }
+        BlastHold::NoMachine(activity) => (
+            tr!("blast-hold-no-machine", step = step(activity)),
+            tr!("blast-hold-no-machine-note", step = step(activity)),
+        ),
+        BlastHold::Working(activity) => (tr!("blast-hold-working", step = activity.label()), String::new()),
+        BlastHold::Queued(activity) => (tr!("blast-hold-queued", step = step(activity)), tr!("blast-hold-queued-note", step = step(activity))),
+        BlastHold::AwaitingWindow => (tr!("blast-hold-window"), tr!("blast-hold-window-note")),
+    })
+}
+
+/// When this machine's next bar opens after `hour`, for a machine with no
+/// bar open: without it, "no bar open" reads as "nothing planned".
+pub(super) fn next_bar_note(plan: &SchedulePlan, agent: LoaderAgentId, hour: f64) -> Option<String> {
+    plan.bars()
+        .iter()
+        .filter(|bar| bar.agent == Some(agent) && bar.window.start_h > hour + 1e-9)
+        .map(|bar| bar.window.start_h)
+        .min_by(f64::total_cmp)
+        .map(|start| tr!("idle-next-bar", at = instant_label(start * GanttView::HOUR)))
+}
+
 /// The short name and the explanation of one idle reason.
 pub(super) fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
     match reason {
@@ -1322,7 +1363,17 @@ pub(super) fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
 ///
 /// Drawn from the result's explicit idle spans, never inferred from gaps
 /// between bars - a gap on screen can be a lane that packed elsewhere.
-fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, schedule: Option<&CalculatedSchedule>, rows: &[Row], destinations: &[DestinationView]) {
+#[allow(clippy::too_many_arguments, reason = "the strip reads the view, the plan, the result and the rows it sits under")]
+fn draw_idle(
+    ui: &mut egui::Ui,
+    body: egui::Rect,
+    view: GanttView,
+    scroll: f32,
+    plan: &SchedulePlan,
+    schedule: Option<&CalculatedSchedule>,
+    rows: &[Row],
+    destinations: &[DestinationView],
+) {
     let Some(schedule) = schedule else {
         return;
     };
@@ -1385,11 +1436,21 @@ fn draw_idle(ui: &mut egui::Ui, body: egui::Rect, view: GanttView, scroll: f32, 
                 to = instant_label(span.end_h * GanttView::HOUR),
                 hours = format!("{:.1}", span.end_h - span.start_h)
             ));
-            if let Some(blast) = span.blast.and_then(|index| schedule.drill_blast.as_ref()?.blasts.get(index)) {
+            if let Some((index, result)) = span.blast.zip(schedule.drill_blast.as_ref())
+                && let Some(blast) = result.blasts.get(index)
+            {
                 ui.label(tr!("idle-waiting-on-blast-named", blast = blast_title(blast)));
+                if let Some((_, why)) = blast_hold_text(result, index, at_h) {
+                    ui.label(why);
+                }
                 if let Some(fired) = blast.fired_h {
                     ui.label(tr!("blast-fired-at", at = instant_label(fired * GanttView::HOUR)));
                 }
+            }
+            if span.reason == Some(IdleReason::NoWork)
+                && let Some(next) = next_bar_note(plan, agent, at_h)
+            {
+                ui.label(next);
             }
             if !span.full.is_empty() {
                 let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
@@ -1433,7 +1494,7 @@ fn source_label(source: WorkSource, bar: &ScheduleBar, report: Option<&ScheduleB
     }
 }
 
-/// A source as a planner names it: a block with the area it lies in.
+/// A source as a planner names it: a block by its full ground path.
 pub(super) fn qualified_source_label(
     source: WorkSource,
     bar: &ScheduleBar,
@@ -1441,13 +1502,11 @@ pub(super) fn qualified_source_label(
     schedule: &CalculatedSchedule,
     destinations: &[DestinationView],
 ) -> String {
-    let name = source_label(source, bar, report, schedule, destinations);
     match source {
-        WorkSource::Block(block) => match member_of(schedule, bar, report, block).and_then(|member| member.area.clone()) {
-            Some(area) => format!("{area} · {name}"),
-            None => name,
-        },
-        WorkSource::Stockpile(_) => name,
+        WorkSource::Block(block) => member_of(schedule, bar, report, block)
+            .and_then(crate::ui::state::ScheduleMemberView::path)
+            .unwrap_or_else(|| source_label(source, bar, report, schedule, destinations)),
+        WorkSource::Stockpile(_) => source_label(source, bar, report, schedule, destinations),
     }
 }
 
@@ -1770,15 +1829,18 @@ fn draw_bars(
     session: u32,
     commands: &mut Vec<UiCommand>,
     schedule: Option<&CalculatedSchedule>,
-) {
+) -> Vec<(crate::model::schedule::BarId, egui::Rect)> {
+    let mut drawn = Vec::new();
     if !body.is_positive() {
-        return;
+        return drawn;
     }
     let scroll = editor.gantt.row_scroll;
     let view = editor.gantt;
     let painter = ui.painter_at(body);
     let visuals = ui.visuals().clone();
-    let mut selected = editor.schedule_selected_bar;
+    let mut selected = editor.schedule_selected_bars.clone();
+    // Ctrl (Cmd) or Shift adds a clicked bar to the selection, or takes it out.
+    let adding = ui.input(|input| input.modifiers.command || input.modifiers.shift);
     let mut open_dialog: Option<BarNameDialog> = None;
     let mut open_window: Option<BarWindowDialog> = None;
     let mut open_editor: Option<crate::ui::state::SequenceDraft> = None;
@@ -1908,7 +1970,8 @@ fn draw_bars(
                     let rect = egui::Rect::from_min_size(egui::pos2(left, slot_top + BAR_TOP), egui::vec2(right - left, plan.bar_height()));
 
                     let response = ui.interact(rect.intersect(body), ui.id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
-                    let is_selected = selected == Some(bar.id);
+                    drawn.push((bar.id, rect.intersect(body)));
+                    let is_selected = selected.contains(&bar.id);
                     let ready = report.is_some_and(|report| report.ready);
                     let delay = bar.delay().map(|work| super::schedule_delays::delay_look(plan, work.kind).0);
                     let fill = match delay {
@@ -1976,7 +2039,7 @@ fn draw_bars(
                     // the band is simply not there. One hover for the whole
                     // band, answering for the instant under the pointer.
                     if let Some(schedule) = schedule
-                        && bar.blast_order().is_some()
+                        && (bar.blast_order().is_some() || bar.follow().is_some())
                     {
                         draw_blast_band(ui, body, band, view, bar, schedule);
                     }
@@ -2021,12 +2084,20 @@ fn draw_bars(
                         }
                     }
                     if response.clicked() {
-                        selected = Some(bar.id);
+                        if !adding {
+                            selected.clear();
+                            selected.insert(bar.id);
+                        } else if !selected.remove(&bar.id) {
+                            selected.insert(bar.id);
+                        }
                     }
                     // Primary only: the middle button pans the timeline and the
                     // secondary one opens this bar's menu.
                     if response.drag_started_by(egui::PointerButton::Primary) {
-                        selected = Some(bar.id);
+                        if !selected.contains(&bar.id) {
+                            selected.clear();
+                            selected.insert(bar.id);
+                        }
                         let pointer = response.interact_pointer_pos().map_or(left, |pos| pos.x);
                         let mode = drag_mode_at(pointer, left, right, window.end_h.is_some());
                         let start_seconds = window.start_h * GanttView::HOUR;
@@ -2104,7 +2175,7 @@ fn draw_bars(
                                 insert_lane: false,
                                 start_h: bar.window.start_h,
                                 end_h: bar.window.end_h.unwrap_or(bar.window.start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
-                                bench: None,
+                                preview: 0,
                             });
                             ui.close();
                         }
@@ -2140,9 +2211,28 @@ fn draw_bars(
                             commands.push(UiCommand::schedule(session, ScheduleEdit::CopyBar(bar.id)));
                             ui.close();
                         }
-                        if ContextMenuAction::new(tr!("schedule-delete-bar")).show(ui).clicked() {
-                            commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteBar(bar.id)));
+                        // On one of several selected bars, the whole selection.
+                        let several = selected.len() > 1 && selected.contains(&bar.id);
+                        let delete_label = if several {
+                            tr!("schedule-delete-bars", count = selected.len().to_string())
+                        } else {
+                            tr!("schedule-delete-bar")
+                        };
+                        if ContextMenuAction::new(delete_label).show(ui).clicked() {
+                            let bars = if several { selected.iter().copied().collect() } else { vec![bar.id] };
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteBars(bars)));
                             ui.close();
+                        }
+                        if let Some(work) = bar.follow() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(tr!("follow-bar-leader")).weak());
+                            for agent in follow_leaders(plan, bar.agent) {
+                                if ContextMenuAction::new(agent.name.clone()).checked(work.leader == Some(agent.id)).show(ui).clicked() {
+                                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetFollowLeader { bar: bar.id, leader: agent.id }));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
                         }
                         // Lanes are numbered from zero and lower is sooner, so
                         // "raise" is one step down the number. A bar already in
@@ -2158,8 +2248,14 @@ fn draw_bars(
                             ));
                             ui.close();
                         }
+                        // Lowering only means something beside another bar on
+                        // the same machine that it would then fall behind.
+                        let behind = plan
+                            .bars()
+                            .iter()
+                            .any(|other| other.id != bar.id && other.agent.is_some() && other.agent == bar.agent && other.priority >= bar.priority);
                         if ContextMenuAction::new(tr!("schedule-bar-lower-priority"))
-                            .enabled(bar.priority < u32::MAX)
+                            .enabled(bar.priority < u32::MAX && behind)
                             .show(ui)
                             .clicked()
                         {
@@ -2241,7 +2337,8 @@ fn draw_bars(
         ));
     }
     editor.gantt_drag = drag;
-    editor.schedule_selected_bar = selected.filter(|id| plan.bar(*id).is_some());
+    selected.retain(|id| plan.bar(*id).is_some());
+    editor.schedule_selected_bars = selected;
     if let Some(dialog) = open_dialog {
         editor.bar_name_dialog = Some(dialog);
     }
@@ -2257,6 +2354,7 @@ fn draw_bars(
     if let Some(dialog) = open_blast {
         editor.blast_bar_dialog = Some(dialog);
     }
+    drawn
 }
 
 /// A blast bar's calculated machine work, coloured by activity. Firing
@@ -2264,11 +2362,14 @@ fn draw_bars(
 fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: GanttView, bar: &ScheduleBar, schedule: &CalculatedSchedule) {
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let blasts = bar_blasts(bar, schedule);
+    // A follow bar works whatever its leader has next, so all of its
+    // machine's work inside its window is its own.
+    let follows = bar.follow().is_some();
     let clip = band.intersect(body);
     let rows: Vec<&crate::model::schedule::result::PublishedBlastWork> = result
         .work
         .iter()
-        .filter(|row| Some(row.agent) == bar.agent && blasts.contains(&row.blast))
+        .filter(|row| Some(row.agent) == bar.agent && (follows || blasts.contains(&row.blast)))
         .filter(|row| row.start_h >= bar.window.start_h - 1e-9 && bar.window.end_h.is_none_or(|end| row.start_h < end))
         .collect();
     for row in &rows {
@@ -2305,9 +2406,9 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
     });
 }
 
-/// A published blast as hovers name it: its bench and its name.
+/// A published blast as hovers name it: its ground path.
 pub(super) fn blast_title(blast: &crate::model::schedule::result::PublishedBlast) -> String {
-    tr!("blast-label", bench = format!("{:.0}", blast.bench_top), name = blast.name.clone())
+    super::solids_view::blast_path(&blast.solid_name, blast.bench_base, &blast.name)
 }
 
 /// The placement a drag is currently previewing, as one value.
@@ -2342,6 +2443,9 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
             }
             let id = ui.id().with(("gantt_lane", index, lane));
             let response = ui.interact(rect, id, egui::Sense::click());
+            if response.clicked() && !ui.input(|input| input.modifiers.command || input.modifiers.shift) {
+                editor.schedule_selected_bars.clear();
+            }
             // A delay list or roster under the pointer, named. The bars take
             // the hover where they sit, so this answers only for open lane.
             if let Some(agent) = row.agent
@@ -2385,8 +2489,8 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                         priority,
                         insert_lane: false,
                         start_h,
-                        end_h: start_h + crate::model::schedule::SCHEDULE_PERIOD_H,
-                        bench: None,
+                        end_h: new_bar_end_h(plan, GanttPaletteItem::Blast, start_h),
+                        preview: 0,
                     });
                     ui.close();
                 }
@@ -2395,9 +2499,9 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                     // it was asked for, rather than unassigned at hour zero
                     // somewhere off screen: right-clicking a machine's lane at
                     // a place on the timeline is how the user says all three.
-                    // One period long to begin with, not open-ended: a new
-                    // bar is something to resize, and a window with no end
-                    // has no edge to take hold of.
+                    // To the horizon's end, not open-ended: a new bar is
+                    // something to resize, and a window with no end has no
+                    // edge to take hold of.
                     let start_h = ui.data(|data| data.get_temp::<f64>(opened_at)).unwrap_or(0.0) / GanttView::HOUR;
                     commands.push(UiCommand::schedule(
                         session,
@@ -2407,7 +2511,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                             priority,
                             window: WorkWindow {
                                 start_h,
-                                end_h: Some(start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
+                                end_h: Some(new_bar_end_h(plan, GanttPaletteItem::Dig, start_h)),
                             },
                             insert_lane: false,
                         },
@@ -2435,7 +2539,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                         agent: row.agent,
                         priority,
                         start: start_h.to_string(),
-                        end: (start_h + crate::model::schedule::SCHEDULE_PERIOD_H).to_string(),
+                        end: new_bar_end_h(plan, GanttPaletteItem::Reclaim, start_h).to_string(),
                         maximum: String::new(),
                     });
                     ui.close();
@@ -2471,10 +2575,18 @@ pub(super) fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
 
 /// How long a bar dropped from the palette is to begin with: a day of work, or
 /// a shift's worth of delay. Something to resize, as a right-clicked bar is.
-fn palette_length_h(item: GanttPaletteItem) -> f64 {
+/// Where a new bar started at `start_h` ends. Work bars run to the end of
+/// the planning horizon: a bar is where its machine may work, and a day-long
+/// one left a loader idle from Day 2 with its blocks still standing. They stay
+/// bounded rather than open-ended, so the end has an edge to take hold of. A
+/// delay is a stoppage, and starts short.
+fn new_bar_end_h(plan: &SchedulePlan, item: GanttPaletteItem, start_h: f64) -> f64 {
+    let period = crate::model::schedule::SCHEDULE_PERIOD_H;
     match item {
-        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast => crate::model::schedule::SCHEDULE_PERIOD_H,
-        GanttPaletteItem::Delay => 12.0,
+        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast | GanttPaletteItem::Follow => {
+            (f64::from(plan.experiment().planning_end_day) * period).max(start_h + period)
+        }
+        GanttPaletteItem::Delay => start_h + 12.0,
     }
 }
 
@@ -2484,6 +2596,7 @@ fn palette_label(item: GanttPaletteItem) -> String {
         GanttPaletteItem::Reclaim => tr!("gantt-palette-reclaim"),
         GanttPaletteItem::Delay => tr!("gantt-palette-delay"),
         GanttPaletteItem::Blast => tr!("gantt-palette-blast"),
+        GanttPaletteItem::Follow => tr!("gantt-palette-follow"),
     }
 }
 
@@ -2493,25 +2606,52 @@ fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
         GanttPaletteItem::Reclaim => RECLAIM_COLOR,
         GanttPaletteItem::Delay => super::schedule_delays::UNTYPED_DELAY_COLOR,
         GanttPaletteItem::Blast => BLAST_COLOR,
+        GanttPaletteItem::Follow => BLAST_COLOR.gamma_multiply(0.6),
     }
 }
 
 /// The chips in the corner above the machine names: drag one onto a row to
 /// make that kind of bar there.
 fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState) {
-    let items = [GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay, GanttPaletteItem::Blast];
+    let items = [
+        GanttPaletteItem::Dig,
+        GanttPaletteItem::Reclaim,
+        GanttPaletteItem::Delay,
+        GanttPaletteItem::Blast,
+        GanttPaletteItem::Follow,
+    ];
     let inner = corner.shrink2(egui::vec2(6.0, 3.0));
     if !inner.is_positive() {
         return;
     }
-    let height = inner.height().min(18.0);
     let gap = 4.0;
-    let width = ((inner.width() - gap * (items.len() - 1) as f32) / items.len() as f32).min(64.0);
     let font = egui::TextStyle::Small.resolve(ui.style());
     let visuals = ui.visuals().clone();
+    // Each chip as wide as its name, wrapping onto a second row rather than
+    // cutting names short when the corner is narrow.
+    let widths: Vec<f32> = items
+        .iter()
+        .map(|item| 4.0 + 7.0 + 4.0 + ui.painter().layout_no_wrap(palette_label(*item), font.clone(), visuals.text_color()).size().x + 6.0)
+        .collect();
+    let mut places = Vec::with_capacity(items.len());
+    let (mut x, mut row) = (inner.left(), 0usize);
+    for width in &widths {
+        if x > inner.left() && x + width > inner.right() {
+            x = inner.left();
+            row += 1;
+        }
+        places.push((x, row));
+        x += width + gap;
+    }
+    let rows = row + 1;
+    let height = ((inner.height() - gap * row as f32) / rows as f32).min(18.0);
+    let top = inner.center().y - (height * rows as f32 + gap * row as f32) * 0.5;
     for (index, item) in items.into_iter().enumerate() {
-        let left = inner.left() + index as f32 * (width + gap);
-        let chip = egui::Rect::from_min_size(egui::pos2(left, inner.center().y - height * 0.5), egui::vec2(width, height));
+        let (left, row) = places[index];
+        let chip = egui::Rect::from_min_size(
+            egui::pos2(left, top + row as f32 * (height + gap)),
+            egui::vec2(widths[index].min(inner.right() - left), height),
+        );
         let response = ui
             .interact(chip, ui.id().with(("gantt_palette", index)), egui::Sense::drag())
             .on_hover_text(tr!("gantt-palette-hint", item = palette_label(item)));
@@ -2581,7 +2721,7 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
             visuals.selection.bg_fill.gamma_multiply(0.18)
         };
         painter.rect_filled(slot.intersect(body), GROUP_CORNER_RADIUS, fill);
-        let ghost = span_rect(view, body, start_h, start_h + palette_length_h(item), top + BAR_TOP, plan.bar_height());
+        let ghost = span_rect(view, body, start_h, new_bar_end_h(plan, item, start_h), top + BAR_TOP, plan.bar_height());
         painter.rect_filled(ghost, GROUP_CORNER_RADIUS, palette_color(item).gamma_multiply(0.55));
         painter.rect_stroke(ghost, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, palette_color(item)), egui::StrokeKind::Inside);
     }
@@ -2607,7 +2747,7 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
     let Some((pos, placement, start_h)) = target else { return };
     let window = WorkWindow {
         start_h,
-        end_h: Some(start_h + palette_length_h(item)),
+        end_h: Some(new_bar_end_h(plan, item, start_h)),
     };
     match item {
         GanttPaletteItem::Dig => commands.push(UiCommand::schedule(
@@ -2627,12 +2767,22 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 agent: placement.agent,
                 priority: placement.priority,
                 start: start_h.to_string(),
-                end: (start_h + palette_length_h(item)).to_string(),
+                end: (new_bar_end_h(plan, item, start_h)).to_string(),
                 maximum: String::new(),
             });
         }
         GanttPaletteItem::Delay => {
             editor.gantt_delay_drop = Some(DelayDrop {
+                session,
+                agent: placement.agent,
+                priority: placement.priority,
+                insert: placement.insert,
+                start_h,
+                pos,
+            });
+        }
+        GanttPaletteItem::Follow => {
+            editor.gantt_follow_drop = Some(DelayDrop {
                 session,
                 agent: placement.agent,
                 priority: placement.priority,
@@ -2654,8 +2804,8 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 priority: placement.priority,
                 insert_lane: placement.insert,
                 start_h,
-                end_h: start_h + palette_length_h(item),
-                bench: None,
+                end_h: new_bar_end_h(plan, item, start_h),
+                preview: 0,
             });
         }
     }
@@ -2710,7 +2860,7 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
                 priority: drop.priority,
                 window: WorkWindow {
                     start_h: drop.start_h,
-                    end_h: Some(drop.start_h + palette_length_h(GanttPaletteItem::Delay)),
+                    end_h: Some(new_bar_end_h(plan, GanttPaletteItem::Delay, drop.start_h)),
                 },
                 kind,
                 insert_lane: drop.insert,
@@ -2728,6 +2878,114 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
     if close {
         editor.gantt_delay_drop = None;
     }
+}
+
+/// The machines a bar on `agent` can follow: other drill and blast machines
+/// of its own type, so a follower adds to work it actually does. On an
+/// unassigned lane, any drill and blast machine.
+fn follow_leaders(plan: &SchedulePlan, agent: Option<crate::model::schedule::LoaderAgentId>) -> Vec<&crate::model::schedule::LoaderAgent> {
+    let kind = agent.and_then(|agent| plan.agent_kind(agent));
+    plan.agents()
+        .iter()
+        .filter(|leader| Some(leader.id) != agent)
+        .filter(|leader| {
+            plan.agent_kind(leader.id)
+                .is_some_and(|leader_kind| leader_kind.is_drill_blast() && kind.is_none_or(|kind| kind == leader_kind))
+        })
+        .collect()
+}
+
+/// The menu a dropped follow bar opens: which machine it follows.
+fn draw_follow_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(drop) = editor.gantt_follow_drop.filter(|drop| drop.session == session) else {
+        editor.gantt_follow_drop = None;
+        return;
+    };
+    let mut chosen = None;
+    let area = egui::Area::new(ui.id().with("gantt_follow_drop"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drop.pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                ui.set_max_width(240.0);
+                ui.label(bold(&tr!("gantt-follow-title")));
+                ui.label(egui::RichText::new(tr!("follow-bar-help")).weak().small());
+                ui.add_space(2.0);
+                let mut any = false;
+                for agent in follow_leaders(plan, drop.agent) {
+                    any = true;
+                    if ui
+                        .add(egui::Button::new(agent.name.clone()).frame(false).min_size(egui::vec2(ui.available_width(), 0.0)))
+                        .clicked()
+                    {
+                        chosen = Some(agent.id);
+                    }
+                }
+                if !any {
+                    ui.label(egui::RichText::new(tr!("gantt-follow-none")).weak());
+                }
+            });
+        });
+    let mut close = area.response.clicked_elsewhere() || ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if let Some(leader) = chosen {
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::AddFollowBar {
+                agent: drop.agent,
+                priority: drop.priority,
+                window: WorkWindow {
+                    start_h: drop.start_h,
+                    end_h: Some(new_bar_end_h(plan, GanttPaletteItem::Follow, drop.start_h)),
+                },
+                leader,
+                insert_lane: drop.insert,
+            },
+        ));
+        close = true;
+    }
+    if close {
+        editor.gantt_follow_drop = None;
+    }
+}
+
+/// A box dragged over the Gantt's empty space: every bar it touches is
+/// selected when it is let go, added to the selection with Ctrl or Shift.
+fn draw_marquee(ui: &egui::Ui, body: egui::Rect, editor: &mut EditorState, canvas: &egui::Response, drawn: &[(crate::model::schedule::BarId, egui::Rect)]) {
+    if canvas.drag_started_by(egui::PointerButton::Primary)
+        && editor.gantt_palette_drag.is_none()
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin()).filter(|origin| body.contains(*origin))
+    {
+        editor.gantt_marquee = Some(origin);
+    }
+    let Some(origin) = editor.gantt_marquee else { return };
+    let (pointer, down, adding) = ui.input(|input| {
+        (
+            input.pointer.interact_pos(),
+            input.pointer.button_down(egui::PointerButton::Primary),
+            input.modifiers.command || input.modifiers.shift,
+        )
+    });
+    let Some(pointer) = pointer else {
+        editor.gantt_marquee = None;
+        return;
+    };
+    let rect = egui::Rect::from_two_pos(origin, pointer).intersect(body);
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(body);
+    painter.rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.15));
+    painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, visuals.selection.stroke.color), egui::StrokeKind::Inside);
+    ui.ctx().request_repaint();
+    if down {
+        return;
+    }
+    editor.gantt_marquee = None;
+    if !adding {
+        editor.schedule_selected_bars.clear();
+    }
+    editor
+        .schedule_selected_bars
+        .extend(drawn.iter().filter(|(_, bar)| bar.intersects(rect)).map(|(id, _)| *id));
 }
 
 /// Delay lists and rosters on each machine's row: a tint of the delay's

@@ -125,10 +125,7 @@ impl crate::app::App<'_> {
             sync::Arc,
         };
 
-        use crate::{
-            app::jobs::JobKey,
-            model::{ItemRef, block_model::ReserveMappingSource},
-        };
+        use crate::{app::jobs::JobKey, model::ItemRef};
         let Some(project) = self.workspace.active_project() else {
             return;
         };
@@ -145,7 +142,7 @@ impl crate::app::App<'_> {
         let mut missing = false;
         let mut data_hash = DefaultHasher::new();
         for entry in &model.reserve_mapping {
-            if let ReserveMappingSource::Column(name) = &entry.source {
+            if let Some(name) = entry.source.column() {
                 let values = model.model.shared_numeric_values(name);
                 missing |= values.is_none();
                 values.map(|values| Arc::as_ptr(&values) as usize).hash(&mut data_hash);
@@ -192,6 +189,7 @@ impl crate::app::App<'_> {
             return;
         }
         let data = model.model.clone();
+        let blocks = model.blocks.clone();
         let mapping = model.reserve_mapping.clone();
         let deferred = model.state.deferred.is_some();
         if missing && deferred {
@@ -227,7 +225,7 @@ impl crate::app::App<'_> {
         self.spawn_job_reporting_progress(
             crate::i18n::tr!("planning-computing-reserves"),
             vec![JobKey::ReserveStats(id, key)],
-            move |cancel, _| crate::model::block_model::compute_reserve_totals(&data, &fields, &mapping, cancel),
+            move |cancel, _| crate::model::block_model::compute_reserve_totals(&data, &blocks, &fields, &mapping, cancel),
             move |app, result| {
                 if app.workspace.active_project().is_none_or(|project| project.runtime_id != runtime) {
                     return;

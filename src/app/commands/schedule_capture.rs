@@ -190,6 +190,7 @@ pub(crate) struct CaptureIdentities {
 #[derive(Clone, Debug)]
 pub(crate) struct CapturedBlast {
     pub(crate) reference: crate::model::schedule::BlastRef,
+    pub(crate) solid_name: String,
     pub(crate) name: String,
     pub(crate) bench: crate::ui::state::BenchSelection,
     pub(crate) face: Arc<crate::model::arrangement::Face>,
@@ -212,6 +213,9 @@ pub(crate) struct CaptureStats {
     pub(crate) mixed_blocks: usize,
     /// Whether the derived event budget hit [`SEGMENT_CEILING`].
     pub(crate) event_budget_restricted: bool,
+    /// Blasts a dig bar needs that no machine bar will prep, drill or charge,
+    /// so their loaders wait all horizon. Named in the notes.
+    pub(crate) unworked_blasts: usize,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -235,6 +239,9 @@ pub(crate) struct CaptureSnapshot {
     pub(crate) runtime: u32,
     /// The horizon this run was asked to cover, from project hour zero.
     pub(crate) horizon_h: f64,
+    /// Whether the run solves the whole horizon at once (Improve), which the
+    /// column ceiling guards; the hourly first schedule never builds that model.
+    pub(crate) whole_horizon: bool,
     pub(crate) generation: u64,
     pub(crate) plan_revision: u64,
     plan: SchedulePlan,
@@ -249,8 +256,9 @@ pub(crate) struct CaptureSnapshot {
     exclusions: Vec<(crate::model::SolidId, crate::model::MiningExclusions)>,
 }
 
-/// Cap on the estimated column count, so a horizon somebody typed three extra
-/// zeroes into is refused with a figure rather than allocated.
+/// Cap on the estimated column count of a whole-horizon solve (Improve), so a
+/// horizon somebody typed three extra zeroes into is refused with a figure
+/// rather than allocated.
 const COLUMN_CEILING: usize = 4_000_000;
 
 /// A bar in scope for the experimental run: assigned, with work, and with a
@@ -321,7 +329,7 @@ impl crate::app::App<'_> {
     ///
     /// Bounded: it clones the plan and the field list, borrows the cached
     /// planning snapshot and reports through `Arc`, and resolves no candidate.
-    pub(crate) fn capture_schedule_snapshot(&mut self, horizon_h: f64) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
+    pub(crate) fn capture_schedule_snapshot(&mut self, horizon_h: f64, whole_horizon: bool) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => return Err(vec![CaptureDiagnostic::global(reason.describe())]),
@@ -343,6 +351,7 @@ impl crate::app::App<'_> {
         Ok(CaptureSnapshot {
             runtime: project.runtime_id,
             horizon_h,
+            whole_horizon,
             generation: inputs.generation,
             plan_revision,
             plan,
@@ -448,7 +457,7 @@ fn capture_drill_blast(
             }
         }
         if blocked && stage == crate::model::schedule::BlastStage::NotStarted {
-            unclearable.push(record.name.clone());
+            unclearable.push(crate::ui::elements::solids_view::blast_path(&record.solid_name, record.bench.base, &record.name));
         }
         blasts.push(BlastJob {
             quantity,
@@ -459,6 +468,7 @@ fn capture_drill_blast(
         });
         identities.blasts.push(CapturedBlast {
             reference,
+            solid_name: record.solid_name.clone(),
             name: record.name.clone(),
             bench: record.bench,
             face: Arc::clone(&record.face),
@@ -473,8 +483,11 @@ fn capture_drill_blast(
     // Machines and their bars.
     let mut agents: Vec<BlastAgent> = Vec::new();
     let mut tasks: Vec<BlastTask> = Vec::new();
+    // Follow bars name their leader by id; its index is known only once
+    // every bar has been read.
+    let mut leaders: Vec<(usize, crate::model::schedule::LoaderAgentId)> = Vec::new();
     for bar in plan.bars() {
-        if bar.blast_order().is_none() && bar.delay().is_none() {
+        if bar.blast_order().is_none() && bar.delay().is_none() && bar.follow().is_none() {
             continue;
         }
         let members = bar.blast_order().map_or(&[][..], |order| order.members.as_slice());
@@ -528,6 +541,9 @@ fn capture_drill_blast(
         if missing > 0 {
             notes.push(crate::i18n::tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
         }
+        if let Some(leader) = bar.follow().and_then(|work| work.leader) {
+            leaders.push((tasks.len(), leader));
+        }
         tasks.push(BlastTask {
             agent: agent_index,
             priority: bar.priority,
@@ -535,7 +551,13 @@ fn capture_drill_blast(
             end_h,
             sequence,
             delay: bar.delay().is_some(),
+            follow: None,
         });
+    }
+    // A leader with no blast bars of its own has nothing to follow, and the
+    // bar idles.
+    for (task, leader) in leaders {
+        tasks[task].follow = identities.blast_agents.iter().position(|id| *id == leader);
     }
     Some(DrillBlastInput {
         blasts,
@@ -1641,10 +1663,15 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let event_budget_restricted = derived > event_capacity;
     let segments_per_interval = derived.clamp(1, event_capacity);
     let estimated_columns = movements.len().saturating_mul(intervals.len()).saturating_mul(segments_per_interval);
-    if estimated_columns > COLUMN_CEILING {
-        problems.push(CaptureDiagnostic::global(format!(
-            "this horizon and resolution would build about {estimated_columns} movement columns, beyond the {COLUMN_CEILING} a run allows; shorten the horizon or widen the interval"
-        )).at(ScheduleStep::Configuration));
+    if source.whole_horizon && estimated_columns > COLUMN_CEILING {
+        problems.push(
+            CaptureDiagnostic::global(crate::i18n::tr!(
+                "schedule-capture-too-many-columns",
+                columns = format!("{:.1}", estimated_columns as f64 / 1e6),
+                ceiling = format!("{:.0}", COLUMN_CEILING as f64 / 1e6)
+            ))
+            .at(ScheduleStep::Configuration),
+        );
     }
     // ---- drill and blast ----------------------------------------------------
     let drill_blast = if plan.drill_blast().enabled {
@@ -1652,6 +1679,23 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     } else {
         None
     };
+    // A dig bar on ground whose blast no machine works waits for it all
+    // horizon. The run is still a valid schedule, so it is a note and a
+    // warning on the status rather than a refusal.
+    let unworked = drill_blast.as_ref().map(|input| input.unworked()).unwrap_or_default();
+    if !unworked.is_empty() {
+        let blasts = unworked
+            .iter()
+            .filter_map(|(index, activity)| {
+                identities.blasts.get(*index).map(|blast| {
+                    let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
+                    crate::i18n::tr!("drill-blast-unworked-entry", blast = label, step = activity.label())
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        notes.push(crate::i18n::tr!("drill-blast-unworked", blasts = blasts));
+    }
 
     if movements.is_empty() && !has_blast_work && problems.is_empty() {
         problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
@@ -1684,6 +1728,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         ground_sources: input.ground.len(),
         mixed_blocks,
         event_budget_restricted,
+        unworked_blasts: unworked.len(),
     };
     let fingerprint = fingerprint(source, &input);
     Ok(BlendCapture {
@@ -2206,6 +2251,7 @@ impl CaptureSnapshot {
             runtime: 1,
             // Run All Periods: the whole configured horizon.
             horizon_h: f64::from(plan.experiment().planning_end_day) * SCHEDULE_PERIOD_H,
+            whole_horizon: false,
             generation: 9,
             plan_revision: 5,
             plan,

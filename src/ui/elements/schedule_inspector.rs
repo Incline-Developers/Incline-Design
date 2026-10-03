@@ -149,8 +149,14 @@ fn drill_blast(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSche
                 ));
             }
             None => {
-                entry.value = tr!("inspector-drill-blast-idle");
                 entry.value_weak = true;
+                // A machine nobody has given work says only that.
+                entry.value = if plan.bars().iter().any(|bar| bar.agent == Some(agent.id)) {
+                    entry.detail = drill_blast_idle_detail(plan, schedule, result, agent.id, hour);
+                    tr!("inspector-drill-blast-idle")
+                } else {
+                    tr!("idle-no-bars")
+                };
             }
         }
         draw_entry(ui, &entry);
@@ -173,6 +179,37 @@ fn drill_blast(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSche
     }
     let fired = (0..result.blasts.len()).filter(|index| result.stage_at(*index, hour) == BlastStage::Fired).count();
     note(ui, tr!("inspector-blasts-fired", fired = fired.to_string(), total = result.blasts.len().to_string()));
+}
+
+/// Why a dozer, drill or MPU with bars is not working at `hour`: none is
+/// open yet, or the first blast its open bars still need it on is held up -
+/// named, with what holds it.
+fn drill_blast_idle_detail(
+    plan: &SchedulePlan,
+    schedule: &CalculatedSchedule,
+    result: &crate::model::schedule::result::DrillBlastResult,
+    agent: crate::model::schedule::LoaderAgentId,
+    hour: f64,
+) -> Option<String> {
+    let open: Vec<_> = plan
+        .bars()
+        .iter()
+        .filter(|bar| bar.agent == Some(agent))
+        .filter(|bar| bar.window.start_h <= hour + 1e-9 && bar.window.end_h.is_none_or(|end| hour < end - 1e-9))
+        .collect();
+    if open.is_empty() {
+        return Some(super::schedule_gantt::next_bar_note(plan, agent, hour).unwrap_or_else(|| sentence_case(&idle_reason_text(Some(IdleReason::NoWork)).0)));
+    }
+    let activity = plan.agent_kind(agent).and_then(crate::model::schedule::MachineKind::activity)?;
+    let reached = |at: Option<f64>| at.is_some_and(|at| at <= hour + 1e-9);
+    let waiting = open.iter().flat_map(|bar| super::schedule_gantt::bar_blasts(bar, schedule)).find(|index| {
+        result
+            .blasts
+            .get(*index)
+            .is_some_and(|blast| !reached(blast.done_h[activity as usize]) && !reached(blast.fired_h))
+    })?;
+    let (short, _) = super::schedule_gantt::blast_hold_text(result, waiting, hour)?;
+    Some(format!("{} · {short}", super::schedule_gantt::blast_title(&result.blasts[waiting])))
 }
 
 fn note(ui: &mut egui::Ui, text: String) {
@@ -239,8 +276,22 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 let (name, note) = idle_reason_text(span.reason);
                 entry.dot = Some(IDLE_COLOR);
                 entry.value = sentence_case(&name);
-                if let Some(blast) = span.blast.and_then(|index| schedule.drill_blast.as_ref()?.blasts.get(index)) {
-                    entry.detail = Some(super::schedule_gantt::blast_title(blast));
+                // What the blast itself is waiting for, in the detail line and
+                // in full on hover: the loader's reason is only the first link.
+                let mut why = None;
+                if let Some((index, result)) = span.blast.zip(schedule.drill_blast.as_ref())
+                    && let Some(blast) = result.blasts.get(index)
+                {
+                    let title = super::schedule_gantt::blast_title(blast);
+                    let hold = super::schedule_gantt::blast_hold_text(result, index, hour);
+                    entry.detail = Some(match &hold {
+                        Some((short, _)) => format!("{title} · {short}"),
+                        None => title,
+                    });
+                    why = hold.map(|(_, long)| long).filter(|long| !long.is_empty());
+                }
+                if span.reason == Some(IdleReason::NoWork) {
+                    entry.detail = super::schedule_gantt::next_bar_note(plan, agent.id, hour);
                 }
                 if !span.full.is_empty() {
                     let names: Vec<String> = span.full.iter().map(|id| destination_label(*id, destinations)).collect();
@@ -256,6 +307,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                     to = instant_label(span.end_h * GanttView::HOUR),
                     hours = format!("{:.1}", span.end_h - span.start_h)
                 )];
+                lines.extend(why);
                 if !note.is_empty() {
                     lines.push(note);
                 }
@@ -263,9 +315,14 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
             }
         } else {
             // A machine with no bars never reached the calculation.
-            let (name, _) = idle_reason_text(Some(IdleReason::NoWork));
             entry.dot = Some(IDLE_COLOR);
-            entry.value = sentence_case(&name);
+            match super::schedule_gantt::next_bar_note(plan, agent.id, hour) {
+                Some(next) => {
+                    entry.value = sentence_case(&idle_reason_text(Some(IdleReason::NoWork)).0);
+                    entry.detail = Some(next);
+                }
+                None => entry.value = tr!("idle-no-bars"),
+            }
         }
         if let Some(execution) = schedule.executions_at(hour).find(|e| e.agent == agent.id) {
             let mut matching = 0.0;
@@ -554,6 +611,8 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
                 if duration > 0.0 { delivery.truck_hours / duration } else { 0.0 }
             })
             .sum();
+        // An empty float sum is -0.0, which would read "-0.0 of 10.0".
+        let busy = if busy > 0.0 { busy } else { 0.0 };
         let fleet = class.calendar.values_at(day).effective_units();
         let entry = Entry {
             name: class.name.clone(),

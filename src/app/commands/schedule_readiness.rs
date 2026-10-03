@@ -75,16 +75,16 @@ fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String,
                 .map(|blast| blast.name.clone())
         })
         .unwrap_or_else(|| tr!(literal = "Unblasted"));
-    // The bar's own name when nothing was authored: pit, bench and blast,
-    // which is how a dig area is spoken about. The bench drops its unit here
-    // - the hyphens already say which field is which, and a marker is short.
-    let area = tr_format!(
-        literal = "%pit%-%bench%-%blast%",
-        pit = block.solid_name.clone(),
-        bench = rl(block.bench.base),
-        blast = blast.clone()
-    );
+    // The bar's own name when nothing was authored: the blast's ground path,
+    // which is how a dig area is spoken about.
+    let area = crate::ui::elements::solids_view::blast_path(&block.solid_name, block.bench.base, &blast);
     (solid_type, bench, blast, flitch, area)
+}
+
+/// A dig block's full ground path, `Pit A/336/1/344/3`.
+pub(crate) fn block_path(document: &Document, block: &DigBlockRecord) -> String {
+    let (_, bench, blast, flitch, _) = block_labels(document, block);
+    crate::ui::elements::solids_view::ground_path(&[block.solid_name.as_str(), &bench, &blast, &flitch, &block.name])
 }
 
 /// What an unnamed bar is called: the dig area it covers.
@@ -145,6 +145,8 @@ pub(crate) enum ReadinessProblem {
     /// bar keeps the source exactly as authored: repointing it at another pile
     /// would reclaim material nobody chose.
     ReclaimSourceUnresolved,
+    /// A follow bar whose machine has been removed.
+    NoLeader,
 }
 
 impl ReadinessProblem {
@@ -152,6 +154,7 @@ impl ReadinessProblem {
         match self {
             Self::NoRun(reason) => tr!("sequence-not-ready", reason = reason.clone()),
             Self::Empty => tr!("sequence-empty"),
+            Self::NoLeader => tr!("follow-bar-no-leader"),
             Self::NoTonnageField => tr!("sequence-no-tonnage-field"),
             Self::TonnageFieldMissing => tr!("sequence-tonnage-field-missing"),
             Self::TonnageFieldNotSum(field) => tr!("sequence-tonnage-field-not-sum", field = field.clone()),
@@ -868,6 +871,13 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     }
     // A delay has no ground and no pile: nothing to resolve, nothing wrong.
     if bar.delay().is_some() {
+        return report;
+    }
+    // A follow bar works someone else's blasts; all it needs is that machine.
+    if let Some(work) = bar.follow() {
+        if work.leader.is_none() {
+            report.problems.push(ReadinessProblem::NoLeader);
+        }
         return report;
     }
     // A drill and blast bar names blasts, not ground: it is ready once it

@@ -420,9 +420,21 @@ fn toggle_source(chosen: &mut Vec<DestinationId>, id: DestinationId, picked: boo
     }
 }
 
-/// Add a dozer, drill or MPU bar, or change the blasts of one: the run's
-/// blasts by bench on the left, the bar's order on the right.
-pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+/// Width of the blast picker's order column beside its 3D view.
+const BLAST_LIST_WIDTH: f32 = 360.0;
+
+/// Add a dozer, drill or MPU bar, or change the blasts of one, laid out as the
+/// dig sequence editor is: the navigation trees, the run's blasts in 3D, and
+/// the bar's order, with the order preview beneath.
+pub(crate) fn draw_blast_bar_dialog(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &crate::ui::UiProjectView,
+    document: &Document,
+    plan: &SchedulePlan,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) {
     let Some(target) = editor.blast_bar_dialog.as_ref().map(|dialog| dialog.target) else {
         return;
     };
@@ -444,26 +456,6 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
         .is_some_and(|order| order.members != draft.opened_from);
     let run_changed = draft.generation.is_some() && draft.generation != editor.blast_sequence_generation;
     let title = if target.is_some() { tr!("blast-edit-title") } else { tr!("blast-add-bar") };
-    // Benches, highest first, as the Drill & Blast page lists them.
-    let mut benches: Vec<(crate::model::SolidId, u64, String)> = Vec::new();
-    for entry in &blasts {
-        let key = (entry.reference.solid, entry.bench_base.to_bits());
-        if !benches.iter().any(|(solid, base, _)| (*solid, *base) == key) {
-            benches.push((
-                key.0,
-                key.1,
-                tr!("drill-blast-bench", solid = entry.solid_name.clone(), bench = format!("{:.0}", entry.bench_top)),
-            ));
-        }
-    }
-    if draft.bench.is_none() {
-        draft.bench = draft
-            .members
-            .first()
-            .and_then(|member| blasts.iter().find(|entry| entry.holds(member)))
-            .map(|entry| (entry.reference.solid, entry.bench_base.to_bits()))
-            .or_else(|| benches.first().map(|(solid, base, _)| (*solid, *base)));
-    }
     let screen = ui.ctx().content_rect();
     DragableMenu::new("blast_bar_dialog", title)
         .open(&mut open)
@@ -474,7 +466,6 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             if target_changed || run_changed {
                 ui.colored_label(ui.visuals().error_fg_color, tr!("blast-sequence-changed"));
             }
-            let body_height = (ui.available_height() - 170.0).max(160.0);
             if target.is_none() {
                 let agent_label = draft
                     .agent
@@ -496,61 +487,73 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             if blasts.is_empty() {
                 ui.label(egui::RichText::new(tr!("drill-blast-no-blasts")).weak());
             }
-            ui.columns(2, |columns| {
-                let left = &mut columns[0];
-                let bench_label = draft
-                    .bench
-                    .and_then(|key| benches.iter().find(|(solid, base, _)| (*solid, *base) == key))
-                    .map_or_else(String::new, |(_, _, label)| label.clone());
-                egui::ComboBox::from_id_salt("blast_bar_bench")
-                    .selected_text(bench_label)
-                    .width(left.available_width())
-                    .show_ui(left, |ui| {
-                        for (solid, base, label) in &benches {
-                            if ui.selectable_value(&mut draft.bench, Some((*solid, *base)), label).changed() {
-                                draft.view = crate::ui::state::SolidPreviewView::default();
-                                editor.solid_preview_pick = None;
-                                ui.ctx().request_repaint();
-                            }
+            // Sized up front, as the dig sequence editor is: the window is
+            // exactly as tall as the screen, so the columns take everything
+            // the preview slider and the action row below them do not need.
+            let available = ui.available_rect_before_wrap();
+            let footer = ui.spacing().interact_size.y * 2.0 + ui.spacing().item_spacing.y * 4.0 + 18.0;
+            let body_height = (available.height() - footer).max(160.0);
+            let nav_width = super::sequence_editor::NAV_WIDTH.min(available.width() * 0.28);
+            let list_width = BLAST_LIST_WIDTH.min(available.width() * 0.32);
+            let view_width = (available.width() - nav_width - list_width - ui.spacing().item_spacing.x * 2.0).max(200.0);
+            let mut remove = None;
+            let mut raise = None;
+            let mut lower = None;
+            ui.horizontal_top(|ui| {
+                super::sequence_editor::draw_navigation_column(ui, editor, project, document, commands, egui::vec2(nav_width, body_height));
+                ui.allocate_ui_with_layout(egui::vec2(view_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_min_size(egui::vec2(view_width, body_height));
+                    let height = ui.available_height();
+                    draw_blast_sequence_preview(ui, editor, &mut draft, session, height);
+                });
+                ui.allocate_ui_with_layout(egui::vec2(list_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_min_size(egui::vec2(list_width, body_height));
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    ui.label(egui::RichText::new(tr!("blast-bar-order")).strong());
+                    if draft.members.is_empty() {
+                        ui.label(egui::RichText::new(tr!("blast-bar-empty-order")).weak());
+                    }
+                    let count = draft.members.len();
+                    egui::ScrollArea::vertical().id_salt("blast_bar_order").auto_shrink([false, false]).show(ui, |ui| {
+                        for (index, member) in draft.members.iter().enumerate() {
+                            let label = blasts
+                                .iter()
+                                .find(|entry| entry.holds(member))
+                                .map_or_else(|| tr!("blast-bar-missing"), crate::ui::state::BlastListEntry::label);
+                            // Fired at the slider's position, so off the pane:
+                            // dimmed here to match.
+                            let text = egui::RichText::new(format!("{}. {label}", index + 1));
+                            ui.horizontal(|ui| {
+                                ui.label(if index < draft.preview { text.weak() } else { text });
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("✕").clicked() {
+                                        remove = Some(index);
+                                    }
+                                    if ui.add_enabled(index + 1 < count, egui::Button::new("↓").small()).clicked() {
+                                        lower = Some(index);
+                                    }
+                                    if ui.add_enabled(index > 0, egui::Button::new("↑").small()).clicked() {
+                                        raise = Some(index);
+                                    }
+                                });
+                            });
                         }
                     });
-                left.label(egui::RichText::new(tr!("blast-sequence-pick-help")).weak());
-                draw_blast_sequence_preview(left, editor, &mut draft, session, body_height);
-                let right = &mut columns[1];
-                right.label(crate::ui::fonts::bold(&tr!("blast-bar-order")));
-                let mut remove = None;
-                let mut raise = None;
-                let mut lower = None;
-                egui::ScrollArea::vertical().id_salt("blast_bar_order").max_height(body_height).show(right, |ui| {
-                    for (index, member) in draft.members.iter().enumerate() {
-                        let label = blasts
-                            .iter()
-                            .find(|entry| entry.holds(member))
-                            .map_or_else(|| tr!("blast-bar-missing"), crate::ui::state::BlastListEntry::label);
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{}. {label}", index + 1));
-                            if ui.small_button("↑").clicked() && index > 0 {
-                                raise = Some(index);
-                            }
-                            if ui.small_button("↓").clicked() && index + 1 < draft.members.len() {
-                                lower = Some(index);
-                            }
-                            if ui.small_button("✕").clicked() {
-                                remove = Some(index);
-                            }
-                        });
-                    }
                 });
-                if let Some(index) = raise {
-                    draft.members.swap(index - 1, index);
-                }
-                if let Some(index) = lower {
-                    draft.members.swap(index, index + 1);
-                }
-                if let Some(index) = remove {
-                    draft.members.remove(index);
-                }
             });
+            if let Some(index) = raise {
+                draft.members.swap(index - 1, index);
+            }
+            if let Some(index) = lower {
+                draft.members.swap(index, index + 1);
+            }
+            if let Some(index) = remove {
+                draft.members.remove(index);
+                if index < draft.preview {
+                    draft.preview -= 1;
+                }
+            }
+            draw_blast_preview_slider(ui, &mut draft);
             let valid = (target.is_some() || draft.agent.is_some()) && !target_changed && !run_changed && !draft.members.is_empty();
             menu::menu_actions(ui, |ui| {
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
@@ -589,6 +592,29 @@ pub(crate) fn draw_blast_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
         }
     } else {
         editor.blast_bar_dialog = Some(draft);
+    }
+}
+
+/// The blast order preview, as the dig sequence editor's: at *k* the first
+/// *k* blasts are fired and off the pane, and the next pick lands after them.
+fn draw_blast_preview_slider(ui: &mut egui::Ui, draft: &mut crate::ui::state::BlastBarDialog) {
+    let total = draft.members.len();
+    draft.preview = draft.preview.min(total);
+    let before = draft.preview;
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tr!("sequence-editor-preview")).strong());
+        let mut position = draft.preview;
+        let width = (ui.available_width() - 220.0).max(120.0);
+        ui.add_enabled_ui(total > 0, |ui| {
+            ui.spacing_mut().slider_width = width;
+            ui.add(egui::Slider::new(&mut position, 0..=total).show_value(false));
+        });
+        draft.preview = position.min(total);
+        ui.label(egui::RichText::new(tr!("blast-sequence-preview-at", fired = draft.preview.to_string(), total = total.to_string())).weak());
+    });
+    if draft.preview != before {
+        ui.ctx().request_repaint();
     }
 }
 
@@ -672,7 +698,13 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            tr!("drill-blast-no-blasts"),
+            // A run with nothing left to draw has had everything in view
+            // fired by the slider, not no blasts at all.
+            if ready && draft.preview > 0 {
+                tr!("blast-sequence-all-fired")
+            } else {
+                tr!("drill-blast-no-blasts")
+            },
             egui::TextStyle::Body.resolve(ui.style()),
             ui.visuals().weak_text_color(),
         );

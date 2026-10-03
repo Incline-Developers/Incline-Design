@@ -42,14 +42,24 @@ them exactly as to loaders.
 
 Each is a row on the Gantt. Drag the **Blasts** chip onto a dozer, drill or
 MPU row (or right-click the row → Add blast bar). In the interactive sequence
-window, choose a bench and click its blasts in the 3D preview to add them to
-the order. Selected blasts are highlighted; the list on the right allows
-reordering and removal. Apply saves the sequence, and Cancel discards it.
+window, narrow the view with Solids Navigation and click blasts in the 3D
+preview to add them to the order. Sequence Preview fires the blasts before
+its position, taking them off the view to uncover the bench below, and a
+click inserts at that position. Selected blasts are highlighted; the list on
+the right allows reordering and removal. Apply saves the sequence, and Cancel
+discards it.
 Edit blasts… on the bar reopens the same window. A machine works the first
 blast in its highest-priority open bar that still needs it, and waits there
 if that blast is not ready. Machines with the same blast in their bars work
 it together, their rates adding. A dig or reclaim bar cannot be put on a
 drill and blast machine, nor a blast bar on a loader.
+
+A **Follow** bar (the Follow chip, then choose the machine) has no blasts of
+its own: while it is the machine's highest-priority open bar, the machine
+works whatever its leader's own open blast bar has next, adding its rate
+there. Two dozers of one rate then prep the leader's sequence in half the
+time. Only machines of the same type can be followed; a leader standing for
+a delay still leads. Change the leader from the bar's right-click menu.
 
 ## Blasting windows
 
@@ -72,26 +82,40 @@ A blast already marked Fired at the start remains available immediately.
 - The default pattern (burden, spacing, subdrill, staggered rows), hole
   diameter, stemming, product density and clearance buffer. The legacy daily
   window is editable here until windows are managed on the Gantt.
-- The run's blasts by bench. Right-click a blast, or a whole bench, to set the
-  stage it starts the schedule at (Not started, Prepped, Drilled, Charged,
-  Fired). Select one to give it its own pattern.
+- The run's blasts by bench. Right-click a blast, or a whole bench's header,
+  to set the stage it starts the schedule at (Not started, Prepped, Drilled,
+  Charged, Fired). Select one to give it its own pattern. Ground is named by
+  the app's one path, solid/bench RL/blast/flitch RL/dig block: blast 1 of
+  Pit A's bench from 336 to 348 is "Pit A/336/1" everywhere it is shown, and a
+  dig block in it "Pit A/336/1/344/3".
 
 ## What you see
 
+- **Status line:** a run in which a dig bar needs a blast that no machine bar
+  works - its next step (prep, drill or charge) is in no bar of that kind of
+  machine, and it does not start Fired - still publishes, but the status adds
+  "· N blasts have no machine to work them" in the warning colour. Its hover
+  names each blast and the missing step; the loader waits on it all horizon.
 - **Gantt:** each blast bar's band shows its machine's work, coloured prep,
   drill or charge; hovering says what and how far. The remainder of a machine
   bar greys out when all its blasts finish that machine's step. Firing diamonds
   and blast names appear on the separate Blasting row. A loader waiting on a blast has the amber idle strip, and its
-  hover names the blast.
+  hover names the blast and what the blast itself is waiting for: ground above
+  still being dug, ground above that no bar digs (it never clears), a step no
+  machine bar works, a machine busy elsewhere, or a blast window.
 - **Inspector:** at the slider's hour, what each dozer, drill and MPU is on and
-  how far, and the blasts under way with when each can be dug.
+  how far, and the blasts under way with when each can be dug. A loader
+  waiting on a blast, and an idle dozer, drill or MPU, names the blast and what
+  holds it (for example "Pit A/336/1 · never clears").
 - **Calendar:** each drill and blast machine's availability, utilisation,
   rate and what it got done each day, in its own unit.
 - **Report export:** machine quantities and working hours, grouped by day,
   week or the whole schedule, in a separate drill-and-blast table.
-- **Animate:** each blast under way on its bench top: its outline in the
-  colour of its stage, its holes appearing as they are drilled and turning red
-  as they are charged.
+- **Animate:** a blast is drawn whole until it fires, cross-hatched with
+  benching's crosses until prepped (prep clears the hatching from one end
+  along its longer side). Laid over its top, its outline is in the colour of
+  its stage and its holes appear as they are drilled and turn red as they are
+  charged. Once it fires, its dig blocks replace it and its marks go.
 
 ## How it is solved
 

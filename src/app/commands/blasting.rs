@@ -452,7 +452,10 @@ impl crate::app::App<'_> {
         if bench.blasts.iter().any(|stored| stored.name == new_name && stored.anchor != blast.anchor()) {
             crate::userspace_warn!(
                 "{}",
-                crate::i18n::tr!("planning-blast-name-taken", name = new_name.clone(), rl = format!("{:.2}", blast.bench_base()))
+                crate::i18n::tr!(
+                    "planning-blast-name-taken",
+                    blast = crate::ui::elements::solids_view::blast_path(&solid.name, blast.bench_base(), &new_name)
+                )
             );
             return;
         }

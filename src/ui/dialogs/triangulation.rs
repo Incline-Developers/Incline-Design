@@ -198,6 +198,10 @@ fn triangulation_picker_field_with_width(
                     for (option, text) in options {
                         ui.selectable_value(value, option, text);
                     }
+                    // An unloaded surface has no mesh to work on, so it is
+                    // not offered; say so rather than leave it missing.
+                    ui.separator();
+                    ui.label(egui::RichText::new(tr!("triangulation-picker-loaded-only")).weak().small());
                 })
                 .response
                 .on_hover_text(selected_text);
@@ -686,7 +690,9 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::TrimSurface);
             }
 
-            if editor.tri_cut_surface_target_id != old_target
+            // Also when the dialog opened with the surface already chosen
+            // from the selection, and so has no name yet.
+            if (editor.tri_cut_surface_target_id != old_target || editor.tri_cut_surface_name_input.is_empty())
                 && editor.tri_cut_surface_name_auto
                 && let Some(name) = editor
                     .tri_cut_surface_target_id

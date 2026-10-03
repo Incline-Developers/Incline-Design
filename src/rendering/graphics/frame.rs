@@ -400,7 +400,7 @@ impl<'a> Graphics<'a> {
             .is_schedule_animation()
             .then(|| editor.schedule_result.as_ref().and_then(|schedule| schedule.drill_blast.as_ref()))
             .flatten()
-            .map(|result| (result, editor.schedule_animation_shown_h));
+            .map(|result| (result, editor.schedule_animation_shown_h, editor.schedule_animation_blasts.as_slice()));
         if !editor.animation_flows.is_empty() || blasts.is_some() || !self.flow_strokes.is_empty() {
             let view_proj = self.view_proj();
             self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {

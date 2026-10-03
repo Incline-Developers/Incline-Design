@@ -530,6 +530,24 @@ fn group_selected(selection: &[SolidsViewRow], rows: &[SolidsViewRow]) -> bool {
             .all(|row| selection.contains(row) || (row.band.is_some() && selection.contains(&SolidsViewRow { solid: row.solid, band: None })))
 }
 
+/// Ground named the one way the whole app names it: solid, bench RL, blast,
+/// flitch RL and dig block, joined by slashes and cut off at whatever is being
+/// named - `Pit A/392` is a bench, `Pit A/392/1` a blast, `Pit A/392/1/396/23`
+/// a dig block. Elevations go bare: their place in the path says what they are.
+pub(crate) fn ground_path<S: AsRef<str>>(parts: &[S]) -> String {
+    parts.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("/")
+}
+
+/// A bench by [`ground_path`].
+pub(crate) fn bench_path(solid: &str, bench: f64) -> String {
+    ground_path(&[solid, &format_rl(bench)])
+}
+
+/// A blast by [`ground_path`]: its name is only unique on its bench.
+pub(crate) fn blast_path(solid: &str, bench: f64, blast: &str) -> String {
+    ground_path(&[solid, &format_rl(bench), blast])
+}
+
 /// An RL with no more decimals than it needs: 348, 348.5, 348.25.
 pub(crate) fn format_rl(value: f64) -> String {
     if !value.is_finite() {

@@ -55,6 +55,7 @@ pub(crate) struct PublishMeta<'a> {
     pub(crate) candidates: usize,
     pub(crate) ground_sources: usize,
     pub(crate) event_budget_restricted: bool,
+    pub(crate) unworked_blasts: usize,
     pub(crate) notes: Vec<String>,
 }
 
@@ -486,6 +487,7 @@ pub(crate) fn publish(
         intervals: input.intervals.len(),
         segments_per_interval: input.segments_per_interval,
         event_budget_restricted: meta.event_budget_restricted,
+        unworked_blasts: meta.unworked_blasts,
         chunk_slots: input.piles.iter().map(|pile| pile.chunks.len()).sum(),
         chunk_slots_full,
         grade_margin: GRADE_MARGIN,
@@ -922,8 +924,17 @@ fn published_drill_blast(
     identities: &crate::app::commands::schedule_capture::CaptureIdentities,
 ) -> Option<crate::model::schedule::result::DrillBlastResult> {
     use crate::model::schedule::result::{DrillBlastResult, PublishedBlast, PublishedBlastWork};
-    input.drill_blast.as_ref()?;
+    let chain = input.drill_blast.as_ref()?;
     let timeline = solution.drill_blast.as_ref();
+    // Which blast releases each piece of ground, so a blast can name the
+    // blasts standing over it.
+    let released_by: BTreeMap<_, usize> = chain
+        .blasts
+        .iter()
+        .enumerate()
+        .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
+        .collect();
+    let unworked: BTreeMap<usize, _> = chain.unworked().into_iter().collect();
     let blasts = identities
         .blasts
         .iter()
@@ -932,6 +943,7 @@ fn published_drill_blast(
             let events = timeline.and_then(|timeline| timeline.blasts.get(index)).copied().unwrap_or_default();
             PublishedBlast {
                 reference: blast.reference,
+                solid_name: blast.solid_name.clone(),
                 name: blast.name.clone(),
                 bench_base: blast.bench.base,
                 bench_top: blast.bench.top,
@@ -941,6 +953,14 @@ fn published_drill_blast(
                 cleared_h: events.cleared_h,
                 done_h: events.done_h,
                 fired_h: events.fired_h.filter(|at| *at < f64::MAX),
+                never_clear: chain.blasts.get(index).is_some_and(|job| job.never_clear),
+                unworked: unworked.get(&index).copied(),
+                above: chain.blasts.get(index).map_or_else(Vec::new, |job| {
+                    let mut above: Vec<usize> = job.above.iter().filter_map(|ground| released_by.get(ground).copied()).collect();
+                    above.sort_unstable();
+                    above.dedup();
+                    above
+                }),
             }
         })
         .collect();

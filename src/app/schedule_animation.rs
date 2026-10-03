@@ -132,6 +132,28 @@ struct SourceBlock {
     /// of the same immutable geometry.
     profile: Arc<OnceLock<VolumeProfile>>,
     mesh: OpenTriangulation,
+    /// When the blast this block lies in fires: until then the blast is
+    /// drawn whole in its place. Zero for ground that is never held back.
+    fired_h: f64,
+}
+
+/// A blast drawn whole, bench high, until it fires: before then its ground
+/// is not yet cut into anything a loader digs.
+struct BlastPiece {
+    solid: SolidId,
+    bench: BenchSelection,
+    flitch: BenchSelection,
+    blast: BlastShapeRef,
+    mesh: OpenTriangulation,
+    fired_h: f64,
+    /// Its position in the run's blasts.
+    published: usize,
+    /// Prep clears its hatching along this plan direction, from `low` to
+    /// `low + length`: the longer side of the blast.
+    sweep: (glam::DVec2, f64, f64),
+    /// How far prep had got, in 128ths, when its style was last set; `None`
+    /// before it ever was.
+    prepped: Option<u8>,
 }
 
 /// One source block's derived geometry, as the last solved cut left it.
@@ -229,6 +251,13 @@ pub(crate) struct ScheduleAnimation {
     identity: Option<Identity>,
     index: Option<AnimationIndex>,
     source: Vec<SourceBlock>,
+    /// The blasts still to fire somewhere in the run, drawn in place of their
+    /// dig blocks until they do.
+    blasts: Vec<BlastPiece>,
+    /// How many of `blasts` have fired at the instant the body was last
+    /// assembled for, and that instant. The count only grows with time, so
+    /// it alone says when the body has to change.
+    fired: (usize, f64),
     /// Fingerprint of the calculated solids `source` was taken from, so it is
     /// re-collected when they move rather than on every frame.
     source_key: Option<u64>,
@@ -272,10 +301,66 @@ impl ScheduleAnimation {
 
     /// The meshes the viewport should show: the solved cuts, or the authored
     /// blocks whole while there is no run to deplete them by.
+    ///
+    /// A blast not yet fired is drawn whole instead of its dig blocks.
     fn body(&self) -> impl Iterator<Item = &OpenTriangulation> {
-        let cuts = self.depleted.then(|| self.slots.iter().filter_map(|slot| slot.mesh.as_ref())).into_iter().flatten();
+        let at = self.fired.1;
+        let cuts = self
+            .depleted
+            .then(|| {
+                self.source
+                    .iter()
+                    .zip(&self.slots)
+                    .filter(move |(block, _)| block.fired_h <= at)
+                    .filter_map(|(_, slot)| slot.mesh.as_ref())
+            })
+            .into_iter()
+            .flatten();
+        let blasts = self
+            .depleted
+            .then(|| self.blasts.iter().filter(move |blast| blast.fired_h > at).map(|blast| &blast.mesh))
+            .into_iter()
+            .flatten();
         let whole = (!self.depleted).then(|| self.source.iter().map(|block| &block.mesh)).into_iter().flatten();
-        cuts.chain(whole)
+        cuts.chain(blasts).chain(whole)
+    }
+
+    /// Follow the cursor across blast firings: the body changes only when one
+    /// fires or un-fires, not on every step of the slider.
+    fn set_blast_time(&mut self, time_h: f64) -> bool {
+        let fired = self.blasts.iter().filter(|blast| blast.fired_h <= time_h).count();
+        if fired == self.fired.0 && self.fired.1.is_finite() {
+            return false;
+        }
+        self.fired = (fired, time_h);
+        self.body_generation = self.body_generation.wrapping_add(1);
+        true
+    }
+
+    /// Hatch each blast still to be prepped, clearing the share prep has
+    /// done from one end. Restyles only the blasts whose prep moved on by a
+    /// visible step, and says whether any did.
+    fn set_blast_prep(&mut self, result: &crate::model::schedule::result::DrillBlastResult, time_h: f64) -> bool {
+        let mut changed = false;
+        for blast in &mut self.blasts {
+            let share = result.done_share(blast.published, crate::model::schedule::BlastActivity::Prep, time_h);
+            let prepped = (share * 128.0).floor() as u8;
+            if blast.prepped == Some(prepped) {
+                continue;
+            }
+            blast.prepped = Some(prepped);
+            let (direction, low, length) = blast.sweep;
+            blast.mesh.pattern_from = Some([direction.x, direction.y, low + length * f64::from(prepped) / 128.0]);
+            if prepped >= 128 {
+                // Wholly prepped: nothing left to hatch.
+                blast.mesh.pattern_from = Some([direction.x, direction.y, f64::INFINITY]);
+            }
+            changed = true;
+        }
+        if changed {
+            self.body_generation = self.body_generation.wrapping_add(1);
+        }
+        changed
     }
 
     fn set_depleted(&mut self, depleted: bool) {
@@ -422,6 +507,15 @@ impl crate::app::App<'_> {
         // the calculated horizon, and only the cut is bounded by it.
         let time_h = self.animation_time_h();
         self.schedule_animation.set_depleted(true);
+        let fired = self.schedule_animation.set_blast_time(time_h);
+        let prepped = self
+            .schedule_calculation
+            .as_ref()
+            .and_then(|calculation| calculation.drill_blast.as_ref())
+            .is_some_and(|result| self.schedule_animation.set_blast_prep(result, time_h));
+        if fired || prepped {
+            self.invalidate_geometry();
+        }
 
         // One batch in flight at a time, and the cursor's latest position
         // picked up when it lands.
@@ -510,6 +604,8 @@ impl crate::app::App<'_> {
             // Both are already empty, taken above; what is left is to say the
             // drawn body has changed, because it has - to nothing.
             self.schedule_animation.stale_slots = 0;
+            self.schedule_animation.blasts.clear();
+            self.editor.schedule_animation_blasts.clear();
             self.schedule_animation.body_generation = self.schedule_animation.body_generation.wrapping_add(1);
             return;
         };
@@ -537,9 +633,73 @@ impl crate::app::App<'_> {
                     volume: part.volume,
                     profile: Arc::default(),
                     mesh,
+                    fired_h: 0.0,
                 });
             }
         }
+        // The run's own firing times, matched to each solid's blasts. A blast
+        // the run does not hold, or one fired before it starts, holds nothing
+        // back.
+        let mut blasts = Vec::new();
+        if let Some(result) = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref()) {
+            for solid in document.solids() {
+                let Some(parts) = self.solid_view_cache.get(&solid.id).and_then(super::commands::solids_view::ViewSolid::blast_parts) else {
+                    continue;
+                };
+                for part in parts {
+                    let Some(shape) = part.blast else { continue };
+                    let Some(published) = result.blasts.iter().position(|blast| {
+                        blast.reference.solid == solid.id
+                            && (blast.reference.bench - shape.bench_base()).abs() < 1e-6
+                            && crate::model::arrangement::point_in_face(&blast.face, glam::DVec2::from(shape.anchor()))
+                    }) else {
+                        continue;
+                    };
+                    let fired_h = result.blasts[published].fired_h.unwrap_or(f64::INFINITY);
+                    if fired_h <= 0.0 {
+                        continue;
+                    }
+                    let points = || result.blasts[published].face.iter().flat_map(|ring| ring.iter().copied());
+                    let (Some(min), Some(max)) = (points().reduce(glam::DVec2::min), points().reduce(glam::DVec2::max)) else {
+                        continue;
+                    };
+                    let extent = max - min;
+                    let sweep = if extent.x >= extent.y {
+                        (glam::DVec2::X, min.x, extent.x)
+                    } else {
+                        (glam::DVec2::Y, min.y, extent.y)
+                    };
+                    let mut mesh = part.mesh.clone();
+                    // Benching's own crosses, which prep clears away.
+                    mesh.flitch_style = Some(crate::model::FlitchStyle {
+                        pattern: crate::model::FillStyle::Crosses,
+                        ..crate::model::FlitchStyle::default_for(solid.color, 0, 1)
+                    });
+                    mesh.color = solid.color;
+                    mesh.line_color = [0.0, 0.0, 0.0, 1.0];
+                    mesh.line_weight = Some(2.0);
+                    blasts.push(BlastPiece {
+                        solid: solid.id,
+                        bench: part.bench,
+                        flitch: part.band.selection,
+                        blast: shape,
+                        mesh,
+                        fired_h,
+                        published,
+                        sweep,
+                        prepped: None,
+                    });
+                }
+            }
+        }
+        let fired: HashMap<BlastShapeRef, f64> = blasts.iter().map(|blast| (blast.blast, blast.fired_h)).collect();
+        for block in &mut source {
+            block.fired_h = block.blast.and_then(|shape| fired.get(&shape).copied()).unwrap_or(0.0);
+        }
+        self.editor.schedule_animation_blasts = self.animated_blasts(&source);
+        self.schedule_animation.blasts = blasts;
+        // Not yet placed on the timeline: the next frame counts the firings.
+        self.schedule_animation.fired = (0, f64::NAN);
         if let Some(calculation) = &self.schedule_calculation {
             let centers: HashMap<_, _> = source
                 .iter()
@@ -608,6 +768,35 @@ impl crate::app::App<'_> {
         self.schedule_animation.stale_slots = stale_slots;
         self.schedule_animation.source = source;
         self.schedule_animation.body_generation = self.schedule_animation.body_generation.wrapping_add(1);
+    }
+
+    /// What Animate draws each of the run's blasts with: the top of the
+    /// ground the source blocks inside it make up, which its marks are draped
+    /// over.
+    fn animated_blasts(&self, source: &[SourceBlock]) -> Vec<crate::model::schedule::animation::AnimatedBlast> {
+        use crate::model::schedule::animation::{AnimatedBlast, BlastTop};
+        let Some(result) = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref()) else {
+            return Vec::new();
+        };
+        result
+            .blasts
+            .iter()
+            .map(|blast| {
+                let inside = source.iter().filter(|block| {
+                    block.solid == blast.reference.solid
+                        && block.blast.is_some_and(|shape| {
+                            (blast.reference.bench - shape.bench_base()).abs() < 1e-6 && crate::model::arrangement::point_in_face(&blast.face, glam::DVec2::from(shape.anchor()))
+                        })
+                });
+                let points = || blast.face.iter().flat_map(|ring| ring.iter().copied());
+                let top = points()
+                    .reduce(glam::DVec2::min)
+                    .zip(points().reduce(glam::DVec2::max))
+                    .and_then(|(min, max)| BlastTop::rasterize(min, max, inside.map(|block| &*block.mesh.mesh)))
+                    .map(Arc::new);
+                AnimatedBlast { top }
+            })
+            .collect()
     }
 
     /// Whether every visible block already stands at the cut `time_h` asks
@@ -774,6 +963,13 @@ impl crate::app::App<'_> {
             .iter()
             .filter(|block| !hidden.hides_block(block))
             .map(|block| block.mesh.id)
+            .chain(
+                self.schedule_animation
+                    .blasts
+                    .iter()
+                    .filter(|blast| !hidden.hides(blast.solid, blast.bench, blast.flitch, Some(blast.blast)))
+                    .map(|blast| blast.mesh.id),
+            )
             .collect();
         // Every open surface, on the project's own visibility.
         //

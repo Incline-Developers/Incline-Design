@@ -950,6 +950,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn begin_orbit_at_surface(
         &mut self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -960,7 +961,7 @@ impl<'a> Graphics<'a> {
         xray_enabled: bool,
     ) {
         let pt = rotation_centre.unwrap_or_else(|| {
-            self.pick_rotation_centre(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled)
+            self.pick_rotation_centre(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled)
                 .unwrap_or_else(|| self.unexaggerate_point(self.cursor_world_at_target_depth()))
         });
         self.camera.sync_angles_from_forward();
@@ -969,9 +970,12 @@ impl<'a> Graphics<'a> {
     }
 
     /// Asset under the cursor, else object, working plane, or eye depth.
+    /// `overlay` holds surfaces drawn in place of or over the project's own
+    /// - planning solids, Animate's ground - so the pivot lands on them too.
     fn orbit_point_under_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -982,6 +986,7 @@ impl<'a> Graphics<'a> {
         {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
+            let overlay_hit = SceneQuery::nearest_surface(overlay, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
             let drill_hole_hit =
                 SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
@@ -1002,6 +1007,7 @@ impl<'a> Graphics<'a> {
                 .map(|(_, world)| world);
             triangulation_hit
                 .into_iter()
+                .chain(overlay_hit)
                 .chain(drill_hole_hit)
                 .chain(block_model_hit)
                 .chain(point_cloud_hit)
@@ -1026,6 +1032,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn pick_rotation_centre(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1036,10 +1043,10 @@ impl<'a> Graphics<'a> {
     ) -> Option<DVec3> {
         if self.slice_view.is_some() {
             return self
-                .string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
+                .string_or_trace_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
                 .or_else(|| self.section_point_at_px(self.camera_controller.mouse_loc));
         }
-        Some(self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled))
+        Some(self.plan_pivot_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled))
     }
 
     /// Nearest string or trace point the eye can see within reach, since it
@@ -1049,6 +1056,7 @@ impl<'a> Graphics<'a> {
     fn plan_pivot_near_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1057,8 +1065,8 @@ impl<'a> Graphics<'a> {
         working_plane_z: f64,
         xray_enabled: bool,
     ) -> DVec3 {
-        self.string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
-            .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z))
+        self.string_or_trace_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
+            .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, overlay, drill_holes, hidden, frozen, working_plane_z))
     }
 
     /// The nearer of the closest string and trace points within reach, kept
@@ -1070,6 +1078,7 @@ impl<'a> Graphics<'a> {
     fn string_or_trace_near_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1084,7 +1093,11 @@ impl<'a> Graphics<'a> {
             .flatten()
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(point, _)| point)
-            .filter(|point| xray_enabled || self.centre_candidate_drawn(*point, triangulations, document, snap_index, hidden))
+            .filter(|point| {
+                xray_enabled
+                    || (self.centre_candidate_drawn(*point, triangulations, document, snap_index, hidden)
+                        && !SceneQuery::surface_occludes_pick(overlay, hidden, &self.view_proj(), self.scene_origin, *point, self.section_slab()))
+            })
     }
 
     /// Whether a centre candidate is drawn where it sits, against everything

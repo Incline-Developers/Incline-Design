@@ -729,9 +729,9 @@ pub(crate) fn draw_rule_editor(
             // Conditions, ANDed. A field carries at most one, because one interval
             // or value set already expresses anything two on the same field could.
             grid_separator_row(ui, &tr!("destination-rule-conditions"), 0);
-            if rule.conditions.is_empty() {
-                explorer_note(ui, tr!("destination-no-conditions"));
-            }
+            // The note stands where the first condition would, so it offers
+            // the same menu as the space below it.
+            let note = rule.conditions.is_empty().then(|| explorer_note(ui, tr!("destination-no-conditions")));
             // A category condition the rule's current sources cannot evaluate.
             // Named rather than removed: the planner chose it, and the repair -
             // narrowing the sources, or splitting the rule - is theirs to make.
@@ -757,6 +757,10 @@ pub(crate) fn draw_rule_editor(
                 });
             }
             let body = ui.available_rect_before_wrap();
+            let body = match &note {
+                Some(note) => body.union(note.rect),
+                None => body,
+            };
             if body.is_positive() {
                 let response = ui.interact(body, ui.id().with(("new_condition_space", rule.id.0)), egui::Sense::click());
                 context_menu_popup(&response, tr!("destination-rule-conditions"), |ui| {
@@ -820,7 +824,7 @@ pub(crate) fn draw_rule_editor(
         }
     }
     commands.append(&mut edits);
-    draw_condition_dialog(ui, editor, plan, document, &categories, session, commands);
+    draw_condition_dialog(ui, editor, plan, document, ConditionOwner::Routing(rule.id), &categories, session, commands);
 }
 
 pub(crate) enum ConditionAction {
@@ -896,15 +900,26 @@ pub(crate) fn condition_note(document: &Document, condition: &FieldCondition) ->
 
 /// The condition editor: one field, and either the values it may hold or the
 /// interval it must fall in.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the dialog's whole input: the page state, the plan and document it edits, the rule on screen, the category values, the session and the command sink"
+)]
 pub(crate) fn draw_condition_dialog(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &Document,
+    shown: ConditionOwner,
     categories: &std::collections::BTreeMap<crate::model::ReserveFieldId, Vec<String>>,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
+    // A condition belongs to the rule it was opened from. Once another rule
+    // is on screen - picked from the list, or a new one just added - the
+    // dialog would otherwise go on editing a rule the page no longer shows.
+    if editor.schedule_condition_draft.as_ref().is_some_and(|draft| draft.rule != shown) {
+        editor.schedule_condition_draft = None;
+    }
     let Some(draft) = editor.schedule_condition_draft.as_mut() else { return };
     let owner = draft.rule;
     // Whichever kind of rule it belongs to, a condition is the same statement

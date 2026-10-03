@@ -417,7 +417,7 @@ impl crate::app::App<'_> {
                 None => SCHEDULE_PERIOD_H.min(end_h),
             },
         };
-        let snapshot = match self.capture_schedule_snapshot(requested_end_h) {
+        let snapshot = match self.capture_schedule_snapshot(requested_end_h, mode == ScheduleRunMode::Improve) {
             Ok(snapshot) => snapshot,
             Err(problems) => {
                 let semantic = self.schedule_semantic_key();
@@ -515,6 +515,7 @@ impl crate::app::App<'_> {
                         candidates: capture.stats.candidates,
                         ground_sources: capture.stats.ground_sources,
                         event_budget_restricted: capture.stats.event_budget_restricted,
+                        unworked_blasts: capture.stats.unworked_blasts,
                         notes: notes.clone(),
                     };
                     publish(&input, solution, replay, &capture.identities, meta, cancel)
@@ -691,10 +692,20 @@ impl crate::app::App<'_> {
     /// Publish nothing, keep whatever was held, and say why.
     fn record_attempt(&mut self, attempt: ScheduleAttempt) {
         self.schedule_auto_attempted = Some(self.auto_key());
+        // Edits recalculate automatically, so a project that is not ready yet
+        // is refused for the same reason after every one of them. The status
+        // line already holds that reason; the console says it once.
+        let repeated = attempt.outcome == AttemptOutcome::Refused
+            && self
+                .schedule_run_diagnostics
+                .as_ref()
+                .is_some_and(|held| held.outcome == AttemptOutcome::Refused && held.messages == attempt.messages);
         let headline = attempt_headline(&attempt);
-        crate::userspace_warn!("{headline}");
-        for message in &attempt.messages {
-            crate::userspace_warn!("{message}");
+        if !repeated {
+            crate::userspace_warn!("{headline}");
+            for message in attempt.messages.iter().filter(|message| !headline.contains(message.as_str())) {
+                crate::userspace_warn!("{message}");
+            }
         }
         self.schedule_run_diagnostics = Some(attempt);
         self.redraw_requested = true;
@@ -803,8 +814,22 @@ impl crate::app::App<'_> {
         // A recalculation in hand says so quietly rather than warning that
         // the last result is out of date: it is about to be replaced.
         let recalculating = self.schedule_recalculating();
+        // A Gantt nobody has put work on yet is a starting point, not a
+        // failure: say what to do rather than why there is nothing to run.
+        let bars = self.workspace.active_document().map_or(&[][..], |document| document.schedule().bars());
+        let no_assigned_bars = bars.iter().all(|bar| bar.agent.is_none());
+        // Dropped from the palette but not yet given its blocks.
+        let empty_dig_bars = !no_assigned_bars
+            && bars
+                .iter()
+                .filter(|bar| bar.agent.is_some())
+                .all(|bar| bar.dig_order().is_some_and(|order| order.members().is_empty()) || bar.delay().is_some())
+            && bars.iter().any(|bar| bar.agent.is_some() && bar.dig_order().is_some());
+        let starting = !cfg!(target_arch = "wasm32") && self.schedule_run_blocker().is_none();
         let status = match (running, attempt, held_status) {
             _ if recalculating => tr!("schedule-run-updating"),
+            (None, _, None) if no_assigned_bars && starting => tr!("schedule-run-no-bars"),
+            (None, _, None) if empty_dig_bars && starting => tr!("schedule-run-empty-bars"),
             (Some(end_h), _, _) if improving => tr!("schedule-run-improving", day = day_of(end_h).to_string()),
             (Some(end_h), _, _) => tr!("schedule-run-working", day = day_of(end_h).to_string()),
             // The newest attempt failed: say so first, then what is still
@@ -828,7 +853,10 @@ impl crate::app::App<'_> {
         };
         let mut details = Vec::new();
         if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial)) {
-            details.extend(attempt.messages.iter().cloned());
+            // A refusal's only reason is already in the status line.
+            if !(attempt.outcome == AttemptOutcome::Refused && attempt.messages.len() == 1) {
+                details.extend(attempt.messages.iter().cloned());
+            }
         }
         if let Some(calculation) = self.schedule_calculation.as_ref().filter(|_| current) {
             let currency = self
@@ -915,7 +943,11 @@ fn not_published(completion: &super::scip_blend::ScipCompletion) -> RunOutcome {
 fn attempt_headline(attempt: &ScheduleAttempt) -> String {
     let run = attempt.serial.to_string();
     match attempt.outcome {
-        AttemptOutcome::Refused => tr!("schedule-run-refused", run = run),
+        // One reason fits the status line; several are listed beneath it.
+        AttemptOutcome::Refused => match attempt.messages.as_slice() {
+            [reason] => tr!("schedule-run-refused-because", run = run, reason = reason.clone()),
+            _ => tr!("schedule-run-refused", run = run),
+        },
         AttemptOutcome::NoSolution => tr!("schedule-run-no-solution", run = run),
         AttemptOutcome::Infeasible => tr!("schedule-run-infeasible", run = run),
         AttemptOutcome::Cancelled => tr!("schedule-run-cancelled", run = run),
@@ -946,6 +978,9 @@ fn result_status(calculation: &CalculatedSchedule) -> String {
     }
     if report.chunk_slots_full {
         status.push_str(&tr!("schedule-run-suffix-chunks-full"));
+    }
+    if report.unworked_blasts > 0 {
+        status.push_str(&tr!("schedule-run-suffix-unworked-blasts", count = report.unworked_blasts));
     }
     status
 }

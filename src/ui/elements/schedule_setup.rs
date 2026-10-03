@@ -90,7 +90,17 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             if let Some(rect) = entry_response.icon_rect {
                 markers.push((rect, status.state));
             }
-            let response = entry_response.response;
+            // The badge's reason, where the badge is.
+            let response = entry_response.response.on_hover_ui(|ui| {
+                super::planning_setup::stage_tooltip_parts(
+                    ui,
+                    status.state,
+                    status.blocked_by.map(ScheduleStep::label),
+                    status.message.as_deref(),
+                    status.last_success.as_ref(),
+                    &status.diagnostics,
+                );
+            });
             if response.clicked() {
                 step = entry;
             }
@@ -322,6 +332,9 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
     DataGrid::new("schedule_class_list", rect, &tr!("schedule-loader-classes"))
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
+            if plan.classes().is_empty() {
+                explorer_note(ui, tr!("schedule-no-class-list"));
+            }
             for class in plan.classes() {
                 let rate = if class.kind.is_drill_blast() {
                     format!("{} {}", rate_text(class.default_dig_rate_tph), class.kind.rate_unit())

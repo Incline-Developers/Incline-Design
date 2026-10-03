@@ -66,13 +66,18 @@ pub(crate) fn stripe_bands(x_range: egui::Rangef, top: f32, bottom: f32, height:
 }
 
 /// A section's empty-state line ("No design layers"), as a tree row.
-pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) {
+///
+/// Wraps rather than truncating: a note is usually the only thing in an empty
+/// list, and the part cut off is the part that says what to do. Returns the
+/// note's response, so a list can offer its own menu on it too.
+pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
     let height = row_height(ui);
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+    ui.horizontal(|ui| {
+        ui.set_min_height(height);
         ui.add_space(ENTRY_LABEL_GUTTER);
-        ui.label(egui::RichText::new(text).weak().italics());
-    });
+        ui.add(egui::Label::new(egui::RichText::new(text).weak().italics()).wrap())
+    })
+    .inner
 }
 
 /// Width reserved for one trailing toggle in an explorer row.

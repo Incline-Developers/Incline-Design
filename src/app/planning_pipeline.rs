@@ -2,10 +2,11 @@
 //! produces, and whether what it produced is still current.
 //!
 //! The pipeline is *explicitly executed*. Opening a page, selecting a blast or
-//! moving a camera never finishes a calculation; Run to Step and Run All do. What
-//! a page does is show the stage status and the artifacts that are already
-//! there, so a scheduler can consume a completed run without any page having
-//! been opened at all.
+//! moving a camera never finishes a calculation; Run to Step, Run All, and the
+//! Auto switch (which reruns stale steps once edits settle, see
+//! [`crate::app::App::auto_run_planning`]) do. What a page does is show the
+//! stage status and the artifacts that are already there, so a scheduler can
+//! consume a completed run without any page having been opened at all.
 //!
 //! Stages run in a strict order and no stage may read a later stage's output:
 //!
@@ -32,6 +33,11 @@ use crate::{
     model::{ReserveAggregation, ReserveFieldIssue},
     ui::state::SolidsStep,
 };
+
+/// How long Auto waits after the last edit before rerunning the stale steps:
+/// long enough that a burst of edits (a cut line drawn point by point) is one
+/// run, not one per point.
+const PLANNING_AUTO_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Where one stage stands for the inputs it has now.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -136,6 +142,9 @@ pub(crate) struct PlanningPipeline {
     /// stage is running, and so nothing may build: displaying a page is not a
     /// reason to compute anything.
     demand: Option<GeometryDemand>,
+    /// Whether the run in flight was started by Auto rather than a button.
+    /// An edit stopping it is then expected, and Auto starts it again.
+    auto_run: bool,
 }
 
 /// How far down the geometry a running stage needs built.
@@ -161,6 +170,7 @@ impl PlanningPipeline {
             queue: Vec::new(),
             running: None,
             demand: None,
+            auto_run: false,
         }
     }
 
@@ -194,10 +204,44 @@ impl PlanningPipeline {
         }
         self.stages = Default::default();
         self.demand = None;
+        self.auto_run = false;
         self.generation += 1;
         self.queue = SolidsStep::ALL.into_iter().take(stage.index() + 1).collect();
         for stage in self.queue.clone() {
             self.status_mut(stage).state = StageState::Queued;
+        }
+        true
+    }
+
+    /// Bring every stage up to date without retiring the ones that already
+    /// are: the run Auto starts. Returns whether there was anything to run.
+    fn resume_all(&mut self) -> bool {
+        if self.is_running() {
+            return false;
+        }
+        // A stage marked stale whose inputs have come back to what it ran
+        // on - an undo, say - is current again, as long as everything before
+        // it is.
+        let mut first = None;
+        for stage in SolidsStep::ALL {
+            let matches = self.stage_inputs_match(stage);
+            let status = self.status_mut(stage);
+            if status.state == StageState::Stale && matches {
+                status.state = StageState::Complete;
+            }
+            if !(status.state.is_current() && matches) {
+                first = Some(stage);
+                break;
+            }
+        }
+        let Some(first) = first else { return false };
+        self.generation += 1;
+        self.auto_run = true;
+        self.queue = SolidsStep::ALL.into_iter().skip(first.index()).collect();
+        for stage in self.queue.clone() {
+            let status = self.status_mut(stage);
+            status.state = StageState::Queued;
+            status.message = None;
         }
         true
     }
@@ -398,8 +442,11 @@ impl crate::app::App<'_> {
                 self.discard_incomplete_solid_requests();
                 // Said out loud, and naming the stage whose inputs moved: a run
                 // that ends by itself part way through otherwise looks like a
-                // button that only does one step.
-                crate::userspace_warn!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
+                // button that only does one step. An Auto run is simply started
+                // again once the edits settle, so it goes unremarked.
+                if !self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.auto_run) {
+                    crate::userspace_warn!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
+                }
             }
         }
         // A stage whose recorded inputs no longer match is stale even if no
@@ -428,6 +475,14 @@ impl crate::app::App<'_> {
                 self.editor.schedule_blasts_key = Some(key);
                 self.refresh_schedule_blasts();
             }
+        }
+        // The Layout's block tint is baked into the document scene, which
+        // rebuilds only when invalidated; a page change alone does not.
+        let haul_page = self.editor.is_haulage_page();
+        if self.editor.haul_page_drawn != haul_page {
+            self.editor.haul_page_drawn = haul_page;
+            self.invalidate_geometry();
+            self.invalidate_overlay();
         }
         if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
@@ -604,6 +659,54 @@ impl crate::app::App<'_> {
         }
         self.retry_failed_solid_requests();
         self.advance_planning_run();
+    }
+
+    /// Rerun the stale steps on their own once edits have settled, while the
+    /// Auto switch is on.
+    ///
+    /// Like the schedule's Auto: at most once for one set of inputs, so a step
+    /// that fails, or a run the user cancelled, is not retried until something
+    /// changes. A project with no solids has nothing to plan, and is left with
+    /// its steps not run rather than failed.
+    pub(crate) fn auto_run_planning(&mut self) {
+        self.planning_auto_deadline = None;
+        let Some(pipeline) = self.planning_pipeline.as_ref() else {
+            self.planning_auto_settle = None;
+            return;
+        };
+        let has_solids = self.workspace.active_document().is_some_and(|document| !document.solids().is_empty());
+        if !self.editor.planning_auto_run || !has_solids || pipeline.is_running() {
+            self.planning_auto_settle = None;
+            // Switched off, edits can leave steps stale over inputs Auto has
+            // already seen; switching it back on has to look again.
+            if !self.editor.planning_auto_run {
+                self.planning_auto_attempted = None;
+            }
+            return;
+        }
+        let key = pipeline.fingerprints;
+        if self.planning_auto_attempted == Some(key) {
+            return;
+        }
+        let now = web_time::Instant::now();
+        let since = match self.planning_auto_settle {
+            Some((seen, since)) if seen == key => since,
+            _ => {
+                self.planning_auto_settle = Some((key, now));
+                now
+            }
+        };
+        if now < since + PLANNING_AUTO_SETTLE {
+            self.planning_auto_deadline = Some(since + PLANNING_AUTO_SETTLE);
+            return;
+        }
+        self.planning_auto_settle = None;
+        self.planning_auto_attempted = Some(key);
+        if self.planning_pipeline.as_mut().is_some_and(PlanningPipeline::resume_all) {
+            self.retry_failed_solid_requests();
+            self.advance_planning_run();
+            self.mirror_planning_stages();
+        }
     }
 
     /// Restart all six stages, including those already complete.
@@ -864,12 +967,13 @@ impl crate::app::App<'_> {
         const RELATIVE: f64 = 1e-6;
         const FLOOR: f64 = 1e-3;
 
-        let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
+        let document = self.workspace.active_document();
+        let solids = document.map(|document| document.solids().to_vec()).unwrap_or_default();
         let mut diagnostics = Vec::new();
         for solid in &solids {
             for parent in self.bench_reserve_references(solid.id) {
                 let here = |message: String, blocking: bool| StageDiagnostic {
-                    entity: Some(format!("{} · RL {:.2}", solid.name, parent.bench.base)),
+                    entity: Some(crate::ui::elements::solids_view::bench_path(&solid.name, parent.bench.base)),
                     message,
                     blocking,
                 };
@@ -890,7 +994,7 @@ impl crate::app::App<'_> {
                 }
                 if let Some(open) = children.iter().find(|record| record.volume.is_none()) {
                     diagnostics.push(StageDiagnostic {
-                        entity: Some(format!("{} · RL {:.2}", solid.name, open.flitch.base)),
+                        entity: document.map(|document| crate::app::commands::schedule_readiness::block_path(document, open)),
                         message: tr!("stage-block-not-closed", block = open.name.clone(), area = format!("{:.1}", open.plan_area)),
                         blocking: true,
                     });
@@ -1042,7 +1146,7 @@ impl crate::app::App<'_> {
         // amount of re-inferring parentage downstream would fix.
         for record in records.iter().filter(|record| record.blast.is_none()) {
             diagnostics.push(StageDiagnostic {
-                entity: Some(format!("{} · RL {:.2}", record.solid_name, record.flitch.base)),
+                entity: document.map(|document| crate::app::commands::schedule_readiness::block_path(document, record)),
                 message: tr!("stage-block-no-blast", block = record.name.clone()),
                 blocking: true,
             });

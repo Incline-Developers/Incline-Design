@@ -60,7 +60,7 @@ impl crate::app::App<'_> {
                 insert_lane,
             } => self.add_bar(name, agent, priority, window, insert_lane),
             ScheduleEdit::RenameBar { bar, name } => self.rename_bar(bar, name),
-            ScheduleEdit::DeleteBar(bar) => self.delete_bar(bar),
+            ScheduleEdit::DeleteBars(bars) => self.delete_bars(&bars),
             ScheduleEdit::CopyBar(bar) => self.copy_bar(bar),
             ScheduleEdit::SetBarAgent { bar, agent } => self.set_bar_agent(bar, agent),
             ScheduleEdit::SetBarPriority { bar, priority } => self.set_bar_priority(bar, priority),
@@ -203,6 +203,14 @@ impl crate::app::App<'_> {
                 insert_lane,
             } => self.add_delay_bar(agent, priority, window, kind, insert_lane),
             ScheduleEdit::SetDelayBarType { bar, kind } => self.edit_schedule(|plan| plan.set_delay_bar_kind(bar, kind)),
+            ScheduleEdit::AddFollowBar {
+                agent,
+                priority,
+                window,
+                leader,
+                insert_lane,
+            } => self.add_follow_bar(agent, priority, window, leader, insert_lane),
+            ScheduleEdit::SetFollowLeader { bar, leader } => self.edit_schedule(|plan| plan.set_follow_leader(bar, leader)),
             ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
             ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
             ScheduleEdit::SetDelayTypeColor { kind, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.set_type_color(kind, color))),
@@ -612,7 +620,7 @@ impl crate::app::App<'_> {
             Ok(())
         });
         if let Some(id) = added {
-            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
     }
@@ -637,7 +645,7 @@ impl crate::app::App<'_> {
             Ok(())
         });
         if let Some(id) = added {
-            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
     }
@@ -662,7 +670,24 @@ impl crate::app::App<'_> {
             Ok(())
         });
         if let Some(id) = added {
-            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    fn add_follow_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, leader: LoaderAgentId, insert_lane: bool) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            let id = plan.add_follow_bar(agent, priority, window, leader)?;
+            if insert_lane {
+                plan.open_lane(agent, priority);
+                plan.set_bar_priority(id, priority)?;
+            }
+            added = Some(id);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
     }
@@ -716,7 +741,7 @@ impl crate::app::App<'_> {
             Ok(())
         });
         if let Some(id) = added {
-            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
     }
@@ -810,10 +835,13 @@ impl crate::app::App<'_> {
         self.edit_schedule(|plan| plan.rename_bar(id, &name));
     }
 
-    fn delete_bar(&mut self, id: BarId) {
-        self.edit_schedule(|plan| plan.remove_bar(id));
-        if self.workspace.active_document().is_none_or(|document| document.schedule().bar(id).is_none()) {
-            self.editor.schedule_selected_bar = None;
+    /// Delete bars as one edit, so one undo brings them all back.
+    pub(crate) fn delete_bars(&mut self, ids: &[BarId]) {
+        self.edit_schedule(|plan| ids.iter().try_for_each(|id| plan.remove_bar(*id)));
+        let Some(document) = self.workspace.active_document() else { return };
+        let plan = document.schedule();
+        self.editor.schedule_selected_bars.retain(|id| plan.bar(*id).is_some());
+        if self.editor.schedule_selected_bars.is_empty() {
             self.editor.schedule_selected_member = None;
         }
     }
@@ -847,7 +875,7 @@ impl crate::app::App<'_> {
             Ok(())
         });
         if let Some(id) = added {
-            self.editor.schedule_selected_bar = Some(id);
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
     }
