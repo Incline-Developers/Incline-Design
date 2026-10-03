@@ -57,6 +57,7 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
 ws-menubar-drillholes = Drill Holes
+ws-menubar-modelling = Modelling
 ws-menubar-active-layer = Layer:
 
 ## Menubars functions

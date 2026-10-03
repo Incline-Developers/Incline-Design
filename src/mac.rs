@@ -125,6 +125,7 @@ const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
+const MODELLING_MENU_TAG: isize = -7;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -500,18 +501,22 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
-    add_separator(&drill_hole_menu, mtm);
-    add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
+    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
+    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+
+    let modelling_menu = menu(&tr!("ws-menubar-modelling"), mtm);
+    modelling_menu.setAutoenablesItems(false);
+    add_action(&modelling_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
     add_action(
-        &drill_hole_menu,
+        &modelling_menu,
         &tr!("common-build-surface-ellipsis"),
         "",
         MacMenuAction::OpenReferenceSurface,
         &target,
         mtm,
     );
-    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
-    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+    let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
+    modelling_item.setTag(MODELLING_MENU_TAG);
 
     let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
     coordinates_menu.setAutoenablesItems(false);
@@ -585,6 +590,10 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
     }
 
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Geology);
+    }
+
+    if let Some(item) = find_item(root, MODELLING_MENU_TAG) {
         item.setHidden(workspace != Workspace::Geology);
     }
 }
