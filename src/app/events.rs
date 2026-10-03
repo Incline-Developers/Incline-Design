@@ -254,6 +254,7 @@ impl<'a> App<'a> {
                     // demand that the same frame's edit had already retired.
                     self.sync_planning_pipeline();
                     self.auto_run_planning();
+                    self.auto_run_haulage();
                     self.auto_recalculate_schedule();
                     self.pick_entry_ground();
                     self.sync_solid_preview();

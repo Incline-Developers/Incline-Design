@@ -109,6 +109,18 @@ pub(crate) enum IssueKind {
     SteepRoad,
     MissingDestination,
 }
+
+impl IssueKind {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::DeadEnd => crate::i18n::tr!("haul-dead-end"),
+            Self::NearMiss => crate::i18n::tr!("haul-near-miss"),
+            Self::SeparatePiece => crate::i18n::tr!("haul-separate-piece"),
+            Self::SteepRoad => crate::i18n::tr!("haul-steep"),
+            Self::MissingDestination => crate::i18n::tr!("haul-missing-destination"),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkIssue {
     pub(crate) kind: IssueKind,

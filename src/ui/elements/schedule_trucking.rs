@@ -26,29 +26,40 @@ use crate::{
         state::{ScheduleEdit, ScheduleRuleNameDraft, ScheduleTruckClassDraft, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup, context_menu_separator},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_checkbox_row, grid_named_row, grid_row, grid_select_row, grid_separator_row},
+            data_grid::{
+                DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_checkbox_row, grid_columns_row, grid_empty_state, grid_named_row, grid_row,
+                grid_select_row, grid_separator_row,
+            },
             explorer::explorer_note,
             menu,
         },
     },
 };
 
+/// Shares of the class list's columns: the class, then what each truck
+/// carries. How many trucks there are is the Calendar's, day by day.
+const CLASS_FRACTIONS: [f32; 2] = [0.6, 0.4];
+/// Shares of the grade speed columns: where a band starts, then its loaded
+/// and empty speeds.
+const BAND_FRACTIONS: [f32; 3] = [0.34, 0.33, 0.33];
+
 /// The truck classes, in fleet order.
 pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let trucks = plan.trucks();
     let mut selected = editor.schedule_selected_truck_class;
-    DataGrid::new("schedule_truck_class_list", rect, &tr!("truck-classes"))
-        .column_header(&tr!("planning-name"))
+    let new_class = tr!("truck-new-class");
+    let columns = [(tr!("planning-name"), CLASS_FRACTIONS[0]), (tr!("truck-payload-column"), CLASS_FRACTIONS[1])];
+    let mut add = false;
+    let added = DataGrid::new("schedule_truck_class_list", rect, &tr!("truck-classes"))
+        .columns(&columns)
+        .add_button(&new_class, &mut add)
         .show(ui, |ui| {
             if trucks.classes.is_empty() {
-                explorer_note(ui, tr!("truck-no-classes"));
+                return grid_empty_state(ui, &tr!("truck-no-classes"), Some(&new_class));
             }
             for class in &trucks.classes {
-                // The rostered fleet beside the name: a class with no trucks in
-                // it supplies nothing, and that is the first thing to know
-                // about it.
-                let label = format!("{} · {} × {} t", class.name, class.calendar.default_units, number(class.payload_t));
-                let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
+                let payload = format!("{} t", number(class.payload_t));
+                let (response, _) = grid_columns_row(ui, &CLASS_FRACTIONS, &[&class.name, &payload], selected == Some(class.id));
                 if response.clicked() {
                     selected = Some(class.id);
                 }
@@ -63,32 +74,47 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                     }
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_truck_class_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("truck-classes"), |ui| {
-                    if ContextMenuAction::new(tr!("truck-new-class")).show(ui).clicked() {
-                        let name = crate::model::schedule::suggested_name(&tr!("truck-default-class-name"), trucks.classes.iter().map(|class| class.name.clone()));
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::AddTruckClass { name }));
-                        ui.close();
-                    }
-                });
-            }
+            grid_add_action_row(ui, &new_class)
         });
+    if add || added {
+        let name = crate::model::schedule::suggested_name(&tr!("truck-default-class-name"), trucks.classes.iter().map(|class| class.name.clone()));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::AddTruckClass { name }));
+    }
     if editor.schedule_selected_truck_class != selected {
         editor.schedule_truck_class_draft = None;
     }
     editor.schedule_selected_truck_class = selected;
 }
 
+/// The class selected in the list, if there is one.
+fn selected_class(editor: &EditorState, plan: &SchedulePlan) -> Option<trucking::TruckClass> {
+    editor.schedule_selected_truck_class.and_then(|id| plan.trucks().class(id)).cloned()
+}
+
+/// A class's haulage figures with its grade speeds replaced, as one edit.
+fn set_speeds(session: u32, class: &trucking::TruckClass, mut speeds: Vec<trucking::GradeSpeed>) -> UiCommand {
+    speeds.sort_by(|a, b| a.from_grade.total_cmp(&b.from_grade));
+    UiCommand::schedule(
+        session,
+        ScheduleEdit::SetTruckClassHaulage {
+            class: class.id,
+            speeds,
+            maximum_speed_kph: class.maximum_speed_kph,
+            maximum_grade: class.maximum_grade,
+            dump_time_s: class.dump_time_s,
+        },
+    )
+}
+
 /// The selected class's cells, and what they make of one another.
 pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let trucks = plan.trucks();
-    let Some(class) = editor.schedule_selected_truck_class.and_then(|id| trucks.class(id)).cloned() else {
-        PropertyTable::new("schedule_truck_class_properties", rect, &tr!("truck-classes")).show(ui, |rows| {
-            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            rows.readonly(&tr!("planning-name"), &tr!("truck-select-class"), None, None);
-        });
+    let Some(class) = selected_class(editor, plan) else {
+        // Only reached with no class to select: the step opens on the first.
+        let columns = [(tr!("planning-property"), 0.54), (tr!("planning-value"), 0.46)];
+        DataGrid::new("schedule_truck_class_properties", rect, &tr!("planning-properties"))
+            .columns(&columns)
+            .show(ui, |_| {});
         return;
     };
     let source = (
@@ -112,11 +138,6 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             maximum_speed: number(class.maximum_speed_kph),
             maximum_grade: number(class.maximum_grade * 100.0),
             dump_time: number(class.dump_time_s),
-            grade_rows: class
-                .grade_speeds
-                .iter()
-                .map(|r| (number(r.from_grade * 100.0), number(r.loaded_kph), number(r.empty_kph)))
-                .collect(),
         });
     }
     let taken: Vec<String> = trucks.classes.iter().filter(|other| other.id != class.id).map(|other| other.name.clone()).collect();
@@ -169,80 +190,103 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         ] {
             commit |= rows.field(&label, value, error.as_deref()).lost_focus();
         }
-        rows.three_headers([&tr!("haul-grade-from"), &tr!("haul-loaded-speed"), &tr!("haul-empty-speed")]);
-        let removable = draft.grade_rows.len() > 1;
-        let mut remove = None;
-        for (index, (grade, loaded, empty)) in draft.grade_rows.iter_mut().enumerate() {
-            let (responses, removed) = rows.three_fields([grade, loaded, empty], removable);
-            commit |= responses.iter().any(|r| r.lost_focus());
-            if removed {
-                remove = Some(index);
-            }
-        }
-        if let Some(index) = remove {
-            draft.grade_rows.remove(index);
-            commit = true;
-        }
-        let mut grades: Vec<_> = draft.grade_rows.iter().filter_map(|r| r.0.trim().parse::<f64>().ok()).collect();
-        grades.sort_by(f64::total_cmp);
-        let bands_valid = grades.len() == draft.grade_rows.len()
-            && grades.windows(2).all(|g| g[0] < g[1])
-            && draft.grade_rows.iter().all(|r| positive(&r.1).is_some() && positive(&r.2).is_some());
-        if !bands_valid {
-            rows.readonly("", &tr!("haul-error-bands"), None, Some(&tr!("haul-error-bands")));
-        }
-        if rows.action("", &tr!("haul-add-band")).clicked() {
-            let grade = grades.last().copied().unwrap_or(6.0) + 2.0;
-            let (loaded, empty) = draft.grade_rows.last().map_or(("10".to_owned(), "20".to_owned()), |r| (r.1.clone(), r.2.clone()));
-            draft.grade_rows.push((number(grade), loaded, empty));
-            commit = true;
-        }
-        // A class migrated from the old two-speed model holds one speed at
-        // every grade; this is the quick way onto grade-dependent speeds.
-        if rows.action("", &tr!("haul-generic-speeds")).on_hover_text(tr!("haul-speeds-help")).clicked() {
-            draft.grade_rows = trucking::generic_grade_speeds()
-                .iter()
-                .map(|r| (number(r.from_grade * 100.0), number(r.loaded_kph), number(r.empty_kph)))
-                .collect();
-            commit = true;
-        }
-        rows.readonly("", &tr!("haul-speeds-help"), None, None).on_hover_text(tr!("haul-speeds-help"));
-        if commit {
-            let parsed = (|| -> Option<_> {
-                let maximum_speed_kph = draft.maximum_speed.parse::<f64>().ok()?;
-                let maximum_grade = draft.maximum_grade.parse::<f64>().ok()? / 100.0;
-                let dump_time_s = draft.dump_time.parse::<f64>().ok()?;
-                let mut speeds: Vec<trucking::GradeSpeed> = draft
-                    .grade_rows
-                    .iter()
-                    .map(|(g, l, e)| {
-                        Some(trucking::GradeSpeed {
-                            from_grade: g.parse::<f64>().ok()? / 100.0,
-                            loaded_kph: l.parse().ok()?,
-                            empty_kph: e.parse().ok()?,
-                        })
-                    })
-                    .collect::<Option<_>>()?;
-                speeds.sort_by(|a, b| a.from_grade.total_cmp(&b.from_grade));
-                Some((speeds, maximum_speed_kph, maximum_grade, dump_time_s))
-            })();
-            if let Some((speeds, maximum_speed_kph, maximum_grade, dump_time_s)) = parsed
-                && (speeds != class.grade_speeds || maximum_speed_kph != class.maximum_speed_kph || maximum_grade != class.maximum_grade || dump_time_s != class.dump_time_s)
-            {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::SetTruckClassHaulage {
-                        class: class.id,
-                        speeds,
-                        maximum_speed_kph,
-                        maximum_grade,
-                        dump_time_s,
-                    },
-                ));
-            }
+        if commit
+            && let (Some(maximum_speed_kph), Some(maximum_grade), Ok(dump_time_s)) =
+                (positive(&draft.maximum_speed), positive(&draft.maximum_grade), draft.dump_time.trim().parse::<f64>())
+            && (maximum_speed_kph != class.maximum_speed_kph || maximum_grade / 100.0 != class.maximum_grade || dump_time_s != class.dump_time_s)
+            && maximum_grade <= 100.0
+            && dump_time_s >= 0.0
+        {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetTruckClassHaulage {
+                    class: class.id,
+                    speeds: class.grade_speeds.clone(),
+                    maximum_speed_kph,
+                    maximum_grade: maximum_grade / 100.0,
+                    dump_time_s,
+                },
+            ));
         }
     });
     commands.append(&mut edits);
+}
+
+/// The selected class's speed in each grade band, loaded and empty.
+///
+/// A band runs from its grade up to the next one's, so the bands are kept in
+/// grade order; an edit that would give two bands the same grade is refused.
+pub(crate) fn draw_grade_speeds(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let columns = [
+        (tr!("haul-grade-from"), BAND_FRACTIONS[0]),
+        (tr!("haul-loaded-speed"), BAND_FRACTIONS[1]),
+        (tr!("haul-empty-speed"), BAND_FRACTIONS[2]),
+    ];
+    let title = tr!("haul-grade-speeds");
+    let Some(class) = selected_class(editor, plan) else {
+        DataGrid::new("schedule_truck_grade_speeds", rect, &title).columns(&columns).show(ui, |_| {});
+        return;
+    };
+    let add_band = tr!("haul-add-band");
+    let defaults = tr!("haul-default-speeds");
+    let defaults_help = tr!("haul-speeds-help");
+    let (mut add, mut reset) = (false, false);
+    let mut edited = None;
+    DataGrid::new("schedule_truck_grade_speeds", rect, &title)
+        .columns(&columns)
+        .add_button(&add_band, &mut add)
+        .title_action(&defaults, &defaults_help, &mut reset)
+        .show(ui, |ui| {
+            let removable = class.grade_speeds.len() > 1;
+            for (index, band) in class.grade_speeds.iter().enumerate() {
+                let (response, cells) = grid_columns_row(ui, &BAND_FRACTIONS, &["", "", ""], false);
+                let mut grade = band.from_grade * 100.0;
+                let mut loaded = band.loaded_kph;
+                let mut empty = band.empty_kph;
+                let mut changed = grid_cell_entry(ui, ("band_grade", index), cells[0], &mut grade, "%");
+                changed |= grid_cell_entry(ui, ("band_loaded", index), cells[1], &mut loaded, "km/h");
+                changed |= grid_cell_entry(ui, ("band_empty", index), cells[2], &mut empty, "km/h");
+                if changed {
+                    let mut speeds = class.grade_speeds.clone();
+                    speeds[index] = trucking::GradeSpeed {
+                        from_grade: grade.clamp(-100.0, 100.0) / 100.0,
+                        loaded_kph: loaded.max(1.0),
+                        empty_kph: empty.max(1.0),
+                    };
+                    edited = Some(speeds);
+                }
+                context_menu_popup(&response, tr!("haul-grade-band"), |ui| {
+                    if ContextMenuAction::new(tr!("haul-remove-band")).enabled(removable).show(ui).clicked() {
+                        let mut speeds = class.grade_speeds.clone();
+                        speeds.remove(index);
+                        edited = Some(speeds);
+                        ui.close();
+                    }
+                });
+            }
+        });
+    if add {
+        // Two points steeper than the steepest band, at its speeds: the
+        // nearest guess, for the planner to correct.
+        let last = *class.grade_speeds.last().expect("a class keeps at least one band");
+        let mut speeds = class.grade_speeds.clone();
+        speeds.push(trucking::GradeSpeed {
+            from_grade: (last.from_grade + 0.02).min(1.0),
+            ..last
+        });
+        edited = Some(speeds);
+    }
+    if reset {
+        edited = Some(trucking::default_grade_speeds());
+    }
+    if let Some(speeds) = edited {
+        let mut grades: Vec<_> = speeds.iter().map(|band| band.from_grade.to_bits()).collect();
+        grades.sort_unstable();
+        grades.dedup();
+        if grades.len() == speeds.len() && speeds != class.grade_speeds {
+            commands.push(set_speeds(session, &class, speeds));
+        }
+    }
 }
 
 /// The trucking rules. Unordered by design; see the module documentation.

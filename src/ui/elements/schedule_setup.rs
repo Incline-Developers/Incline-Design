@@ -76,9 +76,7 @@ pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> O
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let mut step = editor.schedule_setup_step;
     let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
-    // Truck classes are set up on the Haulage page, beside the roads they
-    // drive; the step is still checked here, as part of this pipeline.
-    for entry in ScheduleStep::ALL.into_iter().filter(|step| *step != ScheduleStep::TruckClasses) {
+    for entry in ScheduleStep::ALL {
         let status = &editor.schedule_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
@@ -97,28 +95,17 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             if response.clicked() {
                 step = entry;
             }
-            draw_step_menu(&response, entry, editor.schedule_run_active, commands);
+            super::planning_setup::draw_stage_menu(
+                &response,
+                entry.label(),
+                editor.schedule_run_active,
+                [UiCommand::RunScheduleStage(entry), UiCommand::RunAllScheduleStages, UiCommand::CancelScheduleRun],
+                commands,
+            );
         });
     }
     super::planning_setup::paint_step_links(ui, &markers);
     editor.schedule_setup_step = step;
-}
-
-fn draw_step_menu(response: &egui::Response, step: ScheduleStep, running: bool, commands: &mut Vec<UiCommand>) {
-    context_menu_popup(response, step.label(), |ui| {
-        if ContextMenuAction::new(tr!("stage-run-step")).enabled(!running).show(ui).clicked() {
-            commands.push(UiCommand::RunScheduleStage(step));
-            ui.close();
-        }
-        if ContextMenuAction::new(tr!("stage-run-all")).enabled(!running).show(ui).clicked() {
-            commands.push(UiCommand::RunAllScheduleStages);
-            ui.close();
-        }
-        if ContextMenuAction::new(tr!("stage-cancel")).enabled(running).show(ui).clicked() {
-            commands.push(UiCommand::CancelScheduleRun);
-            ui.close();
-        }
-    });
 }
 
 /// The Scheduling Readiness step: what the last completed run checked, and

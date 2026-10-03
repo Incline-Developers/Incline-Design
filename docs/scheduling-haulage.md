@@ -2,8 +2,11 @@
 
 Haulage has two pages. **Setup** holds the road network settings (join
 tolerance, auto-join distance, bench speed, acceleration) and the truck
-classes, which moved here from Schedule Setup; Schedule's pipeline still checks
-them, and its repair links open this page. **Layout** holds the road network,
+classes, each class's figures above its Grade Speeds. Setup has its own
+pipeline (`app/haulage_pipeline.rs`) with Run Step, Run All and Auto: Road
+Network reports the Layout's issues as warnings, Truck Classes checks each
+class. Schedule's pipeline has a Haulage step that runs this pipeline when it
+is not current and waits for it; its repair links open this page. **Layout** holds the road network,
 destination dump and reclaim points, block connections and the Route check.
 Loader classes stay in Schedule Setup. A road is a dedicated planning object: its ends are junction
 nodes and its intermediate vertices only shape the road. Moving a node moves
@@ -74,15 +77,28 @@ covers grades below it. The selected speed is capped by the class maximum and
 any road speed limit. The return traverses the same topology in the opposite
 direction, with its own least-time path and signed grades.
 
-Generic starting speeds for new classes are placeholders for site figures:
+New classes start with default grade speeds, from a large haul truck's
+published curves at 398 t loaded and 165 t empty, with 2% rolling resistance,
+each band taken at its starting grade. Uphill and level bands come from the
+rimpull curve. Downhill bands are the top speed of the highest gear whose
+standard retarding holds the effective grade (grade less rolling resistance,
+scaled by weight when empty); the steepest band is taken at 15%:
 
 | Grade from | Loaded km/h | Empty km/h |
 | --- | ---: | ---: |
-| −100% | 15 | 25 |
-| −6% | 25 | 35 |
-| −2% | 20 | 50 |
-| 2% | 20 | 40 |
-| 6% | 11 | 22 |
+| −100% | 12.9 | 23.8 |
+| −10% | 17.4 | 32.1 |
+| −8% | 23.8 | 43.6 |
+| −6% | 32.1 | 43.6 |
+| −4% | 43.6 | 60 |
+| −2% | 60 | 60 |
+| 0% | 57 | 60 |
+| 1% | 41 | 60 |
+| 2% | 32 | 60 |
+| 4% | 22 | 48 |
+| 6% | 17 | 38 |
+| 8% | 14 | 31 |
+| 10% | 10 | 26 |
 
 The initial maximum speed is 50 km/h and maximum grade 10%. Acceleration is
 1.5 km/h/s. A road journey counts the acceleration/deceleration loss at the
@@ -139,12 +155,11 @@ Cycle, distance and rise averages are tonne-weighted; tonne-km is summed.
 Truck charts compare simultaneous use with the available fleet.
 
 This changes the previous travel-only coefficient even for projects without
-roads: loading now counts. **Use generic starting speeds** on a truck class
-replaces migrated flat speeds with the grade-dependent defaults. Old truck classes migrate their two speeds to every
+roads: loading now counts. **Use default grade speeds** on a truck class's
+Grade Speeds pane replaces migrated flat speeds with the grade-dependent defaults. Old truck classes migrate their two speeds to every
 grade band and retain zero dump time; old loader classes retain zero spot time.
 With spot, load and dump zero, fixed-distance coefficients match the previous
-travel-only calculation. New classes receive the generic starting settings
-above. Review class speeds and times before calculating production schedules.
+travel-only calculation. New classes receive the default settings above. Review class speeds and times before calculating production schedules.
 
 ## Animate
 

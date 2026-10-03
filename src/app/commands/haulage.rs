@@ -128,7 +128,7 @@ impl crate::app::App<'_> {
         let Some(document) = self.workspace.active_document() else { return };
         let network = document.haulage();
         let index = crate::model::haulage::network::RoadIndex::new(network);
-        let max_grade = document.schedule().trucks().classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1);
+        let max_grade = max_grade(document.schedule().trucks());
         let reach = network.settings.auto_join_m;
         for block in snapshot.iter().flat_map(|s| &s.blocks) {
             let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
@@ -159,20 +159,7 @@ impl crate::app::App<'_> {
         if self.editor.haul_selected_block.is_some_and(|id| !self.editor.haul_blocks.iter().any(|b| b.id == id)) {
             self.editor.haul_selected_block = None;
         }
-        let destinations: Vec<_> = document
-            .schedule()
-            .routing()
-            .standalone
-            .iter()
-            .map(|d| DestinationId::Standalone(d.id))
-            .chain(
-                document
-                    .solids()
-                    .iter()
-                    .filter(|s| s.kind != crate::model::SolidKind::Pit)
-                    .map(|s| DestinationId::Solid(s.id)),
-            )
-            .collect();
+        let destinations = haul_destinations(document);
         let anchors: Vec<_> = self.editor.haul_blocks.iter().map(crate::ui::state::HaulBlock::point).collect();
         self.editor.haul_issues = network.issues(&destinations, max_grade, &anchors);
         self.invalidate_overlay();
@@ -538,4 +525,29 @@ impl crate::app::App<'_> {
         };
         Ok(())
     }
+}
+
+/// Every destination a road node can serve: the standalone ones and the
+/// solids that are not pits.
+pub(crate) fn haul_destinations(document: &crate::model::Document) -> Vec<DestinationId> {
+    document
+        .schedule()
+        .routing()
+        .standalone
+        .iter()
+        .map(|d| DestinationId::Standalone(d.id))
+        .chain(
+            document
+                .solids()
+                .iter()
+                .filter(|s| s.kind != crate::model::SolidKind::Pit)
+                .map(|s| DestinationId::Solid(s.id)),
+        )
+        .collect()
+}
+
+/// The steepest grade every truck class can drive, which is what a road is
+/// judged against.
+pub(crate) fn max_grade(trucks: &crate::model::schedule::TruckFleetConfig) -> f64 {
+    trucks.classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1)
 }

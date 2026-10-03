@@ -5,6 +5,7 @@ pub(crate) mod events; // Handles window events
 pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod geophysics_web;
+pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
@@ -18,6 +19,7 @@ pub(crate) mod schedule_solve; // One schedule run: validation, the hourly dispa
 pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, run inside the solver process
 #[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
 pub(crate) mod solver_process; // The schedule solve in a child process, so a native fault ends one run, not the app
+pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -447,6 +449,9 @@ pub(crate) struct App<'a> {
     /// The Schedule Setup pipeline's state for the active project; see
     /// [`crate::app::schedule_pipeline`]. `None` until a project is open.
     pub(crate) schedule_pipeline: Option<crate::app::schedule_pipeline::SchedulePipeline>,
+    /// The Haulage Setup pipeline's state for the active project; see
+    /// [`crate::app::haulage_pipeline`]. `None` until a project is open.
+    pub(crate) haulage_pipeline: Option<crate::app::haulage_pipeline::HaulagePipeline>,
     /// The step a Run Step started from, so the step list moves on to the
     /// next one once it succeeds. Cleared when that step settles either way.
     pub(crate) planning_advance_after: Option<crate::ui::state::SolidsStep>,
@@ -498,6 +503,11 @@ pub(crate) struct App<'a> {
     /// When the settled planning inputs are due a run, so the event loop
     /// wakes for it with no further input.
     pub(crate) planning_auto_deadline: Option<Instant>,
+    /// The same three for the Haulage pipeline's Auto; see
+    /// [`Self::auto_run_haulage`].
+    pub(crate) haulage_auto_attempted: Option<[u64; crate::ui::state::HaulageStep::ALL.len()]>,
+    pub(crate) haulage_auto_settle: Option<([u64; crate::ui::state::HaulageStep::ALL.len()], Instant)>,
+    pub(crate) haulage_auto_deadline: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -634,6 +644,7 @@ impl<'a> Default for App<'a> {
             dig_block_identities: Default::default(),
             planning_pipeline: None,
             schedule_pipeline: None,
+            haulage_pipeline: None,
             planning_advance_after: None,
             schedule_advance_after: None,
             planning_entry_pending: false,
@@ -653,6 +664,9 @@ impl<'a> Default for App<'a> {
             planning_auto_attempted: None,
             planning_auto_settle: None,
             planning_auto_deadline: None,
+            haulage_auto_attempted: None,
+            haulage_auto_settle: None,
+            haulage_auto_deadline: None,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -2352,6 +2366,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.planning_auto_deadline = None;
             self.redraw_requested = true;
         }
+        if self.haulage_auto_deadline.is_some_and(|deadline| deadline <= now) {
+            self.haulage_auto_deadline = None;
+            self.redraw_requested = true;
+        }
         if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
             self.slice_surface_retry_deadline = None;
             if let Some(graphics) = self.graphics.as_ref() {
@@ -2391,6 +2409,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(resize_settle_deadline)
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
+            .chain(self.haulage_auto_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));

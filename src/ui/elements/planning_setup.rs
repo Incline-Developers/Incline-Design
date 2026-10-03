@@ -52,48 +52,72 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: Plan
     match page {
         PlanningPage::Solids => draw_solids_steps(ui, editor, commands),
         PlanningPage::Schedule => striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor, commands)),
-        PlanningPage::Haulage => striped_list(ui, |ui| draw_haulage_steps(ui, editor)),
+        PlanningPage::Haulage => striped_list(ui, |ui| draw_haulage_steps(ui, editor, commands)),
     }
 }
 
-/// Haulage Setup's steps. The road network has nothing to run; truck classes
-/// carry the Schedule pipeline's own check of them.
-fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState) {
-    use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
-    let mut step = editor.haulage_setup_step;
-    for entry in HaulageStep::ALL {
-        let (state, diagnostics) = match entry {
-            HaulageStep::Network => (StageState::Complete, &[][..]),
-            HaulageStep::TruckClasses => {
-                let status = &editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()];
-                (status.state, &status.diagnostics[..])
+/// Schedule's Haulage step: where each Haulage step stands, each opening its
+/// own page. The steps are set up there; this pipeline only waits on them.
+fn draw_haulage_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
+    use crate::ui::{state::HaulageStep, widgets::data_grid::grid_columns_row};
+    const FRACTIONS: [f32; 2] = [0.55, 0.45];
+    let columns = [(tr!("planning-step"), FRACTIONS[0]), (tr!("planning-status"), FRACTIONS[1])];
+    DataGrid::new("schedule_haulage_steps", rect, &tr!("planning-page-haulage"))
+        .columns(&columns)
+        .show(ui, |ui| {
+            for step in HaulageStep::ALL {
+                let state = editor.haulage_stages[step.index()].state.label();
+                let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
+                if response.on_hover_text(tr!("schedule-haulage-open")).clicked() {
+                    editor.planning_page = crate::ui::state::PlanningPage::Haulage;
+                    editor.haulage_subpage = crate::ui::state::PlanningSubpage::Setup;
+                    editor.haulage_setup_step = step;
+                }
             }
-        };
+        });
+}
+
+/// Haulage Setup's steps, marked from the Haulage pipeline.
+fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::ui::state::HaulageStep;
+    let mut step = editor.haulage_setup_step;
+    let mut markers = Vec::with_capacity(HaulageStep::ALL.len());
+    for entry in HaulageStep::ALL {
+        let status = &editor.haulage_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            let mut response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
-                .leading_icon(StepBadge::of(state, diagnostics).icon(), egui::Color32::WHITE)
+            // Truck Classes with no classes is grey, not amber: its note says
+            // what is missing, and nothing has gone wrong. Road Network always
+            // has its settings, and no roads is fine - destinations then haul
+            // their fixed distances.
+            let empty = entry == HaulageStep::TruckClasses
+                && status.state == crate::app::planning_pipeline::StageState::Complete
+                && status.last_success.as_ref().is_some_and(|run| run.entities == 0);
+            let badge = if empty { StepBadge::NotRun } else { StepBadge::of(status.state, &status.diagnostics) };
+            let entry_response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
+                .leading_icon(badge.icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == entry)
-                .show(ui)
-                .response;
-            if entry == HaulageStep::TruckClasses {
-                let status = &editor.schedule_stages[crate::ui::state::ScheduleStep::TruckClasses.index()];
-                response = response.on_hover_ui(|ui| {
-                    stage_tooltip_parts(
-                        ui,
-                        status.state,
-                        status.blocked_by.map(crate::ui::state::ScheduleStep::label),
-                        status.message.as_deref(),
-                        &status.diagnostics,
-                    );
-                });
+                .show(ui);
+            if let Some(rect) = entry_response.icon_rect {
+                markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
+            let response = entry_response.response.on_hover_ui(|ui| {
+                stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
+            });
             if response.clicked() {
                 step = entry;
             }
+            draw_stage_menu(
+                &response,
+                entry.label(),
+                editor.haulage_run_active,
+                [UiCommand::RunHaulageStage(entry), UiCommand::RunAllHaulageStages, UiCommand::CancelHaulageRun],
+                commands,
+            );
         });
     }
+    paint_step_links(ui, &markers);
     editor.haulage_setup_step = step;
 }
 
@@ -118,7 +142,13 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 if response.clicked() {
                     step = entry;
                 }
-                draw_stage_menu(&response, entry, editor.planning_run_active, commands);
+                draw_stage_menu(
+                    &response,
+                    entry.label(),
+                    editor.planning_run_active,
+                    [UiCommand::RunPlanningStage(entry), UiCommand::RunAllPlanningStages, UiCommand::CancelPlanningRun],
+                    commands,
+                );
             });
         }
         paint_step_links(ui, &markers);
@@ -129,8 +159,8 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
 /// Join consecutive step badges with a line showing how far a run reached.
 ///
 /// Painted after all the rows so their backgrounds cannot cover it. Green
-/// reaches the first red or yellow badge. Red then reaches the first yellow
-/// badge, where the connecting line stops.
+/// joins complete steps; a failed step's red line reaches the step after it,
+/// which it blocks, and stops there.
 pub(crate) fn paint_step_links(ui: &egui::Ui, markers: &[(egui::Rect, crate::app::planning_pipeline::StageState)]) {
     use crate::app::planning_pipeline::StageState;
 
@@ -138,8 +168,8 @@ pub(crate) fn paint_step_links(ui: &egui::Ui, markers: &[(egui::Rect, crate::app
     for pair in markers.windows(2) {
         let (previous, state) = pair[0];
         let (next, _) = pair[1];
-        failed |= matches!(state, StageState::Failed | StageState::Blocked);
-        if !matches!(state, StageState::Complete | StageState::Failed | StageState::Blocked) {
+        failed |= state == StageState::Failed;
+        if !matches!(state, StageState::Complete | StageState::Failed) {
             break;
         }
         let color = if failed {
@@ -199,41 +229,68 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
     action
 }
 
+/// One pipeline's run controls: its buttons, Auto where the pipeline has it,
+/// and its progress, with `hover` saying where it stands.
+fn run_header(
+    ui: &mut egui::Ui,
+    salt: &'static str,
+    running: bool,
+    run_step: bool,
+    auto: Option<&mut bool>,
+    (done, total): (usize, usize),
+    hover: impl FnOnce(&mut egui::Ui),
+) -> Option<RunAction> {
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let action = draw_run_buttons(ui, salt, running, run_step);
+        if let Some(auto) = auto {
+            ui.add_space(10.0);
+            ui.add(crate::ui::widgets::toggle::Toggle::new(auto, tr!("planning-auto")))
+                .on_hover_text(tr!("planning-auto-note"));
+        }
+        let label = tr!("stage-progress-short", done = done, total = total);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::ui::widgets::progress::draw_planning_progress(ui, &label, done as f32 / total as f32);
+        })
+        .response
+        .on_hover_ui(hover);
+        action
+    })
+    .inner
+}
+
 /// Contents of the separate run-control island at the top of the sidebar.
 pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::app::planning_pipeline::StageState;
 
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let step = editor.planning_solids_step;
-        match draw_run_buttons(ui, "planning_run", editor.planning_run_active, !editor.is_solids_view()) {
-            Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
-            Some(RunAction::All) => commands.push(UiCommand::RunAllPlanningStages),
-            Some(RunAction::Cancel) => commands.push(UiCommand::CancelPlanningRun),
-            None => {}
-        }
-        ui.add_space(10.0);
-        ui.add(crate::ui::widgets::toggle::Toggle::new(&mut editor.planning_auto_run, tr!("planning-auto")))
-            .on_hover_text(tr!("planning-auto-note"));
-        let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-        let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
-        let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
-        let status = &editor.planning_stages[reported.index()];
-        let label = tr!("stage-progress-short", done = completed, total = SolidsStep::ALL.len());
-        let fraction = completed as f32 / SolidsStep::ALL.len() as f32;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, fraction);
-        })
-        .response
-        .on_hover_ui(|ui| {
+    let step = editor.planning_solids_step;
+    let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
+    let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
+    let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
+    let status = editor.planning_stages[reported.index()].clone();
+    let snapshot = editor.planning_snapshot_status.clone();
+    let action = run_header(
+        ui,
+        "planning_run",
+        editor.planning_run_active,
+        !editor.is_solids_view(),
+        Some(&mut editor.planning_auto_run),
+        (completed, SolidsStep::ALL.len()),
+        |ui| {
             ui.label(reported.label());
-            stage_tooltip(ui, status);
-            if !editor.planning_snapshot_status.is_empty() {
+            stage_tooltip(ui, &status);
+            if !snapshot.is_empty() {
                 ui.separator();
-                ui.label(&editor.planning_snapshot_status);
+                ui.label(&snapshot);
             }
-        });
-    });
+        },
+    );
+    match action {
+        Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
+        Some(RunAction::All) => commands.push(UiCommand::RunAllPlanningStages),
+        Some(RunAction::Cancel) => commands.push(UiCommand::CancelPlanningRun),
+        None => {}
+    }
 }
 
 /// The Schedule Setup page's run controls: the same buttons and the same
@@ -246,40 +303,61 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
 pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     use crate::{app::planning_pipeline::StageState, ui::state::ScheduleStep};
 
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let step = editor.schedule_setup_step;
-        match draw_run_buttons(ui, "schedule_run", editor.schedule_run_active, true) {
-            Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
-            Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
-            Some(RunAction::Cancel) => commands.push(UiCommand::CancelScheduleRun),
-            None => {}
+    let step = editor.schedule_setup_step;
+    let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
+    let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
+    let reported = active.unwrap_or(step);
+    let status = &editor.schedule_stages[reported.index()];
+    let action = run_header(ui, "schedule_run", editor.schedule_run_active, true, None, (completed, ScheduleStep::ALL.len()), |ui| {
+        ui.label(reported.label());
+        stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
+        // What the Gantt would be told if it asked to calculate now,
+        // where the buttons that change that answer are.
+        if !editor.schedule_calculation_status.is_empty() {
+            ui.separator();
+            ui.label(&editor.schedule_calculation_status);
         }
-        let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-        let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
-        let reported = active.unwrap_or(step);
-        let status = &editor.schedule_stages[reported.index()];
-        let label = tr!("stage-progress-short", done = completed, total = ScheduleStep::ALL.len());
-        let fraction = completed as f32 / ScheduleStep::ALL.len() as f32;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, fraction);
-        })
-        .response
-        .on_hover_ui(|ui| {
-            ui.label(reported.label());
-            stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
-            // What the Gantt would be told if it asked to calculate now,
-            // where the buttons that change that answer are.
-            if !editor.schedule_calculation_status.is_empty() {
-                ui.separator();
-                ui.label(&editor.schedule_calculation_status);
-            }
-        });
     });
+    match action {
+        Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
+        Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
+        Some(RunAction::Cancel) => commands.push(UiCommand::CancelScheduleRun),
+        None => {}
+    }
 }
 
-/// What a step's badge says. Grey has not run yet, amber ran but needs a
-/// look - edited since, or done with warnings - and red cannot finish.
+/// The Haulage Setup page's run controls, over the Haulage pipeline.
+pub(crate) fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
+
+    let step = editor.haulage_setup_step;
+    let completed = editor.haulage_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
+    let active = HaulageStep::ALL.into_iter().find(|step| editor.haulage_stages[step.index()].state == StageState::Running);
+    let reported = active.unwrap_or(step);
+    let status = editor.haulage_stages[reported.index()].clone();
+    let action = run_header(
+        ui,
+        "haulage_run",
+        editor.haulage_run_active,
+        true,
+        Some(&mut editor.haulage_auto_run),
+        (completed, HaulageStep::ALL.len()),
+        |ui| {
+            ui.label(reported.label());
+            stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
+        },
+    );
+    match action {
+        Some(RunAction::Step) => commands.push(UiCommand::RunHaulageStage(step)),
+        Some(RunAction::All) => commands.push(UiCommand::RunAllHaulageStages),
+        Some(RunAction::Cancel) => commands.push(UiCommand::CancelHaulageRun),
+        None => {}
+    }
+}
+
+/// What a step's badge says. Grey has not run yet, or is waiting on an
+/// earlier step; amber ran but needs a look - edited since, or done with
+/// warnings - and red ran and cannot finish.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepBadge {
     NotRun,
@@ -296,8 +374,10 @@ impl StepBadge {
             StageState::Complete if diagnostics.iter().any(|diagnostic| !diagnostic.blocking) => Self::Warning,
             StageState::Complete => Self::Complete,
             StageState::Stale | StageState::Cancelled => Self::Stale,
-            StageState::Failed | StageState::Blocked => Self::Error,
-            StageState::NotRun | StageState::Queued | StageState::Running => Self::NotRun,
+            StageState::Failed => Self::Error,
+            // Blocked is waiting on an earlier step rather than wrong itself:
+            // that step carries the red.
+            StageState::NotRun | StageState::Blocked | StageState::Queued | StageState::Running => Self::NotRun,
         }
     }
 
@@ -332,10 +412,12 @@ pub(crate) fn stage_tooltip_parts(
     if state == crate::app::planning_pipeline::StageState::Stale {
         ui.label(tr!("stage-stale-hint"));
     }
-    if let Some(blocker) = blocked_by {
-        ui.label(tr!("stage-blocked-by", stage = blocker));
+    // A blocked stage's message is usually this same line; it is said once.
+    let blocker = blocked_by.map(|stage| tr!("stage-blocked-by", stage = stage));
+    if let Some(blocker) = &blocker {
+        ui.label(blocker);
     }
-    if let Some(message) = message {
+    if let Some(message) = message.filter(|message| blocker.as_deref() != Some(*message)) {
         ui.label(message);
     }
     if diagnostics.is_empty() {
@@ -356,18 +438,19 @@ pub(crate) fn stage_tooltip_parts(
     }
 }
 
-fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, running: bool, commands: &mut Vec<UiCommand>) {
-    context_menu_popup(response, stage.label(), |ui| {
+/// A step's Run Step, Run All and Cancel, for whichever pipeline it is in.
+pub(crate) fn draw_stage_menu(response: &egui::Response, label: String, running: bool, [step, all, cancel]: [UiCommand; 3], commands: &mut Vec<UiCommand>) {
+    context_menu_popup(response, label, |ui| {
         if ContextMenuAction::new(tr!("stage-run-step")).enabled(!running).show(ui).clicked() {
-            commands.push(UiCommand::RunPlanningStage(stage));
+            commands.push(step);
             ui.close();
         }
         if ContextMenuAction::new(tr!("stage-run-all")).enabled(!running).show(ui).clicked() {
-            commands.push(UiCommand::RunAllPlanningStages);
+            commands.push(all);
             ui.close();
         }
         if ContextMenuAction::new(tr!("stage-cancel")).enabled(running).show(ui).clicked() {
-            commands.push(UiCommand::CancelPlanningRun);
+            commands.push(cancel);
             ui.close();
         }
     });
@@ -1616,6 +1699,13 @@ fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: 
             island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
                 super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
             });
+            // The class's figures above, its grade speeds below, with the
+            // split between them the user's.
+            let (bands, seam) = stacked_lower(ui, "schedule_truck_grade_speeds_island", |ui, rect| {
+                super::schedule_trucking::draw_grade_speeds(ui, rect, editor, &plan, session, commands)
+            });
+            layout.regions.push(bands);
+            layout.grips.push(seam);
             central_island(ui, layout, |ui, rect| {
                 super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
             });
@@ -1712,13 +1802,8 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_destinations::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
             });
         }
-        ScheduleStep::TruckClasses => {
-            island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
-                super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
-            });
-            central_island(ui, layout, |ui, rect| {
-                super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
-            });
+        ScheduleStep::Haulage => {
+            central_island(ui, layout, |ui, rect| draw_haulage_summary(ui, rect, editor));
         }
         ScheduleStep::TruckingRules => {
             island(ui, layout, "schedule_truck_rule_list_island", 380.0, |ui, rect| {

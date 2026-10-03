@@ -37,7 +37,10 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::{
-    app::planning_pipeline::{StageDiagnostic, StageNotReady, StageOutcome, StageState, StageStatus, StageSummary},
+    app::{
+        planning_pipeline::{StageDiagnostic, StageNotReady, StageOutcome, StageState},
+        step_pipeline::{Obsolete, PipelineStep, RunTurn, StepPipeline},
+    },
     i18n::tr,
     model::{ReserveAggregation, ReserveFieldId},
     ui::state::{ScheduleRepairTarget, ScheduleStep},
@@ -98,164 +101,36 @@ impl ScheduleNotReady {
     }
 }
 
-/// One turn of the runner, kept free of jobs and of the app so the scheduling
-/// half can be driven straight through in a test.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ScheduleRunStep {
-    Idle,
-    Start(ScheduleStep),
-    /// Already current from an earlier run; take the next one.
-    Skip,
-    Evaluate(ScheduleStep),
-}
-
-/// Why a settled outcome was thrown away instead of published.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Obsolete {
-    /// It belongs to a run that has since been superseded or cancelled.
-    Superseded,
-    /// It belongs to a step that is no longer the running one.
-    NotRunning,
-}
-
-/// The Schedule Setup pipeline's state for one open project.
+/// The Schedule Setup pipeline's state for one open project: the shared step
+/// runner, and the result of the last run that reached the end.
 #[derive(Debug)]
 pub(crate) struct SchedulePipeline {
-    /// Which project this belongs to; a different one starts over.
-    pub(crate) runtime: u32,
-    steps: [StageStatus; ScheduleStep::ALL.len()],
-    fingerprints: [u64; ScheduleStep::ALL.len()],
-    /// Increments on every Run to Step or Run All.
-    generation: u64,
-    queue: Vec<ScheduleStep>,
-    running: Option<ScheduleStep>,
+    steps: StepPipeline<ScheduleStep>,
     /// What the last completed run captured. Kept across edits and across
     /// cancellations - it is marked stale by [`Self::readiness`], never
     /// deleted, so the page can say what was true when it was last checked.
     result: Option<ScheduleRunResult>,
 }
 
+impl std::ops::Deref for SchedulePipeline {
+    type Target = StepPipeline<ScheduleStep>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.steps
+    }
+}
+
+impl std::ops::DerefMut for SchedulePipeline {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.steps
+    }
+}
+
 impl SchedulePipeline {
     pub(crate) fn new(runtime: u32) -> Self {
         Self {
-            runtime,
-            steps: Default::default(),
-            fingerprints: [0; ScheduleStep::ALL.len()],
-            generation: 0,
-            queue: Vec::new(),
-            running: None,
+            steps: StepPipeline::new(runtime),
             result: None,
-        }
-    }
-
-    pub(crate) fn status(&self, step: ScheduleStep) -> &StageStatus {
-        &self.steps[step.index()]
-    }
-
-    fn status_mut(&mut self, step: ScheduleStep) -> &mut StageStatus {
-        &mut self.steps[step.index()]
-    }
-
-    pub(crate) fn is_running(&self) -> bool {
-        self.running.is_some() || !self.queue.is_empty()
-    }
-
-    pub(crate) fn step_inputs_match(&self, step: ScheduleStep) -> bool {
-        self.steps[step.index()].completed_inputs == Some(self.fingerprints[step.index()])
-    }
-
-    /// The step that has to run before `step` can, if any.
-    pub(crate) fn blocked_by(&self, step: ScheduleStep) -> Option<ScheduleStep> {
-        ScheduleStep::ALL
-            .into_iter()
-            .take(step.index())
-            .find(|earlier| !self.steps[earlier.index()].state.is_current())
-    }
-
-    /// Begin a fresh run through the selected step, retiring all previous
-    /// statuses. The held result is left alone: it is retired by the run that
-    /// replaces it, not by the one that starts.
-    fn restart_through(&mut self, step: ScheduleStep) -> bool {
-        if self.is_running() {
-            return false;
-        }
-        self.steps = Default::default();
-        self.generation += 1;
-        self.queue = ScheduleStep::ALL.into_iter().take(step.index() + 1).collect();
-        for queued in self.queue.clone() {
-            self.status_mut(queued).state = StageState::Queued;
-        }
-        true
-    }
-
-    pub(crate) fn next_step(&mut self) -> ScheduleRunStep {
-        if let Some(step) = self.running {
-            return ScheduleRunStep::Evaluate(step);
-        }
-        let Some(next) = (!self.queue.is_empty()).then(|| self.queue.remove(0)) else {
-            return ScheduleRunStep::Idle;
-        };
-        if self.status(next).state.is_current() && self.step_inputs_match(next) {
-            return ScheduleRunStep::Skip;
-        }
-        ScheduleRunStep::Start(next)
-    }
-
-    pub(crate) fn start(&mut self, step: ScheduleStep) {
-        self.running = Some(step);
-        self.status_mut(step).state = StageState::Running;
-    }
-
-    /// The run a step that is starting now belongs to, to be handed back to
-    /// [`Self::settle`] with that step's outcome.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// Apply one step's outcome, and say whether the run should stop here.
-    ///
-    /// `generation` is the run the work was started under. A step that
-    /// finishes after its run was superseded or cancelled has computed against
-    /// inputs the project has moved on from, so its outcome is discarded with
-    /// the reason rather than published over a newer answer.
-    pub(crate) fn settle(&mut self, step: ScheduleStep, outcome: StageOutcome, generation: u64) -> Result<bool, Obsolete> {
-        if generation != self.generation {
-            return Err(Obsolete::Superseded);
-        }
-        if self.running != Some(step) {
-            return Err(Obsolete::NotRunning);
-        }
-        let fingerprint = self.fingerprints[step.index()];
-        match outcome {
-            StageOutcome::Working { message } => {
-                let status = self.status_mut(step);
-                status.state = StageState::Running;
-                status.message = message;
-                Ok(true)
-            }
-            StageOutcome::Settled { diagnostics, entities } => {
-                let blocking = diagnostics.iter().filter(|entry| entry.blocking).count();
-                let status = self.status_mut(step);
-                status.diagnostics = diagnostics;
-                status.run_generation = generation;
-                status.message = None;
-                if blocking > 0 {
-                    status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking.to_string()));
-                    self.running = None;
-                    for later in std::mem::take(&mut self.queue) {
-                        let status = self.status_mut(later);
-                        status.state = StageState::Blocked;
-                        status.message = Some(tr!("stage-blocked-by", stage = step.label()));
-                    }
-                    return Ok(true);
-                }
-                status.state = StageState::Complete;
-                status.completed_inputs = Some(fingerprint);
-                status.last_success = Some(StageSummary { entities, generation });
-                self.running = None;
-                Ok(false)
-            }
         }
     }
 
@@ -265,7 +140,7 @@ impl SchedulePipeline {
     /// them: a result carrying another run's number would describe inputs it
     /// never saw.
     pub(crate) fn publish(&mut self, result: ScheduleRunResult) -> Result<(), Obsolete> {
-        if result.run != self.generation {
+        if result.run != self.generation() {
             return Err(Obsolete::Superseded);
         }
         self.result = Some(result);
@@ -300,56 +175,24 @@ impl SchedulePipeline {
             .filter(|result| result.inputs.fleet_revision == fingerprints[ScheduleStep::Readiness.index()])
             .ok_or(ScheduleNotReady::NotRun(ScheduleStep::Readiness))
     }
-
-    /// Mark this step and every step after it as no longer current.
-    ///
-    /// Returns whether this stopped a run that was in flight.
-    fn invalidate_from(&mut self, step: ScheduleStep) -> bool {
-        // A queued step has not read anything yet: it will see these inputs
-        // when its turn comes. Only a published result, or one being computed
-        // right now, can end up describing inputs it never saw.
-        let stopped = self.running.is_some_and(|running| running.index() >= step.index());
-        for later in ScheduleStep::ALL.into_iter().skip(step.index()) {
-            let status = self.status_mut(later);
-            match status.state {
-                // A failure is a finding about inputs that have now changed:
-                // it may no longer hold, so it is out of date like a success
-                // would be, and the next run says whether it still does.
-                StageState::Complete | StageState::Failed | StageState::Blocked => status.state = StageState::Stale,
-                StageState::Running => status.state = StageState::Cancelled,
-                StageState::Queued if stopped => status.state = StageState::Cancelled,
-                _ => {}
-            }
-        }
-        if stopped {
-            self.queue.clear();
-            self.running = None;
-        }
-        stopped
-    }
-
-    /// Stop whatever is queued or running. The held result is untouched: a
-    /// cancelled run publishes nothing, and takes nothing away either.
-    fn cancel(&mut self) {
-        let affected: Vec<_> = std::mem::take(&mut self.queue).into_iter().chain(self.running.take()).collect();
-        for step in affected {
-            let status = self.status_mut(step);
-            if status.state.is_busy() {
-                status.state = StageState::Cancelled;
-                status.message = Some(tr!("stage-state-cancelled"));
-            }
-        }
-        // A run stopped part way through leaves its earlier steps complete but
-        // the run itself unfinished, so the next result cannot be allowed to
-        // arrive under this number.
-        self.generation += 1;
-    }
 }
 
 fn hash_of(value: impl Hash) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+impl PipelineStep for ScheduleStep {
+    const ALL: &'static [Self] = &ScheduleStep::ALL;
+
+    fn index(self) -> usize {
+        ScheduleStep::index(self)
+    }
+
+    fn label(self) -> String {
+        ScheduleStep::label(self)
+    }
 }
 
 impl crate::app::App<'_> {
@@ -385,39 +228,20 @@ impl crate::app::App<'_> {
             self.schedule_calculation = None;
         }
         let fingerprints = self.schedule_fingerprints();
-        let mut earliest_change = None;
-        {
-            let pipeline = self.schedule_pipeline.as_mut().expect("just ensured");
-            for step in ScheduleStep::ALL {
-                if pipeline.fingerprints[step.index()] != fingerprints[step.index()] {
-                    earliest_change = Some(earliest_change.map_or(step, |first: ScheduleStep| if step.index() < first.index() { step } else { first }));
-                }
-            }
-            pipeline.fingerprints = fingerprints;
-        }
+        let pipeline = self.schedule_pipeline.as_mut().expect("just ensured");
+        let earliest_change = pipeline.take_fingerprints(&fingerprints);
         // A change that reaches only Readiness is the Solids run moving on.
         // A running Readiness waits on that run and re-reads it every frame,
         // and settles against the inputs current then, so it is not stopped:
         // stopping it reported an edit that nobody made each time a project
         // opened.
-        let pipeline = self.schedule_pipeline.as_ref().expect("just ensured");
-        let earliest_change = earliest_change.filter(|&step| !(step == ScheduleStep::Readiness && pipeline.running == Some(ScheduleStep::Readiness)));
-        if let Some(step) = earliest_change {
-            let stopped = self.schedule_pipeline.as_mut().expect("just ensured").invalidate_from(step);
-            if stopped {
-                crate::userspace_warn!("{}", tr!("schedule-run-stopped-by-edit", step = step.label()));
-            }
-        }
+        let earliest_change = earliest_change.filter(|&step| !(step == ScheduleStep::Readiness && pipeline.running() == Some(ScheduleStep::Readiness)));
+        if let Some(step) = earliest_change
+            && pipeline.invalidate_from(step)
         {
-            let pipeline = self.schedule_pipeline.as_mut().expect("just ensured");
-            for step in ScheduleStep::ALL {
-                let current = pipeline.fingerprints[step.index()];
-                let status = pipeline.status_mut(step);
-                if status.state == StageState::Complete && status.completed_inputs != Some(current) {
-                    status.state = StageState::Stale;
-                }
-            }
+            crate::userspace_warn!("{}", tr!("schedule-run-stopped-by-edit", step = step.label()));
         }
+        self.schedule_pipeline.as_mut().expect("just ensured").mark_stale();
         self.advance_schedule_run();
         // After the pipeline, never before it: a run in flight is checked
         // against the gate as it stands now, and this is where "now" is
@@ -793,12 +617,11 @@ impl crate::app::App<'_> {
             Err(reason) => tr!("schedule-calculation-blocked", reason = reason.describe()),
         };
         // As on Solids: a step run on its own that succeeds moves the list on.
-        // Truck classes are listed on the Haulage page, not in this list.
         if let Some(step) = self.schedule_advance_after
             && !matches!(views.get(step.index()).map(|view| view.state), Some(StageState::Queued | StageState::Running))
         {
             self.schedule_advance_after = None;
-            let next = ScheduleStep::ALL.into_iter().skip(step.index() + 1).find(|next| *next != ScheduleStep::TruckClasses);
+            let next = ScheduleStep::ALL.into_iter().nth(step.index() + 1);
             if let (Some(StageState::Complete), Some(next)) = (views.get(step.index()).map(|view| view.state), next)
                 && self.editor.schedule_setup_step == step
             {
@@ -848,10 +671,10 @@ impl crate::app::App<'_> {
         for _ in 0..ScheduleStep::ALL.len() * 2 + 1 {
             let Some(pipeline) = self.schedule_pipeline.as_mut() else { return };
             match pipeline.next_step() {
-                ScheduleRunStep::Idle => return,
-                ScheduleRunStep::Skip => continue,
-                ScheduleRunStep::Start(step) => pipeline.start(step),
-                ScheduleRunStep::Evaluate(step) => {
+                RunTurn::Idle => return,
+                RunTurn::Skip => continue,
+                RunTurn::Start(step) => pipeline.start(step),
+                RunTurn::Evaluate(step) => {
                     let generation = pipeline.generation();
                     let outcome = self.evaluate_schedule_step(step);
                     let Some(pipeline) = self.schedule_pipeline.as_mut() else { return };
@@ -922,7 +745,7 @@ impl crate::app::App<'_> {
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
             ScheduleStep::Destinations => self.evaluate_destination_rules(),
-            ScheduleStep::TruckClasses => self.evaluate_truck_classes(),
+            ScheduleStep::Haulage => self.evaluate_schedule_haulage(),
             ScheduleStep::TruckingRules => self.evaluate_trucking_rules(),
             ScheduleStep::Cashflow => self.evaluate_cashflow(),
             ScheduleStep::Readiness => self.evaluate_schedule_readiness(),
@@ -1194,52 +1017,6 @@ impl crate::app::App<'_> {
         StageOutcome::Settled {
             diagnostics,
             entities: crushers.len(),
-        }
-    }
-
-    /// The truck classes and their fleet calendars.
-    ///
-    /// Setup reports configuration; horizon-specific capture validates matching
-    /// truck rules and coefficients. Empty configuration is not unrestricted haul.
-    fn evaluate_truck_classes(&self) -> StageOutcome {
-        let Some(document) = self.workspace.active_document() else {
-            return StageOutcome::Settled {
-                diagnostics: Vec::new(),
-                entities: 0,
-            };
-        };
-        let trucks = document.schedule().trucks();
-        let mut diagnostics = Vec::new();
-        if trucks.classes.is_empty() {
-            diagnostics.push(StageDiagnostic {
-                entity: None,
-                message: tr!("truck-stage-no-classes"),
-                blocking: false,
-            });
-        }
-        for class in &trucks.classes {
-            if let Err(error) = class.calendar.validate() {
-                diagnostics.push(StageDiagnostic {
-                    entity: Some(class.name.clone()),
-                    message: error.message(),
-                    blocking: false,
-                });
-                continue;
-            }
-            // A rostered fleet of zero is a legitimate answer - a class on site
-            // next year - and is said out loud rather than treated as a fault,
-            // because it supplies no capacity at all.
-            if class.calendar.default_units == 0 && class.calendar.periods.values().all(|value| value.units.unwrap_or(0) == 0) {
-                diagnostics.push(StageDiagnostic {
-                    entity: Some(class.name.clone()),
-                    message: tr!("truck-stage-zero-units", class = class.name.clone()),
-                    blocking: false,
-                });
-            }
-        }
-        StageOutcome::Settled {
-            diagnostics,
-            entities: trucks.classes.len(),
         }
     }
 

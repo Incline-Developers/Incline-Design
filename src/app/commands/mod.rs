@@ -149,6 +149,8 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllPlanningStages
                 | UiCommand::RunScheduleStage(_)
                 | UiCommand::RunAllScheduleStages
+                | UiCommand::RunHaulageStage(_)
+                | UiCommand::RunAllHaulageStages
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunAllSchedulePeriods
                 | UiCommand::ImproveSchedule
@@ -551,6 +553,18 @@ impl<'a> App<'a> {
             }
             UiCommand::CancelScheduleRun => {
                 self.cancel_schedule_run();
+                Ok(())
+            }
+            UiCommand::RunHaulageStage(step) => {
+                self.run_haulage_step(step);
+                Ok(())
+            }
+            UiCommand::RunAllHaulageStages => {
+                self.run_all_haulage_steps();
+                Ok(())
+            }
+            UiCommand::CancelHaulageRun => {
+                self.cancel_haulage_run();
                 Ok(())
             }
             UiCommand::UpdateSolid { solid, edit } => {

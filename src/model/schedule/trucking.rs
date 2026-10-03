@@ -536,7 +536,7 @@ impl TruckFleetConfig {
             payload_t: DEFAULT_PAYLOAD_T,
             loaded_speed_kph: DEFAULT_LOADED_KPH,
             unloaded_speed_kph: DEFAULT_UNLOADED_KPH,
-            grade_speeds: generic_grade_speeds(),
+            grade_speeds: default_grade_speeds(),
             maximum_speed_kph: 50.0,
             maximum_grade: 0.1,
             dump_time_s: 60.0,
@@ -851,6 +851,15 @@ impl TruckFleetConfig {
     }
 
     pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        self.hash_classes(hasher);
+        for rule in &self.rules {
+            rule.hash_content(hasher);
+        }
+    }
+
+    /// The classes alone: what the Haulage pipeline checks, leaving the rules
+    /// to the Schedule pipeline.
+    pub(crate) fn hash_classes<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use std::hash::Hash;
         for class in &self.classes {
             class.id.hash(hasher);
@@ -865,9 +874,6 @@ impl TruckFleetConfig {
             for row in &class.grade_speeds {
                 (row.from_grade.to_bits(), row.loaded_kph.to_bits(), row.empty_kph.to_bits()).hash(hasher);
             }
-        }
-        for rule in &self.rules {
-            rule.hash_content(hasher);
         }
     }
 
@@ -1027,15 +1033,31 @@ pub(crate) fn checked_distance(value: f64) -> ScheduleResult<f64> {
     checked_positive(value, ScheduleError::InvalidDistance)
 }
 
-/// Generic grade speed bands for a new class: placeholders a site replaces
-/// with its own figures.
-pub(crate) fn generic_grade_speeds() -> Vec<GradeSpeed> {
+/// Default grade speed bands for a new class, from a large haul truck's
+/// published curves at 398 t loaded and 165 t empty, on a road with 2%
+/// rolling resistance. Each band takes the speed at its starting grade.
+///
+/// Uphill and level bands are read off the rimpull curve. Downhill bands are
+/// the top speed of the highest gear whose standard retarding holds the
+/// effective grade (the grade less rolling resistance, scaled by weight for
+/// an empty truck); the steepest band is taken at 15%, the chart's limit.
+/// Speeds above 60 km/h are off both curves and held there; the class
+/// maximum caps them anyway.
+pub(crate) fn default_grade_speeds() -> Vec<GradeSpeed> {
     [
-        (-1.0, 15.0, 25.0),
-        (-0.06, 25.0, 35.0),
-        (-0.02, DEFAULT_LOADED_KPH, DEFAULT_UNLOADED_KPH),
-        (0.02, 20.0, 40.0),
-        (0.06, 11.0, 22.0),
+        (-1.0, 12.9, 23.8),
+        (-0.10, 17.4, 32.1),
+        (-0.08, 23.8, 43.6),
+        (-0.06, 32.1, 43.6),
+        (-0.04, 43.6, 60.0),
+        (-0.02, 60.0, 60.0),
+        (0.0, 57.0, 60.0),
+        (0.01, 41.0, 60.0),
+        (0.02, 32.0, 60.0),
+        (0.04, 22.0, 48.0),
+        (0.06, 17.0, 38.0),
+        (0.08, 14.0, 31.0),
+        (0.10, 10.0, 26.0),
     ]
     .into_iter()
     .map(|(from_grade, loaded_kph, empty_kph)| GradeSpeed {

@@ -58,6 +58,10 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
                     ui.add_space(4.0);
                     ui.add(super::toggle::Toggle::new(value, label));
                 }
+                if let Some((label, tooltip, clicked)) = extras.action {
+                    ui.add_space(4.0);
+                    *clicked |= ui.add(super::menu::MenuButton::new(label)).on_hover_text(tooltip).clicked();
+                }
             });
         });
         out = Some(content(ui));
@@ -75,6 +79,8 @@ struct TitleExtras<'a> {
     add: Option<(&'a str, &'a mut bool)>,
     /// A switch at the right, for a setting of the whole pane.
     toggle: Option<(&'a str, &'a mut bool)>,
+    /// A button at the right that acts on the whole pane, with its tooltip.
+    action: Option<(&'a str, &'a str, &'a mut bool)>,
 }
 
 /// One row in a [`DataGrid`].
@@ -440,15 +446,67 @@ pub(crate) fn grid_cell_number(ui: &mut egui::Ui, id: impl std::hash::Hash + std
         cell,
         egui::DragValue::new(value)
             .speed(0.1)
-            // No more decimals than the value has: 360, 12.5.
-            .custom_formatter(|value, _| {
-                let text = format!("{value:.4}");
-                text.trim_end_matches('0').trim_end_matches('.').to_owned()
-            })
+            .custom_formatter(|value, _| trimmed_number(value))
             .suffix(suffix)
             .update_while_editing(false),
     );
     super::menu::committed(&response)
+}
+
+/// No more decimals than the value has: 360, 12.5.
+fn trimmed_number(value: f64) -> String {
+    let text = format!("{value:.4}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// A number typed into one grid cell, drawn like a [`PropertyTable`] value:
+/// plain text with `unit` faint at the right. The text is held while the cell
+/// is being edited and read when it is left; returns true then, with `value`
+/// updated, if what was typed is a number.
+pub(crate) fn grid_cell_entry(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, cell: egui::Rect, value: &mut f64, unit: &str) -> bool {
+    let cell = cell.shrink2(egui::vec2(4.0, COLUMN_ROW_EXTRA / 2.0 + 1.0));
+    if !cell.is_positive() {
+        return false;
+    }
+    let mut text_rect = cell;
+    if !unit.is_empty() {
+        let galley = ui
+            .painter()
+            .layout_no_wrap(unit.to_owned(), egui::TextStyle::Body.resolve(ui.style()), ui.visuals().weak_text_color());
+        let left = (cell.right() - galley.size().x - 4.0).max(cell.left());
+        ui.painter()
+            .with_clip_rect(ui.clip_rect().intersect(cell))
+            .galley(egui::pos2(left, cell.center().y - galley.size().y * 0.5), galley, ui.visuals().weak_text_color());
+        text_rect.max.x = left - 4.0;
+    }
+    if !text_rect.is_positive() {
+        return false;
+    }
+    let id = egui::Id::new(id);
+    let shown = trimmed_number(*value);
+    let mut text = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(text_rect));
+    child.set_clip_rect(child.clip_rect().intersect(text_rect));
+    let response = child.put(
+        text_rect,
+        egui::TextEdit::singleline(&mut text)
+            .id(id.with("text"))
+            .vertical_align(egui::Align::Center)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
+            .desired_width(text_rect.width()),
+    );
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text.clone()));
+        return false;
+    }
+    ui.data_mut(|data| data.remove::<String>(id));
+    match text.trim().parse::<f64>() {
+        Ok(parsed) if response.lost_focus() && parsed.is_finite() && text != shown => {
+            *value = parsed;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// A value shown but not edited in one grid cell, greyed: one this grid
@@ -658,6 +716,13 @@ impl<'a> DataGrid<'a> {
         self
     }
 
+    /// A button at the right of the title strip that acts on everything in
+    /// the pane; `clicked` is set when it is pressed.
+    pub(crate) fn title_action(mut self, label: &'a str, tooltip: &'a str, clicked: &'a mut bool) -> Self {
+        self.extras.action = Some((label, tooltip, clicked));
+        self
+    }
+
     /// Pin a non-interactive header row above the scroll area.
     pub(crate) fn column_header(mut self, text: &'a str) -> Self {
         self.column_header = Some(text);
@@ -715,12 +780,18 @@ pub(crate) struct PropertyRows<'u> {
 }
 
 impl PropertyRows<'_> {
-    /// The bold "Property / Value" heading row.
+    /// The bold "Property / Value" heading row, as a [`DataGrid::columns`]
+    /// header reads.
     pub(crate) fn header(&mut self, key: &str, value: &str) {
         let (rect, split) = self.begin_row(true);
-        self.ui
-            .put(self.key_rect(rect, split, false), egui::Label::new(bold(key)).truncate().halign(egui::Align::Min));
-        self.ui.put(self.value_rect(rect, split), egui::Label::new(bold(value)).halign(egui::Align::Min));
+        let color = self.ui.visuals().text_color();
+        paint_cell_text(self.ui, Self::key_cell(rect, split), bold(key), color);
+        paint_cell_text(self.ui, Self::value_cell(rect, split), bold(value), color);
+    }
+
+    /// The key of an ordinary row, left-aligned in its cell.
+    fn paint_key(&self, rect: egui::Rect, split: f32, key: &str) {
+        paint_cell_text(self.ui, Self::key_cell(rect, split), egui::RichText::new(key), self.ui.visuals().text_color());
     }
 
     /// An editable key/value pair. `error`, when set, shows a red badge in the
@@ -746,125 +817,60 @@ impl PropertyRows<'_> {
         options: impl IntoIterator<Item = (T, String)>,
     ) -> egui::Response {
         let (rect, split) = self.begin_row(false);
-        self.ui.put(
-            self.key_rect(rect, split, false),
-            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
-        );
+        self.paint_key(rect, split, key);
         let value_rect = self.value_rect(rect, split);
         let mut changed = false;
-        let mut response = self
-            .ui
-            .scope_builder(egui::UiBuilder::new().max_rect(value_rect), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(value_rect));
-                // The combo is a button, and its natural height would overrun
-                // the row rule; the cell it sits in is the height it gets.
-                ui.spacing_mut().interact_size.y = value_rect.height();
-                egui::ComboBox::from_id_salt(id)
-                    .selected_text(selected_text)
-                    .width(value_rect.width())
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        for (option, text) in options {
-                            changed |= ui.selectable_value(value, option, text).changed();
-                        }
-                    })
-                    .response
+        // See [`Self::place`]: the row has already claimed this space.
+        let mut child = self.ui.new_child(egui::UiBuilder::new().max_rect(value_rect));
+        child.set_clip_rect(child.clip_rect().intersect(value_rect));
+        // The combo is a button, and its natural height would overrun the
+        // row rule; the cell it sits in is the height it gets.
+        child.spacing_mut().interact_size.y = value_rect.height();
+        let mut response = egui::ComboBox::from_id_salt(id)
+            .selected_text(selected_text)
+            .width(value_rect.width())
+            .truncate()
+            .show_ui(&mut child, |ui| {
+                for (option, text) in options {
+                    changed |= ui.selectable_value(value, option, text).changed();
+                }
             })
-            .inner;
+            .response;
         if changed {
             response.mark_changed();
         }
         response
     }
 
-    /// Three cells of a small table inside the property surface, styled as
-    /// its ordinary fields, with a trailing remove button when `removable`.
-    /// Returns the cells' responses and whether remove was pressed.
-    pub(crate) fn three_fields(&mut self, values: [&mut String; 3], removable: bool) -> ([egui::Response; 3], bool) {
-        let rect = self.begin_table_row(false);
-        let cells = Self::three_cells(self.ui, rect);
-        let mut responses = Vec::new();
-        for (cell, value) in cells.into_iter().zip(values) {
-            let cell = cell.shrink2(egui::vec2(4.0, 2.0));
-            responses.push(
-                self.ui.put(
-                    cell,
-                    egui::TextEdit::singleline(value)
-                        .vertical_align(egui::Align::Center)
-                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
-                        .hint_text(" ")
-                        .desired_width(cell.width()),
-                ),
-            );
-        }
-        let remove_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(18.0, 18.0));
-        let removed = removable
-            && self
-                .ui
-                .put(remove_rect, egui::Button::new("×").frame(false))
-                .on_hover_text(crate::i18n::tr!("haul-remove-band"))
-                .clicked();
-        (responses.try_into().expect("three fields"), removed)
-    }
-    pub(crate) fn three_headers(&mut self, labels: [&str; 3]) {
-        let rect = self.begin_table_row(true);
-        for (cell, label) in Self::three_cells(self.ui, rect).into_iter().zip(labels) {
-            self.ui
-                .put(cell.shrink2(egui::vec2(8.0, 0.0)), egui::Label::new(bold(label)).truncate().halign(egui::Align::Min));
-        }
-    }
-    /// Three equal columns, leaving room for a remove button, with their
-    /// dividers drawn as the key/value split is.
-    fn three_cells(ui: &egui::Ui, rect: egui::Rect) -> [egui::Rect; 3] {
-        let width = (rect.width() - 24.0) / 3.0;
-        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        std::array::from_fn(|i| {
-            let cell = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * width, 0.0), egui::vec2(width, rect.height()));
-            if i > 0 {
-                ui.painter().line_segment([cell.left_top(), cell.left_bottom()], stroke);
-            }
-            cell
-        })
-    }
     pub(crate) fn action(&mut self, key: &str, label: &str) -> egui::Response {
         let (rect, split) = self.begin_row(false);
-        self.ui.put(self.key_rect(rect, split, false), egui::Label::new(key).truncate());
-        self.ui.put(
-            self.value_rect(rect, split),
-            egui::Button::new(label).corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
-        )
+        self.paint_key(rect, split, key);
+        self.place(self.value_rect(rect, split), super::menu::MenuButton::new(label))
     }
 
     /// An editable boolean, drawn as a checkbox in the value column.
     pub(crate) fn checkbox(&mut self, key: &str, value: &mut bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
-        self.ui.put(
-            self.key_rect(rect, split, false),
-            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
-        );
-        self.ui.put(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
+        self.paint_key(rect, split, key);
+        self.place(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
     }
 
     fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, error: Option<&str>, readonly: bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
-        self.ui.put(
-            self.key_rect(rect, split, false),
-            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
-        );
+        self.paint_key(rect, split, key);
         if let Some(message) = error {
-            let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(16.0, 16.0));
-            self.ui
-                .put(
-                    icon_rect,
-                    egui::Image::new(unthemed_icon!("step_error.svg"))
-                        .fit_to_exact_size(icon_rect.size())
-                        .sense(egui::Sense::hover()),
-                )
-                .on_hover_text(message);
+            let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - CELL_WARNING_WIDTH / 2.0, rect.center().y), egui::vec2(16.0, 16.0));
+            self.place(
+                icon_rect,
+                egui::Image::new(unthemed_icon!("step_error.svg"))
+                    .fit_to_exact_size(icon_rect.size())
+                    .sense(egui::Sense::hover()),
+            )
+            .on_hover_text(message);
         }
         let mut value_rect = self.value_rect(rect, split);
         if error.is_some() {
-            value_rect.max.x -= 22.0;
+            value_rect.max.x -= CELL_WARNING_WIDTH;
         }
         if let Some(unit) = unit {
             let width = self
@@ -899,12 +905,9 @@ impl PropertyRows<'_> {
                 .interact(value_rect, self.ui.id().with(("calculated", key)), egui::Sense::hover())
                 .on_hover_text(value.as_str());
         }
-        self.ui
-            .scope_builder(egui::UiBuilder::new().max_rect(value_rect), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(value_rect));
-                ui.put(
-                    value_rect,
-                    egui::TextEdit::singleline(value)
+        self.place(
+            value_rect,
+            egui::TextEdit::singleline(value)
                         .vertical_align(egui::Align::Center)
                         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
                         // egui 0.35 needs a nonzero text atom to anchor the caret
@@ -912,42 +915,51 @@ impl PropertyRows<'_> {
                         // inserting placeholder text into the stored value.
                         .hint_text(" ")
                         .desired_width(value_rect.width()),
-                )
-            })
-            .inner
+        )
     }
 
-    /// Allocate one row and paint its column split and bottom rule.
+    /// Put `widget` in `rect` of a row already allocated. `Ui::put`, or a
+    /// scope, would claim the space again and leave the table's cursor at the
+    /// widget's edge rather than the row's, so rows came out uneven.
+    fn place(&mut self, rect: egui::Rect, widget: impl egui::Widget) -> egui::Response {
+        let mut child = self.ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        child.set_clip_rect(child.clip_rect().intersect(rect));
+        child.put(rect, widget)
+    }
+
+    /// Allocate one row and paint its gutter, column split and bottom rule:
+    /// the same frame, and for an ordinary row the same height, as a
+    /// [`grid_columns_row`], so a property table reads as one of the grids.
     fn begin_row(&mut self, header: bool) -> (egui::Rect, f32) {
-        let height = grid_row_height(self.ui);
-        let (rect, _) = self.ui.allocate_exact_size(egui::vec2(self.ui.available_width(), height), egui::Sense::hover());
-        let split = rect.left() + rect.width() * KEY_FRACTION;
-        let stroke = self.ui.visuals().widgets.noninteractive.bg_stroke;
-        if header {
-            self.ui.painter().rect_filled(rect, 0.0, self.ui.visuals().widgets.noninteractive.bg_fill);
-        }
-        self.ui.painter().line_segment([egui::pos2(split, rect.top()), egui::pos2(split, rect.bottom())], stroke);
-        self.ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
-        (rect, split)
+        let rect = self.begin_table_row(header);
+        let spans = column_spans(rect, [KEY_FRACTION, 1.0 - KEY_FRACTION]);
+        paint_column_rules(self.ui, rect, &spans);
+        (rect, spans[1].left())
     }
 
-    /// A row with no key/value split, for the small tables set inside.
+    /// A row with no key/value split, for the small tables set inside. Its
+    /// gutter and bottom rule are painted; its own columns are the caller's.
     fn begin_table_row(&mut self, header: bool) -> egui::Rect {
-        let height = grid_row_height(self.ui);
+        let height = grid_row_height(self.ui) + if header { 0.0 } else { COLUMN_ROW_EXTRA };
         let (rect, _) = self.ui.allocate_exact_size(egui::vec2(self.ui.available_width(), height), egui::Sense::hover());
         if header {
             self.ui.painter().rect_filled(rect, 0.0, self.ui.visuals().widgets.noninteractive.bg_fill);
         }
-        let stroke = self.ui.visuals().widgets.noninteractive.bg_stroke;
-        self.ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+        paint_column_rules(self.ui, rect, &[]);
         rect
     }
 
-    fn key_rect(&self, rect: egui::Rect, split: f32, has_error: bool) -> egui::Rect {
-        egui::Rect::from_min_max(rect.min + egui::vec2(8.0, 0.0), egui::pos2(split - if has_error { 24.0 } else { 4.0 }, rect.bottom()))
+    fn key_cell(rect: egui::Rect, split: f32) -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), egui::pos2(split, rect.bottom()))
     }
 
+    fn value_cell(rect: egui::Rect, split: f32) -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(split, rect.top()), rect.max)
+    }
+
+    /// Where a row's control goes: its value cell, inset from the rules as
+    /// the grid's own cell controls are.
     fn value_rect(&self, rect: egui::Rect, split: f32) -> egui::Rect {
-        egui::Rect::from_min_max(egui::pos2(split + 4.0, rect.top() + 2.0), rect.max - egui::vec2(4.0, 2.0))
+        Self::value_cell(rect, split).shrink2(egui::vec2(4.0, COLUMN_ROW_EXTRA / 2.0 + 1.0))
     }
 }

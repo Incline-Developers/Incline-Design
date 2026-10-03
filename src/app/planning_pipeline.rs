@@ -401,6 +401,7 @@ impl crate::app::App<'_> {
             // Closing the project clears the markers too; a stage status left
             // over from the last one would describe geometry that is gone.
             self.mirror_planning_stages();
+            self.sync_haulage_pipeline();
             self.sync_schedule_pipeline();
             self.mirror_schedule_reports();
             self.mirror_routing_choices();
@@ -499,6 +500,9 @@ impl crate::app::App<'_> {
         // After this pipeline, never beside it: the Schedule Setup readiness
         // step's inputs include where this run stands, so refreshing the two
         // in the other order would fingerprint it against last frame's state.
+        // Haulage before Schedule for the same reason: its Haulage step reads
+        // where the Haulage run stands.
+        self.sync_haulage_pipeline();
         self.sync_schedule_pipeline();
         self.mirror_schedule_reports();
         self.mirror_routing_choices();

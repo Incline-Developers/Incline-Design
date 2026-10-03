@@ -2757,6 +2757,11 @@ pub(crate) struct EditorState {
     /// so the step tree can mark each step without reaching into the pipeline.
     /// Indexed by [`ScheduleStep::index`].
     pub(crate) schedule_stages: [ScheduleStageView; ScheduleStep::ALL.len()],
+    /// The Haulage Setup pipeline's steps, mirrored like the Schedule ones.
+    pub(crate) haulage_stages: [HaulageStageView; HaulageStep::ALL.len()],
+    pub(crate) haulage_run_active: bool,
+    /// Rerun the Haulage steps on their own once edits settle.
+    pub(crate) haulage_auto_run: bool,
     /// Whether a Schedule Setup run is queued or in flight, so the controls
     /// can offer Cancel.
     pub(crate) schedule_run_active: bool,
@@ -3179,10 +3184,10 @@ impl EditorState {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
     }
 
-    /// Open a Schedule Setup step, wherever it lives: truck classes are set
-    /// up on the Haulage page, beside the roads they drive.
+    /// Open the page that repairs a Schedule Setup step. What the Haulage step
+    /// reports is a truck class's, and is repaired on the Haulage page.
     pub(crate) fn open_schedule_step(&mut self, step: ScheduleStep) {
-        if step == ScheduleStep::TruckClasses {
+        if step == ScheduleStep::Haulage {
             self.planning_page = PlanningPage::Haulage;
             self.haulage_subpage = PlanningSubpage::Setup;
             self.haulage_setup_step = HaulageStep::TruckClasses;
@@ -4109,7 +4114,7 @@ impl EditorState {
             active_workspace: Workspace::Production,
             planning_page: PlanningPage::Solids,
             schedule_subpage: PlanningSubpage::Setup,
-            haulage_subpage: PlanningSubpage::Layout,
+            haulage_subpage: PlanningSubpage::Setup,
             haulage_setup_step: HaulageStep::Network,
             solids_subpage: PlanningSubpage::Setup,
             solids_view_selection: Vec::new(),
@@ -4130,6 +4135,9 @@ impl EditorState {
             schedule_setup_step: ScheduleStep::Configuration,
             schedule_stages: Default::default(),
             schedule_run_active: false,
+            haulage_stages: Default::default(),
+            haulage_run_active: false,
+            haulage_auto_run: true,
             schedule_calculation_status: String::new(),
             schedule_experiment_draft: None,
             schedule_chunk_draft: None,
@@ -4938,6 +4946,11 @@ pub(crate) enum UiCommand {
     /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
     /// whatever result the last completed run left stands untouched.
     CancelScheduleRun,
+    /// Reset the Haulage Setup pipeline and rerun from its first step through
+    /// this one.
+    RunHaulageStage(HaulageStep),
+    RunAllHaulageStages,
+    CancelHaulageRun,
     /// One edit to a project's loader fleet.
     ///
     /// Addressed rather than implicit: `project` is the runtime id of the
@@ -5544,6 +5557,9 @@ impl UiCommand {
             | Self::RunScheduleStage(_)
             | Self::RunAllScheduleStages
             | Self::CancelScheduleRun
+            | Self::RunHaulageStage(_)
+            | Self::RunAllHaulageStages
+            | Self::CancelHaulageRun
             | Self::RunSchedulePeriod
             | Self::RunAllSchedulePeriods
             | Self::ImproveSchedule
@@ -6343,7 +6359,8 @@ impl PlanningPage {
 }
 
 /// The Haulage Setup page's steps: how roads join and are driven, then the
-/// trucks that drive them.
+/// trucks that drive them. The same enum indexes the pipeline in
+/// [`crate::app::haulage_pipeline`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum HaulageStep {
     Network,
@@ -6352,6 +6369,10 @@ pub(crate) enum HaulageStep {
 
 impl HaulageStep {
     pub(crate) const ALL: [Self; 2] = [Self::Network, Self::TruckClasses];
+
+    pub(crate) fn index(self) -> usize {
+        Self::ALL.iter().position(|step| *step == self).expect("every step is in ALL")
+    }
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -6473,7 +6494,9 @@ pub(crate) enum ScheduleStep {
     Delays,
     /// Drill and blast settings and each blast's starting stage.
     DrillBlast,
-    TruckClasses,
+    /// The Haulage pipeline, run here when it is not current: truck classes
+    /// and the roads they drive.
+    Haulage,
     Stockpiles,
     Dumps,
     Crushers,
@@ -6490,15 +6513,16 @@ impl ScheduleStep {
     /// and before Readiness: a rule names a destination, so the lists it
     /// chooses from have to be checked first, and the ground its source scopes
     /// name is only known once Readiness has the Solids run.
-    /// Truck Classes sits with the loader fleet because it is fleet, and
-    /// Trucking Rules after Destinations because a trucking rule names them.
+    /// Haulage sits with the loader fleet because its truck classes are
+    /// fleet, and Trucking Rules after Destinations because a trucking rule
+    /// names them.
     pub(crate) const ALL: [Self; 13] = [
         Self::Configuration,
         Self::LoaderClasses,
         Self::LoaderAgents,
         Self::Delays,
         Self::DrillBlast,
-        Self::TruckClasses,
+        Self::Haulage,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
@@ -6519,7 +6543,7 @@ impl ScheduleStep {
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
-            Self::TruckClasses => tr!("truck-classes"),
+            Self::Haulage => tr!("planning-page-haulage"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
             Self::Crushers => tr!("destination-crushers"),
@@ -6537,7 +6561,7 @@ impl ScheduleStep {
             Self::LoaderAgents => "schedule_loader_agents",
             Self::Delays => "schedule_delays",
             Self::DrillBlast => "schedule_drill_blast",
-            Self::TruckClasses => "schedule_truck_classes",
+            Self::Haulage => "schedule_haulage",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
             Self::Crushers => "schedule_crushers",
@@ -6558,20 +6582,35 @@ pub(crate) enum ScheduleRepairTarget {
     Solids(SolidsStep),
 }
 
-/// One Schedule Setup stage's status as the step tree reads it.
+/// One Setup pipeline step's status as the step tree reads it.
 ///
-/// Separate from [`PlanningStageView`] because the step it can be blocked by
-/// is a Schedule step, not a Solids one - a stage view that could name either
-/// would let the two trees be crossed.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ScheduleStageView {
+/// Typed by the pipeline's own steps because the step it can be blocked by is
+/// one of them - a stage view that could name either pipeline's steps would
+/// let the trees be crossed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SetupStageView<S> {
     pub(crate) state: crate::app::planning_pipeline::StageState,
     pub(crate) message: Option<String>,
     pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
     pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
     /// The earlier step that has to run first, when this one cannot.
-    pub(crate) blocked_by: Option<ScheduleStep>,
+    pub(crate) blocked_by: Option<S>,
 }
+
+impl<S> Default for SetupStageView<S> {
+    fn default() -> Self {
+        Self {
+            state: Default::default(),
+            message: None,
+            diagnostics: Vec::new(),
+            last_success: None,
+            blocked_by: None,
+        }
+    }
+}
+
+pub(crate) type ScheduleStageView = SetupStageView<ScheduleStep>;
+pub(crate) type HaulageStageView = SetupStageView<HaulageStep>;
 
 /// One piece of ground a routing rule may name, as the run describes it.
 ///
@@ -6624,7 +6663,6 @@ pub(crate) struct ScheduleTruckClassDraft {
     pub(crate) maximum_speed: String,
     pub(crate) maximum_grade: String,
     pub(crate) dump_time: String,
-    pub(crate) grade_rows: Vec<(String, String, String)>,
 }
 
 /// Which rule a condition being written belongs to.

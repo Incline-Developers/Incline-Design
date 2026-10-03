@@ -1338,7 +1338,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             match trucking::available_truck_hours(&class.calendar, interval.start_h, interval.end_h) {
                 Ok(value) => hours.push(value),
                 Err(error) => {
-                    problems.push(CaptureDiagnostic::new(class.name.clone(), error.message()).at(ScheduleStep::TruckClasses));
+                    problems.push(CaptureDiagnostic::new(class.name.clone(), error.message()).at(ScheduleStep::Haulage));
                     hours.push(0.0);
                 }
             }
@@ -1898,7 +1898,7 @@ fn expand_candidate<'a>(
         let coefficients = match trucking::coefficients_from_cycle(definition, cycle) {
             Ok(coefficients) => coefficients,
             Err(error) => {
-                problems.push(CaptureDiagnostic::new(definition.name.clone(), error.message()).at(ScheduleStep::TruckClasses));
+                problems.push(CaptureDiagnostic::new(definition.name.clone(), error.message()).at(ScheduleStep::Haulage));
                 continue;
             }
         };

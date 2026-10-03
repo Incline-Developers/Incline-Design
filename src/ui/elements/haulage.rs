@@ -22,6 +22,7 @@ use crate::{
         state::{HaulEdit, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_submenu},
+            data_grid::{DataGrid, grid_cell_entry, grid_columns_row},
             island::{Island, IslandResponse, Side},
         },
     },
@@ -433,7 +434,7 @@ fn issues(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork, de
     let list = editor.haul_issues.clone();
     section(ui, "haul_issues", tr!("haul-issues", count = list.len().to_string()), true, |ui| {
         for issue in &list {
-            let kind = issue_kind(issue.kind);
+            let kind = issue.kind.label();
             let subject = issue
                 .road
                 .and_then(|id| network.road(id).map(|r| r.name.clone()))
@@ -449,16 +450,6 @@ fn issues(ui: &mut egui::Ui, editor: &mut EditorState, network: &HaulNetwork, de
             }
         }
     });
-}
-
-fn issue_kind(kind: IssueKind) -> String {
-    match kind {
-        IssueKind::DeadEnd => tr!("haul-dead-end"),
-        IssueKind::NearMiss => tr!("haul-near-miss"),
-        IssueKind::SeparatePiece => tr!("haul-separate-piece"),
-        IssueKind::SteepRoad => tr!("haul-steep"),
-        IssueKind::MissingDestination => tr!("haul-missing-destination"),
-    }
 }
 
 fn issue_help(kind: IssueKind) -> String {
@@ -597,45 +588,35 @@ fn destination_access(
     });
 }
 
-/// Haulage Setup's Road network step: how roads join and how blocks reach
-/// them. Each figure carries its explanation beneath it rather than on hover:
-/// this is the page where a planner reads what they are setting.
+/// Shares of the Road Network grid's columns: the setting, then its value.
+const SETTING_FRACTIONS: [f32; 2] = [0.6, 0.4];
+
+/// Haulage Setup's Road Network step: how roads join and how blocks reach
+/// them, one row each, with what a setting does on hover.
 pub(crate) fn draw_network_settings(ui: &mut egui::Ui, rect: egui::Rect, network: &HaulNetwork, session: u32, commands: &mut Vec<UiCommand>) {
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(16.0)), |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(560.0);
-            ui.heading(tr!("haul-step-network"));
-            ui.label(egui::RichText::new(tr!("haul-network-intro")).weak());
-            ui.add_space(12.0);
-            let current = network.settings.clone();
-            let fields: [(String, String, f64, std::ops::RangeInclusive<f64>, &str); 4] = [
-                (tr!("haul-join"), tr!("haul-join-help"), current.join_tolerance_m, 0.01..=100.0, " m"),
-                (tr!("haul-auto-join"), tr!("haul-auto-join-help"), current.auto_join_m, 1.0..=100_000.0, " m"),
-                (tr!("haul-bench-speed"), tr!("haul-bench-speed-help"), current.bench_speed_kph, 1.0..=200.0, " km/h"),
-                (tr!("haul-acceleration"), tr!("haul-acceleration-help"), current.acceleration_kph_s, 0.1..=20.0, " km/h/s"),
-            ];
-            for (index, (label, help, value, range, suffix)) in fields.into_iter().enumerate() {
-                card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(crate::ui::fonts::bold(&label));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(value) = committed_number(ui, ui.id().with(("haul_setting", index)), value, range, 0.1, suffix) {
-                                let mut settings = current.clone();
-                                *[
-                                    &mut settings.join_tolerance_m,
-                                    &mut settings.auto_join_m,
-                                    &mut settings.bench_speed_kph,
-                                    &mut settings.acceleration_kph_s,
-                                ][index] = value;
-                                command(commands, session, HaulEdit::Settings(settings));
-                            }
-                        });
-                    });
-                    ui.label(egui::RichText::new(help).weak());
-                });
-                ui.add_space(6.0);
+    let current = network.settings.clone();
+    let columns = [(tr!("haul-setting"), SETTING_FRACTIONS[0]), (tr!("planning-value"), SETTING_FRACTIONS[1])];
+    let fields: [(String, String, f64, std::ops::RangeInclusive<f64>, &str); 4] = [
+        (tr!("haul-join"), tr!("haul-join-help"), current.join_tolerance_m, 0.01..=100.0, "m"),
+        (tr!("haul-auto-join"), tr!("haul-auto-join-help"), current.auto_join_m, 1.0..=100_000.0, "m"),
+        (tr!("haul-bench-speed"), tr!("haul-bench-speed-help"), current.bench_speed_kph, 1.0..=200.0, "km/h"),
+        (tr!("haul-acceleration"), tr!("haul-acceleration-help"), current.acceleration_kph_s, 0.1..=20.0, "km/h/s"),
+    ];
+    DataGrid::new("haul_network_settings", rect, &tr!("haul-step-network")).columns(&columns).show(ui, |ui| {
+        for (index, (label, help, mut value, range, suffix)) in fields.into_iter().enumerate() {
+            let (response, cells) = grid_columns_row(ui, &SETTING_FRACTIONS, &[&label, ""], false);
+            response.on_hover_text(&help);
+            if grid_cell_entry(ui, ("haul_setting", index), cells[1], &mut value, suffix) {
+                let mut settings = current.clone();
+                *[
+                    &mut settings.join_tolerance_m,
+                    &mut settings.auto_join_m,
+                    &mut settings.bench_speed_kph,
+                    &mut settings.acceleration_kph_s,
+                ][index] = value.clamp(*range.start(), *range.end());
+                command(commands, session, HaulEdit::Settings(settings));
             }
-        });
+        }
     });
 }
 

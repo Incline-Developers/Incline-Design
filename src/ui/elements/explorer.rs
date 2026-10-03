@@ -606,23 +606,18 @@ pub(crate) fn draw_explorer(
             // its own Run, Run All and Cancel rather than borrowing the Solids
             // ones - a Cancel that stopped whichever run the page had last
             // shown would be a button nobody could predict.
-            let schedule_controls = editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Schedule;
-            let show_run_controls = editor.is_solids_view()
-                || editor.is_planning_cut_step()
-                || schedule_controls
-                || (editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Solids);
+            let setup_page = editor.is_planning_setup().then_some(editor.planning_page);
+            let show_run_controls = editor.is_solids_view() || editor.is_planning_cut_step() || setup_page.is_some();
             let run_controls = if show_run_controls {
                 egui::Panel::top("planning_run_controls")
                     .resizable(false)
                     .show_separator_line(crate::ui::chrome::show_separator_line(ui))
                     .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
                     .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-                    .show(ui, |ui| {
-                        if schedule_controls {
-                            super::planning_setup::draw_schedule_run_controls(ui, editor, commands);
-                        } else {
-                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        }
+                    .show(ui, |ui| match setup_page {
+                        Some(crate::ui::state::PlanningPage::Schedule) => super::planning_setup::draw_schedule_run_controls(ui, editor, commands),
+                        Some(crate::ui::state::PlanningPage::Haulage) => super::planning_setup::draw_haulage_run_controls(ui, editor, commands),
+                        _ => super::planning_setup::draw_solids_run_controls(ui, editor, commands),
                     })
                     .response
                     .rect
