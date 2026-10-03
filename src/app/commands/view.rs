@@ -336,7 +336,7 @@ impl<'a> App<'a> {
 /// Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 5],
+    workspace_order: [crate::ui::state::Workspace; 6],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,

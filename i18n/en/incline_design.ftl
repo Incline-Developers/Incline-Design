@@ -48,6 +48,7 @@ ws-production = Production
 ws-drill-and-blast = Drill & Blast
 ws-geology = Geology
 ws-planning = Planning
+ws-optimization = Optimization
 
 ## Menubars
 
@@ -2338,3 +2339,138 @@ ui-right-click-charge-rules-heading-add = right-click the Charge Rules heading t
 ## OMF warnings (Drill & Blast)
 
 omf-element-name-has-count-charge-naming = Element '{ $name }' has { $count } charge(s) naming holes it no longer contains
+
+## Pit optimization
+
+opt-scenarios-title = Optimization scenarios
+opt-scenarios-button = Scenarios
+opt-load-scenarios-button = Load scenarios
+opt-scenarios-empty = No scenarios yet. Add one to set up a pit optimization run, or load the ones saved earlier.
+opt-scenario-title = Optimization scenario
+opt-scenario-default-name = Scenario { $number }
+opt-copy-name = { $name } copy
+opt-add-scenario = Add scenario
+opt-save-scenario = Save scenario
+opt-delete-scenario = Delete scenario
+opt-duplicate-scenario = Duplicate scenario
+opt-load-scenarios = Load scenarios
+opt-load-scenarios-summary = Read the saved scenarios file
+opt-scenarios-loaded = Loaded { $count } optimization scenario(s)
+opt-no-scenarios-saved = No optimization scenarios have been saved yet
+opt-scenarios-load-failed = Could not read the optimization scenarios: { $error }
+opt-scenarios-save-failed = Could not save the optimization scenarios: { $error }
+opt-edit = Edit
+opt-duplicate = Duplicate
+opt-delete = Delete
+opt-run = Run
+opt-discard = Discard
+opt-name = Name
+opt-select = Select
+opt-yes = Yes
+opt-no = No
+opt-unsaved-title = Unsaved changes
+opt-unsaved-message = "{ $name }" has changes that are not saved. Save them before closing?
+
+opt-status-never-run = Not run yet
+opt-status-up-to-date = Run, and unchanged since
+opt-status-stale = Changed since the last run - run it again
+opt-status-running = Running
+opt-status-running-percent = Running: { $percent }%
+
+opt-section-inputs = Inputs
+opt-section-constants = Constants
+opt-section-mining-costs = Mining costs
+opt-section-processing-costs = Processing costs
+opt-section-revenues = Revenues
+opt-section-constraints = Constraints
+opt-section-outputs = Outputs
+
+opt-density-field = Density field
+opt-quality-field = Main quality field
+opt-rocktype-field = Rock type field
+opt-none-selected = None
+opt-block-model-not-loaded = This block model is not loaded, so its fields cannot be listed. Load it to choose them.
+opt-exclude-air = Exclude air blocks
+opt-air-exclusion = Air exclusion
+opt-air-use-topography = Use topography
+opt-air-use-rocktype = Use rock type value
+opt-any-rocktype = Any rock type
+
+opt-col-name = Name
+opt-col-type = Type
+opt-col-value = Value
+opt-col-description = Description
+opt-col-rocktype = Rock type
+opt-col-factor = Factor
+opt-col-min-grade = Minimum grade
+opt-col-max-grade = Maximum grade
+opt-col-threshold = Threshold
+opt-col-element = Element
+opt-col-recovery = Recovery (%)
+opt-col-element-cost = Element cost
+opt-col-price = Price
+opt-col-selling-costs = Selling costs
+opt-type-number = Number
+opt-type-text = Text
+opt-type-yes-no = Yes/No
+
+opt-grid-add = Add
+opt-grid-delete = Delete
+opt-grid-up = Up
+opt-grid-down = Down
+opt-grid-add-all = Add all
+opt-grid-add-group = Add group
+opt-grid-group-name = Group name
+
+opt-pick-constant = Use a constant
+opt-clear-constant = Remove the constant and type a value
+opt-pick-constant-title = Select a constant
+opt-no-constants-of-type = There are no constants of this type. Add them in the Constants section.
+opt-constant-missing = The constant "{ $name }" no longer exists
+opt-constant-wrong-type = The constant "{ $name }" is not of this field's type
+
+opt-mining-cost = Default mining cost
+opt-currency-agnostic = Any currency: costs are plain numbers
+opt-rocktype-costs = Use different costs for rock types
+opt-waste-haulage = Waste haulage costs
+opt-ore-haulage = Ore haulage costs
+opt-haulage-value = Value or constant
+opt-haulage-field = Block model field
+
+opt-default-method-name = Default
+opt-elements-of = Elements of { $name }
+opt-select-method = Select a processing method above to edit its elements.
+opt-ga-costs = G&A costs
+
+opt-select-mode = Select mode
+opt-mode-single = Single shell
+opt-mode-multiple = Multiple shells using RAFs
+opt-factor-from = Revenue factor from
+opt-factor-to = Revenue factor to
+opt-factor-step = Step
+opt-shell-count = Number of shells
+opt-factor-range-invalid = The factor range must end above where it starts.
+opt-create-reports = Create reports
+opt-create-shells = Create shells
+opt-shell-as-solid = As solid
+opt-shell-as-surface = As surface
+opt-shell-kind-required = Choose solid, surface or both.
+opt-write-shell-field = Shell number in block model
+opt-shell-field = Shell number field
+
+opt-overall-slope = Overall slope angle
+opt-slope-default-angle = Default angle
+opt-slope-use-rosettes = Use rosettes
+opt-slope-rosettes-hint = An angle for each bearing sector
+opt-col-bearing = Bearing
+opt-col-angle = Angle
+opt-rosette-full-oval = The whole oval is { $angle }°: one angle all round, from 0° (north) to 360°.
+opt-rosette-sectors = Each angle applies from its bearing up to the next row's bearing; the last runs round to the first. Bearings are degrees clockwise from north.
+opt-rosette-same-bearing = Two rows have the same bearing. Give each row its own bearing to see the rosette.
+opt-rosette-no-rows = Add a row to see the rosette.
+opt-rosette-diagram-hover = Plan view of the pit: each sector shows the wall angle that applies there
+opt-compass-north = N
+opt-compass-east = E
+opt-compass-south = S
+opt-compass-west = W
+opt-factors-title = Revenue factors

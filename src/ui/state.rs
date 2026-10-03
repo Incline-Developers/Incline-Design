@@ -25,6 +25,7 @@ use crate::{
             csv_block_model::{CsvColumnMapping, CsvPreview},
             csv_drill_hole::{CsvDrillFileMapping, CsvDrillPreview},
         },
+        optimization::OptimizationScenario,
         point_cloud::PointCloudId,
         raster::RasterTextureId,
         triangulation::TriangulationId,
@@ -1744,6 +1745,7 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -1839,7 +1841,7 @@ pub(crate) struct EditorState {
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
-    pub(crate) workspace_order: [Workspace; 5],
+    pub(crate) workspace_order: [Workspace; 6],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -2114,6 +2116,7 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.optimization.dialog_open()
             || {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -2724,6 +2727,7 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -3610,6 +3614,27 @@ pub(crate) enum UiCommand {
     /// Open Create Block Model on the selected drill holes. Like the other
     /// select-first tools it takes its input from the scene selection, so the
     /// command carries nothing.
+    /// Show the Optimization scenarios list.
+    OpenOptimizationScenarios,
+    /// Start a new scenario in the editor, hiding the list.
+    AddOptimizationScenario,
+    /// Open the scenario with this id in the editor, hiding the list.
+    EditOptimizationScenario(u64),
+    /// Keep the edited scenario and write the scenarios file. The editor stays
+    /// open unless `then_close`.
+    SaveOptimizationScenario {
+        scenario: Box<OptimizationScenario>,
+        then_close: bool,
+    },
+    DeleteOptimizationScenario(u64),
+    /// Copy a scenario into a new one beside it, with an amended name.
+    DuplicateOptimizationScenario(u64),
+    RenameOptimizationScenario {
+        id: u64,
+        name: String,
+    },
+    /// Replace the session's scenarios with the ones in the scenarios file.
+    LoadOptimizationScenarios,
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -3863,6 +3888,10 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
+            | Self::OpenOptimizationScenarios
+            | Self::AddOptimizationScenario
+            | Self::EditOptimizationScenario(_)
+            | Self::RenameOptimizationScenario { .. }
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4104,6 +4133,10 @@ impl UiCommand {
                     None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
+            Self::SaveOptimizationScenario { scenario, .. } => report(tr!("opt-save-scenario"), scenario.name.clone()),
+            Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
+            Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
+            Self::LoadOptimizationScenarios => report(tr!("opt-load-scenarios"), tr!("opt-load-scenarios-summary")),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4439,6 +4472,181 @@ impl UiProjectView {
     }
 }
 
+/// Which row each of the scenario editor's grids has selected.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScenarioGridSelections {
+    pub(crate) constants: Option<usize>,
+    pub(crate) rocktype_costs: Option<usize>,
+    pub(crate) methods: Option<usize>,
+    pub(crate) elements: Option<usize>,
+    pub(crate) revenues: Option<usize>,
+    pub(crate) rosette: Option<usize>,
+}
+
+/// The scenario editor's tabs, in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScenarioTab {
+    #[default]
+    Inputs,
+    Constants,
+    MiningCosts,
+    ProcessingCosts,
+    Revenues,
+    Constraints,
+    Outputs,
+}
+
+impl ScenarioTab {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Inputs,
+        Self::Constants,
+        Self::MiningCosts,
+        Self::ProcessingCosts,
+        Self::Revenues,
+        Self::Constraints,
+        Self::Outputs,
+    ];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Inputs => tr!("opt-section-inputs"),
+            Self::Constants => tr!("opt-section-constants"),
+            Self::MiningCosts => tr!("opt-section-mining-costs"),
+            Self::ProcessingCosts => tr!("opt-section-processing-costs"),
+            Self::Revenues => tr!("opt-section-revenues"),
+            Self::Constraints => tr!("opt-section-constraints"),
+            Self::Outputs => tr!("opt-section-outputs"),
+        }
+    }
+}
+
+/// The scenario the editor window is working on, apart from the saved copy:
+/// Save keeps it as the new saved copy and the window stays open; closing
+/// without saving leaves the saved one as it was.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScenarioDraft {
+    pub(crate) scenario: OptimizationScenario,
+    /// The scenario as last saved (or as it was when the editor opened).
+    pub(crate) saved: OptimizationScenario,
+    /// Not in the scenarios list yet: the first save adds it.
+    pub(crate) is_new: bool,
+    /// Asking whether to keep unsaved changes before closing.
+    pub(crate) confirm_close: bool,
+    pub(crate) selections: ScenarioGridSelections,
+    pub(crate) tab: ScenarioTab,
+}
+
+impl ScenarioDraft {
+    pub(crate) fn new(scenario: OptimizationScenario, is_new: bool) -> Self {
+        Self {
+            saved: scenario.clone(),
+            scenario,
+            is_new,
+            confirm_close: false,
+            selections: ScenarioGridSelections::default(),
+            tab: ScenarioTab::default(),
+        }
+    }
+
+    /// Whether the editor holds changes that are not saved.
+    pub(crate) fn dirty(&self) -> bool {
+        self.scenario != self.saved
+    }
+}
+
+/// How long the stand-in run takes, until the optimizer is wired in.
+pub(crate) const STUB_RUN_SECONDS: f32 = 10.0;
+
+/// Where a scenario's run stands. The fingerprint is that of the settings the
+/// run started with, so a later edit shows as stale.
+#[derive(Clone, Debug)]
+pub(crate) enum RunState {
+    Running { started: web_time::Instant, fingerprint: u64 },
+    Finished { fingerprint: u64 },
+}
+
+/// What the scenarios list shows beside a scenario.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScenarioStatus {
+    NeverRun,
+    /// Run, and unchanged since.
+    UpToDate,
+    /// Run, but changed since: it has to be run again.
+    Stale,
+    /// Running, with the fraction done.
+    Running(f32),
+}
+
+/// What the Optimization workspace holds while the app runs.
+///
+/// The scenarios are loaded from, and saved to, one JSON file; nothing here is
+/// read from it until the user asks (Load scenarios). Runs are not saved: what
+/// a run produced is gone with the session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OptimizationState {
+    pub(crate) scenarios: Vec<OptimizationScenario>,
+    /// The scenarios list window. Hidden while a scenario is being edited.
+    pub(crate) list_open: bool,
+    pub(crate) draft: Option<ScenarioDraft>,
+    pub(crate) next_scenario_id: u64,
+    pub(crate) runs: HashMap<u64, RunState>,
+}
+
+impl OptimizationState {
+    pub(crate) fn dialog_open(&self) -> bool {
+        self.list_open || self.draft.is_some()
+    }
+
+    /// An id no scenario in the list carries.
+    pub(crate) fn fresh_id(&mut self) -> u64 {
+        let id = self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id + 1).max().unwrap_or(0));
+        self.next_scenario_id = id + 1;
+        id
+    }
+
+    pub(crate) fn status(&self, scenario: &OptimizationScenario) -> ScenarioStatus {
+        match self.runs.get(&scenario.id) {
+            None => ScenarioStatus::NeverRun,
+            Some(RunState::Running { started, .. }) => ScenarioStatus::Running((started.elapsed().as_secs_f32() / STUB_RUN_SECONDS).min(1.0)),
+            Some(RunState::Finished { fingerprint }) if *fingerprint == scenario.fingerprint() => ScenarioStatus::UpToDate,
+            Some(RunState::Finished { .. }) => ScenarioStatus::Stale,
+        }
+    }
+
+    /// Start a run of the saved scenario. A scenario already running is left alone.
+    pub(crate) fn start_run(&mut self, id: u64) {
+        let Some(scenario) = self.scenarios.iter().find(|scenario| scenario.id == id) else {
+            return;
+        };
+        if matches!(self.runs.get(&id), Some(RunState::Running { .. })) {
+            return;
+        }
+        let fingerprint = scenario.fingerprint();
+        self.runs.insert(
+            id,
+            RunState::Running {
+                started: web_time::Instant::now(),
+                fingerprint,
+            },
+        );
+    }
+
+    /// Finish the runs whose time is up; returns whether any are still going.
+    pub(crate) fn tick_runs(&mut self) -> bool {
+        let mut running = false;
+        for run in self.runs.values_mut() {
+            if let RunState::Running { started, fingerprint } = run {
+                if started.elapsed().as_secs_f32() >= STUB_RUN_SECONDS {
+                    *run = RunState::Finished { fingerprint: *fingerprint };
+                } else {
+                    running = true;
+                }
+            }
+        }
+        running
+    }
+}
+
 /// A workspace: one of the discipline-shaped arrangements of the window the
 /// menu bar's tabs switch between.
 ///
@@ -4453,11 +4661,12 @@ pub(crate) enum Workspace {
     Geology,
     Planning,
     Survey,
+    Optimization,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
+    pub(crate) const ALL: [Self; 6] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey, Self::Optimization];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -4466,12 +4675,16 @@ impl Workspace {
             Self::Geology => tr!("ws-geology"),
             Self::Planning => tr!("ws-planning"),
             Self::Survey => tr!("ws-survey"),
+            Self::Optimization => tr!("ws-optimization"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey)
+        matches!(
+            self,
+            Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey | Self::Optimization
+        )
     }
 
     /// Whether this workspace carries the mine production tools.

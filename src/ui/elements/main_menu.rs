@@ -154,7 +154,7 @@ fn draw_separator(ui: &mut egui::Ui) {
 #[derive(Clone)]
 struct WorkspaceTabDrag {
     workspace: Workspace,
-    order: [Workspace; 5],
+    order: [Workspace; 6],
     grab_offset: f32,
 }
 
@@ -536,6 +536,20 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         // yet, and the run is what the workspace has rather than a fixed set of
         // titles: a menu that opens on nothing is left off it.
         if matches!(editor.active_workspace, Workspace::DrillAndBlast | Workspace::Planning) {
+            return;
+        }
+
+        if editor.active_workspace == Workspace::Optimization {
+            MenuBarMenu::new(&tr!("ws-optimization")).show(ui, |ui| {
+                if ContextMenuAction::new(tr!("opt-scenarios-button")).show(ui).clicked() {
+                    commands.push(UiCommand::OpenOptimizationScenarios);
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("opt-load-scenarios-button")).show(ui).clicked() {
+                    commands.push(UiCommand::LoadOptimizationScenarios);
+                    ui.close();
+                }
+            });
             return;
         }
 

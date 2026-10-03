@@ -39,6 +39,10 @@ enum LeftToolAction {
     Tool(ActiveTool),
     /// Open or close the Drill & Blast pattern builder.
     DrillPattern,
+    /// Open the Optimization scenarios list.
+    OptimizationScenarios,
+    /// Read the saved Optimization scenarios into the list.
+    LoadOptimizationScenarios,
 }
 
 /// One button in the drawing toolbar's run.
@@ -161,6 +165,27 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     ]
 }
 
+/// The Optimization tools: the scenarios list, and loading the scenarios an
+/// earlier session saved into it.
+fn optimization_tools() -> Vec<LeftTool> {
+    vec![
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("optimization_scenarios.svg")),
+            tooltip: tr!("opt-scenarios-button"),
+            action: LeftToolAction::OptimizationScenarios,
+            enabled: true,
+            hint: None,
+        },
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("load_scenarios.svg")),
+            tooltip: tr!("opt-load-scenarios-button"),
+            action: LeftToolAction::LoadOptimizationScenarios,
+            enabled: true,
+            hint: None,
+        },
+    ]
+}
+
 /// Draw one cell of the drawing toolbar's run.
 ///
 /// A tool greys out on its own rather than the run being wrapped in a single
@@ -171,6 +196,8 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
+        LeftToolAction::OptimizationScenarios => editor.optimization.dialog_open(),
+        LeftToolAction::LoadOptimizationScenarios => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -192,6 +219,8 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
+        LeftToolAction::OptimizationScenarios => commands.push(UiCommand::OpenOptimizationScenarios),
+        LeftToolAction::LoadOptimizationScenarios => commands.push(UiCommand::LoadOptimizationScenarios),
     }
 }
 
@@ -204,7 +233,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
 /// it leave, with its run of cells at the top.
 ///
 /// Each workspace fills the column with its own run - production's drawing
-/// tools, Drill & Blast's pattern tools - and a workspace with none leaves it
+/// tools, Drill & Blast's pattern tools, Optimization's scenarios - and a workspace with none leaves it
 /// standing and empty, one cell wide, rather than taking it off the window:
 /// it is where that discipline's own tools will go, and the workspace tabs are
 /// not a reason for the window to change shape under the pointer.
@@ -219,6 +248,7 @@ pub(crate) fn draw_left_toolbar(
     let tools = match editor.active_workspace {
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
+        Workspace::Optimization => optimization_tools(),
         _ => Vec::new(),
     };
     // The run wraps into further columns rather than off the bottom of a short
