@@ -1065,10 +1065,7 @@ impl<'a> App<'a> {
                         crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
                         crate::ui::state::PlanningPage::Haulage => {
                             self.editor.haulage_subpage = subpage;
-                            self.editor.haul_route = None;
-                            self.editor.haul_draw = false;
-                            self.editor.haul_points.clear();
-                            self.editor.haul_link_pick = false;
+                            self.editor.cancel_haul_edit();
                         }
                     }
                     if self.editor.is_planning_viewport() {
@@ -1091,9 +1088,7 @@ impl<'a> App<'a> {
                     self.editor.schedule_calendar.error = None;
                 }
                 self.editor.planning_page = page;
-                self.editor.haul_draw = false;
-                self.editor.haul_points.clear();
-                self.editor.haul_route = None;
+                self.editor.cancel_haul_edit();
                 self.refresh_haulage_view();
                 if self.editor.is_planning_viewport() {
                     self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;

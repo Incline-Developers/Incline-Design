@@ -465,6 +465,8 @@ pub(crate) struct App<'a> {
     /// and the Setup gate, because currentness is asked every frame.
     pub(crate) schedule_semantic_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
+    /// [`App::planning_fingerprints`], with the key it was computed for.
+    pub(crate) planning_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::SolidsStep::ALL.len()])>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) schedule_run_serial: u64,
@@ -629,6 +631,7 @@ impl<'a> Default for App<'a> {
             schedule_plan_revision_cache: std::cell::Cell::new(None),
             schedule_semantic_cache: std::cell::Cell::new(None),
             schedule_report_key_cache: std::cell::Cell::new(None),
+            planning_fingerprint_cache: std::cell::Cell::new(None),
             schedule_run_serial: 0,
             schedule_auto_attempted: None,
             schedule_auto_settle: None,

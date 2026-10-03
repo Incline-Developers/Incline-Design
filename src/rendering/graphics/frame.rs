@@ -165,6 +165,7 @@ impl<'a> Graphics<'a> {
             }
         }
         let mut scene_content_changed = self.geometry_dirty;
+        self.haul_roads_in_bounds = editor.shows_haul_network();
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
         if self.slice_view.is_some() {

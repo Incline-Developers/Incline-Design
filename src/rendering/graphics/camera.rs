@@ -28,9 +28,10 @@ fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
 
 /// Generated planning and Animate meshes can change without a document edit.
 /// Track their identities and visibility before reusing camera depth bounds.
-fn bounds_surface_key(triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>) -> u64 {
+fn bounds_surface_key(triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>, haul_roads: bool) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
+    haul_roads.hash(&mut hasher);
     triangulations.len().hash(&mut hasher);
     for surface in triangulations {
         surface.id.hash(&mut hasher);
@@ -1424,7 +1425,7 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) -> Option<(DVec3, DVec3)> {
-        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden)
+        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds)
     }
 
     /// The point the viewport is currently looking at, in world (not
@@ -1592,10 +1593,10 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) {
-        let surface_key = bounds_surface_key(triangulations, hidden);
+        let surface_key = bounds_surface_key(triangulations, hidden, self.haul_roads_in_bounds);
         if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() || self.cached_bounds_surface_key != Some(surface_key) {
             self.cached_bounds_surface_key = Some(surface_key);
-            self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+            self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds);
             self.cached_scene_bounds = merge_aabbs(&self.cached_object_aabbs);
             self.cached_bounds_document_revision = document.revision();
         }

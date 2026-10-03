@@ -1491,11 +1491,17 @@ impl Document {
     }
 
     fn object_position(&self, id: ObjectId) -> Option<usize> {
+        self.indexed_object_position(id).or_else(|| self.objects.iter().position(|object| object.id() == id))
+    }
+
+    /// The design object's position by its index alone. Every design object
+    /// is indexed, so a miss means the id is a planning cut (or nothing):
+    /// checking this first keeps ordinary edits from scanning every cut.
+    fn indexed_object_position(&self, id: ObjectId) -> Option<usize> {
         self.object_index
             .get(&id)
             .copied()
             .filter(|&index| self.objects.get(index).is_some_and(|object| object.id() == id))
-            .or_else(|| self.objects.iter().position(|object| object.id() == id))
     }
 
     pub(crate) fn add_layer(&mut self, name: String, color_index: Option<u8>, color: [f32; 4], loaded: bool, elevation: f32) -> LayerId {
@@ -1601,7 +1607,10 @@ impl Document {
     /// Replace an object in place, preserving draw order.
     pub(crate) fn replace_object(&mut self, object: Object) -> bool {
         let id = object.id();
-        let planning = self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id);
+        let planning = match self.indexed_object_position(id) {
+            Some(_) => None,
+            None => self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id),
+        };
         if let Some(cut) = planning {
             *cut = object;
             self.touch_object(id);
@@ -1623,7 +1632,10 @@ impl Document {
 
     /// Remove the object with `id`, returning it if present.
     pub(crate) fn remove_object(&mut self, id: ObjectId) -> Option<Object> {
-        let planning = self.planning_benches_mut().find(|bench| bench.cuts.iter().any(|cut| cut.id() == id));
+        let planning = match self.indexed_object_position(id) {
+            Some(_) => None,
+            None => self.planning_benches_mut().find(|bench| bench.cuts.iter().any(|cut| cut.id() == id)),
+        };
         if let Some(bench) = planning {
             let index = bench.cuts.iter().position(|cut| cut.id() == id)?;
             let cut = bench.cuts.remove(index);
@@ -2227,17 +2239,25 @@ impl Document {
         if fast.is_some() {
             return fast;
         }
+        // Planning cuts live with their benches, outside the index; look
+        // there before the full scan below, which only a corrupt index needs.
+        if let Some(cut) = self.planning_benches().flat_map(|bench| &bench.cuts).find(|object| object.id() == id) {
+            return Some(cut);
+        }
         let slow = self.objects.iter().find(|object| object.id() == id);
         // The linear scan finding an object the index missed means the index
         // is corrupt; surface that in debug builds instead of hiding it
         // behind O(N) lookups.
         debug_assert!(slow.is_none(), "object_index out of sync for {id:?}");
-        slow.or_else(|| self.planning_benches().flat_map(|bench| &bench.cuts).find(|object| object.id() == id))
+        slow
     }
 
     /// Translate the object with `id` by `delta`. Returns `true` if found.
     pub(crate) fn translate_object(&mut self, id: ObjectId, delta: DVec3) -> bool {
-        let planning = self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id);
+        let planning = match self.indexed_object_position(id) {
+            Some(_) => None,
+            None => self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id),
+        };
         if let Some(cut) = planning {
             cut.translate(delta);
             self.touch_object(id);

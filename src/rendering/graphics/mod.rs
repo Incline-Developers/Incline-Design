@@ -465,6 +465,9 @@ pub(crate) struct Graphics<'a> {
     pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
     pub(super) cached_bounds_surface_key: Option<u64>,
+    /// Whether the haul network counts towards the scene's extents: only
+    /// where it is drawn. Taken from the editor at the start of each frame.
+    pub(super) haul_roads_in_bounds: bool,
     pub(super) cached_scene_bounds: Option<(DVec3, DVec3)>,
     /// Per-object world AABBs (one per visible object), refreshed alongside
     /// `cached_scene_bounds`. Depth-range fitting needs them individually so a

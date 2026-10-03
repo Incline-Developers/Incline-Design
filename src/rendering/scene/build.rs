@@ -58,9 +58,11 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     document.objects().len().hash(&mut hasher);
     document.revision().hash(&mut hasher);
     static_key.hash(&mut hasher);
-    editor.active_workspace.hash(&mut hasher);
-    editor.planning_page.hash(&mut hasher);
+    // The haul network is the only part of this scene that depends on the
+    // page, so it is all that is keyed: switching between workspaces that do
+    // not show it must not re-tessellate the design.
     editor.shows_haul_network().hash(&mut hasher);
+    editor.is_haulage_page().hash(&mut hasher);
     editor.haul_view_revision.hash(&mut hasher);
     for id in editor
         .selected_handles

@@ -912,7 +912,7 @@ impl<'a> App<'a> {
                 return;
             }
             self.editor.canvas_context_menu_open = false;
-            if self.editor.haul_draw {
+            if self.editor.haul_draw && self.editor.is_haulage_page() {
                 self.place_haul_point();
                 return;
             }

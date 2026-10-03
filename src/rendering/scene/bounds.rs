@@ -18,15 +18,25 @@ pub(crate) fn scene_bounds(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
 ) -> Option<(DVec3, DVec3)> {
     let mut min = DVec3::splat(f64::MAX);
     let mut max = DVec3::splat(f64::MIN);
     let mut any = false;
-    for_each_visible_object_aabb(document, triangulations, block_models, drill_holes, point_clouds, hidden, &mut |object_min, object_max| {
-        min = min.min(object_min);
-        max = max.max(object_max);
-        any = true;
-    });
+    for_each_visible_object_aabb(
+        document,
+        triangulations,
+        block_models,
+        drill_holes,
+        point_clouds,
+        hidden,
+        haul_roads,
+        &mut |object_min, object_max| {
+            min = min.min(object_min);
+            max = max.max(object_max);
+            any = true;
+        },
+    );
     any.then_some((min, max))
 }
 
@@ -41,17 +51,26 @@ pub(crate) fn visible_object_aabbs(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
 ) -> Vec<(DVec3, DVec3)> {
     let mut aabbs = Vec::new();
-    for_each_visible_object_aabb(document, triangulations, block_models, drill_holes, point_clouds, hidden, &mut |object_min, object_max| {
-        aabbs.push((object_min, object_max))
-    });
+    for_each_visible_object_aabb(
+        document,
+        triangulations,
+        block_models,
+        drill_holes,
+        point_clouds,
+        hidden,
+        haul_roads,
+        &mut |object_min, object_max| aabbs.push((object_min, object_max)),
+    );
     aabbs
 }
 
 /// Shared visible-object iteration. Each object contributes one AABB; text,
 /// polylines and roads collapse their many points into a single min/max so
 /// callers see one box per object.
+#[allow(clippy::too_many_arguments)]
 fn for_each_visible_object_aabb(
     document: &Document,
     triangulations: &[OpenTriangulation],
@@ -59,9 +78,13 @@ fn for_each_visible_object_aabb(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
     emit: &mut impl FnMut(DVec3, DVec3),
 ) {
-    for road in &document.haulage().roads {
+    // Roads only count where they are drawn: framing Production around a
+    // network it does not show would zoom out to nothing visible.
+    let roads = if haul_roads { document.haulage().roads.as_slice() } else { &[] };
+    for road in roads {
         if hidden.contains(&SceneEntityId::HaulRoad(road.id)) {
             continue;
         }

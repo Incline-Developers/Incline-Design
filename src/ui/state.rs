@@ -3155,6 +3155,18 @@ impl EditorState {
         }
     }
 
+    /// Put down whatever road edit is in progress. A road is drawn over the
+    /// Haulage Layout's viewport, so leaving it must not leave the next click
+    /// in another workspace placing road points.
+    pub(crate) fn cancel_haul_edit(&mut self) {
+        self.haul_draw = false;
+        self.haul_points.clear();
+        self.haul_cursor = None;
+        self.haul_drag = None;
+        self.haul_link_pick = false;
+        self.haul_route = None;
+    }
+
     /// Placing a road point or dragging one: the cursor snaps as a drawing
     /// tool's does.
     pub(crate) fn haul_placing(&self) -> bool {

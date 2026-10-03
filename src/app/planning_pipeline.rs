@@ -562,6 +562,44 @@ impl crate::app::App<'_> {
     /// Input fingerprints for all six stages, each chained onto the one before
     /// it so an edit invalidates exactly the suffix it can reach.
     pub(crate) fn planning_fingerprints(&self) -> [u64; SolidsStep::ALL.len()] {
+        // Read every frame from every workspace, and the full computation
+        // copies and hashes every solid and cut. Everything it reads moves
+        // one of these counters, so it is recomputed only when one does.
+        let key = self.planning_fingerprint_key();
+        if let Some((cached_key, fingerprints)) = self.planning_fingerprint_cache.get()
+            && cached_key == key
+        {
+            return fingerprints;
+        }
+        let fingerprints = self.compute_planning_fingerprints();
+        self.planning_fingerprint_cache.set(Some((key, fingerprints)));
+        fingerprints
+    }
+
+    /// What [`Self::planning_fingerprints`] depends on, cheaply: the project,
+    /// its document revision (solid, reserve field and cut edits all advance
+    /// it, undo included), and the epochs and bindings of the items the
+    /// solids are built from.
+    fn planning_fingerprint_key(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let project = self.workspace.active_project();
+        // The solids' allocation tells a document rebuilt in place (a revert)
+        // from the one it replaced, should their revision counters coincide.
+        project
+            .map(|project| &project.project.document)
+            .map(|document| (document.revision(), document.solids().as_ptr() as usize, document.solids().len()))
+            .hash(&mut hasher);
+        project.map(|project| project.runtime_id).hash(&mut hasher);
+        for model in &self.block_models {
+            (model.id.0, &model.name, model.included_in_reserves, self.model_content_version(model)).hash(&mut hasher);
+        }
+        for surface in &self.triangulations {
+            (surface.id, surface.state.epoch()).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn compute_planning_fingerprints(&self) -> [u64; SolidsStep::ALL.len()] {
         let document = self.workspace.active_document();
         let fields = document.map(|document| document.reserve_fields().to_vec()).unwrap_or_default();
         let solids = document.map(|document| document.solids().to_vec()).unwrap_or_default();

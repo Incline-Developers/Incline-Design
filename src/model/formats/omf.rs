@@ -2502,38 +2502,44 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             self.read_design_layer(&mut document, layer_id, records, lines, points)
                 .with_context(|| format!("read design layer '{}'", layer_element.name))?;
         }
-        if let Some(reserve_fields) = element
-            .metadata
-            .get(META_RESERVE_FIELDS)
-            .cloned()
-            .and_then(|value| serde_json::from_value::<Vec<ReserveField>>(value).ok())
-        {
-            document.restore_reserve_fields(reserve_fields);
+        // Planning data that cannot be read is reported and left out rather
+        // than failing the whole project or vanishing silently. The warning
+        // also stands in front of the next save, which would otherwise
+        // replace what is in the file with nothing.
+        let mut unreadable = |what: &str, reason: String| {
+            self.bundle
+                .warnings
+                .push(format!("Element '{}' has {what} that could not be read and was left out: {reason}", element.name));
+        };
+        if let Some(value) = element.metadata.get(META_RESERVE_FIELDS).cloned() {
+            match serde_json::from_value::<Vec<ReserveField>>(value) {
+                Ok(fields) => document.restore_reserve_fields(fields),
+                Err(error) => unreadable("a reserves field list", error.to_string()),
+            }
         }
-        if let Some(solids) = element
-            .metadata
-            .get(META_SOLIDS)
-            .cloned()
-            .and_then(|value| serde_json::from_value::<Vec<Solid>>(value).ok())
-        {
-            document.restore_solids(solids);
+        if let Some(value) = element.metadata.get(META_SOLIDS).cloned() {
+            match serde_json::from_value::<Vec<Solid>>(value) {
+                Ok(solids) => document.restore_solids(solids),
+                Err(error) => unreadable("planning solids", error.to_string()),
+            }
         }
         if let Some(value) = element.metadata.get(META_HAULAGE).cloned() {
-            let mut network: crate::model::haulage::HaulNetwork = serde_json::from_value(value).context("read haul network")?;
-            network.validate().context("validate haul network")?;
-            document.restore_haulage(network);
+            let network = serde_json::from_value::<crate::model::haulage::HaulNetwork>(value)
+                .map_err(anyhow::Error::from)
+                .and_then(|mut network| network.validate().map(|()| network));
+            match network {
+                Ok(network) => document.restore_haulage(network),
+                Err(error) => unreadable("a haul road network", format!("{error:#}")),
+            }
         }
         if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {
-            // Unlike the two lists above, a malformed schedule is reported
-            // rather than dropped: a dig rate that failed to parse must not
-            // come back as a plausible-looking default, and a class an agent
-            // can no longer reach is a reconciliation the user has to see.
+            // A schedule is refused whole rather than defaulted: a dig rate
+            // that failed to parse must not come back as a plausible-looking
+            // default, and a class an agent can no longer reach is a
+            // reconciliation the user has to see.
             match read_schedule(value) {
                 Ok(schedule) => document.restore_schedule(schedule),
-                Err(reason) => self
-                    .bundle
-                    .warnings
-                    .push(format!("Element '{}' has a schedule that could not be read and was left out: {reason}", element.name)),
+                Err(reason) => unreadable("a schedule", reason),
             }
         }
         // Files written before circles were their own variant store them as

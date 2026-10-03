@@ -1199,7 +1199,10 @@ fn draw_ui(
         dialogs::editing::draw_finish_polyline_dialog(root_ui, commands, editor, canvas_rect);
     }
 
-    if editor.haul_draw && root_ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary) && i.pointer.hover_pos().is_some_and(|p| canvas_rect.contains(p))) {
+    if editor.haul_draw
+        && editor.is_haulage_page()
+        && root_ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary) && i.pointer.hover_pos().is_some_and(|p| canvas_rect.contains(p)))
+    {
         commands.push(UiCommand::FinishHaulRoad);
     }
     if let Some(handle) = editor
@@ -1526,8 +1529,11 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_cut_surface_dialog(root_ui, editor, project, commands);
     }
 
-    if editor.tri_cut_pitshell_open {
+    if editor.tri_solid_open {
         dialogs::triangulation::draw_build_solid_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_cut_pitshell_open {
         dialogs::triangulation::draw_cut_topology_to_pit_shell_dialog(root_ui, editor, project, commands);
     }
 

@@ -868,6 +868,7 @@ impl<'a> Graphics<'a> {
             document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
             cached_bounds_surface_key: None,
+            haul_roads_in_bounds: false,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),
             overlay_dirty: true,
