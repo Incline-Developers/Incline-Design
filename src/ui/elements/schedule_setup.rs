@@ -18,8 +18,8 @@ use crate::{
         state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_row, property_table_height},
-            explorer::{ExplorerEntry, explorer_note},
+            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_empty_state, grid_row, property_table_height},
+            explorer::ExplorerEntry,
         },
     },
 };
@@ -45,6 +45,15 @@ fn parse_rate(text: &str) -> Result<f64, String> {
         return Err(crate::model::schedule::ScheduleError::InvalidRate.message());
     }
     Ok(value)
+}
+
+/// A loader's spot time: any number of seconds, none included.
+fn parse_spot_time(text: &str) -> Result<f64, String> {
+    text.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .ok_or_else(|| tr!("schedule-spot-time-invalid"))
 }
 
 /// Why this name cannot be committed, for the inline badge beside it. The
@@ -305,12 +314,14 @@ fn draw_general_table(
 /// The Loader Classes list. Selecting one drives the property table beside it.
 pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let mut selected = editor.schedule_selected_class;
-    let mut open_dialog = false;
-    DataGrid::new("schedule_class_list", rect, &tr!("schedule-loader-classes"))
+    let new_class = tr!("schedule-new-class");
+    let mut add = false;
+    let added = DataGrid::new("schedule_class_list", rect, &tr!("schedule-loader-classes"))
         .column_header(&tr!("planning-name"))
+        .add_button(&new_class, &mut add)
         .show(ui, |ui| {
             if plan.classes().is_empty() {
-                explorer_note(ui, tr!("schedule-no-class-list"));
+                return grid_empty_state(ui, &tr!("schedule-no-class-list"), Some(&new_class));
             }
             for class in plan.classes() {
                 let rate = if class.kind.is_drill_blast() {
@@ -323,24 +334,21 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                 if response.clicked() {
                     selected = Some(class.id);
                 }
+                // Offered but greyed while machines use it, with the reason:
+                // deleting would leave them without a class.
+                let users: Vec<String> = plan.agents_of(class.id).map(|agent| agent.name.clone()).collect();
                 context_menu_popup(&response, &class.name, |ui| {
-                    if ContextMenuAction::new(tr!("schedule-delete-class")).show(ui).clicked() {
+                    let delete = ContextMenuAction::new(tr!("schedule-delete-class")).enabled(users.is_empty()).show(ui);
+                    if delete.clicked() {
                         commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteClass(class.id)));
                         ui.close();
                     }
+                    delete.on_disabled_hover_text(tr!("schedule-error-class-in-use", agents = users.join(", ")));
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_loader_class_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("schedule-loader-classes"), |ui| {
-                    if ContextMenuAction::new(tr!("schedule-new-class")).show(ui).clicked() {
-                        open_dialog = true;
-                        ui.close();
-                    }
-                });
-            }
+            grid_add_action_row(ui, &new_class)
         });
+    let open_dialog = add || added;
     if editor.schedule_selected_class != selected {
         // A different class is being edited; its cells replace whatever was
         // half-typed into the previous one.
@@ -381,6 +389,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
     let name_error = name_problem(&draft.name, plan.classes().iter().filter(|other| other.id != class.id).map(|other| other.name.clone()));
     let rate_error = parse_rate(&draft.rate).err();
     let reclaim_error = parse_rate(&draft.reclaim_rate).err();
+    let spot_error = parse_spot_time(&draft.spot_time).err();
     let users = plan.agents_of(class.id).count();
     let mut edits = Vec::new();
     PropertyTable::new("schedule_class_properties", rect, &class.name).show(ui, |rows| {
@@ -431,7 +440,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         let loader = !class.kind.is_drill_blast();
         if loader {
             let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
-            reclaim.clone().on_hover_text(tr!("inventory-help"));
+            reclaim.clone().on_hover_text(tr!("schedule-class-reclaim-rate-help"));
             if reclaim.lost_focus()
                 && let Ok(value) = parse_rate(&draft.reclaim_rate)
                 && value != class.default_reclaim_rate_tph
@@ -440,8 +449,8 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             }
         }
         if loader
-            && rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, None).lost_focus()
-            && let Ok(seconds) = draft.spot_time.parse::<f64>()
+            && rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, spot_error.as_deref()).lost_focus()
+            && let Ok(seconds) = parse_spot_time(&draft.spot_time)
             && seconds != class.spot_time_s
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassSpotTime { class: class.id, seconds }));
@@ -456,44 +465,42 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
 /// The Loader Agents list: the machines themselves, each showing its class.
 pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let mut selected = editor.schedule_selected_agent;
-    let mut open_dialog = false;
     let has_classes = !plan.classes().is_empty();
-    DataGrid::new("schedule_agent_list", rect, &tr!("schedule-loader-agents"))
-        .column_header(&tr!("planning-name"))
-        .show(ui, |ui| {
-            if !has_classes {
-                explorer_note(ui, tr!("schedule-no-classes"));
-            } else if plan.agents().is_empty() {
-                explorer_note(ui, tr!("schedule-no-agents"));
+    let new_agent = tr!("schedule-new-agent");
+    let mut add = false;
+    let (title, name) = (tr!("schedule-loader-agents"), tr!("planning-name"));
+    let mut grid = DataGrid::new("schedule_agent_list", rect, &title).column_header(&name);
+    // A machine needs a class to belong to, so there is nothing to add until
+    // one exists; the empty list says where to go instead.
+    if has_classes {
+        grid = grid.add_button(&new_agent, &mut add);
+    }
+    let added = grid.show(ui, |ui| {
+        if !has_classes {
+            return grid_empty_state(ui, &tr!("schedule-no-classes"), None);
+        } else if plan.agents().is_empty() {
+            return grid_empty_state(ui, &tr!("schedule-no-agents"), Some(&new_agent));
+        }
+        for agent in plan.agents() {
+            let class = plan
+                .class(agent.class_id)
+                .map(|class| class.name.clone())
+                .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
+            let label = format!("{} · {}", agent.name, class);
+            let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id))).on_hover_text(&label);
+            if response.clicked() {
+                selected = Some(agent.id);
             }
-            for agent in plan.agents() {
-                let class = plan
-                    .class(agent.class_id)
-                    .map(|class| class.name.clone())
-                    .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
-                let label = format!("{} · {}", agent.name, class);
-                let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id))).on_hover_text(&label);
-                if response.clicked() {
-                    selected = Some(agent.id);
+            context_menu_popup(&response, &agent.name, |ui| {
+                if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                    ui.close();
                 }
-                context_menu_popup(&response, &agent.name, |ui| {
-                    if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
-                        ui.close();
-                    }
-                });
-            }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_loader_agent_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("schedule-loader-agents"), |ui| {
-                    if ContextMenuAction::new(tr!("schedule-new-agent")).enabled(has_classes).show(ui).clicked() {
-                        open_dialog = true;
-                        ui.close();
-                    }
-                });
-            }
-        });
+            });
+        }
+        grid_add_action_row(ui, &new_agent)
+    });
+    let open_dialog = has_classes && (add || added);
     if editor.schedule_selected_agent != selected {
         editor.schedule_agent_draft = None;
     }
