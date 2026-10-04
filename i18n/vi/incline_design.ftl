@@ -2252,3 +2252,4 @@ ui-hold-shift-unload = giữ Shift để gỡ nạp
 ui-no-charge-rule-load = Không có quy tắc nạp để nạp theo
 ui-right-click-charge-rules-heading-add = nhấp chuột phải vào tiêu đề Quy tắc nạp để thêm một quy tắc
 omf-element-name-has-count-charge-naming = Phần tử '{ $name }' có { $count } lượng nạp chỉ định các lỗ khoan mà nó không còn chứa
+common-currency-symbol = ₫

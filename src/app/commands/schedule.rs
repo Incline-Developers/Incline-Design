@@ -80,7 +80,6 @@ impl crate::app::App<'_> {
             ScheduleEdit::RemoveMember { bar, position } => self.remove_bar_member(bar, position),
             ScheduleEdit::MoveMember { bar, from, to } => self.move_bar_member(bar, from, to),
             ScheduleEdit::SetBarMembers { bar, expected, members } => self.set_bar_members(bar, &expected, &members),
-            ScheduleEdit::SetRoutingEnabled(enabled) => self.set_routing_enabled(enabled),
             ScheduleEdit::AddDestination { name, kind } => self.add_destination(name, kind),
             ScheduleEdit::RenameDestination { destination, name } => self.edit_routing(|routing| routing.rename_standalone(destination, &name)),
             ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
@@ -127,7 +126,6 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetTruckingRuleSources { rule, sources } => self.edit_trucks(|trucks| trucks.set_rule_sources(rule, sources)),
             ScheduleEdit::SetTruckingRuleDestinations { rule, destinations } => self.edit_trucks(|trucks| trucks.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetTruckingRuleClasses { rule, classes } => self.edit_trucks(|trucks| trucks.set_rule_classes(rule, classes)),
-            ScheduleEdit::SetCurrency(currency) => self.edit_schedule(|plan| plan.set_currency(&currency)),
             ScheduleEdit::AddCashflowRule { name } => self.add_cashflow_rule(name),
             ScheduleEdit::DuplicateCashflowRule(rule) => self.duplicate_cashflow_rule(rule),
             ScheduleEdit::DeleteCashflowRule(rule) => self.delete_cashflow_rule(rule),
@@ -227,7 +225,6 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetRoster(roster) => self.edit_schedule(|plan| plan.edit_delays(|delays, agents| delays.set_roster(roster, agents))),
             ScheduleEdit::DeleteRoster(roster) => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.remove_roster(roster))),
             ScheduleEdit::SetExperimentGradeUnit { field, unit } => self.edit_schedule(|plan| plan.experiment_mut().set_grade_unit(field, unit)),
-            ScheduleEdit::SetExperimentEventCapacity { capacity } => self.edit_schedule(|plan| plan.experiment_mut().set_event_capacity(capacity)),
             ScheduleEdit::SetStockpileRepresentation { destination, representation } => {
                 self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_representation(destination, representation))
             }
@@ -412,13 +409,6 @@ impl crate::app::App<'_> {
             self.editor.schedule_selected_truck_rule = None;
             self.editor.schedule_truck_rule_draft = None;
         }
-    }
-
-    fn set_routing_enabled(&mut self, enabled: bool) {
-        self.edit_schedule(|plan| {
-            plan.routing_mut().set_enabled(enabled);
-            Ok(())
-        });
     }
 
     fn add_destination(&mut self, name: String, kind: crate::model::schedule::DestinationKind) {

@@ -2226,3 +2226,4 @@ ui-hold-shift-unload = 按住 Shift 可卸载
 ui-no-charge-rule-load = 没有可用于装填的装药规则
 ui-right-click-charge-rules-heading-add = 右键点击“装药规则”标题以添加
 omf-element-name-has-count-charge-naming = 元素“{ $name }”有 { $count } 条装药指向其已不再包含的炮孔
+common-currency-symbol = ¥

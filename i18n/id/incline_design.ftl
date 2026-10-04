@@ -2226,3 +2226,4 @@ ui-hold-shift-unload = tahan Shift untuk mengosongkan
 ui-no-charge-rule-load = Tidak ada aturan isian untuk mengisi
 ui-right-click-charge-rules-heading-add = klik kanan judul Aturan Isian untuk menambah satu
 omf-element-name-has-count-charge-naming = Elemen '{ $name }' memiliki { $count } isian yang menyebut lubang yang tidak lagi dimuatnya
+common-currency-symbol = Rp

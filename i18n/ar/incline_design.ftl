@@ -2226,3 +2226,4 @@ ui-hold-shift-unload = اضغط Shift للتفريغ
 ui-no-charge-rule-load = لا توجد قاعدة شحن للشحن بها
 ui-right-click-charge-rules-heading-add = انقر بزر الماوس الأيمن على عنوان قواعد الشحن لإضافة واحدة
 omf-element-name-has-count-charge-naming = العنصر «{ $name }» فيه { $count } شحنة تسمّي حفرًا لم يعد يحتويها
+common-currency-symbol = $

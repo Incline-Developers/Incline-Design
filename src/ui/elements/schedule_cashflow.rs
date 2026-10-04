@@ -32,7 +32,6 @@ use crate::{
 /// The rule table: every cashflow rule, what it describes and what it pays.
 pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
     let rules = plan.cashflow();
-    let currency = plan.currency();
     let mut selected = editor.schedule_selected_cashflow_rule;
     DataGrid::new("schedule_cashflow_list", rect, &tr!("cashflow"))
         .column_header(&tr!("planning-name"))
@@ -41,7 +40,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 explorer_note(ui, tr!("cashflow-no-rules"));
             }
             for rule in &rules.rules {
-                let label = format!("{} · {}", rule.name, cashflow::format_value(rule.value_per_tonne, currency));
+                let label = format!("{} · {}", rule.name, cashflow::format_value(rule.value_per_tonne));
                 let summary = rule.summary(
                     |agent| plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent")),
                     |field| {
@@ -98,7 +97,7 @@ pub(crate) fn draw_rule_editor(
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    let currency = plan.currency().to_owned();
+    let currency = cashflow::currency_symbol();
     let Some(rule) = editor.schedule_selected_cashflow_rule.and_then(|id| plan.cashflow().rule(id)).cloned() else {
         draw_empty(ui, rect);
         return;

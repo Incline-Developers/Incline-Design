@@ -651,14 +651,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-interval")).at(ScheduleStep::Configuration),
         ]);
     }
-    // The optimiser accounts for every tonne by destination. An older project
-    // that switched routing off is told so and pointed at the switch; it is
-    // never switched on for it, and there is no dig-only fallback.
-    if !routing.enabled {
-        return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-routing-off")).at(ScheduleStep::Configuration),
-        ]);
-    }
     // Every report must come from the one Solids run the Setup gate named: a
     // model assembled from two runs would describe ground that was never all
     // there at once.

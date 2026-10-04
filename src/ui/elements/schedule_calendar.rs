@@ -219,9 +219,6 @@ impl Figures<'_> {
 /// every page reads but carries no schedule of its own.
 fn destination_rows(plan: &SchedulePlan, document: &Document) -> Vec<DestinationRow> {
     let routing = plan.routing();
-    if !routing.enabled {
-        return Vec::new();
-    }
     destinations::available(document.solids(), routing)
         .into_iter()
         .map(|entry| DestinationRow {
@@ -271,7 +268,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
                     .collect()
             })
             .unwrap_or_default(),
-        currency: plan.currency().to_owned(),
+        currency: crate::model::schedule::cashflow::currency_symbol(),
         field_names: document.reserve_fields().iter().map(|f| (f.id, f.name.clone())).collect(),
     };
     let destinations = destination_rows(plan, document);

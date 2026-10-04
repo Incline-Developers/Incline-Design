@@ -2258,3 +2258,4 @@ ui-hold-shift-unload = shikilia Shift ili kuondoa mzigo
 ui-no-charge-rule-load = Hakuna kanuni ya chaji ya kupakia nayo
 ui-right-click-charge-rules-heading-add = bofya kulia kichwa cha Kanuni za Chaji ili kuongeza moja
 omf-element-name-has-count-charge-naming = Kipengele '{ $name }' kina chaji { $count } zinazotaja mashimo ambayo hakina tena
+common-currency-symbol = KSh

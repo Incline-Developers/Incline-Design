@@ -2267,3 +2267,4 @@ ui-hold-shift-unload = Umschalt halten zum Entladen
 ui-no-charge-rule-load = Keine Laderegel zum Laden
 ui-right-click-charge-rules-heading-add = Rechtsklick auf die Überschrift „Laderegeln“, um eine hinzuzufügen
 omf-element-name-has-count-charge-naming = Element '{ $name }' hat { $count } Ladung(en), die Löcher nennen, die es nicht mehr enthält
+common-currency-symbol = €

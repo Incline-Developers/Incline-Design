@@ -271,7 +271,8 @@ pub(crate) fn grid_select_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
         ui.spacing_mut().interact_size.y = cell.height();
         ui.put(
             cell,
-            egui::Button::new(egui::RichText::new(summary))
+            // Text left, as every other value in a table reads.
+            egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
                 .fill(ui.visuals().extreme_bg_color)
                 .stroke(ui.visuals().widgets.inactive.bg_stroke)
                 .wrap_mode(egui::TextWrapMode::Truncate)
@@ -890,6 +891,25 @@ impl PropertyRows<'_> {
             response.mark_changed();
         }
         response
+    }
+
+    /// A multiple selection, drawn as [`grid_select_row`] draws one: a
+    /// field-shaped button naming what is chosen, for the caller to hang a
+    /// checkable list off.
+    pub(crate) fn select(&mut self, key: &str, summary: &str) -> egui::Response {
+        let (rect, split) = self.begin_row(false);
+        self.paint_key(rect, split, key);
+        let value_rect = self.value_rect(rect, split);
+        let visuals = self.ui.visuals().clone();
+        self.place(
+            value_rect,
+            // Text left, as every other value in a table reads.
+            egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
+                .fill(visuals.extreme_bg_color)
+                .stroke(visuals.widgets.inactive.bg_stroke)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .min_size(value_rect.size()),
+        )
     }
 
     pub(crate) fn action(&mut self, key: &str, label: &str) -> egui::Response {

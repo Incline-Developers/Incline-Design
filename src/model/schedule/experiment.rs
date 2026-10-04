@@ -186,14 +186,6 @@ impl ExperimentConfig {
         Ok(())
     }
 
-    pub(crate) fn set_event_capacity(&mut self, capacity: Option<usize>) -> ScheduleResult {
-        if capacity.is_some_and(|value| !(1..=super::optimisation::SEGMENT_CEILING).contains(&value)) {
-            return Err(ScheduleError::InvalidExperimentSetting);
-        }
-        self.event_capacity = capacity;
-        Ok(())
-    }
-
     pub(crate) fn set_solve_seconds(&mut self, seconds: f64) -> ScheduleResult {
         self.solve_seconds = checked_positive(seconds)?;
         Ok(())

@@ -2268,3 +2268,4 @@ ui-hold-shift-unload = yükü boşaltmak için Shift tuşunu basılı tutun
 ui-no-charge-rule-load = Yüklenecek şarj kuralı yok
 ui-right-click-charge-rules-heading-add = eklemek için Şarj Kuralları başlığına sağ tıklayın
 omf-element-name-has-count-charge-naming = '{ $name }' öğesinde, artık içermediği delikleri adlandıran { $count } şarj var
+common-currency-symbol = ₺

@@ -2296,3 +2296,4 @@ ui-hold-shift-unload = przytrzymaj Shift, aby rozładować
 ui-no-charge-rule-load = Brak reguły ładowania do użycia
 ui-right-click-charge-rules-heading-add = kliknij prawym przyciskiem nagłówek Reguły ładowania, aby dodać regułę
 omf-element-name-has-count-charge-naming = Element „{ $name }” ma ładunki: { $count } wskazujące otwory, których już nie zawiera
+common-currency-symbol = zł

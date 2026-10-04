@@ -294,7 +294,6 @@ impl crate::app::App<'_> {
         // Destinations: identity, kind, capacity, haul distance, crusher
         // budget and opening inventory - by id, never by name.
         let routing = plan.routing();
-        routing.enabled.hash(&mut hasher);
         document.haulage().hash_content(&mut hasher);
         plan.trucks().hash_content(&mut hasher);
         for solid in document.solids() {
@@ -839,12 +838,7 @@ impl crate::app::App<'_> {
             }
         }
         if let Some(calculation) = self.schedule_calculation.as_ref().filter(|_| current) {
-            let currency = self
-                .workspace
-                .active_document()
-                .map(|document| document.schedule().currency().to_owned())
-                .unwrap_or_default();
-            details.extend(result_details(calculation, &currency));
+            details.extend(result_details(calculation));
         }
         let stale = !current && self.schedule_calculation.is_some() && !recalculating;
         let repair = if running.is_some() {
@@ -966,12 +960,12 @@ fn result_status(calculation: &CalculatedSchedule) -> String {
 }
 
 /// Everything the status tooltip says about a held result.
-fn result_details(calculation: &CalculatedSchedule, currency: &str) -> Vec<String> {
+fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
     let report = &calculation.report;
     let mut lines = vec![tr!(
         "schedule-detail-value",
         value = crate::ui::elements::schedule_calendar::format_money(report.objective),
-        currency = currency.to_owned()
+        currency = crate::model::schedule::cashflow::currency_symbol()
     )];
     lines.push(match (report.bound, report.gap) {
         // A bound more than twice the schedule says nothing useful about it.

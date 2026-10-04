@@ -15,7 +15,7 @@ use crate::{
     ui::{
         EditorState,
         fonts::bold,
-        state::{ScheduleAgentDraft, ScheduleBarHeightDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
+        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridRow, PropertyTable, grid_row, property_table_height},
@@ -223,15 +223,14 @@ fn field_option_label(document: &Document, field: &ReserveField) -> String {
     format!("{} · {}", field.name, super::planning_setup::aggregation_label(document, &field.aggregation))
 }
 
-/// The schedule's own settings: what it is called, and which reserve field is
-/// read as tonnes.
+/// The schedule's own settings: what it is called, how far it runs, which
+/// reserve field is read as tonnes and which grades it carries, with the
+/// settings few projects need to change set apart beneath.
 ///
-/// The field is chosen, never guessed: the combo offers "Not chosen" and every
-/// field in the project's Field List with its aggregation beside it, and the
-/// assumption the choice rests on is stated under the table rather than
-/// implied. A choice that cannot produce a tonnage is allowed and then
-/// explained by the readiness report, because a field can be re-aggregated
-/// after it was chosen.
+/// The tonnage field is chosen, never guessed: the combo offers "Not chosen"
+/// and every field in the project's Field List with its aggregation beside it.
+/// It stays here, ahead of every other step, because the grades it weights -
+/// and the Stockpiles step's opening lots - are read against it.
 pub(crate) fn draw_configuration(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -241,17 +240,14 @@ pub(crate) fn draw_configuration(
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    let table = draw_configuration_table(ui, rect, editor, plan, document, session, commands);
-    // The Optimisation settings sit under the configuration table on the
-    // same page: they are configuration, and every build edits them. Laid out
-    // in what is left of the page, not in the table's own rect.
+    let table = draw_general_table(ui, rect, editor, plan, document, session, commands);
     let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table.bottom() + ui.spacing().item_spacing.y), rect.max);
     if below.is_positive() {
-        super::schedule_optimisation::draw_optimisation(ui, below, editor, plan, document, session, commands);
+        super::schedule_optimisation::draw_advanced(ui, below, editor, plan, session, commands);
     }
 }
 
-fn draw_configuration_table(
+fn draw_general_table(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     editor: &mut EditorState,
@@ -266,41 +262,21 @@ fn draw_configuration_table(
             text: plan.name.clone(),
         });
     }
-    let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
-    if editor.schedule_bar_height_draft.as_ref().is_none_or(|draft| draft.source != plan.bar_height()) {
-        editor.schedule_bar_height_draft = Some(ScheduleBarHeightDraft {
-            source: plan.bar_height(),
-            text: plan.bar_height().to_string(),
-        });
-    }
-    let height_draft = editor.schedule_bar_height_draft.as_mut().expect("just ensured");
-    let parsed_height = height_draft.text.trim().parse::<f32>().ok();
-    let height_error = (!parsed_height
-        .is_some_and(|height| height.is_finite() && (crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT).contains(&height)))
-    .then(|| crate::model::schedule::ScheduleError::InvalidBarHeight.message());
-    let mut currency = plan.currency().to_owned();
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
-    // Header + schedule name + bar height + scheduling quantity + destination
-    // routing, plus the explanatory empty-field row when the project has no
-    // reserve schema. The header is a table row too; omitting it from this
-    // count clips the quantity combo.
-    let rows = 6 + usize::from(no_fields);
+    // Header, name, horizon, tonnage field and grades, plus the explanatory
+    // row when the project has no reserve schema. The header is a table row
+    // too; omitting it from this count clips the tonnage combo.
+    let rows = 5 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
-    PropertyTable::new("schedule_configuration", table_rect, &tr!("planning-configuration")).show(ui, |rows| {
+    PropertyTable::new("schedule_configuration", table_rect, &tr!("schedule-general")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
         let response = rows.field(&tr!("planning-schedule-name"), &mut draft.text, None);
         if response.lost_focus() && draft.text.trim() != plan.name {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetName(draft.text.trim().to_owned())));
         }
-        let response = rows.field(&tr!("schedule-bar-height"), &mut height_draft.text, height_error.as_deref());
-        if response.lost_focus()
-            && let Some(height) = parsed_height
-            && height != plan.bar_height()
-            && height_error.is_none()
-        {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
-        }
+        super::schedule_optimisation::horizon_row(rows, editor, plan, session, &mut edits);
         let mut tonnage = plan.tonnage_field();
         let selected_text = tonnage
             .and_then(|id| document.reserve_fields().iter().find(|field| field.id == id))
@@ -317,28 +293,12 @@ fn draw_configuration_table(
         if response.changed() && tonnage != plan.tonnage_field() {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetTonnageField(tonnage)));
         }
-        // Routing is opt-in and stays opt-in: configuring destinations and
-        // writing rules changes nothing until this is switched on, so a project
-        // that has never seen this page keeps the dig-only behaviour it was
-        // authored against.
-        let mut routing = plan.routing().enabled;
-        if rows.checkbox(&tr!("destination-routing-enabled"), &mut routing).changed() {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetRoutingEnabled(routing)));
-        }
-        // A label, not a conversion: every figure in this schedule is in this
-        // currency and nothing here converts between any two.
-        let currency_error = currency.trim().is_empty().then(|| crate::model::schedule::ScheduleError::EmptyCurrency.message());
-        let response = rows.field(&tr!("cashflow-currency"), &mut currency, currency_error.as_deref());
-        if response.lost_focus() && currency_error.is_none() && currency.trim() != plan.currency() {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetCurrency(currency.trim().to_owned())));
-        }
+        super::schedule_optimisation::grades_row(rows, plan, document, session, &mut edits);
         if no_fields {
             rows.readonly("", &tr!("schedule-tonnage-field-no-fields"), None, None);
         }
     });
     commands.extend(edits);
-    // The caller lays the experimental section out beneath this table, so it
-    // needs to know where the table stopped rather than guessing.
     egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), table_rect.bottom()))
 }
 

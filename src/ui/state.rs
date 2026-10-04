@@ -2877,7 +2877,6 @@ pub(crate) struct EditorState {
     pub(crate) schedule_class_draft: Option<ScheduleClassDraft>,
     pub(crate) schedule_agent_draft: Option<ScheduleAgentDraft>,
     pub(crate) schedule_name_draft: Option<ScheduleNameDraft>,
-    pub(crate) schedule_bar_height_draft: Option<ScheduleBarHeightDraft>,
     /// The selected row on the Stockpiles, Dumps and Crushers pages, and the
     /// capacity being typed into it. One selection across the three pages: a
     /// destination is one thing whichever page it is listed on.
@@ -3576,7 +3575,6 @@ impl EditorState {
         self.schedule_class_draft = None;
         self.schedule_agent_draft = None;
         self.schedule_name_draft = None;
-        self.schedule_bar_height_draft = None;
         self.schedule_selected_destination = None;
         self.schedule_destination_draft = None;
         self.schedule_selected_truck_class = None;
@@ -4275,7 +4273,6 @@ impl EditorState {
             schedule_category_values: Default::default(),
             schedule_agent_draft: None,
             schedule_name_draft: None,
-            schedule_bar_height_draft: None,
             schedule_selected_bars: Default::default(),
             schedule_selected_delay: None,
             schedule_delay_draft: None,
@@ -5804,10 +5801,6 @@ impl UiCommand {
                 // Applying a sequence edit is a deliberate, single act on a
                 // whole dig order, unlike the per-block edits below it.
                 ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
-                ScheduleEdit::SetRoutingEnabled(enabled) => report(
-                    tr!("destination-routing-toggle"),
-                    if *enabled { tr!("destination-routing-on") } else { tr!("destination-routing-off") },
-                ),
                 ScheduleEdit::AddDestination { name, kind } => report(tr!("destination-new"), format!("{name} · {}", kind.label())),
                 ScheduleEdit::DeleteDestination(id) => report(tr!("destination-delete"), format!("{id:?}")),
                 ScheduleEdit::AddRule { name, .. } => report(tr!("destination-new-rule"), name.clone()),
@@ -5902,7 +5895,6 @@ impl UiCommand {
                 | ScheduleEdit::SetTruckingRuleClasses { .. }
                 // Cashflow cell edits: the rule editor shows the result where
                 // it was typed.
-                | ScheduleEdit::SetCurrency(_)
                 | ScheduleEdit::RenameCashflowRule { .. }
                 | ScheduleEdit::SetCashflowRuleEnabled { .. }
                 | ScheduleEdit::SetCashflowRuleActivity { .. }
@@ -5925,7 +5917,6 @@ impl UiCommand {
                 // and the stockpile's own page show the result where it was
                 // typed.
                 | ScheduleEdit::SetExperimentHorizon { .. }
-                | ScheduleEdit::SetExperimentEventCapacity { .. }
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
@@ -6919,7 +6910,6 @@ pub(crate) struct ScheduleExperimentDraft {
     pub(crate) source: (u32, u64, u64, u64, Option<usize>),
     pub(crate) end_day: String,
     pub(crate) interval_h: String,
-    pub(crate) event_capacity: String,
     pub(crate) solve_seconds: String,
     pub(crate) relative_gap: String,
 }
@@ -7075,7 +7065,6 @@ pub(crate) enum ScheduleEdit {
     /// Switch destination routing on or off for this project. Off means the
     /// dig-only behaviour every project had before routing existed; nothing
     /// else on these pages turns it on.
-    SetRoutingEnabled(bool),
     /// Add a destination with no geometry behind it - a crusher, or a
     /// stockpile or dump nobody has drawn.
     AddDestination {
@@ -7225,9 +7214,6 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::TruckingRuleId,
         classes: Vec<crate::model::schedule::TruckClassId>,
     },
-    /// What the schedule's figures are labelled with. Display only; nothing is
-    /// converted.
-    SetCurrency(String),
     /// Add a cashflow rule worth nothing.
     AddCashflowRule {
         name: String,
@@ -7398,9 +7384,6 @@ pub(crate) enum ScheduleEdit {
     SetExperimentGradeUnit {
         field: crate::model::ReserveFieldId,
         unit: Option<crate::model::schedule::experiment::GradeUnit>,
-    },
-    SetExperimentEventCapacity {
-        capacity: Option<usize>,
     },
     SetStockpileRepresentation {
         destination: crate::model::schedule::DestinationId,
@@ -7921,12 +7904,6 @@ pub(crate) struct SequenceMemberView {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScheduleNameDraft {
     pub(crate) source: String,
-    pub(crate) text: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScheduleBarHeightDraft {
-    pub(crate) source: f32,
     pub(crate) text: String,
 }
 

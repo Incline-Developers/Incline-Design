@@ -273,7 +273,7 @@ impl crate::app::App<'_> {
                 .find(|field| field.id == id)
                 .map(|field| (id.0, format!("{:?}", field.aggregation)))
         });
-        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field, plan.routing().enabled));
+        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field));
 
         let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits(), class.kind)).collect();
         let classes_step = hash_of((configuration, classes));
@@ -389,7 +389,6 @@ impl crate::app::App<'_> {
             .collect();
         let stockpiles_step = hash_of((
             agents_step,
-            routing.enabled,
             by_kind(crate::model::schedule::DestinationKind::Stockpile),
             standalone(crate::model::schedule::DestinationKind::Stockpile),
             pile_use,
@@ -458,7 +457,6 @@ impl crate::app::App<'_> {
             let mut hasher = DefaultHasher::new();
             trucking_rules_step.hash(&mut hasher);
             plan.cashflow().hash_content(&mut hasher);
-            plan.currency().hash(&mut hasher);
             for field in document.reserve_fields() {
                 field.id.0.hash(&mut hasher);
                 format!("{:?}", field.aggregation).hash(&mut hasher);
@@ -799,16 +797,6 @@ impl crate::app::App<'_> {
                 blocking: true,
             }),
             Some((_, Some(_))) => {}
-        }
-        // The optimiser accounts for every tonne by destination, so a project
-        // that switched routing off is stopped here, on the page that holds
-        // the switch - never switched on for it, and never run without it.
-        if self.workspace.active_document().is_some_and(|document| !document.schedule().routing().enabled) {
-            diagnostics.push(StageDiagnostic {
-                entity: None,
-                message: tr!("schedule-capture-routing-off"),
-                blocking: true,
-            });
         }
         StageOutcome::Settled { diagnostics, entities: 1 }
     }
@@ -1212,22 +1200,6 @@ impl crate::app::App<'_> {
         let plan = document.schedule();
         let routing = plan.routing();
         let mut diagnostics = Vec::new();
-        // Routing switched off is a complete answer: the rules are
-        // configuration nothing reads, and an unfinished one must not block a
-        // dig-only run.
-        if !routing.enabled {
-            if !routing.rules.is_empty() {
-                diagnostics.push(StageDiagnostic {
-                    entity: None,
-                    message: tr!("destination-stage-routing-off"),
-                    blocking: false,
-                });
-            }
-            return StageOutcome::Settled {
-                diagnostics,
-                entities: routing.rules.len(),
-            };
-        }
         if routing.rules.iter().all(|rule| !rule.enabled) {
             diagnostics.push(StageDiagnostic {
                 entity: None,

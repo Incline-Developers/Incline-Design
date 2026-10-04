@@ -1,5 +1,6 @@
-//! The Optimisation settings: what the schedule optimiser is told that the
-//! rest of the plan does not already say.
+//! The schedule settings the optimiser is told that the rest of the plan does
+//! not already say: the horizon and grades on Configuration's General table,
+//! the rest under Advanced, and each stockpile's representation.
 //!
 //! Settings only. Runs start from the Gantt and Calendar run controls, and
 //! their status is reported there; nothing here calculates. The settings are
@@ -18,32 +19,22 @@ use crate::{
     ui::{
         EditorState,
         state::{ScheduleEdit, ScheduleExperimentDraft, UiCommand},
-        widgets::data_grid::{PropertyTable, property_table_height},
+        widgets::{
+            context_menu::{ChecklistRow, Tick, checklist_popup},
+            data_grid::{PropertyRows, PropertyTable, property_table_height},
+            menu,
+        },
     },
 };
-
-/// What the interval setting does, and what it deliberately does not do.
-fn interval_help() -> String {
-    tr!("experiment-interval-help")
-}
 
 fn parse_positive(text: &str) -> Option<f64> {
     let value = text.trim().parse::<f64>().ok()?;
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
-/// The settings table.
-///
-/// Returns the rect it consumed so the caller can lay out beneath it.
-pub(crate) fn draw_optimisation(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    editor: &mut EditorState,
-    plan: &SchedulePlan,
-    document: &Document,
-    session: u32,
-    commands: &mut Vec<UiCommand>,
-) -> egui::Rect {
+/// The typed text of every setting here, refreshed whenever the plan's own
+/// values change underneath it.
+fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut ScheduleExperimentDraft {
     let experiment = plan.experiment();
     let source = (
         experiment.planning_end_day,
@@ -59,30 +50,41 @@ pub(crate) fn draw_optimisation(
             interval_h: experiment.interval_h.to_string(),
             solve_seconds: experiment.solve_seconds.to_string(),
             relative_gap: experiment.relative_gap.to_string(),
-            event_capacity: experiment.event_capacity.map(|value| value.to_string()).unwrap_or_default(),
         });
     }
-    let draft = editor.schedule_experiment_draft.as_mut().expect("just ensured");
-    let end_day = draft.end_day.trim().parse::<u32>().ok().filter(|day| *day > 0);
-    let interval_h = parse_positive(&draft.interval_h);
-    let event_capacity = if draft.event_capacity.trim().is_empty() {
-        Some(None)
-    } else {
-        draft
-            .event_capacity
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .filter(|value| (1..=crate::model::schedule::optimisation::SEGMENT_CEILING).contains(value))
-            .map(Some)
-    };
-    let solve_seconds = parse_positive(&draft.solve_seconds);
-    let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
-    let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
+    editor.schedule_experiment_draft.as_mut().expect("just ensured")
+}
 
-    // Only fields that could be a blended grade are offered: a tonnes-weighted
-    // numeric average. Anything else is not a unit question, it is a different
-    // kind of column, and the grade gate says so in its own words.
+/// How many days the schedule runs, on the General table.
+pub(crate) fn horizon_row(rows: &mut PropertyRows<'_>, editor: &mut EditorState, plan: &SchedulePlan, session: u32, edits: &mut Vec<UiCommand>) {
+    let experiment = plan.experiment();
+    let draft = draft(editor, plan);
+    let end_day = draft.end_day.trim().parse::<u32>().ok().filter(|day| *day > 0);
+    let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
+    let response = rows.field(&tr!("experiment-end-day"), &mut draft.end_day, end_day.is_none().then_some(invalid.as_str()));
+    if response.lost_focus()
+        && let Some(end_day) = end_day
+        && end_day != experiment.planning_end_day
+    {
+        edits.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetExperimentHorizon {
+                end_day,
+                interval_h: experiment.interval_h,
+            },
+        ));
+    }
+    response.on_hover_text(tr!("experiment-end-day-help"));
+}
+
+/// Which grades the schedule carries: a summary that opens a checklist of
+/// every field that could be one.
+///
+/// Only fields that could be a blended grade are offered: a tonnes-weighted
+/// numeric average. Anything else is not a unit question, it is a different
+/// kind of column, and the grade gate says so in its own words.
+pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, document: &Document, session: u32, edits: &mut Vec<UiCommand>) {
+    let experiment = plan.experiment();
     let candidates: Vec<_> = document
         .reserve_fields()
         .iter()
@@ -91,22 +93,70 @@ pub(crate) fn draw_optimisation(
                 || experiment.grade_unit(field.id).is_some()
         })
         .collect();
-    let rows_used = 7 + candidates.len() + usize::from(candidates.is_empty());
+    let carried: Vec<&str> = candidates
+        .iter()
+        .filter(|field| experiment.grade_unit(field.id).is_some())
+        .map(|field| field.name.as_str())
+        .collect();
+    let summary = match carried.as_slice() {
+        _ if candidates.is_empty() => tr!("experiment-no-grade-fields"),
+        [] => tr!("experiment-grades-none"),
+        names => names.join(", "),
+    };
+    let response = rows.select(&tr!("experiment-grades"), &summary).on_hover_text(tr!("experiment-grade-units-help"));
+    checklist_popup(&response, tr!("experiment-grades"), 260.0, |ui| {
+        if candidates.is_empty() {
+            menu::menu_note(ui, tr!("experiment-no-grade-fields"));
+        }
+        for field in &candidates {
+            let tracked = experiment.grade_unit(field.id).is_some();
+            if ChecklistRow::new(&field.name, Tick::of(tracked, false)).show(ui).toggled {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetExperimentGradeUnit {
+                        field: field.id,
+                        unit: (!tracked).then_some(GradeUnit::Stored),
+                    },
+                ));
+            }
+        }
+    });
+}
+
+/// The settings few projects need to change: how finely the calendar is
+/// split and, where Improve is built in, how long it may search.
+///
+/// The event capacity is left to its derived value: it trades model size
+/// against achievable production in a way nobody can set by eye.
+pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let experiment = plan.experiment();
+    let draft = draft(editor, plan);
+    let interval_h = parse_positive(&draft.interval_h);
+    let solve_seconds = parse_positive(&draft.solve_seconds);
+    let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
+    let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
+    let improve = cfg!(feature = "scip");
+    let rows_used = 2 + if improve { 2 } else { 0 };
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
-    PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-section")).show(ui, |rows| {
+    PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-advanced")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        let response = rows.field(&tr!("experiment-end-day"), &mut draft.end_day, end_day.is_none().then_some(invalid.as_str()));
-        let horizon_committed = response.lost_focus();
-        response.on_hover_text(tr!("experiment-end-day-help"));
         let response = rows.field(&tr!("experiment-interval"), &mut draft.interval_h, interval_h.is_none().then_some(invalid.as_str()));
-        let interval_committed = response.lost_focus();
-        response.on_hover_text(interval_help());
-        if (horizon_committed || interval_committed)
-            && let (Some(end_day), Some(interval_h)) = (end_day, interval_h)
-            && (end_day != experiment.planning_end_day || interval_h != experiment.interval_h)
+        if response.lost_focus()
+            && let Some(interval_h) = interval_h
+            && interval_h != experiment.interval_h
         {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentHorizon { end_day, interval_h }));
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetExperimentHorizon {
+                    end_day: experiment.planning_end_day,
+                    interval_h,
+                },
+            ));
+        }
+        response.on_hover_text(tr!("experiment-interval-help"));
+        if !improve {
+            return;
         }
         let response = rows.field(
             &tr!("experiment-solve-seconds"),
@@ -121,40 +171,8 @@ pub(crate) fn draw_optimisation(
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap }));
         }
-        let response = rows.field(
-            &tr!("experiment-event-capacity"),
-            &mut draft.event_capacity,
-            event_capacity.is_none().then_some(invalid.as_str()),
-        );
-        let committed = response.lost_focus();
-        response.on_hover_text(tr!("experiment-event-capacity-help"));
-        if committed
-            && let Some(capacity) = event_capacity
-            && capacity != experiment.event_capacity
-        {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentEventCapacity { capacity }));
-        }
-        // Tracking is all a grade asks for: capture blends its stored numbers.
-        if candidates.is_empty() {
-            rows.readonly(&tr!("experiment-grades"), &tr!("experiment-no-grade-fields"), None, None);
-        }
-        for field in &candidates {
-            let mut tracked = experiment.grade_unit(field.id).is_some();
-            let response = rows.checkbox(&tr!("experiment-track-grade", grade = field.name.clone()), &mut tracked);
-            if response.changed() {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::SetExperimentGradeUnit {
-                        field: field.id,
-                        unit: tracked.then_some(GradeUnit::Stored),
-                    },
-                ));
-            }
-            response.on_hover_text(tr!("experiment-grade-units-help"));
-        }
     });
     commands.append(&mut edits);
-    table_rect
 }
 
 /// The optimisation rows on one stockpile's Setup page.

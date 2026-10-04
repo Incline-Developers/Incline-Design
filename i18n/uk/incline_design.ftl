@@ -2273,3 +2273,4 @@ ui-hold-shift-unload = утримуйте Shift, щоб розрядити
 ui-no-charge-rule-load = Немає правила заряджання
 ui-right-click-charge-rules-heading-add = клацніть правою кнопкою заголовок «Правила заряджання», щоб додати
 omf-element-name-has-count-charge-naming = Елемент «{ $name }» має зарядів ({ $count }), що посилаються на свердловини, яких він більше не містить
+common-currency-symbol = ₴

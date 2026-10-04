@@ -2224,3 +2224,4 @@ ui-hold-shift-unload = mantenga Mayús para descargar
 ui-no-charge-rule-load = No hay regla de carga con la que cargar
 ui-right-click-charge-rules-heading-add = haga clic derecho en el encabezado Reglas de carga para añadir una
 omf-element-name-has-count-charge-naming = El elemento «{ $name }» tiene { $count } carga(s) que nombran barrenos que ya no contiene
+common-currency-symbol = €

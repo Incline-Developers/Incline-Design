@@ -2268,3 +2268,4 @@ ui-hold-shift-unload = tieni premuto Maiusc per scaricare
 ui-no-charge-rule-load = Nessuna regola di carica con cui caricare
 ui-right-click-charge-rules-heading-add = fai clic destro sull'intestazione Regole di carica per aggiungerne una
 omf-element-name-has-count-charge-naming = L'elemento '{ $name }' ha { $count } carica/che che indicano fori che non contiene più
+common-currency-symbol = €

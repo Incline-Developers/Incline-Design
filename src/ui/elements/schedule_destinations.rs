@@ -401,9 +401,6 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
     DataGrid::new("schedule_rule_list", rect, &tr!("destination-destinations"))
         .column_header(&tr!("destination-rule-order"))
         .show(ui, |ui| {
-            if !routing.enabled {
-                explorer_note(ui, tr!("destination-routing-off-note"));
-            }
             if routing.rules.is_empty() {
                 explorer_note(ui, tr!("destination-no-rules"));
             }

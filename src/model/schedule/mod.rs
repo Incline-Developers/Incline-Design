@@ -553,8 +553,6 @@ pub(crate) enum ScheduleError {
     InvalidGradeTarget,
     /// A summed coefficient or movement value no finite number can express.
     UnrepresentableValue,
-    /// A currency label that is empty once trimmed.
-    EmptyCurrency,
     /// A lot or portion tonnage that is zero, negative, infinite or NaN. Blank
     /// is not a legitimate answer here: a portion of nothing is not a portion.
     InvalidLotTonnes,
@@ -662,7 +660,6 @@ impl ScheduleError {
             Self::InvalidGradeTarget => tr!("grade-target-invalid"),
             Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
             Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
-            Self::EmptyCurrency => tr!("cashflow-error-empty-currency"),
             Self::InvalidLotTonnes => tr!("inventory-error-invalid-tonnes"),
             Self::InvalidLotValue => tr!("inventory-error-invalid-value"),
             Self::DuplicateLotValue => tr!("inventory-error-duplicate-value"),
@@ -768,8 +765,10 @@ pub(crate) struct SchedulePlan {
     /// are steered by routing, and crusher targets live in the Calendar.
     #[serde(default, rename = "grade_targets", skip_serializing)]
     retired_grade_targets: grade_targets::Retired,
-    #[serde(default = "default_currency")]
-    currency: String,
+    /// A currency label from before figures took the language's own
+    /// symbol, read and dropped.
+    #[serde(default, rename = "currency", skip_serializing)]
+    retired_currency: String,
     /// Explicit settings for schedule optimisation; see [`experiment`].
     /// Persisted in every build, including WASM where calculation is unavailable.
     #[serde(default)]
@@ -781,10 +780,6 @@ pub(crate) struct SchedulePlan {
     /// Drill and blast settings; see [`drill_blast`]. Off by default.
     #[serde(default)]
     drill_blast: DrillBlastConfig,
-}
-
-fn default_currency() -> String {
-    cashflow::DEFAULT_CURRENCY.to_owned()
 }
 
 impl Default for SchedulePlan {
@@ -806,7 +801,7 @@ impl Default for SchedulePlan {
             crusher_grade_calendars: Vec::new(),
             stockpile_operations: Vec::new(),
             retired_grade_targets: grade_targets::Retired,
-            currency: default_currency(),
+            retired_currency: String::new(),
             experiment: experiment::ExperimentConfig::default(),
             delays: DelayConfig::default(),
             drill_blast: DrillBlastConfig::default(),
@@ -855,7 +850,6 @@ impl SchedulePlan {
             && self.cashflow.is_empty()
             && self.crusher_grade_calendars.is_empty()
             && self.stockpile_operations.is_empty()
-            && self.currency == cashflow::DEFAULT_CURRENCY
             && self.experiment.is_pristine()
             && self.delays.is_empty()
             && self.drill_blast.is_pristine()
@@ -1047,20 +1041,6 @@ impl SchedulePlan {
 
     pub(crate) fn cashflow_mut(&mut self) -> &mut CashflowConfig {
         &mut self.cashflow
-    }
-
-    pub(crate) fn currency(&self) -> &str {
-        &self.currency
-    }
-
-    /// The label figures are shown with. Display only - nothing is converted.
-    pub(crate) fn set_currency(&mut self, currency: &str) -> ScheduleResult {
-        let trimmed = currency.trim();
-        if trimmed.is_empty() {
-            return Err(ScheduleError::EmptyCurrency);
-        }
-        self.currency = trimmed.to_owned();
-        Ok(())
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -1917,9 +1897,6 @@ impl SchedulePlan {
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
-        if self.currency.trim().is_empty() {
-            return Err(ScheduleError::EmptyCurrency);
-        }
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -1984,7 +1961,6 @@ impl SchedulePlan {
             operation.hash_content(hasher);
         }
         self.cashflow.hash_names(hasher);
-        self.currency.hash(hasher);
         self.experiment.hash_content(hasher);
         self.delays.hash_content(hasher);
         self.drill_blast.hash_content(hasher);
@@ -2062,7 +2038,6 @@ impl SchedulePlan {
                 .iter()
                 .map(|o| std::mem::size_of_val(o) + o.periods.len() * std::mem::size_of::<(CalendarPeriod, stockpile_operation::PileMode)>())
                 .sum::<usize>()
-            + self.currency.len()
             + self.experiment.estimated_bytes()
             + self.delays.estimated_bytes()
     }

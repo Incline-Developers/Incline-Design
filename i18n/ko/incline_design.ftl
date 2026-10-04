@@ -2259,3 +2259,4 @@ ui-hold-shift-unload = Shift를 누르면 장약 해제
 ui-no-charge-rule-load = 장약에 사용할 장약 규칙 없음
 ui-right-click-charge-rules-heading-add = 장약 규칙 제목을 우클릭하여 추가
 omf-element-name-has-count-charge-naming = 요소 '{ $name }'에 더 이상 포함되지 않은 발파공을 지정하는 장약이 { $count }개 있습니다
+common-currency-symbol = ₩

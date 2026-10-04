@@ -2226,3 +2226,4 @@ ui-hold-shift-unload = برای تخلیه شارژ، Shift را نگه داری
 ui-no-charge-rule-load = قانون شارژی برای شارژ وجود ندارد
 ui-right-click-charge-rules-heading-add = برای افزودن، روی عنوان قوانین شارژ راست‌کلیک کنید
 omf-element-name-has-count-charge-naming = عنصر «{ $name }» دارای { $count } شارژ است که چال‌هایی را نام می‌برند که دیگر در آن نیستند
+common-currency-symbol = ﷼

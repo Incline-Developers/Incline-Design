@@ -60,9 +60,11 @@ use crate::{
             BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog,
             ScheduleBarView, ScheduleEdit, ScheduleRepairTarget, ScheduleStep, UiCommand,
         },
+        themed_icon,
         widgets::{
-            context_menu::{ContextMenuAction, context_menu_popup},
-            toolbar::GROUP_CORNER_RADIUS,
+            context_menu::{ContextMenuAction, checklist_popup, context_menu_fields, context_menu_popup},
+            menu::MenuFieldF32,
+            toolbar::{GROUP_CORNER_RADIUS, ToolbarButton},
         },
     },
 };
@@ -154,7 +156,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     // to its successor.
     let plan = project.schedule.clone();
     let session = project.active_session;
-    let rect = draw_timeline_page(ui, editor, &plan, document, commands, |ui, timeline, editor, destinations, commands| {
+    let rect = draw_timeline_page(ui, editor, &plan, document, Some(session), commands, |ui, timeline, editor, destinations, commands| {
         draw_canvas(ui, timeline, editor, &plan, destinations, session, commands);
     });
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
@@ -478,10 +480,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// their widget ids apart, because both pages can be laid out in the same
 /// frame.
 pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
-    use crate::ui::{
-        elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT},
-        widgets::toolbar::ToolbarButton,
-    };
+    use crate::ui::elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
     let startable = !working;
@@ -616,7 +615,7 @@ fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::Schedul
     (end > 0.0).then_some(end)
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, settings: Option<u32>, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
@@ -653,6 +652,9 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
         // the repair.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
+            if let Some(session) = settings {
+                draw_settings(ui, plan, session, commands);
+            }
             if let Some(target) = editor.schedule_run_repair {
                 let label = match target {
                     ScheduleRepairTarget::Schedule(_) => tr!("schedule-open-setup"),
@@ -674,14 +676,52 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
     });
 }
 
+/// The Gantt's own display settings, behind the gear at the toolbar's right
+/// end: how tall a dig sequence bar is drawn.
+///
+/// The height is held while it is dragged or typed and written once, when
+/// that stops, so one adjustment is one undo step rather than one per frame.
+fn draw_settings(ui: &mut egui::Ui, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let side = ui.spacing().interact_size.y;
+    let button = ui.add(
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("gantt-settings"))
+            .id_salt("gantt_settings")
+            .button_side(side),
+    );
+    checklist_popup(&button, tr!("gantt-settings"), 280.0, |ui| {
+        context_menu_fields(ui, |ui| {
+            let id = ui.id().with("gantt_bar_height");
+            let mut height = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(plan.bar_height());
+            let response = MenuFieldF32::new(
+                tr!("schedule-bar-height"),
+                &mut height,
+                crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT,
+            )
+            .max_decimals(0)
+            .show(ui);
+            if response.dragged() || response.has_focus() {
+                ui.data_mut(|data| data.insert_temp(id, height));
+            } else {
+                ui.data_mut(|data| data.remove::<f32>(id));
+                if height != plan.bar_height() {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
+                }
+            }
+        });
+    });
+}
+
 /// A page laid out like the Gantt: the toolbar across the top, a timeline
 /// canvas drawn by `draw`, and the Inspector beside it while it is open.
-/// Returns the rect it claimed, for the caller to round off as one region.
+/// `settings` carries the session when the page offers the Gantt's own
+/// display settings. Returns the rect it claimed, for the caller to round off
+/// as one region.
 pub(super) fn draw_timeline_page(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &crate::model::Document,
+    settings: Option<u32>,
     commands: &mut Vec<UiCommand>,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &[DestinationView], &mut Vec<UiCommand>),
 ) -> egui::Rect {
@@ -692,7 +732,7 @@ pub(super) fn draw_timeline_page(
             let toolbar_height = ui.spacing().interact_size.y + 8.0;
             let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
             let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, plan, commands);
+            draw_toolbar(ui, toolbar, editor, plan, settings, commands);
             if canvas.is_positive() {
                 // Names are resolved here, at draw time, by stable id: a
                 // rename relabels a calculated span without recalculating it.

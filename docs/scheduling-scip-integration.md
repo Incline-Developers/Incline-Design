@@ -15,7 +15,7 @@ continues from the first schedule: SCIP → extraction → the same replay.
 
 Every run starts at hour zero with authored opening inventory. Run Period
 requests Day 1 when no current result exists, otherwise extends the current
-horizon by one day, capped at Planning end day. It reoptimises earlier days.
+horizon by one day, capped at the Horizon (days) setting. It reoptimises earlier days.
 Run All Periods requests the complete configured horizon. Empty days inside
 that requested horizon are calculated, not missing data.
 
@@ -33,7 +33,8 @@ The solve itself runs in a child process of the app; see
 
 Calendar interval sets input constancy and stockpile receipt release. Event
 positions are shared, ordered segments inside each interval; their durations
-are decision variables. Event capacity is an optional saved setting, 1–24.
+are decision variables. Event capacity is an optional saved setting, 1–24,
+kept by projects that set it but no longer offered in Setup.
 Blank preserves the existing derived capacity, capped at 24. A lower explicit
 cap can restrict source switches and change the best attainable schedule: it
 is a modelling choice, not a solver-only speed knob. The run details state

@@ -2277,3 +2277,4 @@ ui-hold-shift-unload = цэнэггүй болгохын тулд Shift дарн
 ui-no-charge-rule-load = Цэнэглэх дүрэм алга
 ui-right-click-charge-rules-heading-add = нэмэхийн тулд Цэнэглэх дүрмүүд гарчиг дээр хулганы баруун товчийг дарна уу
 omf-element-name-has-count-charge-naming = '{ $name }' элементэд өөрт нь цаашид агуулагдахгүй цооногуудыг нэрлэсэн { $count } цэнэг байна
+common-currency-symbol = ₮

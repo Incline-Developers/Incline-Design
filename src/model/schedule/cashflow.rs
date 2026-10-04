@@ -40,9 +40,11 @@ use super::{
 };
 use crate::{i18n::tr, model::ReserveFieldId};
 
-/// What a project's money is called. Display only - nothing here converts
-/// between currencies, and a schedule's figures are all in this one.
-pub(crate) const DEFAULT_CURRENCY: &str = "USD";
+/// The symbol money is shown with: the interface language's own. Display
+/// only - nothing here converts between currencies.
+pub(crate) fn currency_symbol() -> String {
+    tr!("common-currency-symbol")
+}
 
 /// Identity of one cashflow rule within its project. Allocated and protected
 /// like every other id here: never reused, never rewound by an undo.
@@ -589,8 +591,8 @@ pub(crate) fn movement_value(tonnes: f64, valuation: &Valuation) -> ScheduleResu
     Ok(value)
 }
 
-/// A signed figure with its currency and basis: `+135 USD/t`.
-pub(crate) fn format_value(value: f64, currency: &str) -> String {
+/// A signed figure with its currency and basis: `+$135/t`.
+pub(crate) fn format_value(value: f64) -> String {
     let rounded = if (value * 100.0).round() == 0.0 { 0.0 } else { value };
     let sign = if rounded > 0.0 { "+" } else { "" };
     let digits = {
@@ -603,5 +605,9 @@ pub(crate) fn format_value(value: f64, currency: &str) -> String {
         }
         text
     };
-    format!("{}{} {}/t", sign, digits, currency)
+    let (sign, digits) = match digits.strip_prefix('-') {
+        Some(magnitude) => ("-", magnitude.to_owned()),
+        None => (sign, digits),
+    };
+    format!("{sign}{}{digits}/t", currency_symbol())
 }

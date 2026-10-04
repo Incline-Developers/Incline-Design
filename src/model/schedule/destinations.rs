@@ -653,14 +653,11 @@ impl DestinationRule {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct RoutingConfig {
-    /// Whether calculated production is routed at all.
-    ///
-    /// Off for every project that has not switched it on, including every
-    /// project saved before routing existed, so their runs keep the dig-only
-    /// behaviour they were authored against. Adding a destination or a rule
-    /// does not switch it on: configuring something and committing to it are
-    /// different decisions.
-    pub(crate) enabled: bool,
+    /// Read and dropped: routing was once switched on per project, and a
+    /// project with it off could not be calculated at all. Every tonne is
+    /// routed now.
+    #[serde(rename = "enabled", skip_serializing)]
+    retired_enabled: bool,
     pub(crate) standalone: Vec<StandaloneDestination>,
     next_standalone_id: u64,
     /// Settings for the automatically exposed solid-backed destinations.
@@ -802,7 +799,7 @@ impl RoutingConfig {
     /// Whether nothing here has ever been configured, so an untouched project
     /// is not reported as holding routing setup.
     pub(crate) fn is_pristine(&self) -> bool {
-        !self.enabled && self.standalone.is_empty() && self.rules.is_empty() && self.solids.iter().all(|entry| entry.capacity_t.is_none() && entry.inventory.is_pristine())
+        self.standalone.is_empty() && self.rules.is_empty() && self.solids.iter().all(|entry| entry.capacity_t.is_none() && entry.inventory.is_pristine())
     }
 
     pub(crate) fn standalone(&self, id: StandaloneDestinationId) -> Option<&StandaloneDestination> {
@@ -1219,10 +1216,6 @@ impl RoutingConfig {
         Ok(())
     }
 
-    pub(crate) fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
     /// Check a plan as it came off disk, and raise the id allocators past
     /// every stored id so a hand-edited or future file cannot hand out one
     /// that is already in use.
@@ -1333,7 +1326,6 @@ impl RoutingConfig {
 
     pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use std::hash::Hash;
-        self.enabled.hash(hasher);
         for entry in &self.standalone {
             entry.id.hash(hasher);
             entry.name.hash(hasher);

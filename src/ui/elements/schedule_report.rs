@@ -147,7 +147,7 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
             .map_or_else(|| tr!("destination-unresolved"), |(_, name, _)| name.clone())
     };
     let loader_name = |id: LoaderAgentId| plan.agent(id).map_or_else(|| id.0.to_string(), |agent| agent.name.clone());
-    let currency = plan.currency().to_owned();
+    let currency = crate::model::schedule::cashflow::currency_symbol();
     let grade_headers: Vec<String> = names.grades.iter().map(|name| tr!("report-grade", grade = name.clone())).collect();
 
     let mut tables = Vec::new();
