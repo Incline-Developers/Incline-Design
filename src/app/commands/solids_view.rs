@@ -2113,10 +2113,15 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                 super::triangulation::solid_between::crease_outline(&built.slab, &internal, BLAST_CREASE_ANGLE)
             }
         };
-        *slot = Some(Carved {
-            mesh: piece_preview(source, built.slab, edges)?,
-            volume: Some(built.volume),
-        });
+        let mut mesh = piece_preview(source, built.slab, edges)?;
+        if built.source_vertex.is_some() {
+            // Split off whole, its edges are the source's every triangle
+            // side: shown only as the whole flitch shows them, not as the
+            // always-on rim a cut piece draws.
+            mesh.always_show_edges = source.always_show_edges;
+            mesh.line_weight = source.line_weight;
+        }
+        *slot = Some(Carved { mesh, volume: Some(built.volume) });
     }
     Ok(carved)
 }

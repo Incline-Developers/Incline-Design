@@ -97,6 +97,7 @@ pub(crate) enum MacMenuAction {
     OpenCutTriangulationBySurface,
     OpenCutTopologyByPitShell,
     OpenIncludeSolidInTopology,
+    OpenBuildSolidFromSurfaces,
     OpenContourTriangulation,
     OpenPointCloudTin,
     OpenPointCloudJoin,
@@ -174,6 +175,7 @@ impl MacMenuAction {
         Self::OpenCutTriangulationBySurface,
         Self::OpenCutTopologyByPitShell,
         Self::OpenIncludeSolidInTopology,
+        Self::OpenBuildSolidFromSurfaces,
         Self::OpenContourTriangulation,
         Self::OpenPointCloudTin,
         Self::OpenPointCloudJoin,
@@ -479,6 +481,14 @@ pub(crate) fn install_menu_bar() {
         &tr!("common-merge-shell-into-topology-ellipsis"),
         "",
         MacMenuAction::OpenIncludeSolidInTopology,
+        &target,
+        mtm,
+    );
+    add_action(
+        &triangulation_menu,
+        &tr!("menu-build-solid-surfaces"),
+        "",
+        MacMenuAction::OpenBuildSolidFromSurfaces,
         &target,
         mtm,
     );
