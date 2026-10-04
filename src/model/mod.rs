@@ -251,6 +251,12 @@ impl SolidKind {
     pub(crate) fn requires_block_model(self) -> bool {
         matches!(self, Self::Pit)
     }
+
+    /// Whether its ground is drilled and blasted before it is dug. Placed
+    /// material is loose already, so only a pit's is.
+    pub(crate) fn is_blasted(self) -> bool {
+        matches!(self, Self::Pit)
+    }
 }
 
 /// One closed volume the Solids workspace reserves against: the space between

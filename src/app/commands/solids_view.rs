@@ -2382,14 +2382,15 @@ impl crate::app::App<'_> {
         Ok(records)
     }
 
-    /// Every blast of every solid whose blasting has been built, named as the
-    /// Blasts step names them.
+    /// Every blast of every pit whose blasting has been built, named as the
+    /// Blasts step names them. A dump or stockpile is cut into blasts too, for
+    /// its blocks, but placed material is never drilled.
     pub(crate) fn planning_blasts(&self) -> Vec<BlastRecord> {
         let Some(document) = self.workspace.active_document() else {
             return Vec::new();
         };
         let mut records = Vec::new();
-        for solid in document.solids() {
+        for solid in document.solids().iter().filter(|solid| solid.kind.is_blasted()) {
             let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(ViewSolid::blast_faces) else {
                 continue;
             };
