@@ -356,6 +356,12 @@ fn grid_columns_header(ui: &mut egui::Ui, columns: &[(String, f32)]) {
 /// with the same shares. `cells` are drawn as text, the first in the normal
 /// colour and the rest weaker; an empty one is left for the caller to fill,
 /// in the rect handed back for it.
+/// The height of one [`grid_columns_row`], for a long list that draws only
+/// the rows in view and stands empty space in for the rest.
+pub(crate) fn grid_columns_row_height(ui: &egui::Ui) -> f32 {
+    grid_row_height(ui) + COLUMN_ROW_EXTRA
+}
+
 pub(crate) fn grid_columns_row(ui: &mut egui::Ui, fractions: &[f32], cells: &[&str], selected: bool) -> (egui::Response, Vec<egui::Rect>) {
     let height = grid_row_height(ui) + COLUMN_ROW_EXTRA;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());

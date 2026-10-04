@@ -3066,6 +3066,11 @@ pub(crate) struct EditorState {
     /// A machine waiting on the delete confirmation, asked only when
     /// deleting it would strand Gantt work.
     pub(crate) pending_delete_agent: Option<crate::model::schedule::LoaderAgentId>,
+    /// The periods selected on the Periods step (Day 1 is 0), and the one a
+    /// Shift-click extends from. A colour picked on any selected row marks
+    /// them all.
+    pub(crate) schedule_selected_periods: std::collections::BTreeSet<u32>,
+    pub(crate) schedule_period_anchor: Option<u32>,
     /// The New Destination dialog: whether it is open, and its draft. The kind
     /// comes from the page it was opened on, so there is no kind to choose.
     pub(crate) new_destination_open: bool,
@@ -3622,6 +3627,8 @@ impl EditorState {
         self.new_loader_agent_open = false;
         self.new_loader_agent_class = None;
         self.pending_delete_agent = None;
+        self.schedule_selected_periods.clear();
+        self.schedule_period_anchor = None;
         self.new_loader_agent_name.clear();
         self.gantt = GanttView::default();
         self.schedule_calendar = ScheduleCalendarView::default();
@@ -4334,6 +4341,8 @@ impl EditorState {
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
             pending_delete_agent: None,
+            schedule_selected_periods: std::collections::BTreeSet::new(),
+            schedule_period_anchor: None,
             new_destination_open: false,
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
@@ -5923,6 +5932,8 @@ impl UiCommand {
                 // and the stockpile's own page show the result where it was
                 // typed.
                 | ScheduleEdit::SetExperimentHorizon { .. }
+                | ScheduleEdit::SetStartDate(_)
+                | ScheduleEdit::SetPeriodColors { .. }
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
@@ -6635,6 +6646,9 @@ pub(crate) enum DelaySelection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ScheduleStep {
     Configuration,
+    /// The dates the schedule runs between, and the colour each day is
+    /// marked with.
+    Periods,
     LoaderClasses,
     LoaderAgents,
     /// Delay types, delay lists and rosters.
@@ -6668,8 +6682,9 @@ impl ScheduleStep {
     /// names them. Solids sits last before Readiness because the Solids run
     /// moves on far more often than the setup does, and a step's change
     /// retires every step after it.
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Configuration,
+        Self::Periods,
         Self::LoaderClasses,
         Self::LoaderAgents,
         Self::Delays,
@@ -6692,6 +6707,7 @@ impl ScheduleStep {
     pub(crate) fn label(self) -> String {
         match self {
             Self::Configuration => tr!("planning-configuration"),
+            Self::Periods => tr!("periods-step"),
             Self::LoaderClasses => tr!("schedule-loader-classes"),
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
@@ -6711,6 +6727,7 @@ impl ScheduleStep {
     pub(crate) fn tree_id(self) -> &'static str {
         match self {
             Self::Configuration => "schedule_configuration",
+            Self::Periods => "schedule_periods",
             Self::LoaderClasses => "schedule_loader_classes",
             Self::LoaderAgents => "schedule_loader_agents",
             Self::Delays => "schedule_delays",
@@ -7382,6 +7399,14 @@ pub(crate) enum ScheduleEdit {
     SetExperimentHorizon {
         end_day: u32,
         interval_h: f64,
+    },
+    /// The date of Day 1, or none. Display only; see
+    /// [`crate::model::schedule::periods`].
+    SetStartDate(Option<chrono::NaiveDate>),
+    /// Mark periods (Day 1 is 0) with a colour, or clear their marks.
+    SetPeriodColors {
+        periods: Vec<u32>,
+        color: Option<[u8; 3]>,
     },
     SetExperimentSolveLimits {
         seconds: f64,

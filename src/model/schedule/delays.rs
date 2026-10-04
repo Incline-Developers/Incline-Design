@@ -546,6 +546,13 @@ impl DelayConfig {
     }
 }
 
+/// [`parse_instant`], or - once Day 1 has a date - a date and time the way
+/// a spreadsheet writes one: `17/04/2026 12:00`. See
+/// [`super::periods::parse_date_time`].
+pub(crate) fn parse_time(text: &str, start: Option<chrono::NaiveDate>) -> Option<f64> {
+    parse_instant(text).or_else(|| start.and_then(|start| super::periods::parse_date_time(text, start)))
+}
+
 /// Read an instant typed or pasted by a planner, in hours from the schedule
 /// origin.
 ///
@@ -588,14 +595,6 @@ pub(crate) fn parse_instant(text: &str) -> Option<f64> {
     Some(f64::from(day - 1) * 24.0 + minutes / 60.0)
 }
 
-/// Write hours from the origin as the day number and `HH:MM` the Gantt uses.
-pub(crate) fn instant_parts(hours: f64) -> (i64, String) {
-    let total_minutes = (hours * 60.0).round() as i64;
-    let day = total_minutes.div_euclid(24 * 60) + 1;
-    let into_day = total_minutes.rem_euclid(24 * 60);
-    (day, format!("{:02}:{:02}", into_day / 60, into_day % 60))
-}
-
 /// Write a duration in hours the way it is typed back: `1`, `0.5`, `12`.
 pub(crate) fn hours_text(hours: f64) -> String {
     let rounded = (hours * 1000.0).round() / 1000.0;
@@ -618,11 +617,12 @@ pub(crate) enum DelayRowProblem {
 /// delay per line, separated by tabs (what a spreadsheet copies), commas or
 /// semicolons. Columns after the third are ignored. A first line that is not
 /// a delay is read as the header and skipped. Machines are matched by name
-/// the way the fleet's own names are compared.
+/// the way the fleet's own names are compared. Times are read by
+/// [`parse_time`], so dates are read once Day 1 has one.
 ///
 /// All or nothing: one unreadable line refuses the paste, with every problem
 /// reported by its 1-based line number, so a table is never half-filled.
-pub(crate) fn parse_delay_rows(text: &str, agents: &[(LoaderAgentId, String)]) -> Result<Vec<DelayEntry>, Vec<(usize, DelayRowProblem)>> {
+pub(crate) fn parse_delay_rows(text: &str, agents: &[(LoaderAgentId, String)], start_date: Option<chrono::NaiveDate>) -> Result<Vec<DelayEntry>, Vec<(usize, DelayRowProblem)>> {
     let mut entries = Vec::new();
     let mut problems = Vec::new();
     let mut first = true;
@@ -644,8 +644,8 @@ pub(crate) fn parse_delay_rows(text: &str, agents: &[(LoaderAgentId, String)]) -
             continue;
         }
         let agent = agents.iter().find(|(_, name)| super::same_name(name, columns[0])).map(|(id, _)| *id);
-        let start = parse_instant(columns[1]);
-        let end = parse_instant(columns[2]);
+        let start = parse_time(columns[1], start_date);
+        let end = parse_time(columns[2], start_date);
         if header && agent.is_none() && start.is_none() {
             continue;
         }

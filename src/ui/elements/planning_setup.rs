@@ -1771,6 +1771,9 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_setup::draw_configuration(ui, rect, editor, &plan, document, session, commands)
             });
         }
+        ScheduleStep::Periods => {
+            central_island(ui, layout, |ui, rect| super::schedule_periods::draw_periods(ui, rect, editor, &plan, session, commands));
+        }
         ScheduleStep::LoaderClasses => {
             island(ui, layout, "schedule_class_list_island", 320.0, |ui, rect| {
                 super::schedule_setup::draw_class_list(ui, rect, editor, &plan, session, commands)

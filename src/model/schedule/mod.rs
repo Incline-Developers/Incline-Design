@@ -22,6 +22,7 @@ pub(crate) mod experiment;
 pub(crate) mod grade_targets;
 pub(crate) mod inventory;
 pub(crate) mod optimisation;
+pub(crate) mod periods;
 pub(crate) mod result;
 pub(crate) mod sequence;
 pub(crate) mod stockpile_operation;
@@ -780,6 +781,10 @@ pub(crate) struct SchedulePlan {
     /// Drill and blast settings; see [`drill_blast`]. Off by default.
     #[serde(default)]
     drill_blast: DrillBlastConfig,
+    /// The date of Day 1 and the colours periods are marked with; see
+    /// [`periods`]. Read by the displays only, never by a calculation.
+    #[serde(default)]
+    periods: periods::SchedulePeriods,
 }
 
 impl Default for SchedulePlan {
@@ -805,6 +810,7 @@ impl Default for SchedulePlan {
             experiment: experiment::ExperimentConfig::default(),
             delays: DelayConfig::default(),
             drill_blast: DrillBlastConfig::default(),
+            periods: periods::SchedulePeriods::default(),
         }
     }
 }
@@ -853,6 +859,7 @@ impl SchedulePlan {
             && self.experiment.is_pristine()
             && self.delays.is_empty()
             && self.drill_blast.is_pristine()
+            && self.periods == periods::SchedulePeriods::default()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -883,6 +890,26 @@ impl SchedulePlan {
 
     pub(crate) fn delays(&self) -> &DelayConfig {
         &self.delays
+    }
+
+    pub(crate) fn periods(&self) -> &periods::SchedulePeriods {
+        &self.periods
+    }
+
+    /// Name Day 1, or stop naming it. The horizon is unchanged: the same
+    /// number of days, now starting on `date`.
+    pub(crate) fn set_start_date(&mut self, date: Option<chrono::NaiveDate>) {
+        self.periods.start_date = date;
+    }
+
+    /// Mark `periods` with `color`, or clear their marks.
+    pub(crate) fn set_period_colors(&mut self, periods: &[u32], color: Option<[u8; 3]>) {
+        for period in periods {
+            match color {
+                Some(color) => self.periods.colors.insert(*period, color),
+                None => self.periods.colors.remove(period),
+            };
+        }
     }
 
     pub(crate) fn agent_ids(&self) -> Vec<LoaderAgentId> {
@@ -1982,6 +2009,8 @@ impl SchedulePlan {
         self.cashflow.hash_names(hasher);
         self.experiment.hash_content(hasher);
         self.delays.hash_content(hasher);
+        // Display only, but saved: a start date or a colour is unsaved work.
+        self.periods.hash(hasher);
         self.drill_blast.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);

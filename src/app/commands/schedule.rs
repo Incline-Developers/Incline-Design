@@ -223,6 +223,14 @@ impl crate::app::App<'_> {
                 plan.experiment_mut().set_planning_end_day(end_day)?;
                 plan.experiment_mut().set_interval_h(interval_h)
             }),
+            ScheduleEdit::SetStartDate(date) => self.edit_schedule(|plan| {
+                plan.set_start_date(date);
+                Ok(())
+            }),
+            ScheduleEdit::SetPeriodColors { periods, color } => self.edit_schedule(|plan| {
+                plan.set_period_colors(&periods, color);
+                Ok(())
+            }),
             ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap } => self.edit_schedule(|plan| {
                 plan.experiment_mut().set_solve_seconds(seconds)?;
                 plan.experiment_mut().set_relative_gap(relative_gap)

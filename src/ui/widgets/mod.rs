@@ -5,6 +5,7 @@ pub(crate) mod color;
 pub(crate) mod context_menu;
 pub(crate) mod data_grid;
 pub(crate) mod data_table;
+pub(crate) mod date_picker;
 pub(crate) mod explorer;
 pub(crate) mod island;
 pub(crate) mod log_traces;

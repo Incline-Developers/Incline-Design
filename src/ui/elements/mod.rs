@@ -32,6 +32,7 @@ pub(crate) mod schedule_inspector;
 /// The schedule optimiser's settings: horizon, resolution, solve limits,
 /// grade units and stockpile representation.
 pub(crate) mod schedule_optimisation;
+pub(crate) mod schedule_periods;
 pub(crate) mod schedule_report;
 pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;

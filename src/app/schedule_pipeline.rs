@@ -507,8 +507,14 @@ impl crate::app::App<'_> {
             hasher.finish()
         };
 
+        // Dates and colours name the days; they change nothing a run reads.
+        // The horizon they show is the experiment's, which a calculated
+        // schedule's currentness already reads.
+        let periods_step = hash_of((configuration, "periods"));
+
         [
             configuration,
+            periods_step,
             classes_step,
             agents_step,
             delays_step,
@@ -756,6 +762,7 @@ impl crate::app::App<'_> {
     fn evaluate_schedule_step(&mut self, step: ScheduleStep) -> StageOutcome {
         match step {
             ScheduleStep::Configuration => self.evaluate_schedule_configuration(),
+            ScheduleStep::Periods => self.evaluate_periods(),
             ScheduleStep::LoaderClasses => self.evaluate_loader_classes(),
             ScheduleStep::LoaderAgents => self.evaluate_loader_agents(),
             ScheduleStep::Delays => self.evaluate_delays(),
@@ -834,6 +841,19 @@ impl crate::app::App<'_> {
 
     /// Delays are optional, and every edit is checked as it is made, so the
     /// step has nothing to block on: it counts what there is.
+    /// Periods has nothing to refuse: without a start date the schedule
+    /// reads in day numbers, as it always has.
+    fn evaluate_periods(&self) -> StageOutcome {
+        let entities = self
+            .workspace
+            .active_document()
+            .map_or(0, |document| document.schedule().experiment().planning_end_day as usize);
+        StageOutcome::Settled {
+            diagnostics: Vec::new(),
+            entities,
+        }
+    }
+
     fn evaluate_delays(&self) -> StageOutcome {
         let entities = self.workspace.active_document().map_or(0, |document| {
             let delays = document.schedule().delays();

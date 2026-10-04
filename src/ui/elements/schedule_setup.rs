@@ -273,10 +273,11 @@ fn draw_general_table(
     }
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
-    // Header, name, horizon, tonnage field and grades, plus the explanatory
-    // row when the project has no reserve schema. The header is a table row
-    // too; omitting it from this count clips the tonnage combo.
-    let rows = 5 + usize::from(no_fields);
+    // Header, name, tonnage field and grades, plus the explanatory row when
+    // the project has no reserve schema. The header is a table row too;
+    // omitting it from this count clips the tonnage combo. The horizon is
+    // the Periods step's, as the dates it runs between.
+    let rows = 4 + usize::from(no_fields);
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
     PropertyTable::new("schedule_configuration", table_rect, &tr!("schedule-general")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -285,7 +286,6 @@ fn draw_general_table(
         if response.lost_focus() && draft.text.trim() != plan.name {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetName(draft.text.trim().to_owned())));
         }
-        super::schedule_optimisation::horizon_row(rows, editor, plan, session, &mut edits);
         let mut tonnage = plan.tonnage_field();
         let selected_text = tonnage
             .and_then(|id| document.reserve_fields().iter().find(|field| field.id == id))

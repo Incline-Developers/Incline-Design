@@ -570,6 +570,9 @@ fn draw_ui(
     // Before any panel is claimed: every region reads the preference back off
     // the context as it is drawn. See `chrome::set_enabled`.
     chrome::set_enabled(root_ui.ctx(), editor.panel_chrome);
+    // Every schedule page writes its times through this; see
+    // `schedule_periods::set_clock`.
+    elements::schedule_periods::set_clock(project.schedule.periods().start_date);
 
     // The window background sits behind every panel, but its shape depends on
     // where the scene ends up, which is only known once they have all been
@@ -697,7 +700,7 @@ fn draw_ui(
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let animation_timeline_rect = if editor.is_schedule_animation() {
-        elements::schedule_animation::draw_timeline(root_ui, editor, document)
+        elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber

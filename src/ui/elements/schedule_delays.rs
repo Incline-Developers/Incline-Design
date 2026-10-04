@@ -10,7 +10,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         DelayEntry, DelayTypeId, LoaderAgentId, LoaderSelection, Roster, SchedulePlan,
-        delays::{DelayRowProblem, MIN_ROSTER_DURATION_H, MIN_ROSTER_EVERY_H, hours_text, instant_parts, parse_delay_rows, parse_instant},
+        delays::{DelayRowProblem, MIN_ROSTER_DURATION_H, MIN_ROSTER_EVERY_H, hours_text, parse_delay_rows, parse_time},
     },
     ui::{
         EditorState,
@@ -24,10 +24,15 @@ use crate::{
     },
 };
 
-/// An instant the way the Gantt writes it, which is also a way to type one.
+/// An instant as it is typed into a cell: a date and time once Day 1 has a
+/// date, the Gantt's "Day 3, 06:00" before.
 pub(crate) fn instant_text(hours: f64) -> String {
-    let (day, time) = instant_parts(hours);
-    tr!("gantt-day-time", day = day.to_string(), time = time)
+    super::schedule_periods::editable_time(hours)
+}
+
+/// What a typed instant reads as, dates included once Day 1 has one.
+fn read_time(text: &str) -> Option<f64> {
+    parse_time(text, super::schedule_periods::clock_start())
 }
 
 pub(crate) fn delay_color(color: [u8; 3]) -> egui::Color32 {
@@ -352,7 +357,7 @@ fn draw_list(
             })
         });
         if let Some(text) = pasted {
-            match parse_delay_rows(&text, &agents) {
+            match parse_delay_rows(&text, &agents, super::schedule_periods::clock_start()) {
                 Ok(rows) => {
                     entries.extend(rows);
                     entries_changed = true;
@@ -414,7 +419,7 @@ fn draw_list(
                     let Some(text) = draft.cells.get_mut(index).map(|cells| &mut cells[column]) else {
                         continue;
                     };
-                    let parsed = parse_instant(text);
+                    let parsed = read_time(text);
                     let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
                     if parsed.is_none() {
                         response.clone().on_hover_text(tr!("delay-instant-hint"));
@@ -477,7 +482,7 @@ fn draw_list(
                 ui.horizontal(|ui| {
                     ui.add_space(6.0);
                     if ui.add(egui::Button::new(tr!("delay-paste-add")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
-                        match parse_delay_rows(text, &agents) {
+                        match parse_delay_rows(text, &agents, super::schedule_periods::clock_start()) {
                             Ok(rows) => {
                                 entries.extend(rows);
                                 entries_changed = true;
@@ -552,7 +557,7 @@ fn draw_roster(
         for (index, label) in labels.iter().enumerate() {
             let text = &mut draft.roster[index];
             let parsed: Option<Option<f64>> = match index {
-                0 => parse_instant(text).map(Some),
+                0 => read_time(text).map(Some),
                 1 => text
                     .trim()
                     .parse::<f64>()
@@ -561,7 +566,7 @@ fn draw_roster(
                     .map(Some),
                 2 => text.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value >= MIN_ROSTER_EVERY_H).map(Some),
                 _ if text.trim().is_empty() => Some(None),
-                _ => parse_instant(text).map(Some),
+                _ => read_time(text).map(Some),
             };
             let error = parsed.is_none().then(|| match index {
                 1 => tr!("delay-roster-duration-hint"),

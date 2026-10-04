@@ -142,8 +142,10 @@ fn time_of(seconds: f64) -> String {
     format!("{:02}:{:02}", (minutes / 60).clamp(0, 23), minutes % 60)
 }
 
+/// An instant as every schedule page writes it; see
+/// [`super::schedule_periods::instant_label`].
 pub(crate) fn instant_label(seconds: f64) -> String {
-    tr!("gantt-day-time", day = day_of(seconds).to_string(), time = time_of(seconds))
+    super::schedule_periods::instant_label(seconds / GanttView::HOUR)
 }
 
 /// The Gantt page. Returns the rect it claimed, for the caller to round off
@@ -856,6 +858,9 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     ui.painter().rect_filled(corner, 0.0, visuals.widgets.noninteractive.bg_fill);
 
     let interval = editor.gantt.minor_interval(body.width(), MIN_TICK_SPACING);
+    // Marked days as a solid strip along the ruler's top edge, where it
+    // reads at any zoom without fighting the text or the bars.
+    draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_ruler(ui, ruler, editor.gantt, interval, day_band);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
     draw_grid(ui, body, editor.gantt, interval);
@@ -1082,10 +1087,17 @@ pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, inter
             let left = view.x_of(start, rect.left(), rect.width()).max(rect.left());
             let right = view.x_of(start + GanttView::DAY, rect.left(), rect.width()).min(rect.right());
             if right - left > 28.0 {
+                // The date too, where the day is wide enough to say it.
+                let period = (day_of(start + 1.0) - 1).max(0) as u32;
+                let label = if right - left > 150.0 {
+                    super::schedule_periods::day_label(period)
+                } else {
+                    tr!("gantt-day", day = day_of(start + 1.0).to_string())
+                };
                 painter.text(
                     egui::pos2(left + 6.0, rect.top() + RULER_BAND * 0.5),
                     egui::Align2::LEFT_CENTER,
-                    tr!("gantt-day", day = day_of(start + 1.0).to_string()),
+                    label,
                     egui::TextStyle::Body.resolve(ui.style()),
                     text_color,
                 );
@@ -2579,6 +2591,25 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                 }
             });
         }
+    }
+}
+
+/// The days the planner has marked on the Periods step, each across `rect`
+/// in its colour.
+fn draw_period_colors(ui: &egui::Ui, rect: egui::Rect, view: GanttView, plan: &crate::model::schedule::SchedulePlan) {
+    let colors = &plan.periods().colors;
+    if colors.is_empty() || !rect.is_positive() {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    let first = (view.start_seconds / GanttView::DAY).floor().max(0.0) as u32;
+    let last = (view.end_seconds() / GanttView::DAY).ceil().max(0.0) as u32;
+    for (period, color) in colors.range(first..=last) {
+        let start = f64::from(*period) * GanttView::DAY;
+        let left = view.x_of(start, rect.left(), rect.width());
+        let right = view.x_of(start + GanttView::DAY, rect.left(), rect.width());
+        let fill = super::schedule_periods::period_color(*color);
+        painter.rect_filled(egui::Rect::from_x_y_ranges(left..=right, rect.y_range()), 0.0, fill);
     }
 }
 

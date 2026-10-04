@@ -569,11 +569,16 @@ fn draw_grid(
             ui,
             cell,
             tr!("schedule-calendar-day", day = period.saturating_add(1).to_string()),
-            Some(tr!(
-                "schedule-calendar-hours",
-                start = format!("{:.0}", f64::from(period) * SCHEDULE_PERIOD_H),
-                end = format!("{:.0}", f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H)
-            )),
+            Some(
+                match crate::ui::elements::schedule_periods::clock_start().and_then(|start| start.checked_add_signed(chrono::Duration::days(i64::from(period)))) {
+                    Some(date) => crate::model::schedule::periods::date_text(date),
+                    None => tr!(
+                        "schedule-calendar-hours",
+                        start = format!("{:.0}", f64::from(period) * SCHEDULE_PERIOD_H),
+                        end = format!("{:.0}", f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H)
+                    ),
+                },
+            ),
         );
     }
 
