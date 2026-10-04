@@ -1148,30 +1148,26 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                     let gap = ui.spacing().item_spacing.x;
                     let colour_width = ui.spacing().interact_size.x;
                     let value_width = (width - colour_width * 2.0 - gap * 3.0) * 0.5;
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(width, row_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_minor_interval_input)
-                                    .range(1e-6..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("tri-minor")))
-                                    .max_decimals(3),
-                            );
-                            crate::ui::widgets::color::edit_srgba(ui, &mut minor_color, egui::color_picker::Alpha::OnlyBlend);
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_major_interval_input)
-                                    .range(1e-6..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("tri-major")))
-                                    .max_decimals(3),
-                            );
-                            crate::ui::widgets::color::edit_srgba(ui, &mut major_color, egui::color_picker::Alpha::OnlyBlend);
-                        },
-                    )
+                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add_sized(
+                            [value_width, row_height],
+                            egui::DragValue::new(&mut editor.tri_contour_minor_interval_input)
+                                .range(1e-6..=f64::MAX)
+                                .speed(0.1)
+                                .prefix(format!("{} ", tr!("tri-minor")))
+                                .max_decimals(3),
+                        );
+                        crate::ui::widgets::color::edit_srgba(ui, &mut minor_color, egui::color_picker::Alpha::OnlyBlend);
+                        ui.add_sized(
+                            [value_width, row_height],
+                            egui::DragValue::new(&mut editor.tri_contour_major_interval_input)
+                                .range(1e-6..=f64::MAX)
+                                .speed(0.1)
+                                .prefix(format!("{} ", tr!("tri-major")))
+                                .max_decimals(3),
+                        );
+                        crate::ui::widgets::color::edit_srgba(ui, &mut major_color, egui::color_picker::Alpha::OnlyBlend);
+                    })
                     .response
                 });
             editor.tri_contour_minor_color = color32_to_rgba(minor_color);
@@ -1181,51 +1177,39 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 .help_text(tr!("tri-when-enabled-generate-contours-only"))
                 .show(ui, |ui, row_height, _| {
                     let width = control_width;
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(width, row_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
+                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add_sized([row_height, row_height], egui::Checkbox::new(&mut editor.tri_contour_use_z_range, ""));
+                        if editor.tri_contour_use_z_range {
+                            let gap = ui.spacing().item_spacing.x;
+                            let value_width = (width - row_height - gap * 2.0) * 0.5;
                             ui.add_sized(
-                                [row_height, row_height],
-                                egui::Checkbox::new(&mut editor.tri_contour_use_z_range, ""),
+                                [value_width, row_height],
+                                egui::DragValue::new(&mut editor.tri_contour_z_min_input)
+                                    .range(f64::MIN..=f64::MAX)
+                                    .speed(0.1)
+                                    .prefix(format!("{} ", tr!("tri-min")))
+                                    .max_decimals(2),
                             );
-                            if editor.tri_contour_use_z_range {
-                                let gap = ui.spacing().item_spacing.x;
-                                let value_width = (width - row_height - gap * 2.0) * 0.5;
-                                ui.add_sized(
-                                    [value_width, row_height],
-                                    egui::DragValue::new(&mut editor.tri_contour_z_min_input)
-                                        .range(f64::MIN..=f64::MAX)
-                                        .speed(0.1)
-                                        .prefix(format!("{} ", tr!("tri-min")))
-                                        .max_decimals(2),
-                                );
-                                ui.add_sized(
-                                    [value_width, row_height],
-                                    egui::DragValue::new(&mut editor.tri_contour_z_max_input)
-                                        .range(f64::MIN..=f64::MAX)
-                                        .speed(0.1)
-                                        .prefix(format!("{} ", tr!("common-max")))
-                                        .max_decimals(2),
-                                );
-                            } else {
-                                ui.weak(tr!("tri-use-full-surface-elevation-range"));
-                            }
-                        },
-                    )
+                            ui.add_sized(
+                                [value_width, row_height],
+                                egui::DragValue::new(&mut editor.tri_contour_z_max_input)
+                                    .range(f64::MIN..=f64::MAX)
+                                    .speed(0.1)
+                                    .prefix(format!("{} ", tr!("common-max")))
+                                    .max_decimals(2),
+                            );
+                        } else {
+                            ui.weak(tr!("tri-use-full-surface-elevation-range"));
+                        }
+                    })
                     .response
                 });
 
             ui.add_space(4.0);
 
             let active_project = project.projects.iter().find(|entry| entry.is_active);
-            let active_layers = active_project
-                .map(|entry| entry.layers.as_slice())
-                .unwrap_or(&[]);
-            if editor
-                .tri_contour_target_layer
-                .is_some_and(|id| !active_layers.iter().any(|layer| layer.id == id))
-            {
+            let active_layers = active_project.map(|entry| entry.layers.as_slice()).unwrap_or(&[]);
+            if editor.tri_contour_target_layer.is_some_and(|id| !active_layers.iter().any(|layer| layer.id == id)) {
                 editor.tri_contour_target_layer = None;
             }
             let output_layer_label = editor
@@ -1238,11 +1222,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 tr!("tri-output-layer"),
                 &mut editor.tri_contour_target_layer,
                 output_layer_label,
-                std::iter::once((None, tr!("tri-new-layer").into())).chain(
-                    active_layers
-                        .iter()
-                        .map(|layer| (Some(layer.id), layer.name.clone().into())),
-                ),
+                std::iter::once((None, tr!("tri-new-layer").into())).chain(active_layers.iter().map(|layer| (Some(layer.id), layer.name.clone().into()))),
             )
             .help_text(tr!("tri-create-new-layer-contours-append"))
             .width(control_width)
@@ -1259,10 +1239,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 editor.tri_contour_layer_name_auto = false;
             }
             let new_layer_name = editor.tri_contour_layer_name_input.trim().to_owned();
-            let new_layer_name_conflicts = editor.tri_contour_target_layer.is_none()
-                && active_layers
-                    .iter()
-                    .any(|layer| layer.name == new_layer_name);
+            let new_layer_name_conflicts = editor.tri_contour_target_layer.is_none() && active_layers.iter().any(|layer| layer.name == new_layer_name);
             if editor.tri_contour_target_layer.is_none() && new_layer_name_conflicts {
                 ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-layer-already-exists-select-above"));
             }
@@ -1272,23 +1249,14 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
 
             let minor_interval = editor.tri_contour_minor_interval_input;
             let major_interval = editor.tri_contour_major_interval_input;
-            let valid_intervals = minor_interval.is_finite()
-                && major_interval.is_finite()
-                && minor_interval >= 1e-6
-                && major_interval >= 1e-6
-                && major_interval >= minor_interval;
-            let z_range = editor.tri_contour_use_z_range.then_some((
-                editor.tri_contour_z_min_input,
-                editor.tri_contour_z_max_input,
-            ));
-            let valid_z_range =
-                z_range.is_none_or(|(lo, hi)| lo.is_finite() && hi.is_finite() && lo < hi);
+            let valid_intervals = minor_interval.is_finite() && major_interval.is_finite() && minor_interval >= 1e-6 && major_interval >= 1e-6 && major_interval >= minor_interval;
+            let z_range = editor.tri_contour_use_z_range.then_some((editor.tri_contour_z_min_input, editor.tri_contour_z_max_input));
+            let valid_z_range = z_range.is_none_or(|(lo, hi)| lo.is_finite() && hi.is_finite() && lo < hi);
             let can_run = editor.tri_contour_tri_id.is_some()
                 && valid_intervals
                 && valid_z_range
                 && project.has_active_project
-                && (editor.tri_contour_target_layer.is_some()
-                    || (!new_layer_name.is_empty() && !new_layer_name_conflicts));
+                && (editor.tri_contour_target_layer.is_some() || (!new_layer_name.is_empty() && !new_layer_name_conflicts));
 
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());

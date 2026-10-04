@@ -1311,7 +1311,12 @@ impl crate::app::App<'_> {
                     .blocks
                     .iter()
                     // A block held to a node is connected by choice.
-                    .filter(|block| !network.block_link(block.solid, block.flitch.base, &block.ground).iter().any(|id| index.node_join(*id).is_some()))
+                    .filter(|block| {
+                        !network
+                            .block_link(block.solid, block.flitch.base, &block.ground)
+                            .iter()
+                            .any(|id| index.node_join(*id).is_some())
+                    })
                     .filter_map(|block| index.access_m(glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base), grade))
                     .filter(|access| *access > reach)
                     .collect();

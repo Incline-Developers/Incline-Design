@@ -957,13 +957,13 @@ impl PropertyRows<'_> {
         self.place(
             value_rect,
             egui::TextEdit::singleline(value)
-                        .vertical_align(egui::Align::Center)
-                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
-                        // egui 0.35 needs a nonzero text atom to anchor the caret
-                        // in an empty field. A blank hint supplies it without
-                        // inserting placeholder text into the stored value.
-                        .hint_text(" ")
-                        .desired_width(value_rect.width()),
+                .vertical_align(egui::Align::Center)
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
+                // egui 0.35 needs a nonzero text atom to anchor the caret
+                // in an empty field. A blank hint supplies it without
+                // inserting placeholder text into the stored value.
+                .hint_text(" ")
+                .desired_width(value_rect.width()),
         )
     }
 

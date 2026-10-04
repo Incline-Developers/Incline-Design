@@ -1149,31 +1149,15 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
         .show(ui.ctx(), |ui| {
             // Mode tabs
             let previous_mode = editor.relimit_mode;
-            MenuField::new(tr!("edit-mode"))
-                .help_text(tr!("relimit-mode-help"))
-                .show(ui, |ui, _, _| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut editor.relimit_mode,
-                            RelimitMode::Intersect,
-                            tr!("edit-intersect"),
-                        );
-                        ui.selectable_value(
-                            &mut editor.relimit_mode,
-                            RelimitMode::AbsoluteLength,
-                            tr!("edit-absolute-length"),
-                        );
-                        ui.selectable_value(
-                            &mut editor.relimit_mode,
-                            RelimitMode::RelativeLength,
-                            tr!("edit-relative"),
-                        );
-                    })
-                    .response
-                });
-            if editor.relimit_mode == RelimitMode::Intersect
-                && previous_mode != RelimitMode::Intersect
-            {
+            MenuField::new(tr!("edit-mode")).help_text(tr!("relimit-mode-help")).show(ui, |ui, _, _| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut editor.relimit_mode, RelimitMode::Intersect, tr!("edit-intersect"));
+                    ui.selectable_value(&mut editor.relimit_mode, RelimitMode::AbsoluteLength, tr!("edit-absolute-length"));
+                    ui.selectable_value(&mut editor.relimit_mode, RelimitMode::RelativeLength, tr!("edit-relative"));
+                })
+                .response
+            });
+            if editor.relimit_mode == RelimitMode::Intersect && previous_mode != RelimitMode::Intersect {
                 editor.relimit_waiting_for_pick = true;
                 editor.relimit_confirming_end = false;
             }
@@ -1206,23 +1190,13 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         .speed(0.1)
                         .suffix(tr!("common-m"))
                         .show(ui);
-                    MenuField::new(tr!("edit-move-which-end"))
-                        .help_text(tr!("edit-endpoint-help"))
-                        .show(ui, |ui, _, _| {
-                            ui.horizontal(|ui| {
-                                ui.selectable_value(
-                                    &mut editor.relimit_resize_end,
-                                    TrimEnd::Start,
-                                    tr!("edit-start"),
-                                );
-                                ui.selectable_value(
-                                    &mut editor.relimit_resize_end,
-                                    TrimEnd::End,
-                                    tr!("edit-end"),
-                                );
-                            })
-                            .response
-                        });
+                    MenuField::new(tr!("edit-move-which-end")).help_text(tr!("edit-endpoint-help")).show(ui, |ui, _, _| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::Start, tr!("edit-start"));
+                            ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::End, tr!("edit-end"));
+                        })
+                        .response
+                    });
                 }
             }
 
