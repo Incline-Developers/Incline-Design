@@ -1116,8 +1116,12 @@ impl<'a> App<'a> {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
+                // A right click on a ring opens the menu on that ring and
+                // leaves the selection as it is.
+                let ring_radius = self.points_to_px(crate::ui::state::STRING_RING_RADIUS);
+                let ring = self.editor.cursor_screen_px.and_then(|px| self.editor.string_ring_near(px, ring_radius));
                 let frozen = &self.editor.frozen_handles;
-                let picked = self.graphics.as_ref().and_then(|g| {
+                let picked = self.graphics.as_ref().filter(|_| ring.is_none()).and_then(|g| {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
@@ -1151,10 +1155,17 @@ impl<'a> App<'a> {
                     // rows act on the hole under the cursor, selected or not.
                     self.editor.show_picked_hole(pick.hole);
                     self.editor.canvas_context_menu_hole = pick.hole;
+                    self.editor.canvas_context_menu_ring = None;
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if ring.is_some() {
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_ring = ring;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;

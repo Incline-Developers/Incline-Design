@@ -112,13 +112,25 @@ impl<'a> App<'a> {
         let Some(hit) = self.delete_polyline_vertex_hit() else {
             return false;
         };
-        if !self.activate_project_for_object(hit.object_id) {
+        self.delete_polyline_vertex(hit.object_id, hit.vertex_index)
+    }
+
+    /// Delete one vertex of a polyline as one undo step, the string then
+    /// selected alone; refused, returning false, when the string would drop
+    /// below its fewest vertices or has no such vertex.
+    pub(crate) fn delete_polyline_vertex(&mut self, object_id: ObjectId, vertex_index: usize) -> bool {
+        if !self.activate_project_for_object(object_id) {
             return false;
         }
-        let Some(before) = self.active_document().get_object(hit.object_id).cloned() else {
+        // Nothing hidden or locked is edited from the canvas, whichever
+        // path asked: picking already refuses them, a ring's menu does not.
+        if !self.editor.canvas_edits_object(self.active_document(), object_id) {
+            return false;
+        }
+        let Some(before) = self.active_document().get_object(object_id).cloned() else {
             return false;
         };
-        let Some(after) = without_polyline_vertex(&before, hit.vertex_index) else {
+        let Some(after) = without_polyline_vertex(&before, vertex_index) else {
             return false;
         };
 
@@ -129,14 +141,10 @@ impl<'a> App<'a> {
         self.editor.tool_hover_vertex_px = None;
         self.editor.tool_hover_vertex_world = None;
         self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(SceneEntityId::Object(hit.object_id));
+        self.editor.selected_handles.insert(SceneEntityId::Object(object_id));
         crate::logging::report_completed_action(
-            CommandReportSpec::new(crate::i18n::tr!("cmd-selection-delete-vertex"), format!("{:?}", hit.object_id)),
-            crate::i18n::tr!(
-                "cmd-selection-deleted-vertex",
-                vertex = hit.vertex_index.to_string(),
-                object_id = format!("{:?}", hit.object_id)
-            ),
+            CommandReportSpec::new(crate::i18n::tr!("cmd-selection-delete-vertex"), format!("{:?}", object_id)),
+            crate::i18n::tr!("cmd-selection-deleted-vertex", vertex = vertex_index.to_string(), object_id = format!("{:?}", object_id)),
         );
         self.invalidate_geometry();
         self.invalidate_overlay();

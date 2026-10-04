@@ -729,6 +729,22 @@ fn draw_ui(
         }
     }
 
+    // Where strings go wrong, from a refused build or a clean: one ring per
+    // place, the same size at any zoom, a dark rim under a bright one so it
+    // reads on either theme and over the blue of the selected strings.
+    // The painted list is clustered and capped when the view changes, see
+    // `EditorState::project_string_rings`; here it is only walked.
+    if !editor.string_ring_cache.paint_px.is_empty() {
+        const RING_RADIUS: f32 = crate::ui::state::STRING_RING_RADIUS;
+        let pixels_per_point = root_ui.ctx().pixels_per_point();
+        let painter = root_ui.painter().with_clip_rect(canvas_rect);
+        for &(x, y) in &editor.string_ring_cache.paint_px {
+            let position = egui::pos2(x / pixels_per_point, y / pixels_per_point);
+            painter.circle_stroke(position, RING_RADIUS, egui::Stroke::new(5.0, egui::Color32::BLACK));
+            painter.circle_stroke(position, RING_RADIUS, egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 220, 0)));
+        }
+    }
+
     // Either translate tool: the Blender-style gizmo and the numeric delta
     // panel, over whichever selection the active one moves.
     if editor.move_tool_has_targets() {

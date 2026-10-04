@@ -41,6 +41,19 @@ impl<'a> App<'a> {
         self.editor.object_edit_dialog = Some(crate::ui::dialogs::object_edit::ObjectEditDialog::new(id, object, layer_name, layer_rgba));
     }
 
+    /// Open the "Edit Object" dialog on `id` at its Vertices tab with `row`,
+    /// counting from zero, selected and scrolled into view once; a dialog
+    /// already open on `id` keeps its working copy and moves to the row.
+    pub(crate) fn show_object_vertex(&mut self, id: ObjectId, row: usize) {
+        self.activate_project_for_object(id);
+        self.open_object_edit_dialog(id);
+        if let Some(dialog) = self.editor.object_edit_dialog.as_mut().filter(|dialog| dialog.id == id) {
+            dialog.tab = crate::ui::dialogs::object_edit::ObjectEditTab::Vertices;
+            dialog.selected_row = Some(row);
+            dialog.scroll_to_row = Some(row);
+        }
+    }
+
     /// Close the "Edit Object" dialog if its object is gone from the active
     /// project, once per frame before the UI runs. Hiding an object must NOT
     /// close it: an object can still be edited while hidden, and only the

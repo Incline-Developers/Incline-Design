@@ -17,6 +17,7 @@ pub(crate) mod scene_selection; // What the selection-driven tools take from the
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
+pub(crate) mod string_clean; // Clean Strings: the app side of the open-string clean-up and the rings it leaves.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
@@ -62,6 +63,10 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
+        // Rings describe the strings as a build or a clean left them, by
+        // vertex number; a step back or forward leaves them describing
+        // strings that are no longer there, so they go, as with Unhide All.
+        self.editor.clear_string_rings();
         self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
@@ -71,6 +76,15 @@ impl<'a> App<'a> {
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
         self.invalidate_geometry();
+    }
+
+    /// Every string ring `index` names may be edited from the canvas.
+    fn ring_strings_editable(&self, index: usize) -> bool {
+        let document = self.active_document();
+        self.editor
+            .string_rings
+            .get(index)
+            .is_some_and(|ring| ring.sides.iter().all(|&(id, _)| self.editor.canvas_edits_object(document, id)))
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
@@ -128,6 +142,12 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::RenameSeam { .. }
+                | UiCommand::CleanStrings
+                | UiCommand::CleanString(_)
+                | UiCommand::JoinAllAtHalfway
+                | UiCommand::JoinHereAtHalfway(_)
+                | UiCommand::DeleteRingVertex { .. }
+                | UiCommand::ShowObjectVertex { .. }
                 | UiCommand::ShiftStratColumn { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -332,6 +352,10 @@ impl<'a> App<'a> {
             }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
+                Ok(())
+            }
+            UiCommand::UnhideAll => {
+                self.unhide_all_objects();
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1002,6 +1026,7 @@ impl<'a> App<'a> {
             }
             UiCommand::CloseCanvasContextMenu => {
                 self.editor.canvas_context_menu_open = false;
+                self.editor.canvas_context_menu_ring = None;
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
@@ -1078,6 +1103,43 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenObjectEditDialog(id) => {
                 self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ShowObjectVertex { id, row } => {
+                self.show_object_vertex(id, row);
+                Ok(())
+            }
+            UiCommand::CleanStrings => {
+                self.clean_selected_strings();
+                Ok(())
+            }
+            // The ring rows edit only strings the canvas could edit itself:
+            // shown and not locked. The menu offers no other, and a ring
+            // that went hidden or locked since the menu was drawn is refused
+            // here.
+            UiCommand::CleanString(id) => {
+                if self.editor.canvas_edits_object(self.active_document(), id) {
+                    self.clean_strings(&[id]);
+                }
+                Ok(())
+            }
+            UiCommand::JoinAllAtHalfway => {
+                let rings: Vec<usize> = (0..self.editor.string_rings.len())
+                    .filter(|&index| self.editor.string_rings[index].joinable() && self.ring_strings_editable(index))
+                    .collect();
+                self.join_at_halfway(&rings);
+                Ok(())
+            }
+            UiCommand::JoinHereAtHalfway(index) => {
+                if self.editor.string_rings.get(index).is_some_and(|ring| ring.joinable()) && self.ring_strings_editable(index) {
+                    self.join_at_halfway(&[index]);
+                }
+                Ok(())
+            }
+            UiCommand::DeleteRingVertex { id, vertex } => {
+                if self.editor.canvas_edits_object(self.active_document(), id) {
+                    self.delete_ring_vertex(id, vertex);
+                }
                 Ok(())
             }
             UiCommand::ApplyObjectEdit { id, object, close } => {
@@ -1452,5 +1514,68 @@ impl<'a> App<'a> {
         }
         self.execute_edit(Command::Batch(commands));
         self.invalidate_geometry();
+    }
+
+    /// Show everything in the active project that Hide Selection hid, as
+    /// one undo step: its objects in any layer, and its triangulations,
+    /// block models, drill holes, point clouds and rasters. The explorer's
+    /// Reveal All brings back one section at a time; this brings back all.
+    fn unhide_all_objects(&mut self) {
+        // The rings a refused build left go with the strings it hid.
+        if !self.editor.string_rings.is_empty() {
+            self.editor.clear_string_rings();
+            self.redraw_requested = true;
+        }
+        let Some(document) = self.workspace.active_document() else {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        };
+        let mut commands: Vec<Command> = document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }).collect();
+        let objects = commands.len();
+        // The items Hide Selection unloaded, and any an older hide left only
+        // on the canvas (not saved, so not part of the undo step).
+        let unloaded = self
+            .triangulations
+            .iter()
+            .filter(|item| !item.state.loaded)
+            .map(|item| SceneEntityId::Triangulation(item.id))
+            .chain(self.block_models.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::BlockModel(item.id)))
+            .chain(self.drill_holes.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::DrillHole(item.id)))
+            .chain(self.point_clouds.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::PointCloud(item.id)))
+            .chain(self.raster_textures.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::Raster(item.id)));
+        let mut items: Vec<SceneEntityId> = unloaded
+            .chain(
+                self.editor
+                    .hidden_handles
+                    .iter()
+                    .copied()
+                    .filter(|handle| crate::model::ItemRef::from_entity(*handle).is_some()),
+            )
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        items.retain(|handle| seen.insert(*handle));
+        commands.extend(
+            items
+                .iter()
+                .filter_map(|&handle| crate::model::ItemRef::from_entity(handle))
+                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(true))),
+        );
+        self.editor.hidden_handles.retain(|handle| !items.contains(handle));
+        if objects == 0 && items.is_empty() {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        }
+        if !commands.is_empty() {
+            self.execute_edit(Command::Batch(commands));
+        }
+        self.invalidate_geometry();
+        if items.is_empty() {
+            userspace_log!("{}", tr!("cmd-unhide-all-count", count = objects.to_string()));
+        } else {
+            userspace_log!(
+                "{}",
+                tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.len().to_string())
+            );
+        }
     }
 }

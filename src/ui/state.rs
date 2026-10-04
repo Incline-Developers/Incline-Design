@@ -33,6 +33,252 @@ use crate::{
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
 
+/// Radius in points of the ring drawn where a string goes wrong; a right
+/// click this close to one opens the canvas menu on it.
+pub(crate) const STRING_RING_RADIUS: f32 = 14.0;
+
+/// Why a string ring is drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum StringRingKind {
+    /// Build Surface refused a control string for its shape here.
+    Refused,
+    /// In the way of a build, as Clean Strings' final check names it.
+    Left(crate::model::string_clean::ProblemKind),
+}
+
+/// One ring on the canvas: a place where a string goes wrong, kept until the
+/// next build, a clean of its strings, an undo or redo, Unhide All or the
+/// project is left; an edit of its string carries it across or drops it.
+/// Drawn only: never saved, and no part of the project or its undo history.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StringRing {
+    pub(crate) at: DVec3,
+    pub(crate) kind: StringRingKind,
+    /// The strings it concerns, each with its vertex at the ring (from zero)
+    /// when it has one there.
+    pub(crate) sides: Vec<(ObjectId, Option<usize>)>,
+    /// The header of the canvas menu opened on it, for a ring of two
+    /// strings or more: their numbers and miss as the console names them.
+    pub(crate) title: Option<String>,
+}
+
+impl StringRing {
+    /// Two strings meeting here close enough in height for Join at halfway.
+    pub(crate) fn joinable(&self) -> bool {
+        matches!(self.kind, StringRingKind::Left(crate::model::string_clean::ProblemKind::Crossing { miss }) if miss <= crate::model::string_clean::JOIN_ON_REQUEST)
+    }
+}
+
+/// The slot of the ring drawn nearest `px` within `radius_px`, all in
+/// physical px; a slot holding `None` is not drawn and never hit.
+pub(crate) fn nearest_ring_within(slots: &[OptionalScreenPointPx], px: (f32, f32), radius_px: f32) -> Option<usize> {
+    slots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, slot)| slot.map(|(x, y)| (index, (x - px.0).hypot(y - px.1))))
+        .filter(|&(_, distance)| distance <= radius_px)
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(index, _)| index)
+}
+
+/// After vertex `vertex` of string `id` was deleted: a ring naming that
+/// vertex goes, and later vertices of the string move down by one. Rings
+/// and their screen slots stay in step.
+pub(crate) fn forget_deleted_vertex(rings: &mut Vec<StringRing>, slots: &mut Vec<OptionalScreenPointPx>, id: ObjectId, vertex: usize) {
+    let mut index = 0;
+    while index < rings.len() {
+        if rings[index].sides.contains(&(id, Some(vertex))) {
+            rings.remove(index);
+            if index < slots.len() {
+                slots.remove(index);
+            }
+            continue;
+        }
+        for side in &mut rings[index].sides {
+            if let (side_id, Some(side_vertex)) = side
+                && *side_id == id
+                && *side_vertex > vertex
+            {
+                *side_vertex -= 1;
+            }
+        }
+        index += 1;
+    }
+}
+
+/// Most rings painted in one view. A view more crowded than that paints the
+/// first ones found; zooming in paints the rest, and a right click still
+/// finds every ring.
+pub(crate) const MAX_PAINTED_STRING_RINGS: usize = 512;
+
+/// What the canvas last saw of one ringed string, so that a frame can tell
+/// cheaply whether anything under its rings changed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RingedString {
+    pub(crate) id: ObjectId,
+    /// [`crate::model::Document::object_revision`] when its rings were last
+    /// checked against it.
+    pub(crate) revision: u64,
+    /// Its vertices then; `None` while it has not been seen in the scene.
+    pub(crate) verts: Option<Vec<crate::model::PolyVertex>>,
+    /// In the scene and not hidden: only then are its rings drawn.
+    pub(crate) shown: bool,
+    /// Frozen, or on a locked layer: its rings are drawn but offer nothing
+    /// that edits it.
+    pub(crate) locked: bool,
+}
+
+/// The canvas side of [`EditorState::string_rings`]: the strings under them
+/// and what is painted for the current view, rebuilt only when either
+/// changes, never every frame.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StringRingCache {
+    /// Each ringed string once, ordered by id.
+    pub(crate) strings: Vec<RingedString>,
+    /// Fingerprint of the view the slots were last projected for; `None`
+    /// projects them again on the next frame.
+    pub(crate) view_key: Option<u64>,
+    /// Where rings are painted this view, physical px: one per cell of a
+    /// ring's width, as rings closer than that read as one, and at most
+    /// [`MAX_PAINTED_STRING_RINGS`].
+    pub(crate) paint_px: Vec<(f32, f32)>,
+    cells: HashSet<(i32, i32)>,
+}
+
+impl StringRingCache {
+    fn forget(&mut self) {
+        self.strings.clear();
+        self.view_key = None;
+        self.paint_px.clear();
+        self.cells.clear();
+    }
+
+    fn string(&self, id: ObjectId) -> Option<&RingedString> {
+        self.strings.binary_search_by_key(&id.0, |string| string.id.0).ok().map(|index| &self.strings[index])
+    }
+
+    fn string_mut(&mut self, id: ObjectId) -> Option<&mut RingedString> {
+        self.strings.binary_search_by_key(&id.0, |string| string.id.0).ok().map(|index| &mut self.strings[index])
+    }
+
+    /// Every string of `ring` is shown.
+    fn ring_shown(&self, ring: &StringRing) -> bool {
+        ring.sides.iter().all(|&(id, _)| self.string(id).is_some_and(|string| string.shown))
+    }
+}
+
+/// The vertices of polyline `id` in `document` and whether it is closed;
+/// none for anything else.
+fn polyline_in(document: &crate::model::Document, id: ObjectId) -> (&[crate::model::PolyVertex], bool) {
+    match document.get_object(id) {
+        Some(Object::Polyline { verts, closed, .. }) => (verts, *closed),
+        _ => (&[], false),
+    }
+}
+
+/// For each vertex of `old`, its index in `new`, when `new` is `old` with
+/// some vertices deleted and nothing else changed; `None` when it is not.
+pub(crate) fn surviving_vertices(old: &[crate::model::PolyVertex], new: &[crate::model::PolyVertex]) -> Option<Vec<Option<usize>>> {
+    if new.len() > old.len() {
+        return None;
+    }
+    let mut next = 0;
+    let map = old
+        .iter()
+        .map(|vertex| {
+            let kept = (new.get(next) == Some(vertex)).then_some(next);
+            next += usize::from(kept.is_some());
+            kept
+        })
+        .collect();
+    (next == new.len()).then_some(map)
+}
+
+/// The segment of a string through `old` nearest `at` in plan, as its two
+/// vertex indices; the closing one counts on a closed string.
+fn nearest_segment(old: &[crate::model::PolyVertex], closed: bool, at: DVec3) -> Option<(usize, usize)> {
+    let count = old.len();
+    let segments = if closed && count > 2 { count } else { count.saturating_sub(1) };
+    (0..segments)
+        .map(|start| (start, (start + 1) % count))
+        .map(|(start, end)| {
+            let (a, b, p) = (old[start].pos.truncate(), old[end].pos.truncate(), at.truncate());
+            let span = b - a;
+            let along = if span.length_squared() > 0.0 {
+                ((p - a).dot(span) / span.length_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            ((start, end), p.distance_squared(a + span * along))
+        })
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(segment, _)| segment)
+}
+
+/// Keep the rings `keep` accepts, their screen slots and the ring the canvas
+/// menu is open on staying in step.
+fn retain_rings(rings: &mut Vec<StringRing>, slots: &mut Vec<OptionalScreenPointPx>, menu_ring: &mut Option<usize>, mut keep: impl FnMut(&mut StringRing) -> bool) {
+    let in_step = slots.len() == rings.len();
+    let mut write = 0;
+    let mut menu = None;
+    for read in 0..rings.len() {
+        if !keep(&mut rings[read]) {
+            continue;
+        }
+        rings.swap(read, write);
+        if in_step {
+            slots.swap(read, write);
+        }
+        if *menu_ring == Some(read) {
+            menu = Some(write);
+        }
+        write += 1;
+    }
+    rings.truncate(write);
+    if in_step {
+        slots.truncate(write);
+    } else {
+        slots.clear();
+    }
+    *menu_ring = menu;
+}
+
+/// Carry the rings on string `id` across an edit of it from `old` to `new`
+/// vertices. A deletion keeps the rings at the vertices and on the segments
+/// it left alone, renumbered; a ring at a deleted vertex or on a changed
+/// segment goes, and so does every ring on a string edited any other way
+/// (moved, reshaped, vertices added).
+pub(crate) fn carry_rings_across_edit(
+    rings: &mut Vec<StringRing>,
+    slots: &mut Vec<OptionalScreenPointPx>,
+    menu_ring: &mut Option<usize>,
+    id: ObjectId,
+    old: &[crate::model::PolyVertex],
+    new: &[crate::model::PolyVertex],
+    closed: bool,
+) {
+    let map = surviving_vertices(old, new);
+    retain_rings(rings, slots, menu_ring, |ring| {
+        if !ring.sides.iter().any(|&(side, _)| side == id) {
+            return true;
+        }
+        let Some(map) = &map else {
+            return false;
+        };
+        let at = ring.at;
+        ring.sides.iter_mut().filter(|(side, _)| *side == id).all(|(_, vertex)| match vertex {
+            Some(index) => match map.get(*index).copied().flatten() {
+                Some(moved) => {
+                    *index = moved;
+                    true
+                }
+                None => false,
+            },
+            None => nearest_segment(old, closed, at).is_some_and(|(start, end)| map[start].is_some() && map[end].is_some()),
+        })
+    });
+}
+
 /// Unsaved preference values currently being edited in the Preferences window.
 ///
 /// When the user clicks "Save Changes" these values are applied to `EditorState`.
@@ -1617,6 +1863,26 @@ pub(crate) struct EditorState {
     /// Per-frame projections of the current failure's world-space diagnostic.
     pub(crate) tri_create_diagnostic_markers_screen_px: Vec<(f32, f32)>,
     pub(crate) tri_create_diagnostic_segments_screen_px: Vec<[OptionalScreenPointPx; 2]>,
+    /// Where strings go wrong, ringed on the canvas until the next build, a
+    /// clean of their strings, an undo or redo, Unhide All, or the project
+    /// is left: what the last Build Surface refused or left out, and what
+    /// Clean Strings left. [`Self::settle_string_rings`] keeps them in step
+    /// with edits of their strings.
+    pub(crate) string_rings: Vec<StringRing>,
+    /// The number, counting from zero, each ringed string goes by in the
+    /// report of the run that ringed it.
+    pub(crate) string_numbers: std::collections::HashMap<ObjectId, usize>,
+    /// Projections of [`Self::string_rings`] for the current view, one slot
+    /// per ring, `None` where the ring is not drawn: on a hidden string,
+    /// outside the section or off the window. Whoever replaces the rings
+    /// clears this, which is how the next frame knows they are new.
+    pub(crate) string_rings_screen_px: Vec<OptionalScreenPointPx>,
+    /// The strings under the rings and what is painted for them; see
+    /// [`StringRingCache`].
+    pub(crate) string_ring_cache: StringRingCache,
+    /// The ring the canvas context menu was opened on, by index into
+    /// [`Self::string_rings`]; its rows act on that ring.
+    pub(crate) canvas_context_menu_ring: Option<usize>,
     /// Frozen cursor position (physical px) where the picker Area was opened.
     pub(crate) tri_create_picker_px: Option<(f32, f32)>,
     /// Objects highlighted yellow on canvas during selection hover.
@@ -2199,6 +2465,175 @@ impl EditorState {
         self.tri_contour_layer_name_input = tr!("state-stem-contours", stem = stem.to_string());
     }
 
+    /// Drop every string ring.
+    pub(crate) fn clear_string_rings(&mut self) {
+        self.string_rings.clear();
+        self.string_rings_screen_px.clear();
+        self.string_ring_cache.forget();
+        self.canvas_context_menu_ring = None;
+    }
+
+    /// Bring the rings into line with `document`, the scene the canvas
+    /// shows, once a frame before they are drawn: the one place every edit
+    /// of a ringed string reaches, whichever tool made it. A string edited
+    /// since its rings were last checked has them carried across the edit
+    /// ([`carry_rings_across_edit`]); one hidden or locked since has them
+    /// drawn or offered accordingly. Cheap when nothing changed: one look
+    /// per ringed string, nothing allocated. Returns whether anything drawn
+    /// changed.
+    pub(crate) fn settle_string_rings(&mut self, document: &crate::model::Document) -> bool {
+        let cache = &mut self.string_ring_cache;
+        if self.string_rings.is_empty() {
+            let had = !cache.strings.is_empty() || !cache.paint_px.is_empty() || !self.string_rings_screen_px.is_empty();
+            cache.forget();
+            self.string_rings_screen_px.clear();
+            return had;
+        }
+        let (hidden, frozen) = (&self.hidden_handles, &self.frozen_handles);
+        let shown = |id: ObjectId| document.get_object(id).is_some() && !hidden.contains(&SceneEntityId::Object(id));
+        let locked = |id: ObjectId| frozen.contains(&SceneEntityId::Object(id));
+        if self.string_rings_screen_px.len() != self.string_rings.len() {
+            // New rings, made against what the project holds now.
+            let mut ids: Vec<ObjectId> = self.string_rings.iter().flat_map(|ring| ring.sides.iter().map(|&(id, _)| id)).collect();
+            ids.sort_unstable_by_key(|id| id.0);
+            ids.dedup();
+            cache.strings = ids
+                .into_iter()
+                .map(|id| RingedString {
+                    id,
+                    revision: document.object_revision(id),
+                    verts: document.get_object(id).map(|_| polyline_in(document, id).0.to_vec()),
+                    shown: shown(id),
+                    locked: locked(id),
+                })
+                .collect();
+            self.string_rings_screen_px.clear();
+            self.string_rings_screen_px.resize(self.string_rings.len(), None);
+            cache.view_key = None;
+            return true;
+        }
+        let mut changed = false;
+        let mut index = 0;
+        while index < cache.strings.len() {
+            let string = &mut cache.strings[index];
+            index += 1;
+            let id = string.id;
+            if (shown(id), locked(id)) != (string.shown, string.locked) {
+                (string.shown, string.locked) = (shown(id), locked(id));
+                changed = true;
+            }
+            // A string out of the scene (hidden, its layer unloaded, or
+            // deleted) is looked at again when it comes back.
+            if document.get_object(id).is_none() || document.object_revision(id) == string.revision {
+                continue;
+            }
+            string.revision = document.object_revision(id);
+            let (new, closed) = polyline_in(document, id);
+            let Some(old) = string.verts.replace(new.to_vec()).filter(|old| old.as_slice() != new) else {
+                continue;
+            };
+            carry_rings_across_edit(
+                &mut self.string_rings,
+                &mut self.string_rings_screen_px,
+                &mut self.canvas_context_menu_ring,
+                id,
+                &old,
+                new,
+                closed,
+            );
+            changed = true;
+        }
+        if changed {
+            cache.view_key = None;
+        }
+        changed
+    }
+
+    /// Project the rings for the view `view_key` names, once per view: each
+    /// ring's slot through `project` (window px, `None` outside the section),
+    /// `None` too when one of its strings is hidden or it lands outside
+    /// `bounds` (left, top, right, bottom); then the painted rings, one per
+    /// cell `2 * ring_px` across, at most [`MAX_PAINTED_STRING_RINGS`].
+    pub(crate) fn project_string_rings(&mut self, view_key: u64, ring_px: f32, bounds: [f32; 4], project: impl Fn(DVec3) -> Option<(f32, f32)>) {
+        let cache = &mut self.string_ring_cache;
+        if cache.view_key == Some(view_key) && self.string_rings_screen_px.len() == self.string_rings.len() {
+            return;
+        }
+        cache.view_key = Some(view_key);
+        let [left, top, right, bottom] = bounds;
+        self.string_rings_screen_px.resize(self.string_rings.len(), None);
+        for (slot, ring) in self.string_rings_screen_px.iter_mut().zip(&self.string_rings) {
+            *slot = cache
+                .ring_shown(ring)
+                .then(|| project(ring.at))
+                .flatten()
+                .filter(|&(x, y)| (left..=right).contains(&x) && (top..=bottom).contains(&y));
+        }
+        cache.paint_px.clear();
+        cache.cells.clear();
+        let cell = (2.0 * ring_px).max(1.0);
+        for &(x, y) in self.string_rings_screen_px.iter().flatten() {
+            if cache.paint_px.len() >= MAX_PAINTED_STRING_RINGS {
+                break;
+            }
+            if cache.cells.insert(((x / cell).floor() as i32, (y / cell).floor() as i32)) {
+                cache.paint_px.push((x, y));
+            }
+        }
+    }
+
+    /// Ring `index` is drawn: every string it names is shown.
+    pub(crate) fn string_ring_shown(&self, index: usize) -> bool {
+        self.string_rings.get(index).is_some_and(|ring| self.string_ring_cache.ring_shown(ring))
+    }
+
+    /// Ring `index` may be joined at halfway from the canvas: a crossing
+    /// close enough in height, drawn, and on no locked string.
+    pub(crate) fn string_ring_joinable(&self, index: usize) -> bool {
+        self.string_rings
+            .get(index)
+            .is_some_and(|ring| ring.joinable() && self.string_ring_shown(index) && ring.sides.iter().all(|&(id, _)| self.ringed_string_editable(id)))
+    }
+
+    /// The ring menu may offer rows that edit ringed string `id`: it is
+    /// shown and not locked, as the last frame found it.
+    pub(crate) fn ringed_string_editable(&self, id: ObjectId) -> bool {
+        self.string_ring_cache.string(id).is_some_and(|string| string.shown && !string.locked)
+    }
+
+    /// Whether the canvas may edit object `id` of `document`, the active
+    /// project's: it is there, shown, and not locked, which is what picking
+    /// asks of anything it hands a tool.
+    pub(crate) fn canvas_edits_object(&self, document: &crate::model::Document, id: ObjectId) -> bool {
+        let handle = SceneEntityId::Object(id);
+        document
+            .get_object(id)
+            .is_some_and(|object| document.layer(object.layer()).is_some_and(|layer| layer.loaded) && !self.locked_layers.contains(&object.layer()))
+            && !document.is_object_hidden(id)
+            && !self.hidden_handles.contains(&handle)
+            && !self.frozen_handles.contains(&handle)
+    }
+
+    /// The index of the ring drawn nearest `px` (physical px) within
+    /// `radius_px`, if any.
+    pub(crate) fn string_ring_near(&self, px: (f32, f32), radius_px: f32) -> Option<usize> {
+        nearest_ring_within(&self.string_rings_screen_px, px, radius_px).filter(|&index| index < self.string_rings.len())
+    }
+
+    /// After a vertex of a string was deleted: see [`forget_deleted_vertex`].
+    /// The cache drops the vertex too, so the next frame finds the string
+    /// as the rings now describe it and does not carry them a second time.
+    pub(crate) fn forget_deleted_ring_vertex(&mut self, id: ObjectId, vertex: usize) {
+        forget_deleted_vertex(&mut self.string_rings, &mut self.string_rings_screen_px, id, vertex);
+        if let Some(verts) = self.string_ring_cache.string_mut(id).and_then(|string| string.verts.as_mut())
+            && vertex < verts.len()
+        {
+            verts.remove(vertex);
+        }
+        self.string_ring_cache.view_key = None;
+        self.canvas_context_menu_ring = None;
+    }
+
     /// Clear every project/object-owned interaction session in one lifecycle
     /// transition. Numeric tool preferences remain intact, but no source id,
     /// preview geometry, projected handle, or modal draft can refer to the
@@ -2354,6 +2789,7 @@ impl EditorState {
         self.tri_create_failure = None;
         self.tri_create_diagnostic_markers_screen_px.clear();
         self.tri_create_diagnostic_segments_screen_px.clear();
+        self.clear_string_rings();
         self.triangulation_pick_target = None;
         self.viewport_pick_hover_label = None;
         self.tri_cut_poly_open = false;
@@ -2659,6 +3095,11 @@ impl EditorState {
             tri_create_failure: None,
             tri_create_diagnostic_markers_screen_px: Vec::new(),
             tri_create_diagnostic_segments_screen_px: Vec::new(),
+            string_rings: Vec::new(),
+            string_numbers: std::collections::HashMap::new(),
+            string_rings_screen_px: Vec::new(),
+            string_ring_cache: StringRingCache::default(),
+            canvas_context_menu_ring: None,
             tri_create_picker_px: None,
             tri_hover_handles: HashSet::new(),
             tri_selected_object_ids: Vec::new(),
@@ -3694,6 +4135,9 @@ pub(crate) enum UiCommand {
     },
     RemoveTriangulation(TriangulationId),
     HideSelection,
+    /// Show again every object of the active project hidden from the canvas,
+    /// whichever layer holds it, as one undo step.
+    UnhideAll,
     ZoomToExtents,
     /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
@@ -3866,6 +4310,27 @@ pub(crate) enum UiCommand {
     /// Open the "Edit Object" dialog on one design object, seeding its working
     /// copy from the document.
     OpenObjectEditDialog(ObjectId),
+    /// Open the "Edit Object" dialog on a polyline at its Vertices tab, the
+    /// row (counting from zero) selected and scrolled into view.
+    ShowObjectVertex {
+        id: ObjectId,
+        row: usize,
+    },
+    /// Clean the selected open strings of the active project, layer by layer.
+    CleanStrings,
+    /// Clean one string alone, from a ring's menu.
+    CleanString(ObjectId),
+    /// Join at the halfway height every ring where two strings meet close
+    /// enough in height.
+    JoinAllAtHalfway,
+    /// Join at the halfway height the one ring at this index.
+    JoinHereAtHalfway(usize),
+    /// Delete one vertex of a string as the canvas Delete Vertex does, from a
+    /// ring's menu, and update the rings.
+    DeleteRingVertex {
+        id: ObjectId,
+        vertex: usize,
+    },
     /// Write the dialog's working copy back as one undoable replace; `close`
     /// shuts the dialog once the write went through (OK), Apply leaves it open.
     ApplyObjectEdit {
@@ -3932,6 +4397,7 @@ impl UiCommand {
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenObjectEditDialog(_)
+            | Self::ShowObjectVertex { .. }
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin
             | Self::OpenPointCloudClassify
@@ -4182,12 +4648,18 @@ impl UiCommand {
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
             Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
+            Self::UnhideAll => report(tr!("common-unhide-all"), tr!("state-hidden-objects")),
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
+            Self::CleanStrings => report(tr!("cmd-string-clean-clean-strings"), tr!("state-selected-polylines")),
+            Self::CleanString(id) => report(tr!("cmd-string-clean-clean-this-string"), format!("{id:?}")),
+            Self::JoinAllAtHalfway => report(tr!("cmd-string-clean-join-all-at-halfway"), tr!("cmd-string-clean-rings")),
+            Self::JoinHereAtHalfway(_) => report(tr!("cmd-string-clean-join-here-at-halfway"), tr!("cmd-string-clean-rings")),
+            Self::DeleteRingVertex { id, .. } => report(tr!("cmd-selection-delete-vertex"), format!("{id:?}")),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!("state-insert-points-elevation"),
                 tr!("state-count-object-s-z-elevation", count = object_ids.len().to_string(), elevation = elevation.to_string()),

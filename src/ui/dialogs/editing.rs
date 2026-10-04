@@ -103,8 +103,50 @@ pub(crate) fn draw_right_click_context(
 ) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
-    let title = canvas_context_menu_title(editor, document);
+    // Opened on a ring of two strings or more, the header names them as the
+    // console does.
+    let title = editor
+        .canvas_context_menu_ring
+        .filter(|&index| editor.string_ring_shown(index))
+        .and_then(|index| editor.string_rings.get(index))
+        .and_then(|ring| ring.title.clone())
+        .unwrap_or_else(|| canvas_context_menu_title(editor, document));
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+        // Opened on a ring: its rows first, vertices numbered from one as the
+        // Vertices table numbers them.
+        // A ring on a hidden string offers nothing; one on a locked string
+        // offers only what reads it, as the canvas edits nothing locked.
+        if let Some(index) = editor.canvas_context_menu_ring.filter(|&index| editor.string_ring_shown(index))
+            && let Some(ring) = editor.string_rings.get(index).cloned()
+        {
+            let editable = |id| editor.ringed_string_editable(id);
+            if ring.joinable() && ring.sides.iter().all(|&(id, _)| editable(id)) && ContextMenuAction::new(tr!("cmd-string-clean-join-here-at-halfway")).show(ui).clicked() {
+                commands.push(UiCommand::JoinHereAtHalfway(index));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            for &(id, vertex) in &ring.sides {
+                let Some(vertex) = vertex else {
+                    continue;
+                };
+                let number = (vertex + 1).to_string();
+                if editable(id) && ContextMenuAction::new(tr!("edit-delete-vertex-number", number = number.clone())).show(ui).clicked() {
+                    commands.push(UiCommand::DeleteRingVertex { id, vertex });
+                    commands.push(UiCommand::CloseCanvasContextMenu);
+                }
+                if ContextMenuAction::new(tr!("edit-show-vertex-number-in-table", number = number)).show(ui).clicked() {
+                    commands.push(UiCommand::ShowObjectVertex { id, row: vertex });
+                    commands.push(UiCommand::CloseCanvasContextMenu);
+                }
+            }
+            if let [(id, _)] = ring.sides.as_slice()
+                && editable(*id)
+                && ContextMenuAction::new(tr!("cmd-string-clean-clean-this-string")).show(ui).clicked()
+            {
+                commands.push(UiCommand::CleanString(*id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            context_menu_separator(ui);
+        }
         crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
         let selected_drill_hole = editor
             .selected_handles
@@ -156,6 +198,23 @@ pub(crate) fn draw_right_click_context(
                 *geometry_dirty |= editor.apply_action(crate::ui::state::EditorAction::FreezeSelection);
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
+            context_menu_separator(ui);
+        }
+
+        let open_string_selected = editor.selected_handles.iter().any(|handle| match handle {
+            crate::model::SceneEntityId::Object(id) => matches!(document.get_object(*id), Some(crate::model::Object::Polyline { closed: false, .. })),
+            _ => false,
+        });
+        let join_offered = (0..editor.string_rings.len()).any(|index| editor.string_ring_joinable(index));
+        if open_string_selected && ContextMenuAction::new(tr!("cmd-string-clean-clean-strings")).show(ui).clicked() {
+            commands.push(UiCommand::CleanStrings);
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+        if join_offered && ContextMenuAction::new(tr!("cmd-string-clean-join-all-at-halfway")).show(ui).clicked() {
+            commands.push(UiCommand::JoinAllAtHalfway);
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+        if open_string_selected || join_offered {
             context_menu_separator(ui);
         }
 

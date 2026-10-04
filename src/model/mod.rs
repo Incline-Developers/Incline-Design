@@ -9,6 +9,7 @@ pub(crate) mod layer_residency;
 pub(crate) mod atomic_file;
 pub(crate) mod blast;
 pub(crate) mod block_model;
+pub(crate) mod control_checks;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
 pub(crate) mod folders;
@@ -36,6 +37,7 @@ pub(crate) mod rbf;
 pub(crate) mod rbf_spans;
 pub(crate) mod spatial;
 pub(crate) mod strat_order;
+pub(crate) mod string_clean;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
 

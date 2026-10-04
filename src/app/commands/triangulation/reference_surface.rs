@@ -10,32 +10,29 @@ use glam::{DVec2, DVec3};
 
 use super::*;
 use crate::{
-    app::jobs::CancelFlag,
+    app::{commands::string_clean::forget_ring_menu, jobs::CancelFlag},
     model::{
-        Document, LayerId,
+        Command, Document, LayerId,
+        control_checks::{
+            BoxGrid, Crossing, MisshapenControls, PlanCells, SEARCH_MARGIN, SELF_SHAPE_LINES, canonical_order, cell_of, cells_across, control_crossings, control_points,
+            control_points_spaced, elevation_along, grid_cell, nearer_end, segment_box, self_intersects, stop_if_cancelled, too_few_control_vertices, validate_controls,
+        },
         kernel::{self, PolyContainment, SegSeg},
         progress::Progress,
         project::ModellingSettings,
-        rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, RbfSurface, SteepPair},
+        rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
+        string_clean::{self, LeftOut, NotLeftOut, OddOneOut, Problem, ProblemKind},
     },
+    ui::state::{StringRing, StringRingKind},
 };
 
 /// The fewest points a surface can be built from.
 pub(crate) const MINIMUM_POINTS: usize = 3;
 
-/// The fewest vertices a control string is usable from: two make a segment,
-/// and a segment is what the surface is held along.
-const MINIMUM_CONTROL_VERTICES: usize = 2;
-
 /// How many overridden picks the report names one by one before it counts the
 /// rest, so a build over a big string set cannot flood the console.
 const OVERRIDE_LINES: usize = 20;
-
-/// How far apart two controls' elevations may be where they cross in plan and
-/// still count as one height; two interpretations meeting, so tighter than
-/// [`kernel::Z_TOL`].
-const CONTROL_AGREEMENT: f64 = 0.01;
 
 /// The step the vertical extent is rounded out to, so the box reads as a
 /// round number instead of an accident of where the picks happened to fall.
@@ -52,6 +49,17 @@ const OUTLINE_ARC_STEP: f64 = 10.0;
 /// How many steep pairs the warning names one by one before it counts the
 /// rest, as the override report does.
 const STEEP_LINES: usize = 50;
+
+/// How many places a line naming a string left out of the build gives
+/// before it counts the rest.
+const LEFT_OUT_PLACES: usize = 5;
+
+/// The shape tolerances, in metres, a build whose control strings would
+/// pass the spline's point budget thins its copy of them at, tried in turn
+/// until the vertices kept fit: a vertex is kept when the string without it
+/// would pass more than the tolerance from it, in plan or in height. The
+/// first is the half metre within which Clean Strings joins two strings.
+const SHAPE_TOLERANCES: [f64; 4] = [string_clean::JOIN_AUTOMATIC, 1.0, 2.0, 5.0];
 
 /// One build's grid and the numbers the report is made of, kept apart from
 /// the log line so they can be read back.
@@ -79,9 +87,19 @@ struct SurfaceMesh {
     vertical_box: (f64, f64),
     /// Control strings the surface was made to pass through.
     controls: usize,
+    /// Control strings left out of this build so the rest pass its checks,
+    /// in the order they were chosen, by place in the selection.
+    left_out_strings: Vec<LeftOut>,
+    /// What the build cleaned in its copy of the controls, each change by
+    /// the place in the selection of the string it came from.
+    cleaned: Vec<string_clean::Change>,
     /// Points those strings entered: their vertices, their segments
-    /// densified at the grid spacing, and where they cross.
+    /// densified at the grid spacing, and where they cross; when they would
+    /// pass the spline's point budget, the points of their thinned copy.
     control_points: usize,
+    /// How the copy of the control strings was thinned to fit the spline's
+    /// point budget, when it was.
+    thinned: Option<Thinning>,
     /// Plan positions where controls met each other.
     crossings: usize,
     /// Picks a control left out at another height.
@@ -93,6 +111,17 @@ struct SurfaceMesh {
     steep: Vec<SteepPair>,
     /// The settings the surface was built with.
     settings: ModellingSettings,
+}
+
+/// How a build thinned its copy of the control strings to fit the
+/// spline's point budget: the points the vertices kept make, with where the
+/// strings cross, the shape tolerance in metres they were kept at, and the
+/// spacing in plan, in metres, points were put along the strings at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Thinning {
+    kept: usize,
+    tolerance: f64,
+    spacing: f64,
 }
 
 /// A pick a control left out at another height: the plan position, the
@@ -186,11 +215,35 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
     Ok(SurfaceInput { points, layers, controls, extent })
 }
 
+/// One ring per refused position, naming its string and the drawn vertex at
+/// that position when there is one.
+fn refused_rings(ids: &[ObjectId], refused: &[usize], positions: &[DVec3], vertex_of: impl Fn(ObjectId, DVec3) -> Option<usize>) -> Vec<StringRing> {
+    refused
+        .iter()
+        .zip(positions)
+        .filter_map(|(&index, &at)| {
+            let id = *ids.get(index)?;
+            Some(StringRing {
+                at,
+                kind: StringRingKind::Refused,
+                sides: vec![(id, vertex_of(id, at))],
+                title: None,
+            })
+        })
+        .collect()
+}
+
 impl<'a> App<'a> {
     /// Grid a thin plate spline through the selected points into a new
     /// surface, named for their layer when they share one. Every run adds a
     /// surface; nothing is replaced.
     pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>) -> Result<()> {
+        // The last refusal's rings go as the next build starts, whatever it
+        // finds; a fresh refusal rings its own.
+        if !self.editor.string_rings.is_empty() {
+            self.editor.clear_string_rings();
+            self.redraw_requested = true;
+        }
         let project = self
             .workspace
             .active_project()
@@ -209,7 +262,9 @@ impl<'a> App<'a> {
         // is what the selection was read against: a string the geologist could
         // see and choose is the string that clips.
         let ring = extent.map(|id| extent_ring(&self.scene_document, id)).transpose()?;
-        let controls = control_strings(&self.scene_document, &controls)?;
+        let control_ids = controls;
+        let controls = control_strings(&self.scene_document, &control_ids)?;
+        let runtime_id = project.runtime_id;
         // Snapshot the geometry and its source layers on the UI thread; the
         // worker never sees the scene document. A point whose layer was
         // hidden since the dialog opened no longer resolves and is dropped,
@@ -263,20 +318,193 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-reference-surface-no-mask-selected-surface-outline", buffer = OUTLINE_BUFFER.to_string()));
         }
         let stamp = RunStamp::now();
+        let keys: Vec<u64> = control_ids.iter().map(|id| id.0).collect();
+        // Each control's layer, so the build's copy is cleaned layer by
+        // layer as Clean Strings cleans.
+        let control_layers: Vec<u64> = control_ids
+            .iter()
+            .map(|id| self.scene_document.get_object(*id).map_or(0, |object| object.layer().0))
+            .collect();
 
-        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<crate::model::triangulation::GeneratedTriangulation> {
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
             if cancel.is_cancelled() {
                 anyhow::bail!("{}", tr!("common-cancelled"));
             }
-            grid_surface_from_points(points, controls, ring, &settings, name, &stamp, cancel, progress)
+            let selected = SelectedControls {
+                strings: &controls,
+                keys: &keys,
+                layers: &control_layers,
+            };
+            grid_surface_from_points(points, selected, ring, &settings, name, &stamp, cancel, progress)
         };
-        let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
-            Ok(generated) => app.insert_generated_triangulation_in(generated, section),
-            Err(error) => crate::userspace_error!("{}", tr!("cmd-reference-surface-build-surface-failed-error", error = format!("{error:#}"))),
+        let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
+            Ok((generated, left_out)) => {
+                app.insert_generated_triangulation_in(generated, section);
+                // The strings left out stay selected and ringed, nothing
+                // hidden: the surface is there to look at beside them.
+                if !left_out.is_empty() {
+                    let pieces: Vec<usize> = left_out.iter().map(|left| left.piece).collect();
+                    if app.select_refused_controls(runtime_id, &control_ids, &pieces) > 0 {
+                        let problems: Vec<Problem> = left_out.iter().flat_map(|left| left.problems.iter().cloned()).collect();
+                        app.ring_placed_controls(&control_ids, &problems);
+                    }
+                }
+            }
+            Err(error) => {
+                let mut message = format!("{error:#}");
+                if let Some(misshapen) = error.downcast_ref::<MisshapenControls>() {
+                    let selected = app.select_refused_controls(runtime_id, &control_ids, &misshapen.refused);
+                    if selected > 0 {
+                        message.push('\n');
+                        message.push_str(&tr!("cmd-reference-surface-count-refused-strings-selected", count = selected.to_string()));
+                        let hidden = app.hide_other_controls(&control_ids, &misshapen.refused);
+                        if hidden > 0 {
+                            message.push('\n');
+                            message.push_str(&tr!("cmd-reference-surface-count-other-strings-hidden", count = hidden.to_string()));
+                        }
+                        app.frame_selected_strings();
+                        app.ring_refused_controls(&control_ids, &misshapen.refused, &misshapen.positions);
+                    }
+                } else if let Some(placed) = error.downcast_ref::<PlacedRefusal>() {
+                    // Reported after the build's own text, which stands as
+                    // it was; then treated as a shape refusal is.
+                    message.push('\n');
+                    message.push_str(&placed_report(&placed.problems, &placed.odd_ones));
+                    let involved = placed_strings(&placed.problems);
+                    let selected = app.select_refused_controls(runtime_id, &control_ids, &involved);
+                    if selected > 0 {
+                        message.push('\n');
+                        message.push_str(&tr!("cmd-reference-surface-count-refused-strings-selected", count = selected.to_string()));
+                        let hidden = app.hide_other_controls(&control_ids, &involved);
+                        if hidden > 0 {
+                            message.push('\n');
+                            message.push_str(&tr!("cmd-reference-surface-count-other-strings-hidden", count = hidden.to_string()));
+                        }
+                        app.frame_selected_strings();
+                        app.ring_placed_controls(&control_ids, &placed.problems);
+                    }
+                }
+                crate::userspace_error!("{}", tr!("cmd-reference-surface-build-surface-failed-error", error = message))
+            }
         };
         self.spawn_job_reporting_progress(tr!("cmd-reference-surface-building-surface"), vec![project_key], compute, apply);
         Ok(())
     }
+
+    /// Replace the selection with the controls a build refused or left out,
+    /// so they light up for the geologist to fix by hand, and say how
+    /// many that is. Nothing changes when the build's project is no longer
+    /// the active one or none of the strings can still be selected.
+    fn select_refused_controls(&mut self, runtime_id: u32, ids: &[ObjectId], refused: &[usize]) -> usize {
+        if self.workspace.active_project().is_none_or(|project| project.runtime_id != runtime_id) {
+            return 0;
+        }
+        let handles = refused_selection(ids, refused, |handle| {
+            matches!(handle, SceneEntityId::Object(id) if self.scene_document.get_object(id).is_some())
+                && !self.editor.hidden_handles.contains(&handle)
+                && !self.editor.frozen_handles.contains(&handle)
+        });
+        if handles.is_empty() {
+            return 0;
+        }
+        if self.has_pending_move_delta() {
+            self.cancel_move_delta();
+        }
+        self.editor.selected_handles = handles.into_iter().collect();
+        self.editor.selected_drill_holes.clear();
+        self.editor.selected_tie_ins.clear();
+        self.invalidate_overlay();
+        self.editor.selected_handles.len()
+    }
+
+    /// Hide every other control the build took, as Hide Selection hides,
+    /// in one undo step, so the refused ones stand alone in the scene; Unhide
+    /// All or one undo brings them back. Returns how many were hidden.
+    fn hide_other_controls(&mut self, ids: &[ObjectId], refused: &[usize]) -> usize {
+        let Some(document) = self.workspace.active_document() else {
+            return 0;
+        };
+        let hides = isolating_hides(ids, refused, |id| document.get_object(id).is_some() && !document.is_object_hidden(id));
+        if hides.is_empty() {
+            return 0;
+        }
+        let count = hides.len();
+        self.execute_edit(Command::Batch(
+            hides.into_iter().map(|id| Command::SetObjectHidden { id, before: false, after: true }).collect(),
+        ));
+        self.invalidate_geometry();
+        count
+    }
+
+    /// Ring every position where a refused control goes wrong, each one,
+    /// past the report's line limit too, until the next build, Unhide All or
+    /// the project is left. Drawn on the canvas only: nothing enters the
+    /// project or its undo history.
+    fn ring_refused_controls(&mut self, ids: &[ObjectId], refused: &[usize], positions: &[DVec3]) {
+        let document = self.workspace.active_document();
+        self.editor.string_rings = refused_rings(ids, refused, positions, |id, at| match document.and_then(|document| document.get_object(id)) {
+            Some(Object::Polyline { verts, .. }) => crate::app::commands::string_clean::vertex_at(verts, at),
+            _ => None,
+        });
+        self.number_rings_by_selection(ids);
+        forget_ring_menu(&mut self.editor);
+        self.redraw_requested = true;
+    }
+
+    /// Ring every place Clean Strings' final check found in the refused
+    /// controls, as [`Self::ring_refused_controls`] rings, each ring naming
+    /// the drawn vertex of each string at its position when there is one.
+    fn ring_placed_controls(&mut self, ids: &[ObjectId], problems: &[Problem]) {
+        let document = self.workspace.active_document();
+        self.editor.string_rings = placed_rings(ids, problems, |id, at| match document.and_then(|document| document.get_object(id)) {
+            Some(Object::Polyline { verts, .. }) => crate::app::commands::string_clean::vertex_at(verts, at),
+            _ => None,
+        });
+        self.number_rings_by_selection(ids);
+        forget_ring_menu(&mut self.editor);
+        self.redraw_requested = true;
+    }
+
+    /// The build names its strings by their place in the selection, so a
+    /// Join on its rings goes by those numbers too.
+    fn number_rings_by_selection(&mut self, ids: &[ObjectId]) {
+        self.editor.string_numbers = ids.iter().enumerate().map(|(place, &id)| (id, place)).collect();
+    }
+
+    /// Move the camera so the selected strings fill the view, keeping its
+    /// angle, as Zoom Extents does for the whole scene.
+    fn frame_selected_strings(&mut self) {
+        let document = &self.scene_document;
+        let bounds = strings_bounds(self.editor.selected_handles.iter().filter_map(|handle| match handle {
+            SceneEntityId::Object(id) => match document.get_object(*id) {
+                Some(Object::Polyline { verts, closed, .. }) => Some((verts.as_slice(), *closed)),
+                _ => None,
+            },
+            _ => None,
+        }));
+        if let (Some((min, max)), Some(graphics)) = (bounds, self.graphics.as_mut()) {
+            graphics.zoom_to_bounds(min, max);
+            self.redraw_requested = true;
+        }
+    }
+}
+
+/// The controls to hide so the refused ones stand alone: every other string
+/// the build took, each once, where `hideable` allows; a string refused at
+/// any place in the selection is never among them.
+fn isolating_hides(ids: &[ObjectId], refused: &[usize], hideable: impl Fn(ObjectId) -> bool) -> Vec<ObjectId> {
+    let refused: HashSet<ObjectId> = refused.iter().filter_map(|&index| ids.get(index).copied()).collect();
+    let mut seen = HashSet::new();
+    ids.iter().copied().filter(|&id| !refused.contains(&id) && seen.insert(id) && hideable(id)).collect()
+}
+
+/// The box around the strings, arcs included, as the scene bounds measure
+/// each string; `None` when there are none.
+fn strings_bounds<'a>(strings: impl IntoIterator<Item = (&'a [crate::model::PolyVertex], bool)>) -> Option<(DVec3, DVec3)> {
+    strings
+        .into_iter()
+        .filter_map(|(verts, closed)| crate::model::geometry::polyline_bulge_bounds(verts, closed))
+        .reduce(|(min, max), (other_min, other_max)| (min.min(other_min), max.max(other_max)))
 }
 
 fn too_few_points(count: usize) -> String {
@@ -287,67 +515,12 @@ fn too_few_points(count: usize) -> String {
     )
 }
 
-/// Control strings carry no name of their own, so a refusal names one by
-/// where it sat in the selection, counting from one.
-fn too_few_control_vertices(index: usize, count: usize) -> String {
-    tr!(
-        "cmd-reference-surface-control-string-index-has-count",
-        index = (index + 1).to_string(),
-        count = count.to_string(),
-        minimum = MINIMUM_CONTROL_VERTICES.to_string()
-    )
-}
-
 fn control_not_finite(index: usize) -> String {
     tr!("cmd-reference-surface-control-string-index-has-non", index = (index + 1).to_string())
 }
 
 fn control_not_available(index: usize) -> String {
     tr!("cmd-reference-surface-control-string-index-no-longer", index = (index + 1).to_string())
-}
-
-fn control_self_crossing(index: usize) -> String {
-    tr!("cmd-reference-surface-control-string-index-crosses-itself", index = (index + 1).to_string())
-}
-
-fn control_doubles_back(index: usize) -> String {
-    tr!("cmd-reference-surface-control-string-index-doubles-back", index = (index + 1).to_string())
-}
-
-fn control_ends_where_it_starts(index: usize) -> String {
-    tr!("cmd-reference-surface-control-string-index-ends-where", index = (index + 1).to_string())
-}
-
-/// Stop the build once the job it runs in has been cancelled.
-fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
-    if cancelled() {
-        anyhow::bail!("{}", tr!("common-cancelled"));
-    }
-    Ok(())
-}
-
-/// Two controls reading one plan position at two heights: which two, where,
-/// and how far apart, for the geologist to decide between. The string
-/// selected first is named first, each height beside its own string.
-fn controls_disagree(left: usize, right: usize, position: DVec2, low: f64, high: f64) -> String {
-    let (left, right, low, high) = if left <= right { (left, right, low, high) } else { (right, left, high, low) };
-    tr!(
-        "cmd-reference-surface-control-strings-b-disagree-x",
-        a = (left + 1).to_string(),
-        b = (right + 1).to_string(),
-        x = format!("{:.3}", position.x),
-        y = format!("{:.3}", position.y),
-        za = format!("{low:.2}"),
-        zb = format!("{high:.2}"),
-        difference = format!("{:.2}", (high - low).abs())
-    )
-}
-
-/// Two controls sharing a stretch of plan rather than a point: every position
-/// along it is claimed twice, which is a job of its own.
-fn controls_along_each_other(left: usize, right: usize) -> String {
-    let (left, right) = (left.min(right), left.max(right));
-    tr!("cmd-reference-surface-control-strings-b-run-along", a = (left + 1).to_string(), b = (right + 1).to_string())
 }
 
 /// A control running along the extent's edge rather than across it leaves the
@@ -407,7 +580,9 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
             anyhow::bail!("{}", control_not_finite(index));
         }
         string.dedup();
-        if string.len() < MINIMUM_CONTROL_VERTICES {
+        // A string of one point is the build's to leave out and name; one
+        // of none has nowhere to be named.
+        if string.is_empty() {
             anyhow::bail!("{}", too_few_control_vertices(index, string.len()));
         }
         strings.push(string);
@@ -415,32 +590,37 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
     Ok(strings)
 }
 
-/// Two vertices of one control too close in plan to be two points, at
-/// heights too far apart to be one.
-fn control_vertices_disagree(index: usize, position: DVec2) -> String {
-    tr!(
-        "cmd-reference-surface-control-string-index-has-two",
-        index = (index + 1).to_string(),
-        distance = MERGE_DISTANCE.to_string(),
-        x = format!("{:.3}", position.x),
-        y = format!("{:.3}", position.y)
-    )
-}
-
 /// Worker half: the spline through the points and controls, gridded, cut
 /// to the extent or the points' outline, and reported with its run record.
 #[allow(clippy::too_many_arguments)]
 fn grid_surface_from_points(
     points: Vec<DVec3>,
-    controls: Vec<Vec<DVec3>>,
+    controls: SelectedControls,
     extent: Option<Vec<DVec2>>,
     settings: &ModellingSettings,
     name: String,
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
-) -> Result<crate::model::triangulation::GeneratedTriangulation> {
-    let surface = surface_mesh(&points, &controls, extent.as_deref(), settings, cancel, progress)?;
+) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
+    let surface = surface_mesh(&points, controls, extent.as_deref(), settings, cancel, progress)?;
+    // What the build cleaned in its copy and the strings it left out come
+    // first, each under its own heading, so the build line that follows
+    // reads as what was built from them.
+    if !surface.cleaned.is_empty() {
+        userspace_log!("{}", cleaned_report(&surface.cleaned));
+    }
+    if !surface.left_out_strings.is_empty() {
+        userspace_warn!("{}", left_out_report(&surface.left_out_strings));
+    }
+    if let Some(thinning) = surface.thinned {
+        let line = thinned_report(&thinning, surface.used);
+        if thinning.tolerance > SHAPE_TOLERANCES[0] {
+            userspace_warn!("{}", line);
+        } else {
+            userspace_log!("{}", line);
+        }
+    }
     userspace_log!(
         "{}\n{}",
         tr!(
@@ -513,7 +693,28 @@ fn grid_surface_from_points(
     if !surface.steep.is_empty() {
         userspace_warn!("{}", steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees));
     }
-    session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
+    let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+    Ok((generated, surface.left_out_strings))
+}
+
+/// The line saying a build thinned its copy of the control strings, and
+/// whether the shape tolerance had to be raised; `used` is the points the
+/// spline was fitted through.
+fn thinned_report(thinning: &Thinning, used: usize) -> String {
+    let raised = if thinning.tolerance > SHAPE_TOLERANCES[0] {
+        format!(" {}", tr!("cmd-reference-surface-thinned-raised", first = SHAPE_TOLERANCES[0].to_string()))
+    } else {
+        String::new()
+    };
+    tr!(
+        "cmd-reference-surface-thinned",
+        kept = thinning.kept.to_string(),
+        tolerance = thinning.tolerance.to_string(),
+        raised = raised,
+        spacing = thinning.spacing.to_string(),
+        used = used.to_string(),
+        budget = POINT_BUDGET.to_string()
+    )
 }
 
 /// Every pair of points closer than `within` in plan and steeper than
@@ -553,10 +754,17 @@ fn steep_report(pairs: &[SteepPair], within: f64, degrees: f64) -> String {
 ///
 /// A control enters as its vertices and its segments densified at the grid
 /// spacing, so the spline holds the whole string; a pick the string passes
-/// over is left out, the string winning.
+/// over is left out, the string winning. When those points and the picks
+/// would pass the spline's point budget, the controls enter as their
+/// thinned copy instead, as [`within_budget`] makes it; their checks, the
+/// picks they leave out and the outline are still read off them unthinned.
+/// The controls are first cleaned in a copy, as Clean Strings and Join all
+/// at halfway would clean them; the strings of the copy the build's checks
+/// still refuse together are left out as [`string_clean::leave_out`]
+/// chooses. No string selected changes.
 fn surface_mesh(
     points: &[DVec3],
-    controls: &[Vec<DVec3>],
+    selected: SelectedControls,
     extent: Option<&[DVec2]>,
     settings: &ModellingSettings,
     cancel: &CancelFlag,
@@ -574,11 +782,25 @@ fn surface_mesh(
     // Controls in an order read off their own geometry, so the build cannot
     // depend on the order they were selected in; `names` keeps each one's
     // place in the selection for the messages.
-    let names = canonical_order(controls);
-    let ordered: Vec<Vec<DVec3>> = names.iter().map(|&index| controls[index].clone()).collect();
-    let controls = ordered.as_slice();
-    validate_controls(controls, &names, &cancelled)?;
-    let crossings = control_crossings(controls, &names, &cancelled)?;
+    let copy = string_clean::clean_copy(selected.strings, selected.layers, selected.keys, &cancelled).map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+    let strings: Vec<Vec<DVec3>> = copy
+        .pieces
+        .iter()
+        .map(|piece| {
+            let mut string = piece.verts.clone();
+            string.dedup();
+            string
+        })
+        .collect();
+    let sources: Vec<usize> = copy.pieces.iter().map(|piece| piece.source).collect();
+    let keys: Vec<u64> = sources.iter().map(|&source| selected.keys.get(source).copied().unwrap_or(source as u64)).collect();
+    let copied = CopiedControls {
+        strings: &strings,
+        sources: &sources,
+        keys: &keys,
+    };
+    let checked = checked_controls(copied, &cancelled)?;
+    let (names, controls, crossings, entered) = (&checked.names, checked.ordered.as_slice(), &checked.crossings, &checked.entered);
     let drawn = extent.map(RingBands::new);
     let mut support = 0usize;
     if let (Some(ring), Some(bands)) = (extent, drawn.as_ref()) {
@@ -589,7 +811,7 @@ fn surface_mesh(
         if self_intersects(ring, true) {
             anyhow::bail!("{}", tr!("cmd-reference-surface-extent-string-crosses-itself-plan"));
         }
-        refuse_controls_along(ring, controls, &names, &cancelled)?;
+        refuse_controls_along(ring, controls, names, &cancelled)?;
         support = points.iter().filter(|point| !inside(bands, point.truncate())).count();
         let covered = points.len() - support;
         if covered < MINIMUM_POINTS {
@@ -597,19 +819,36 @@ fn surface_mesh(
         }
     }
 
-    let entered = control_points(controls, &names, &crossings, &cancelled)?;
     let (picks, overridden, left_out) = picks_off_controls(points, controls, &cancelled)?;
+    let budgeted = if !controls.is_empty() && picks.len() + entered.len() > POINT_BUDGET {
+        Some(within_budget(controls, names, crossings, picks.len(), &cancelled)?)
+    } else {
+        None
+    };
+    let fit_controls = budgeted.as_ref().map_or(entered.as_slice(), |(thinned, _)| thinned.as_slice());
     let mut fitted = Vec::new();
-    fitted.try_reserve_exact(picks.len() + entered.len()).context("Not enough memory for the surface points")?;
+    fitted
+        .try_reserve_exact(picks.len() + fit_controls.len())
+        .context("Not enough memory for the surface points")?;
     fitted.extend(picks);
-    fitted.extend(entered.iter().copied());
+    fitted.extend(fit_controls.iter().copied());
 
     // Without a mask the points' outline is the extent, cut exactly as a
     // drawn one is. Every fitted point is the buffer inside it, so the
     // refusals above that guard a drawn mask have nothing to find in it.
-    let outline = match extent {
-        Some(_) => Vec::new(),
-        None => buffered_outline(&fitted)?,
+    // A thinned copy's points lie on chords of the strings, inside the
+    // outline of the strings unthinned, which is the one taken.
+    let outline = match (extent, &budgeted) {
+        (Some(_), _) => Vec::new(),
+        (None, None) => buffered_outline(&fitted)?,
+        (None, Some(_)) => {
+            let picked = fitted.len() - fit_controls.len();
+            let mut whole = Vec::new();
+            whole.try_reserve_exact(picked + entered.len()).context("Not enough memory for the outline")?;
+            whole.extend_from_slice(&fitted[..picked]);
+            whole.extend(entered.iter().copied());
+            buffered_outline(&whole)?
+        }
     };
     let ring = extent.unwrap_or(&outline);
     let bands = drawn.unwrap_or_else(|| RingBands::new(ring));
@@ -642,13 +881,510 @@ fn surface_mesh(
         support,
         vertical_box,
         controls: controls.len(),
-        control_points: entered.len(),
+        control_points: fit_controls.len(),
+        thinned: budgeted.as_ref().map(|(_, thinning)| *thinning),
         crossings: crossings.len(),
         overridden,
         left_out,
         steep,
         settings: *settings,
+        left_out_strings: checked.left_out,
+        cleaned: copy.changes,
     })
+}
+
+/// The points the controls enter the fit as when, densified at the grid
+/// spacing, they and the `picks` kept would pass the spline's point budget.
+/// Each string keeps only the vertices that shape it within the first of
+/// [`SHAPE_TOLERANCES`] at which those, with where the strings cross, fit
+/// beside the picks; points are then put along the thinned strings at the
+/// smallest spacing that fits, in whole metres from the grid spacing up,
+/// one spacing for the whole build. Refused, naming the counts, when even
+/// the vertices kept at the last tolerance do not fit.
+fn within_budget(controls: &[Vec<DVec3>], names: &[usize], crossings: &[Crossing], picks: usize, cancelled: &dyn Fn() -> bool) -> Result<(Vec<DVec3>, Thinning)> {
+    let room = POINT_BUDGET.saturating_sub(picks);
+    let mut fewest = 0;
+    for &tolerance in &SHAPE_TOLERANCES {
+        stop_if_cancelled(cancelled)?;
+        let thinned = thinned_controls(controls, crossings, tolerance);
+        fewest = control_points_spaced(&thinned, names, crossings, f64::INFINITY, cancelled)?.len();
+        if fewest > room {
+            continue;
+        }
+        let spaced = |extra: f64| control_points_spaced(&thinned, names, crossings, DEFAULT_SPACING + extra, cancelled);
+        // At a spacing as long as the longest segment every segment is one
+        // piece, so the points are the vertices kept, which fit.
+        let longest = thinned
+            .iter()
+            .flat_map(|string| string.windows(2))
+            .map(|segment| segment[0].truncate().distance(segment[1].truncate()))
+            .fold(0.0, f64::max);
+        let mut fits = 0.0;
+        if spaced(0.0)?.len() > room {
+            let (mut short, mut long) = (0.0, (longest - DEFAULT_SPACING).ceil().max(1.0));
+            while long - short > 1.0 {
+                let middle = ((short + long) / 2.0).floor();
+                if spaced(middle)?.len() > room {
+                    short = middle;
+                } else {
+                    long = middle;
+                }
+            }
+            fits = long;
+        }
+        let points = spaced(fits)?;
+        let thinning = Thinning {
+            kept: fewest,
+            tolerance,
+            spacing: DEFAULT_SPACING + fits,
+        };
+        return Ok((points, thinning));
+    }
+    anyhow::bail!(
+        "{}",
+        tr!(
+            "cmd-reference-surface-thin-refused",
+            budget = POINT_BUDGET.to_string(),
+            tolerance = SHAPE_TOLERANCES[SHAPE_TOLERANCES.len() - 1].to_string(),
+            kept = fewest.to_string(),
+            picks = picks.to_string(),
+            total = (fewest + picks).to_string()
+        )
+    )
+}
+
+/// Each control with only the vertices that shape it within `tolerance`:
+/// a vertex is kept when the string without it would pass more than
+/// `tolerance` from it, in plan or in height. Its ends and every place it
+/// meets another string are always kept, the place put in as a vertex at
+/// the string's own height where it has none, so the strings still meet
+/// where and at the heights they did.
+fn thinned_controls(controls: &[Vec<DVec3>], crossings: &[Crossing], tolerance: f64) -> Vec<Vec<DVec3>> {
+    let mut held: Vec<Vec<bool>> = controls.iter().map(|control| vec![false; control.len()]).collect();
+    let mut put_in: Vec<Vec<(usize, f64, DVec3)>> = vec![Vec::new(); controls.len()];
+    for crossing in crossings {
+        for side in &crossing.sides {
+            let control = &controls[side.control];
+            let (start, end) = (control[side.segment], control[side.segment + 1]);
+            match nearer_end(crossing.position, start.truncate(), end.truncate()) {
+                Some(at) => held[side.control][side.segment + at] = true,
+                None => {
+                    let (_, along) = kernel::project_onto_segment(crossing.position, start.truncate(), end.truncate());
+                    put_in[side.control].push((side.segment, along, crossing.position.extend(elevation_along(start, end, along))));
+                }
+            }
+        }
+    }
+    controls
+        .iter()
+        .zip(held)
+        .zip(put_in)
+        .map(|((control, held), mut put_in)| {
+            put_in.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.total_cmp(&right.1)));
+            let mut string = Vec::with_capacity(control.len() + put_in.len());
+            let mut pinned = Vec::with_capacity(control.len() + put_in.len());
+            let mut extra = put_in.into_iter().peekable();
+            for (index, &vertex) in control.iter().enumerate() {
+                string.push(vertex);
+                pinned.push(held[index] || index == 0 || index + 1 == control.len());
+                while let Some((_, _, at)) = extra.next_if(|&(segment, _, _)| segment == index) {
+                    if string.last() != Some(&at) {
+                        string.push(at);
+                        pinned.push(true);
+                    }
+                }
+            }
+            shaping_vertices(&string, &pinned, tolerance)
+        })
+        .collect()
+}
+
+/// The vertices of a string that shape it within `tolerance`, by
+/// Douglas-Peucker between the vertices `pinned`, which are all kept: of
+/// the vertices between two kept ones, the one farthest off the line
+/// joining them is kept when it is more than `tolerance` off it, and each
+/// side is judged again. How far off is the larger of the plan distance to
+/// the line and the height off it where the line comes nearest in plan.
+fn shaping_vertices(string: &[DVec3], pinned: &[bool], tolerance: f64) -> Vec<DVec3> {
+    let mut keep = pinned.to_vec();
+    let anchors: Vec<usize> = (0..string.len()).filter(|&index| keep[index]).collect();
+    let mut spans: Vec<(usize, usize)> = anchors.windows(2).map(|pair| (pair[0], pair[1])).collect();
+    while let Some((first, last)) = spans.pop() {
+        let (start, end) = (string[first], string[last]);
+        let mut farthest: Option<(usize, f64)> = None;
+        for (index, &vertex) in string.iter().enumerate().take(last).skip(first + 1) {
+            let (nearest, along) = kernel::project_onto_segment(vertex.truncate(), start.truncate(), end.truncate());
+            let off = nearest.distance(vertex.truncate()).max((vertex.z - elevation_along(start, end, along)).abs());
+            if off > tolerance && farthest.is_none_or(|(_, most)| off > most) {
+                farthest = Some((index, off));
+            }
+        }
+        if let Some((index, _)) = farthest {
+            keep[index] = true;
+            spans.push((first, index));
+            spans.push((index, last));
+        }
+    }
+    string.iter().zip(keep).filter(|(_, kept)| *kept).map(|(vertex, _)| *vertex).collect()
+}
+
+/// The control strings a build was given: in selection order, each with
+/// the key that breaks the last tie in choosing what to leave out (its
+/// object id) and its layer.
+#[derive(Clone, Copy)]
+struct SelectedControls<'a> {
+    strings: &'a [Vec<DVec3>],
+    keys: &'a [u64],
+    layers: &'a [u64],
+}
+
+/// The build's working copy of its control strings, each with the place in
+/// the selection of the string it came from, by which every message names
+/// it, and its key.
+#[derive(Clone, Copy)]
+struct CopiedControls<'a> {
+    strings: &'a [Vec<DVec3>],
+    sources: &'a [usize],
+    keys: &'a [u64],
+}
+
+impl CopiedControls<'_> {
+    /// A problem with each string named by its place in the selection.
+    fn named(&self, mut problem: Problem) -> Problem {
+        for side in &mut problem.sides {
+            side.piece = self.sources[side.piece];
+        }
+        problem
+    }
+}
+
+/// The control strings one build uses, past the build's own checks: their
+/// places in the selection in the order the build takes them, the strings
+/// in that order, where they cross, the points they enter the fit as, and
+/// the strings left out so the rest pass.
+struct CheckedControls {
+    names: Vec<usize>,
+    ordered: Vec<Vec<DVec3>>,
+    crossings: Vec<Crossing>,
+    entered: Vec<DVec3>,
+    left_out: Vec<LeftOut>,
+}
+
+/// The build's own checks on the strings of the copy at the places
+/// `kept`, run as the build has always run them: in an order read off
+/// their geometry, each named by the place in the selection of the string
+/// it came from.
+fn run_control_checks(copied: CopiedControls, kept: &[usize], cancelled: &dyn Fn() -> bool) -> Result<CheckedControls> {
+    let subset: Vec<Vec<DVec3>> = kept.iter().map(|&index| copied.strings[index].clone()).collect();
+    let order: Vec<usize> = canonical_order(&subset).into_iter().map(|index| kept[index]).collect();
+    let names: Vec<usize> = order.iter().map(|&index| copied.sources[index]).collect();
+    let ordered: Vec<Vec<DVec3>> = order.iter().map(|&index| copied.strings[index].clone()).collect();
+    validate_controls(&ordered, &names, cancelled)?;
+    let crossings = control_crossings(&ordered, &names, cancelled)?;
+    let entered = control_points(&ordered, &names, &crossings, cancelled)?;
+    Ok(CheckedControls {
+        names,
+        ordered,
+        crossings,
+        entered,
+        left_out: Vec::new(),
+    })
+}
+
+/// The copy's strings past the build's checks: all of them when they pass,
+/// else the rest once the strings that still clash, or are misshapen, are
+/// left out of this build, each named by the place in the selection of the
+/// string it came from. When none can be left out, or none would be left,
+/// the refusal of all of them comes back as it always did, placed, with
+/// why when none would be left.
+fn checked_controls(copied: CopiedControls, cancelled: &dyn Fn() -> bool) -> Result<CheckedControls> {
+    let all: Vec<usize> = (0..copied.strings.len()).collect();
+    let refusal = match run_control_checks(copied, &all, cancelled) {
+        Ok(checked) => return Ok(checked),
+        Err(refusal) => refusal,
+    };
+    if cancelled() {
+        return Err(refusal);
+    }
+    let Ok(problems) = string_clean::problems(copied.strings, cancelled) else {
+        return Err(refusal);
+    };
+    match string_clean::leave_out(copied.strings, &problems, copied.keys, cancelled) {
+        Ok(left_out) if !left_out.is_empty() => {
+            // A string the clean cut into pieces is left out whole when any
+            // piece of it is chosen, so what is named, selected and ringed
+            // is exactly what the build left out. Leaving more out never
+            // makes the rest fail the checks.
+            let left_out = whole_strings_left_out(left_out, copied);
+            let out: HashSet<usize> = left_out.iter().map(|left| left.piece).collect();
+            let kept: Vec<usize> = all.into_iter().filter(|&index| !out.contains(&copied.sources[index])).collect();
+            if kept.is_empty() {
+                return Err(with_reason(placed(refusal, copied, cancelled), &tr!("cmd-reference-surface-left-out-none-left")));
+            }
+            let checked = run_control_checks(copied, &kept, cancelled).map_err(|error| placed(error, copied, cancelled))?;
+            Ok(CheckedControls { left_out, ..checked })
+        }
+        Err(NotLeftOut::NoneLeft) => Err(with_reason(placed(refusal, copied, cancelled), &tr!("cmd-reference-surface-left-out-none-left"))),
+        Ok(_) | Err(NotLeftOut::Unnamed | NotLeftOut::Cancelled) => Err(placed(refusal, copied, cancelled)),
+    }
+}
+
+/// The pieces of the copy left out, as the strings they came from: one
+/// entry per string, by its place in the selection, in the order a piece of
+/// it was first chosen, with the places of all its pieces chosen, each once.
+fn whole_strings_left_out(left_out: Vec<LeftOut>, copied: CopiedControls) -> Vec<LeftOut> {
+    let mut strings: Vec<LeftOut> = Vec::new();
+    let mut entry: HashMap<usize, usize> = HashMap::new();
+    for left in left_out {
+        let source = copied.sources[left.piece];
+        let at = *entry.entry(source).or_insert_with(|| {
+            strings.push(LeftOut {
+                piece: source,
+                problems: Vec::new(),
+            });
+            strings.len() - 1
+        });
+        for problem in left.problems.into_iter().map(|problem| copied.named(problem)) {
+            if !strings[at].problems.contains(&problem) {
+                strings[at].problems.push(problem);
+            }
+        }
+    }
+    strings
+}
+
+/// A refusal with a line saying why after its own text, keeping its type
+/// so the strings it names are still selected and ringed.
+fn with_reason(error: anyhow::Error, reason: &str) -> anyhow::Error {
+    match error.downcast::<MisshapenControls>() {
+        Ok(mut misshapen) => {
+            misshapen.report.push('\n');
+            misshapen.report.push_str(reason);
+            misshapen.into()
+        }
+        Err(error) => match error.downcast::<PlacedRefusal>() {
+            Ok(mut placed) => {
+                placed.report.push('\n');
+                placed.report.push_str(reason);
+                placed.into()
+            }
+            Err(error) => anyhow::anyhow!("{error:#}\n{reason}"),
+        },
+    }
+}
+
+/// The places of a line naming a string left out: "(x, y)", "(x, y) and
+/// (x, y)", up to [`LEFT_OUT_PLACES`] and then a count of the rest.
+fn left_out_places(problems: &[&Problem]) -> String {
+    plan_places(&problems.iter().map(|problem| problem.at).collect::<Vec<_>>())
+}
+
+/// Plan positions as a line gives them, up to [`LEFT_OUT_PLACES`] and
+/// then a count of the rest.
+fn plan_places(at: &[DVec3]) -> String {
+    let places: Vec<String> = at.iter().map(|at| format!("({:.3}, {:.3})", at.x, at.y)).collect();
+    if places.len() <= LEFT_OUT_PLACES {
+        return crate::app::commands::string_clean::word_list(&places);
+    }
+    let mut shown = places[..LEFT_OUT_PLACES].join(", ");
+    shown.push_str(&tr!("cmd-reference-surface-and-more", more = (places.len() - LEFT_OUT_PLACES).to_string()));
+    shown
+}
+
+/// "string 14", "strings 14 and 22": the other strings of a left-out
+/// string's clashes, numbered from one as selected, each once.
+fn left_out_others(piece: usize, problems: &[&Problem]) -> String {
+    let mut others: Vec<usize> = problems
+        .iter()
+        .flat_map(|problem| problem.sides.iter().map(|side| side.piece))
+        .filter(|&other| other != piece)
+        .map(|other| other + 1)
+        .collect();
+    others.sort_unstable();
+    others.dedup();
+    match others.as_slice() {
+        [only] => tr!("cmd-reference-surface-left-out-other-string", string = only.to_string()),
+        _ => tr!(
+            "cmd-reference-surface-left-out-other-strings",
+            strings = crate::app::commands::string_clean::word_list(&others.iter().map(usize::to_string).collect::<Vec<_>>())
+        ),
+    }
+}
+
+/// The lines naming one string left out of the build, numbered from one as
+/// selected: one per fault of its own shape, else one for the strings it
+/// sits above or below with the miss, and one for those it runs along.
+fn left_out_lines(left: &LeftOut) -> Vec<String> {
+    let string = (left.piece + 1).to_string();
+    let mut lines = Vec::new();
+    let mut sided: Vec<&Problem> = Vec::new();
+    let mut along: Vec<&Problem> = Vec::new();
+    let (mut below, mut above) = (false, false);
+    let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+    for problem in &left.problems {
+        let (x, y) = (format!("{:.3}", problem.at.x), format!("{:.3}", problem.at.y));
+        match &problem.kind {
+            ProblemKind::TooShort => lines.push(tr!("cmd-reference-surface-left-out-too-short", string = string.clone(), x = x, y = y)),
+            ProblemKind::EndsWhereItStarts => lines.push(tr!("cmd-reference-surface-left-out-ends-where-it-starts", string = string.clone(), x = x, y = y)),
+            ProblemKind::TurnsBack => lines.push(tr!("cmd-reference-surface-left-out-turns-back", string = string.clone(), x = x, y = y)),
+            ProblemKind::CrossesItself => lines.push(tr!("cmd-reference-surface-left-out-crosses-itself", string = string.clone(), x = x, y = y)),
+            ProblemKind::PointsDisagree { miss } => lines.push(tr!(
+                "cmd-reference-surface-left-out-points-disagree",
+                string = string.clone(),
+                miss = format!("{miss:.2}"),
+                x = x,
+                y = y
+            )),
+            ProblemKind::Along => along.push(problem),
+            ProblemKind::Crossing { .. } | ProblemKind::NearMiss { .. } => {
+                let own = problem.sides.iter().find(|side| side.piece == left.piece).and_then(|side| side.height);
+                let other = problem.sides.iter().find(|side| side.piece != left.piece).and_then(|side| side.height);
+                if let (Some(own), Some(other)) = (own, other) {
+                    below |= own < other;
+                    above |= own > other;
+                    low = low.min((own - other).abs());
+                    high = high.max((own - other).abs());
+                }
+                sided.push(problem);
+            }
+            ProblemKind::BuildRefuses(_) => {}
+        }
+    }
+    if !sided.is_empty() {
+        let (low, high) = (format!("{:.2}", if low.is_finite() { low } else { 0.0 }), format!("{high:.2}"));
+        let amount = if low == high {
+            low
+        } else {
+            tr!("cmd-reference-surface-left-out-range", low = low, high = high)
+        };
+        let others = left_out_others(left.piece, &sided);
+        let places = left_out_places(&sided);
+        lines.push(match (below, above) {
+            (true, false) => tr!(
+                "cmd-reference-surface-left-out-below",
+                string = string.clone(),
+                amount = amount,
+                others = others,
+                places = places
+            ),
+            (false, true) => tr!(
+                "cmd-reference-surface-left-out-above",
+                string = string.clone(),
+                amount = amount,
+                others = others,
+                places = places
+            ),
+            _ => tr!(
+                "cmd-reference-surface-left-out-above-and-below",
+                string = string.clone(),
+                amount = amount,
+                others = others,
+                places = places
+            ),
+        });
+    }
+    if !along.is_empty() {
+        lines.push(tr!(
+            "cmd-reference-surface-left-out-along",
+            string = string,
+            others = left_out_others(left.piece, &along),
+            places = left_out_places(&along)
+        ));
+    }
+    lines
+}
+
+/// What a build cleaned in its copy of the controls: a heading, then one
+/// line per kind of change with how many places and where, the joins split
+/// by whether Clean Strings or Join all at halfway would have made them. A
+/// place where a shared vertex was put in and then joined is counted as
+/// joined only.
+fn cleaned_report(changes: &[string_clean::Change]) -> String {
+    use string_clean::{JOIN_AUTOMATIC, JOIN_ON_REQUEST};
+    let places = cleaned_places(changes);
+    let mut report = tr!("cmd-reference-surface-cleaned-heading");
+    for (slot, at) in places.iter().enumerate().filter(|(_, at)| !at.is_empty()) {
+        let (count, at) = (at.len().to_string(), plan_places(at));
+        let line = match slot {
+            0 => tr!("cmd-reference-surface-cleaned-repeats", count = count, places = at),
+            1 => tr!("cmd-reference-surface-cleaned-spikes", count = count, places = at),
+            2 => tr!("cmd-reference-surface-cleaned-retraces", count = count, places = at),
+            3 => tr!("cmd-reference-surface-cleaned-loops", count = count, places = at),
+            4 => tr!("cmd-reference-surface-cleaned-zeros", count = count, places = at),
+            5 => tr!("cmd-reference-surface-cleaned-heights", count = count, places = at),
+            6 => tr!("cmd-reference-surface-cleaned-shared-cut", count = count, places = at),
+            7 => tr!("cmd-reference-surface-cleaned-removed", count = count, places = at),
+            8 => tr!("cmd-reference-surface-cleaned-joined-small", count = count, limit = JOIN_AUTOMATIC.to_string(), places = at),
+            9 => tr!(
+                "cmd-reference-surface-cleaned-joined-on-request",
+                count = count,
+                low = JOIN_AUTOMATIC.to_string(),
+                high = JOIN_ON_REQUEST.to_string(),
+                places = at
+            ),
+            _ => tr!(
+                "cmd-reference-surface-cleaned-vertex-shared",
+                count = count,
+                limit = JOIN_ON_REQUEST.to_string(),
+                places = at
+            ),
+        };
+        report.push('\n');
+        report.push_str(&line);
+    }
+    report
+}
+
+/// The places of [`cleaned_report`], one slot per line in pipeline order,
+/// each place once: a place where a shared vertex was put in and then
+/// joined is counted as joined only.
+fn cleaned_places(changes: &[string_clean::Change]) -> [Vec<DVec3>; 11] {
+    use string_clean::{ChangeKind, JOIN_AUTOMATIC};
+    let mut joined = PlanCells::default();
+    for change in changes.iter().filter(|change| matches!(change.kind, ChangeKind::Joined { .. })) {
+        joined.add(change.at, 0);
+    }
+    // One slot per line, in pipeline order; the places of each, each once,
+    // filed by plan position so a place seen is found without a scan.
+    let mut places: [Vec<DVec3>; 11] = Default::default();
+    let mut filed: [PlanCells; 11] = Default::default();
+    for change in changes {
+        let slot = match &change.kind {
+            ChangeKind::RepeatsMerged { .. } => 0,
+            ChangeKind::SpikeDropped => 1,
+            ChangeKind::RetraceDropped { .. } => 2,
+            ChangeKind::LoopCut { .. } => 3,
+            ChangeKind::ZeroDropped => 4,
+            ChangeKind::HeightDropped { .. } => 5,
+            ChangeKind::SharedCut { .. } => 6,
+            ChangeKind::Removed { .. } => 7,
+            ChangeKind::Joined { miss, .. } if *miss <= JOIN_AUTOMATIC => 8,
+            ChangeKind::Joined { .. } => 9,
+            ChangeKind::VertexShared { .. } if joined.first_near(change.at.truncate()).is_some() => continue,
+            ChangeKind::VertexShared { .. } => 10,
+        };
+        if filed[slot].first_near(change.at.truncate()).is_none() {
+            filed[slot].add(change.at, 0);
+            places[slot].push(change.at);
+        }
+    }
+    places
+}
+
+/// The warning for strings left out of a build: a line counting them, then
+/// every one with where and by how much, up to [`SELF_SHAPE_LINES`] lines
+/// and then a count of the rest.
+fn left_out_report(left_out: &[LeftOut]) -> String {
+    let lines: Vec<String> = left_out.iter().flat_map(left_out_lines).collect();
+    let mut report = tr!("cmd-reference-surface-left-out-count", count = left_out.len().to_string());
+    for line in lines.iter().take(SELF_SHAPE_LINES) {
+        report.push('\n');
+        report.push_str(line);
+    }
+    if lines.len() > SELF_SHAPE_LINES {
+        report.push_str(&tr!("cmd-reference-surface-and-more", more = (lines.len() - SELF_SHAPE_LINES).to_string()));
+    }
+    report
 }
 
 /// Whether a node or a pick is on the ground a ring bounds. A pick surveyed
@@ -775,43 +1511,6 @@ fn refuse_controls_along(ring: &[DVec2], controls: &[Vec<DVec3>], names: &[usize
     Ok(())
 }
 
-/// The points the controls enter the fit as: where they cross, then each
-/// control's vertices with its segments densified at the grid spacing in
-/// between. A point within [`MERGE_DISTANCE`] of one already entered is the
-/// same point and goes in once; the two must agree on its height.
-fn control_points(controls: &[Vec<DVec3>], names: &[usize], crossings: &[Crossing], cancelled: &dyn Fn() -> bool) -> Result<Vec<DVec3>> {
-    let mut entered = PlanCells::default();
-    for crossing in crossings {
-        entered.add(crossing.position.extend(crossing.z), crossing.sides[0].control);
-    }
-    for (index, control) in controls.iter().enumerate() {
-        stop_if_cancelled(cancelled)?;
-        let mut enter = |point: DVec3| -> Result<()> {
-            match entered.first_near(point.truncate()) {
-                None => entered.add(point, index),
-                Some((kept, owner)) if (kept.z - point.z).abs() > CONTROL_AGREEMENT => {
-                    if owner == index {
-                        anyhow::bail!("{}", control_vertices_disagree(names[index], point.truncate()));
-                    }
-                    anyhow::bail!("{}", controls_disagree(names[owner], names[index], point.truncate(), kept.z, point.z));
-                }
-                Some(_) => {}
-            }
-            Ok(())
-        };
-        enter(control[0])?;
-        for segment in control.windows(2) {
-            let (start, end) = (segment[0], segment[1]);
-            let pieces = (start.truncate().distance(end.truncate()) / DEFAULT_SPACING).ceil().max(1.0) as usize;
-            for step in 1..pieces {
-                enter(start + (end - start) * step as f64 / pieces as f64)?;
-            }
-            enter(end)?;
-        }
-    }
-    Ok(entered.points)
-}
-
 /// The picks no control passes within [`MERGE_DISTANCE`] of in plan, with
 /// the ones a control left out at another height, reported, and how many it
 /// left out in all. Of two controls that near a pick, the nearer speaks.
@@ -858,338 +1557,131 @@ fn picks_off_controls(points: &[DVec3], controls: &[Vec<DVec3>], cancelled: &dyn
     Ok((kept, overridden, left_out))
 }
 
-/// Control points entered so far, filed by plan position so a new one finds
-/// the first within [`MERGE_DISTANCE`] without walking them all.
-#[derive(Default)]
-struct PlanCells {
-    points: Vec<DVec3>,
-    owners: Vec<usize>,
-    cells: HashMap<(i64, i64), Vec<usize>>,
+/// A refusal of the control strings Clean Strings' final check can place:
+/// the build's own text, word for word, and why when leaving strings out
+/// would leave none, then every place the check finds in the build's copy
+/// of the strings and the strings sitting on one side of every string they
+/// miss by more than the join range, each string by its place in the
+/// selection counting from zero.
+#[derive(Debug)]
+struct PlacedRefusal {
+    report: String,
+    problems: Vec<Problem>,
+    odd_ones: Vec<OddOneOut>,
 }
 
-impl PlanCells {
-    /// Cells are a metre across, far wider than the distance, so a match is
-    /// always in the cell a position falls in or one beside it.
-    fn key(position: DVec2) -> (i64, i64) {
-        (position.x.floor() as i64, position.y.floor() as i64)
-    }
-
-    fn add(&mut self, point: DVec3, owner: usize) {
-        self.cells.entry(Self::key(point.truncate())).or_default().push(self.points.len());
-        self.points.push(point);
-        self.owners.push(owner);
-    }
-
-    /// The earliest point within [`MERGE_DISTANCE`] of a position, and the
-    /// control that entered it.
-    fn first_near(&self, position: DVec2) -> Option<(DVec3, usize)> {
-        let (column, row) = Self::key(position);
-        (column.saturating_sub(1)..=column.saturating_add(1))
-            .flat_map(|column| (row.saturating_sub(1)..=row.saturating_add(1)).map(move |row| (column, row)))
-            .filter_map(|key| self.cells.get(&key))
-            .flatten()
-            .copied()
-            .filter(|&index| self.points[index].truncate().distance(position) < MERGE_DISTANCE)
-            .min()
-            .map(|index| (self.points[index], self.owners[index]))
+impl std::fmt::Display for PlacedRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.report)
     }
 }
 
-/// The controls' indices sorted by their vertices, x then y then z at each
-/// in turn, a string that runs out first coming first.
-fn canonical_order(controls: &[Vec<DVec3>]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..controls.len()).collect();
-    order.sort_by(|&left, &right| {
-        let (left, right) = (&controls[left], &controls[right]);
-        left.iter()
-            .zip(right)
-            .map(|(a, b)| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).then(a.z.total_cmp(&b.z)))
-            .find(|order| order.is_ne())
-            .unwrap_or_else(|| left.len().cmp(&right.len()))
-    });
-    order
-}
+impl std::error::Error for PlacedRefusal {}
 
-/// Refuse a control too short to make a segment, closed without the flag,
-/// or crossing or doubling back on itself. Two controls crossing are
-/// [`control_crossings`]'s concern.
-fn validate_controls(controls: &[Vec<DVec3>], names: &[usize], cancelled: &dyn Fn() -> bool) -> Result<()> {
-    for (index, control) in controls.iter().enumerate() {
-        stop_if_cancelled(cancelled)?;
-        if control.len() < MINIMUM_CONTROL_VERTICES {
-            anyhow::bail!("{}", too_few_control_vertices(names[index], control.len()));
-        }
-        let plan: Vec<DVec2> = control.iter().map(|vertex| vertex.truncate()).collect();
-        if plan.len() >= 4 && plan[0].distance(plan[plan.len() - 1]) <= kernel::XY_TOL {
-            anyhow::bail!("{}", control_ends_where_it_starts(names[index]));
-        }
-        if doubles_back(&plan) {
-            anyhow::bail!("{}", control_doubles_back(names[index]));
-        }
-        if self_intersects(&plan, false) {
-            anyhow::bail!("{}", control_self_crossing(names[index]));
-        }
+/// The build's refusal of its controls, carrying every place Clean Strings'
+/// final check finds in the copy's strings, each named by its place in the
+/// selection, when it finds one it can place. A shape
+/// refusal, which places its strings itself, a cancelled build and a
+/// refusal the check cannot place come back as they went in.
+fn placed(error: anyhow::Error, copied: CopiedControls, cancelled: &dyn Fn() -> bool) -> anyhow::Error {
+    if cancelled() || error.is::<MisshapenControls>() {
+        return error;
     }
-    Ok(())
-}
-
-/// Whether a segment of an open string turns back along the one before it,
-/// its far end on that segment's line and pointing the other way.
-fn doubles_back(string: &[DVec2]) -> bool {
-    string.windows(3).any(|corner| {
-        let (before, after) = (corner[1] - corner[0], corner[2] - corner[1]);
-        before.perp_dot(corner[2] - corner[0]).abs() <= kernel::XY_TOL * before.length() && before.dot(after) < 0.0
-    })
-}
-
-/// A plan position more than one control runs through: one vertex of the
-/// surface, at the elevation they agree on, with every control that reaches it
-/// constrained through it.
-struct Crossing {
-    position: DVec2,
-    z: f64,
-    sides: Vec<CrossingSide>,
-}
-
-impl Crossing {
-    /// Keep one part per control segment. Three strings through one point meet
-    /// pairwise, so each of their parts arrives twice.
-    fn add(&mut self, side: CrossingSide) {
-        if !self.sides.iter().any(|kept| (kept.control, kept.segment) == (side.control, side.segment)) {
-            self.sides.push(side);
-        }
-    }
-}
-
-/// How one control reaches a crossing: which of its segments.
-struct CrossingSide {
-    control: usize,
-    segment: usize,
-}
-
-/// Every plan position two different controls run through, each with the
-/// elevation both give it. Read off the strings themselves, before anything is
-/// inserted, so controls that disagree leave no half-built surface behind.
-fn control_crossings(controls: &[Vec<DVec3>], names: &[usize], cancelled: &dyn Fn() -> bool) -> Result<Vec<Crossing>> {
-    let mut crossings: Vec<Crossing> = Vec::new();
-    // Every segment of every control on one grid, so only segments that come
-    // near each other are compared; the pairs are then taken in the order a
-    // walk over every pair would meet them, so the first refusal is the same.
-    let segments: Vec<(usize, usize)> = controls
-        .iter()
-        .enumerate()
-        .flat_map(|(index, control)| (0..control.len() - 1).map(move |segment| (index, segment)))
-        .collect();
-    let grid = BoxGrid::new(
-        segments
-            .iter()
-            .map(|&(index, segment)| segment_box(controls[index][segment].truncate(), controls[index][segment + 1].truncate()))
-            .collect(),
-    );
-    let mut found = CrossingCells::default();
-    let (mut near, mut pairs) = (Vec::new(), Vec::new());
-    for (left, first) in controls.iter().enumerate() {
-        stop_if_cancelled(cancelled)?;
-        pairs.clear();
-        for a in 0..first.len() - 1 {
-            let (low, high) = segment_box(first[a].truncate(), first[a + 1].truncate());
-            grid.overlapping(low, high, &mut near);
-            pairs.extend(near.iter().map(|&other| segments[other]).filter(|&(right, _)| right > left).map(|(right, b)| (right, a, b)));
-        }
-        pairs.sort_unstable();
-        for &(right, a, b) in &pairs {
-            let second = &controls[right];
-            let meeting = kernel::segment_segment(first[a].truncate(), first[a + 1].truncate(), second[b].truncate(), second[b + 1].truncate());
-            // A string ending on another reads the same as one running
-            // across it: one plan position, two interpretations of it.
-            let (point, t, u) = match meeting {
-                SegSeg::Disjoint => continue,
-                SegSeg::CollinearOverlap { .. } => anyhow::bail!("{}", controls_along_each_other(names[left], names[right])),
-                SegSeg::Crossing { point, t, u } | SegSeg::Touching { point, t, u } => (point, t, u),
-            };
-            let (one, one_z) = crossing_side(first, left, a, t, point);
-            let (other, other_z) = crossing_side(second, right, b, u, point);
-            if (one_z - other_z).abs() > CONTROL_AGREEMENT {
-                anyhow::bail!("{}", controls_disagree(names[left], names[right], point, one_z, other_z));
-            }
-            match found.first_near(&crossings, point) {
-                Some(index) => {
-                    crossings[index].add(one);
-                    crossings[index].add(other);
-                }
-                None => {
-                    found.add(point, crossings.len());
-                    crossings.push(Crossing {
-                        position: point,
-                        z: one_z,
-                        sides: vec![one, other],
-                    });
-                }
-            }
-        }
-    }
-    Ok(crossings)
-}
-
-/// The crossings found so far, filed by plan position so a new meeting finds
-/// the first one within the kernel's tolerance without walking them all.
-#[derive(Default)]
-struct CrossingCells {
-    cells: HashMap<(i64, i64), Vec<usize>>,
-}
-
-impl CrossingCells {
-    /// Cells are a metre across, far wider than the tolerance, so a match is
-    /// always in the cell a position falls in or one beside it.
-    fn key(position: DVec2) -> (i64, i64) {
-        (position.x.floor() as i64, position.y.floor() as i64)
-    }
-
-    fn add(&mut self, position: DVec2, index: usize) {
-        self.cells.entry(Self::key(position)).or_default().push(index);
-    }
-
-    /// The earliest crossing within [`kernel::XY_TOL`] of a position.
-    fn first_near(&self, crossings: &[Crossing], position: DVec2) -> Option<usize> {
-        let (column, row) = Self::key(position);
-        (column.saturating_sub(1)..=column.saturating_add(1))
-            .flat_map(|column| (row.saturating_sub(1)..=row.saturating_add(1)).map(move |row| (column, row)))
-            .filter_map(|key| self.cells.get(&key))
-            .flatten()
-            .copied()
-            .filter(|&index| crossings[index].position.distance(position) <= kernel::XY_TOL)
-            .min()
-    }
-}
-
-/// One control's part in a crossing, with the elevation it reads there: its
-/// own vertex's when the crossing lands on one, the segment's otherwise.
-fn crossing_side(control: &[DVec3], index: usize, segment: usize, along: f64, point: DVec2) -> (CrossingSide, f64) {
-    let vertex = nearer_end(point, control[segment].truncate(), control[segment + 1].truncate()).map(|end| segment + end);
-    let z = match vertex {
-        Some(vertex) => control[vertex].z,
-        None => elevation_along(control[segment], control[segment + 1], along),
+    let Ok(problems) = string_clean::problems(copied.strings, cancelled) else {
+        return error;
     };
-    (CrossingSide { control: index, segment }, z)
-}
-
-/// Whether any two of a string's segments meet away from the ends they share
-/// with their neighbours, the first and last included when it is closed.
-/// Any contact counts: an open string touching itself gives one plan
-/// position two elevations, and a ring doing so bounds no single area.
-fn self_intersects(points: &[DVec2], closed: bool) -> bool {
-    let count = points.len();
-    let segments = if closed { count } else { count.saturating_sub(1) };
-    let grid = BoxGrid::new((0..segments).map(|segment| segment_box(points[segment], points[(segment + 1) % count])).collect());
-    let mut near = Vec::new();
-    (0..segments).any(|first| {
-        let (low, high) = segment_box(points[first], points[(first + 1) % count]);
-        grid.overlapping(low, high, &mut near);
-        near.iter()
-            .filter(|&&second| second >= first + 2 && !(closed && first == 0 && second == segments - 1))
-            .any(|&second| kernel::segment_segment(points[first], points[first + 1], points[second], points[(second + 1) % count]) != SegSeg::Disjoint)
-    })
-}
-
-/// How far a box is widened for the grids below: twice the kernel's plan
-/// tolerance, so rounding can never hide a pair the kernel would call close.
-const SEARCH_MARGIN: f64 = 2.0 * kernel::XY_TOL;
-
-/// A segment's plan box, widened by [`SEARCH_MARGIN`].
-fn segment_box(start: DVec2, end: DVec2) -> (DVec2, DVec2) {
-    (start.min(end) - DVec2::splat(SEARCH_MARGIN), start.max(end) + DVec2::splat(SEARCH_MARGIN))
-}
-
-/// Boxes filed on a uniform grid, so only boxes sharing a cell are compared.
-struct BoxGrid {
-    low: DVec2,
-    cell: f64,
-    columns: usize,
-    rows: usize,
-    /// Where each cell's run of `members` starts, one more than the cells.
-    starts: Vec<usize>,
-    members: Vec<usize>,
-    boxes: Vec<(DVec2, DVec2)>,
-}
-
-impl BoxGrid {
-    fn new(boxes: Vec<(DVec2, DVec2)>) -> Self {
-        let (low, high) = boxes
-            .iter()
-            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(low, high), (from, to)| (low.min(*from), high.max(*to)));
-        let (low, span) = if boxes.is_empty() { (DVec2::ZERO, DVec2::ZERO) } else { (low, high - low) };
-        let cell = grid_cell(span, boxes.len());
-        let (columns, rows) = (cells_across(span.x, cell), cells_across(span.y, cell));
-        let mut grid = Self {
-            low,
-            cell,
-            columns,
-            rows,
-            starts: vec![0; columns * rows + 1],
-            members: Vec::new(),
-            boxes,
-        };
-        for index in 0..grid.boxes.len() {
-            for cell in grid.cells(grid.boxes[index]) {
-                grid.starts[cell + 1] += 1;
-            }
-        }
-        for cell in 0..columns * rows {
-            grid.starts[cell + 1] += grid.starts[cell];
-        }
-        let mut next = grid.starts.clone();
-        let mut members = vec![0; grid.starts[columns * rows]];
-        for index in 0..grid.boxes.len() {
-            for cell in grid.cells(grid.boxes[index]) {
-                members[next[cell]] = index;
-                next[cell] += 1;
-            }
-        }
-        grid.members = members;
-        grid
+    if !problems.iter().any(|problem| problem.at.is_finite()) {
+        return error;
     }
-
-    /// The cells a box covers, clamped to the grid.
-    fn cells(&self, (from, to): (DVec2, DVec2)) -> impl Iterator<Item = usize> + use<> {
-        let columns = self.columns;
-        let (first_column, last_column) = (cell_of(from.x, self.low.x, self.cell, columns), cell_of(to.x, self.low.x, self.cell, columns));
-        let (first_row, last_row) = (cell_of(from.y, self.low.y, self.cell, self.rows), cell_of(to.y, self.low.y, self.cell, self.rows));
-        (first_row..=last_row).flat_map(move |row| (first_column..=last_column).map(move |column| row * columns + column))
+    let Ok(odd_ones) = string_clean::odd_ones_out(copied.strings, &problems, cancelled) else {
+        return error;
+    };
+    let odd_ones = odd_ones
+        .into_iter()
+        .map(|odd| OddOneOut {
+            piece: copied.sources[odd.piece],
+            ..odd
+        })
+        .collect();
+    PlacedRefusal {
+        report: format!("{error:#}"),
+        problems: problems.into_iter().map(|problem| copied.named(problem)).collect(),
+        odd_ones,
     }
+    .into()
+}
 
-    /// The boxes overlapping the one from `from` to `to`, ascending and each
-    /// once, into `found`.
-    fn overlapping(&self, from: DVec2, to: DVec2, found: &mut Vec<usize>) {
-        found.clear();
-        for cell in self.cells((from, to)) {
-            for &index in &self.members[self.starts[cell]..self.starts[cell + 1]] {
-                let (low, high) = self.boxes[index];
-                if low.x <= to.x && from.x <= high.x && low.y <= to.y && from.y <= high.y {
-                    found.push(index);
-                }
-            }
+/// The lines added under a placed refusal: how many places are ringed, each
+/// problem biggest miss first, then each string on one side of every string
+/// it misses, both up to [`SELF_SHAPE_LINES`] and then a count of the rest.
+/// Strings are numbered as the build numbers them, by place in the
+/// selection.
+fn placed_report(problems: &[Problem], odd_ones: &[OddOneOut]) -> String {
+    use crate::app::commands::string_clean::{odd_one_out_line, problem_line_named};
+    let capped = |mut lines: Vec<String>, all: usize| {
+        if all > SELF_SHAPE_LINES
+            && let Some(last) = lines.last_mut()
+        {
+            last.push_str(&tr!("cmd-reference-surface-and-more", more = (all - SELF_SHAPE_LINES).to_string()));
         }
-        found.sort_unstable();
-        found.dedup();
-    }
+        lines
+    };
+    let rings = problems.iter().filter(|problem| problem.at.is_finite()).count();
+    let mut lines = vec![tr!("cmd-reference-surface-count-places-stop-build", count = rings.to_string())];
+    lines.extend(capped(
+        problems.iter().take(SELF_SHAPE_LINES).map(|problem| problem_line_named(problem, &Some)).collect(),
+        problems.len(),
+    ));
+    lines.extend(capped(
+        odd_ones.iter().take(SELF_SHAPE_LINES).map(|odd| odd_one_out_line(odd, odd.piece)).collect(),
+        odd_ones.len(),
+    ));
+    lines.join("\n")
 }
 
-/// A cell size giving a grid about as many cells as it holds items, never so
-/// fine along a thin span that one axis outnumbers them. A span that is not
-/// a finite size gets one cell.
-fn grid_cell(span: DVec2, count: usize) -> f64 {
-    let count = count.max(1) as f64;
-    let cell = (span.x * span.y / count).sqrt().max(span.x.max(span.y) / count);
-    if cell.is_finite() && cell > 0.0 { cell } else { f64::INFINITY }
+/// Every string a placed problem concerns, by place in the selection, each
+/// once, in order.
+fn placed_strings(problems: &[Problem]) -> Vec<usize> {
+    let mut strings: Vec<usize> = problems
+        .iter()
+        .filter(|problem| problem.at.is_finite())
+        .flat_map(|problem| problem.sides.iter().map(|side| side.piece))
+        .collect();
+    strings.sort_unstable();
+    strings.dedup();
+    strings
 }
 
-fn cells_across(span: f64, cell: f64) -> usize {
-    ((span / cell).floor() as usize).saturating_add(1)
+/// One ring per placed problem, its strings by the ids they were chosen as,
+/// each with the drawn vertex at the ring when there is one, titled with
+/// the strings' numbers in the selection and the miss.
+fn placed_rings(ids: &[ObjectId], problems: &[Problem], vertex_of: impl Fn(ObjectId, DVec3) -> Option<usize>) -> Vec<StringRing> {
+    problems
+        .iter()
+        .filter(|problem| problem.at.is_finite())
+        .map(|problem| StringRing {
+            at: problem.at,
+            kind: StringRingKind::Left(problem.kind.clone()),
+            sides: problem
+                .sides
+                .iter()
+                .filter_map(|side| ids.get(side.piece))
+                .map(|&id| (id, vertex_of(id, problem.at)))
+                .collect(),
+            title: crate::app::commands::string_clean::ring_title(problem, &Some),
+        })
+        .collect()
 }
 
-/// The cell a coordinate falls in along one axis, clamped to the grid.
-fn cell_of(value: f64, low: f64, cell: f64, count: usize) -> usize {
-    (((value - low) / cell).floor().max(0.0) as usize).min(count - 1)
+/// The scene entities to select for the refused controls: the ids they were
+/// chosen as, by their place in `ids`, kept only where `selectable` allows.
+fn refused_selection(ids: &[ObjectId], refused: &[usize], selectable: impl Fn(SceneEntityId) -> bool) -> Vec<SceneEntityId> {
+    refused
+        .iter()
+        .filter_map(|&index| ids.get(index))
+        .map(|&id| SceneEntityId::Object(id))
+        .filter(|&handle| selectable(handle))
+        .collect()
 }
 
 /// The most band entries a mask edge may make on average, so a ring of tall
@@ -1336,18 +1828,6 @@ fn vertical_extent(low_z: f64, high_z: f64) -> (f64, f64) {
         ((low_z - range) / EXTENT_ROUNDING).floor() * EXTENT_ROUNDING,
         ((high_z + range) / EXTENT_ROUNDING).ceil() * EXTENT_ROUNDING,
     )
-}
-
-/// Which end of a segment a point coincides with in plan, when it coincides
-/// with either: `0` for the start, `1` for the end.
-fn nearer_end(point: DVec2, start: DVec2, end: DVec2) -> Option<usize> {
-    let (to_start, to_end) = (point.distance(start), point.distance(end));
-    (to_start.min(to_end) <= kernel::XY_TOL).then(|| usize::from(to_end < to_start))
-}
-
-/// The elevation a segment has at the fraction `along` of its length.
-fn elevation_along(start: DVec3, end: DVec3, along: f64) -> f64 {
-    start.z + (end.z - start.z) * along
 }
 
 /// What the grid is sized from before the fit: the nodes the build needs,
