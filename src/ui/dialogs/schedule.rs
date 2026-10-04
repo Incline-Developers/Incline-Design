@@ -124,6 +124,50 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
 }
 
+/// What deleting a machine strands: the bars it holds, which move to
+/// Unassigned, and the follow bars it leads, which lose their leader.
+pub(crate) fn agent_delete_impact(plan: &SchedulePlan, agent: crate::model::schedule::LoaderAgentId) -> (usize, usize) {
+    let held = plan.bars().iter().filter(|bar| bar.agent == Some(agent)).count();
+    let led = plan.bars().iter().filter(|bar| bar.follow().is_some_and(|work| work.leader == Some(agent))).count();
+    (held, led)
+}
+
+/// Confirm deleting a machine that still has Gantt work, saying what happens
+/// to that work. Undo brings both back.
+pub(crate) fn draw_delete_agent_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(agent) = editor.pending_delete_agent.and_then(|id| plan.agent(id)) else {
+        editor.pending_delete_agent = None;
+        return;
+    };
+    let (held, led) = agent_delete_impact(plan, agent.id);
+    let title = tr!("schedule-delete-agent");
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("delete_loader_agent_dialog", tr!("schedule-delete-agent-title", name = agent.name.clone()))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            if held > 0 {
+                ui.label(tr!("schedule-delete-agent-bars", count = held));
+            }
+            if led > 0 {
+                ui.label(tr!("schedule-delete-agent-follows", count = led));
+            }
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.pending_delete_agent = None;
+    }
+}
+
 /// Add one machine type: a name, and the rate it digs at in tonnes per hour.
 pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     if !editor.new_loader_class_open {

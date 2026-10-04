@@ -252,10 +252,19 @@ schedule-loader-classes = Machine Classes
 schedule-loader-agents = Machines
 schedule-class = Class
 schedule-dig-rate = Default dig rate (t/h)
-schedule-effective-rate = Effective rate
+schedule-effective-rate = Class rate
 schedule-tph = tph
 schedule-new-class = New Machine Class
 schedule-new-agent = New Machine
+schedule-delete-agent-title = Delete { $name }?
+schedule-delete-agent-bars = { $count ->
+    [one] Its bar moves to Unassigned and won't be scheduled until it's given a machine.
+   *[other] Its { $count } bars move to Unassigned and won't be scheduled until they're given a machine.
+}
+schedule-delete-agent-follows = { $count ->
+    [one] One follow bar loses its leader.
+   *[other] { $count } follow bars lose their leader.
+}
 schedule-delete-class = Delete Class
 schedule-delete-agent = Delete Machine
 schedule-add-class = Add Class
@@ -931,6 +940,11 @@ haul-match-short = Trucks to match loader
 haul-loaded-distance = Loaded distance
 haul-return-distance = Return distance
 haul-rise-short = Rise
+schedule-capture-bar-unassigned = this bar is not assigned to a machine
+schedule-capture-bar-block-unmeasured = a dig block in this bar has no measured tonnage
+schedule-capture-block-no-tonnes = this block measured no tonnes of the nominated field
+schedule-capture-bar-machine-missing = this bar's machine is no longer in the project
+schedule-capture-machine-class-missing = this machine's class is no longer in the project
 schedule-capture-unroutable = { $destination }: no road route from { $count } sources it is offered
 schedule-capture-stranded = { $count } sources have no road route to any destination they are offered
 
@@ -2224,6 +2238,14 @@ schedule-capture-block-uncaptured = Nothing was captured about this block's mate
 schedule-capture-block-no-tonnes = The tonnage field is not among this block's captured values.
 schedule-capture-grade-uncaptured = '{ $grade }' was not captured for this block, and a blend cannot be computed without it.
 schedule-capture-grade-missing = '{ $grade }' is missing on some of this block's material; a missing grade cannot be read as zero.
+schedule-capture-calendar-non-finite = { $field } is not a finite number
+schedule-capture-calendar-non-positive = { $field } must be greater than zero
+schedule-capture-calendar-window = a work window ends before it starts
+schedule-capture-calendar-intervals = its time steps do not line up
+schedule-capture-field-horizon = the horizon
+schedule-capture-field-interval = the calendar interval
+schedule-capture-field-cashflow = the cashflow total
+schedule-capture-field-other = a calendar setting
 schedule-capture-calendar = The schedule calendar could not be built: { $reason }
 schedule-capture-reclaim-source-gone = A permitted reclaim source is no longer a stockpile in this project.
 schedule-capture-portion-unrouted = No enabled destination rule accepts this part of the block, and the rest of the block cannot be dug without it.

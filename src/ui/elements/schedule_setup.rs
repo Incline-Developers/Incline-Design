@@ -466,6 +466,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
 pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let mut selected = editor.schedule_selected_agent;
     let has_classes = !plan.classes().is_empty();
+    let mut confirm_delete = None;
     let new_agent = tr!("schedule-new-agent");
     let mut add = false;
     let (title, name) = (tr!("schedule-loader-agents"), tr!("planning-name"));
@@ -493,7 +494,13 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
             }
             context_menu_popup(&response, &agent.name, |ui| {
                 if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                    // Work it holds would be stranded, so that is asked
+                    // first; a machine with none just goes.
+                    if crate::ui::dialogs::schedule::agent_delete_impact(plan, agent.id) == (0, 0) {
+                        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                    } else {
+                        confirm_delete = Some(agent.id);
+                    }
                     ui.close();
                 }
             });
@@ -501,6 +508,9 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
         grid_add_action_row(ui, &new_agent)
     });
     let open_dialog = has_classes && (add || added);
+    if confirm_delete.is_some() {
+        editor.pending_delete_agent = confirm_delete;
+    }
     if editor.schedule_selected_agent != selected {
         editor.schedule_agent_draft = None;
     }

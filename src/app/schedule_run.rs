@@ -815,6 +815,9 @@ impl crate::app::App<'_> {
                 .all(|bar| bar.dig_order().is_some_and(|order| order.members().is_empty()) || bar.delay().is_some())
             && bars.iter().any(|bar| bar.agent.is_some() && bar.dig_order().is_some());
         let starting = self.schedule_run_blocker().is_none();
+        // What is still shown, when the status line leads with a failed
+        // attempt instead: it goes beneath, in the hover.
+        let mut held_detail = None;
         let status = match (running, attempt, held_status) {
             _ if recalculating => tr!("schedule-run-updating"),
             (None, _, None) if no_assigned_bars && starting => tr!("schedule-run-no-bars"),
@@ -824,7 +827,8 @@ impl crate::app::App<'_> {
             // The newest attempt failed: say so first, then what is still
             // shown.
             (None, Some(attempt), Some(held)) if self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial) => {
-                format!("{} {}", attempt_headline(attempt), held)
+                held_detail = Some(held);
+                attempt_headline(attempt)
             }
             (None, Some(attempt), None) => attempt_headline(attempt),
             (None, _, Some(held)) => held,
@@ -834,7 +838,7 @@ impl crate::app::App<'_> {
                 Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
             },
         };
-        let mut details = Vec::new();
+        let mut details: Vec<String> = held_detail.into_iter().collect();
         if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial)) {
             // A refusal's only reason is already in the status line.
             if !(attempt.outcome == AttemptOutcome::Refused && attempt.messages.len() == 1) {
@@ -917,12 +921,18 @@ fn not_published(completion: &super::schedule_solve::ScheduleCompletion) -> RunO
     RunOutcome::NotPublished { outcome, messages, repair: None }
 }
 
+/// A diagnostic ended as a sentence, so whatever follows it reads apart.
+fn sentence(text: &str) -> String {
+    let text = text.trim_end();
+    if text.ends_with(['.', '!', '?']) { text.to_owned() } else { format!("{text}.") }
+}
+
 fn attempt_headline(attempt: &ScheduleAttempt) -> String {
     let run = attempt.serial.to_string();
     match attempt.outcome {
         // One reason fits the status line; several are listed beneath it.
         AttemptOutcome::Refused => match attempt.messages.as_slice() {
-            [reason] => tr!("schedule-run-refused-because", run = run, reason = reason.clone()),
+            [reason] => tr!("schedule-run-refused-because", run = run, reason = sentence(reason)),
             [] => tr!("schedule-run-refused-plain", run = run),
             messages => tr!("schedule-run-refused", run = run, count = messages.len()),
         },

@@ -376,6 +376,27 @@ impl crate::app::App<'_> {
     }
 }
 
+/// Why the calendar's time steps could not be built, in the planner's terms.
+fn calendar_error(error: &crate::model::schedule::optimisation::InputError) -> String {
+    use crate::model::schedule::optimisation::InputError;
+    match error {
+        InputError::NonFinite(field) => tr!("schedule-capture-calendar-non-finite", field = calendar_field(field)),
+        InputError::NonPositive(field) => tr!("schedule-capture-calendar-non-positive", field = calendar_field(field)),
+        InputError::InvalidWindow => tr!("schedule-capture-calendar-window"),
+        InputError::InvalidIntervals | InputError::TooManyIntervals => tr!("schedule-capture-calendar-intervals"),
+    }
+}
+
+/// The setting an `InputError` names, as Setup labels it.
+fn calendar_field(field: &str) -> String {
+    match field {
+        "horizon" => tr!("schedule-capture-field-horizon"),
+        "interval step" => tr!("schedule-capture-field-interval"),
+        "cashflow sum" => tr!("schedule-capture-field-cashflow"),
+        _ => tr!("schedule-capture-field-other"),
+    }
+}
+
 /// The drill and blast chain: every blast of the run, how much of each step
 /// it needs and what must be dug before it is clear, and the dozers, drills
 /// and MPUs working the blast bars.
@@ -731,7 +752,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let Some(agent) = bar.agent else {
             // An unassigned delay holds no machine, so it is not a fault.
             if bar.is_reclaim() || !bar.members().is_empty() {
-                problems.push(CaptureDiagnostic::new(label.clone(), "this bar is not assigned to a loader"));
+                problems.push(CaptureDiagnostic::new(label.clone(), tr!("schedule-capture-bar-unassigned")));
             }
             continue;
         };
@@ -774,7 +795,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     continue;
                 }
                 let (Some(resolved), Some(tonnes)) = (member.resolved, member.tonnes) else {
-                    problems.push(CaptureDiagnostic::new(label.clone(), "a dig block in this bar has no measured tonnage"));
+                    problems.push(CaptureDiagnostic::new(label.clone(), tr!("schedule-capture-bar-block-unmeasured")));
                     continue;
                 };
                 let Some(position) = source.snapshot.blocks.iter().position(|block| block.id == resolved) else {
@@ -1169,7 +1190,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             continue;
         }
         if shares.is_empty() || block_tonnes <= 0.0 {
-            problems.push(CaptureDiagnostic::new(block.name.clone(), "this block measured no tonnes of the nominated field"));
+            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnes")));
             continue;
         }
         // The portions come from the same scan as the block's measured total,
@@ -1235,11 +1256,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             continue;
         }
         let Some(agent) = plan.agent(bar.agent) else {
-            problems.push(CaptureDiagnostic::new(bar.name.clone(), "this bar's loader is no longer in the project").at(ScheduleStep::LoaderAgents));
+            problems.push(CaptureDiagnostic::new(bar.name.clone(), tr!("schedule-capture-bar-machine-missing")).at(ScheduleStep::LoaderAgents));
             continue;
         };
         let Some(class) = plan.class(agent.class_id) else {
-            problems.push(CaptureDiagnostic::new(agent.name.clone(), "this loader's class is no longer in the project").at(ScheduleStep::LoaderAgents));
+            problems.push(CaptureDiagnostic::new(agent.name.clone(), tr!("schedule-capture-machine-class-missing")).at(ScheduleStep::LoaderAgents));
             continue;
         };
         let dig = match agent.calendar.compile_rate(RateKind::Dig, class.default_dig_rate_tph) {
@@ -1363,7 +1384,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             Vec::new()
         }
         Err(error) => {
-            problems.push(CaptureDiagnostic::global(tr!("schedule-capture-calendar", reason = format!("{error:?}"))).at(ScheduleStep::Configuration));
+            problems.push(CaptureDiagnostic::global(tr!("schedule-capture-calendar", reason = calendar_error(&error))).at(ScheduleStep::Configuration));
             Vec::new()
         }
     };

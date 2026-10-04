@@ -87,7 +87,13 @@ impl<'a> App<'a> {
             // A widget being dragged reports the same command every frame.
             // The first opens a console entry for the edit; the rest are that
             // same edit still happening, and would bury the console.
-            match command.console_report_spec().filter(|_| self.should_report_to_console(&command)) {
+            let mut spec = command.console_report_spec();
+            if let (Some(spec), crate::ui::state::UiCommand::Schedule { edit, .. }) = (spec.as_mut(), &command)
+                && let Some(subject) = self.schedule_report_subject(edit)
+            {
+                spec.summary = subject;
+            }
+            match spec.filter(|_| self.should_report_to_console(&command)) {
                 Some(spec) => {
                     let report_id = crate::logging::begin_command_report(spec);
                     let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));

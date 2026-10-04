@@ -1872,6 +1872,7 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
     }
     crate::ui::dialogs::schedule::draw_new_loader_class_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_new_loader_agent_dialog(ui, editor, &plan, session, commands);
+    crate::ui::dialogs::schedule::draw_delete_agent_dialog(ui, editor, &plan, session, commands);
 }
 
 #[allow(clippy::too_many_arguments)]

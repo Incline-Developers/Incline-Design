@@ -3063,6 +3063,9 @@ pub(crate) struct EditorState {
     pub(crate) new_loader_agent_open: bool,
     pub(crate) new_loader_agent_name: String,
     pub(crate) new_loader_agent_class: Option<crate::model::schedule::LoaderClassId>,
+    /// A machine waiting on the delete confirmation, asked only when
+    /// deleting it would strand Gantt work.
+    pub(crate) pending_delete_agent: Option<crate::model::schedule::LoaderAgentId>,
     /// The New Destination dialog: whether it is open, and its draft. The kind
     /// comes from the page it was opened on, so there is no kind to choose.
     pub(crate) new_destination_open: bool,
@@ -3618,6 +3621,7 @@ impl EditorState {
         self.new_loader_class_rate.clear();
         self.new_loader_agent_open = false;
         self.new_loader_agent_class = None;
+        self.pending_delete_agent = None;
         self.new_loader_agent_name.clear();
         self.gantt = GanttView::default();
         self.schedule_calendar = ScheduleCalendarView::default();
@@ -4329,6 +4333,7 @@ impl EditorState {
             new_loader_agent_open: false,
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
+            pending_delete_agent: None,
             new_destination_open: false,
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
@@ -5781,44 +5786,45 @@ impl UiCommand {
             Self::DeleteReserveField(id) => report(tr!("planning-delete-field"), format!("{id:?}")),
             Self::AddSolid { name, .. } => report(tr!("solids-add-solid"), name.clone()),
             // The fleet editors report additions and deletions, which are
-            // structural, but not renames or rate edits: those are cell edits
+            // structural (a deletion's name is filled in App-side, by
+            // `schedule_report_subject`, which can still read it), but not renames or rate edits: those are cell edits
             // and a console line per keystroke-commit would bury the log.
             Self::Schedule { edit, .. } => match edit {
                 ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", if kind.is_drill_blast() { kind.rate_unit() } else { "tph" })),
-                ScheduleEdit::DeleteClass(id) => report(tr!("schedule-delete-class"), format!("{id:?}")),
+                ScheduleEdit::DeleteClass(_) => report(tr!("schedule-delete-class"), String::new()),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
-                ScheduleEdit::DeleteAgent(id) => report(tr!("schedule-delete-agent"), format!("{id:?}")),
+                ScheduleEdit::DeleteAgent(_) => report(tr!("schedule-delete-agent"), String::new()),
                 ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
                 ScheduleEdit::AddReclaimBar { name, .. } => report(tr!("reclaim-add-bar"), name.clone()),
                 ScheduleEdit::AddOpeningLot { name, tonnes_t, .. } => report(tr!("inventory-new-lot"), format!("{name} · {tonnes_t} t")),
-                ScheduleEdit::DuplicateOpeningLot { lot, .. } => report(tr!("inventory-duplicate-lot"), format!("{lot:?}")),
-                ScheduleEdit::DeleteOpeningLot { lot, .. } => report(tr!("inventory-delete-lot"), format!("{lot:?}")),
+                ScheduleEdit::DuplicateOpeningLot { .. } => report(tr!("inventory-duplicate-lot"), String::new()),
+                ScheduleEdit::DeleteOpeningLot { .. } => report(tr!("inventory-delete-lot"), String::new()),
                 ScheduleEdit::AddOpeningPortion { tonnes_t, .. } => report(tr!("inventory-new-portion"), format!("{tonnes_t} t")),
-                ScheduleEdit::DeleteOpeningPortion { portion, .. } => report(tr!("inventory-delete-portion"), format!("{portion:?}")),
-                ScheduleEdit::CopyBar(id) => report(tr!("schedule-copy-bar"), format!("{id:?}")),
-                ScheduleEdit::DeleteBars(ids) => report(tr!("schedule-delete-bar"), format!("{ids:?}")),
+                ScheduleEdit::DeleteOpeningPortion { .. } => report(tr!("inventory-delete-portion"), String::new()),
+                ScheduleEdit::CopyBar(_) => report(tr!("schedule-copy-bar"), String::new()),
+                ScheduleEdit::DeleteBars(_) => report(tr!("schedule-delete-bar"), String::new()),
                 // Applying a sequence edit is a deliberate, single act on a
                 // whole dig order, unlike the per-block edits below it.
                 ScheduleEdit::SetBarMembers { members, .. } => report(tr!("schedule-bar-edit-sequence"), tr!("sequence-applied-blocks", count = members.len().to_string())),
                 ScheduleEdit::AddDestination { name, kind } => report(tr!("destination-new"), format!("{name} · {}", kind.label())),
-                ScheduleEdit::DeleteDestination(id) => report(tr!("destination-delete"), format!("{id:?}")),
+                ScheduleEdit::DeleteDestination(_) => report(tr!("destination-delete"), String::new()),
                 ScheduleEdit::AddRule { name, .. } => report(tr!("destination-new-rule"), name.clone()),
-                ScheduleEdit::DuplicateRule(id) => report(tr!("destination-duplicate-rule"), format!("{id:?}")),
-                ScheduleEdit::DeleteRule(id) => report(tr!("destination-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::DuplicateRule(_) => report(tr!("destination-duplicate-rule"), String::new()),
+                ScheduleEdit::DeleteRule(_) => report(tr!("destination-delete-rule"), String::new()),
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
                 ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
-                ScheduleEdit::DuplicateTruckClass(id) => report(tr!("truck-duplicate-class"), format!("{id:?}")),
-                ScheduleEdit::DeleteTruckClass(id) => report(tr!("truck-delete-class"), format!("{id:?}")),
+                ScheduleEdit::DuplicateTruckClass(_) => report(tr!("truck-duplicate-class"), String::new()),
+                ScheduleEdit::DeleteTruckClass(_) => report(tr!("truck-delete-class"), String::new()),
                 ScheduleEdit::AddTruckingRule { name, .. } => report(tr!("truck-new-rule"), name.clone()),
-                ScheduleEdit::DuplicateTruckingRule(id) => report(tr!("truck-duplicate-rule"), format!("{id:?}")),
-                ScheduleEdit::DeleteTruckingRule(id) => report(tr!("truck-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::DuplicateTruckingRule(_) => report(tr!("truck-duplicate-rule"), String::new()),
+                ScheduleEdit::DeleteTruckingRule(_) => report(tr!("truck-delete-rule"), String::new()),
                 ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
-                ScheduleEdit::DuplicateCashflowRule(id) => report(tr!("cashflow-duplicate-rule"), format!("{id:?}")),
-                ScheduleEdit::DeleteCashflowRule(id) => report(tr!("cashflow-delete-rule"), format!("{id:?}")),
+                ScheduleEdit::DuplicateCashflowRule(_) => report(tr!("cashflow-duplicate-rule"), String::new()),
+                ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
                 ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
@@ -5829,11 +5835,11 @@ impl UiCommand {
                 | ScheduleEdit::SetBlastPattern { .. }
                 | ScheduleEdit::SetBlastMembers { .. } => None,
                 ScheduleEdit::AddDelayType { name, .. } => report(tr!("delay-new-type"), name.clone()),
-                ScheduleEdit::DeleteDelayType(id) => report(tr!("delay-delete-type"), format!("{id:?}")),
+                ScheduleEdit::DeleteDelayType(_) => report(tr!("delay-delete-type"), String::new()),
                 ScheduleEdit::AddDelayList { title } => report(tr!("delay-new-list"), title.clone()),
-                ScheduleEdit::DeleteDelayList(id) => report(tr!("delay-delete-list"), format!("{id:?}")),
+                ScheduleEdit::DeleteDelayList(_) => report(tr!("delay-delete-list"), String::new()),
                 ScheduleEdit::AddRoster { name } => report(tr!("delay-new-roster"), name.clone()),
-                ScheduleEdit::DeleteRoster(id) => report(tr!("delay-delete-roster"), format!("{id:?}")),
+                ScheduleEdit::DeleteRoster(_) => report(tr!("delay-delete-roster"), String::new()),
                 // Delay cell edits: the Delays page and the bar's menu show
                 // the result in place.
                 ScheduleEdit::SetDelayBarType { .. }

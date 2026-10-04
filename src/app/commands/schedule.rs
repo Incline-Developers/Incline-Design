@@ -22,6 +22,37 @@ use crate::{
 };
 
 impl crate::app::App<'_> {
+    /// What a schedule deletion or copy names in its console entry. The edit
+    /// carries only ids, so the names are read before it is applied, while
+    /// the thing it removes is still there.
+    pub(crate) fn schedule_report_subject(&self, edit: &ScheduleEdit) -> Option<String> {
+        let plan = self.workspace.active_document()?.schedule();
+        let routing = plan.routing();
+        let lot = |destination, lot| routing.inventory(destination).and_then(|inventory| inventory.lot(lot));
+        match edit {
+            ScheduleEdit::DeleteClass(id) => plan.class(*id).map(|class| class.name.clone()),
+            ScheduleEdit::DeleteAgent(id) => plan.agent(*id).map(|agent| agent.name.clone()),
+            ScheduleEdit::CopyBar(id) => plan.bar(*id).map(|bar| bar.name().to_owned()),
+            ScheduleEdit::DeleteBars(ids) => Some(ids.iter().filter_map(|id| plan.bar(*id)).map(|bar| bar.name().to_owned()).collect::<Vec<_>>().join(", ")),
+            ScheduleEdit::DuplicateOpeningLot { destination, lot: id } | ScheduleEdit::DeleteOpeningLot { destination, lot: id } => {
+                lot(*destination, *id).map(|lot| lot.name.clone())
+            }
+            ScheduleEdit::DeleteOpeningPortion { destination, lot: id, portion } => lot(*destination, *id).and_then(|lot| {
+                let portion = lot.portions.iter().find(|entry| entry.id == *portion)?;
+                Some(format!("{} · {} t", lot.name, portion.tonnes_t))
+            }),
+            ScheduleEdit::DeleteDestination(id) => routing.standalone(*id).map(|destination| destination.name.clone()),
+            ScheduleEdit::DuplicateRule(id) | ScheduleEdit::DeleteRule(id) => routing.rule(*id).map(|rule| rule.name.clone()),
+            ScheduleEdit::DuplicateTruckClass(id) | ScheduleEdit::DeleteTruckClass(id) => plan.trucks().class(*id).map(|class| class.name.clone()),
+            ScheduleEdit::DuplicateTruckingRule(id) | ScheduleEdit::DeleteTruckingRule(id) => plan.trucks().rule(*id).map(|rule| rule.name.clone()),
+            ScheduleEdit::DuplicateCashflowRule(id) | ScheduleEdit::DeleteCashflowRule(id) => plan.cashflow().rule(*id).map(|rule| rule.name.clone()),
+            ScheduleEdit::DeleteDelayType(id) => plan.delays().delay_type(*id).map(|kind| kind.name.clone()),
+            ScheduleEdit::DeleteDelayList(id) => plan.delays().list(*id).map(|list| list.title.clone()),
+            ScheduleEdit::DeleteRoster(id) => plan.delays().roster(*id).map(|roster| roster.name.clone()),
+            _ => None,
+        }
+    }
+
     /// Apply one fleet edit to the project it was drawn from.
     ///
     /// `session` is the runtime id the UI read the plan under. Commands are
